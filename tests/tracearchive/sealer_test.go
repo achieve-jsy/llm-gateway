@@ -972,8 +972,8 @@ func TestSealRejectsMismatchedZstdVersion(t *testing.T) {
 	if !errors.Is(err, ta.ErrSealFailed) {
 		t.Fatalf("zstd 版本不符必须失败（ErrSealFailed），实际 %v", err)
 	}
-	if msg := err.Error(); !strings.Contains(msg, "1.9.9") {
-		t.Fatalf("错误信息必须带上实际版本号，否则运维无法定位是哪个 zstd: %v", err)
+	if msg := err.Error(); !strings.Contains(msg, "1.9.9") || !strings.Contains(msg, "1.4.8") {
+		t.Fatalf("错误信息必须同时带上【实际】与【期望】版本号（运维要据此决定换构建还是重新标定），实际: %v", err)
 	}
 
 	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
@@ -989,28 +989,51 @@ func TestSealRejectsMismatchedZstdVersion(t *testing.T) {
 }
 
 // TestSealRejectsUnparsableZstdVersion 覆盖版本守卫的另一支：
-// 探测命令成功退出但输出的不是版本号 —— 属于「无法确认编码器版本」。
+// 探测命令成功退出，但输出里没有一个可信的版本号 —— 属于「无法确认编码器版本」。
 // 必须拒绝而不是「解析不出来就当通过」：静默通过等于没有这条守卫。
+//
+// 【为什么断言的是文案而不是「是否失败」】这一支的价值就是**诊断保真度**：
+// 三段式校验放过的 "1.5"、"1.5.7-beta" 最终也会因为与期望值不符而被拒（同样是
+// 失败），但运维看到的是「版本不符：期望 1.4.8，实际 1.5」而不是「输出无法解析」——
+// 前者会让人以为是版本漂移（去重新走标定流程），后者才正确指向「这份二进制/包装
+// 脚本不规范」。因此这里断言错误文案含「无法解析」，从而让三段式/数字校验成为
+// 可被杀死的守卫（删除后文案变成「版本不符」，本用例转红）。
 func TestSealRejectsUnparsableZstdVersion(t *testing.T) {
-	root := t.TempDir()
-	spool := writeSpool(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("aaa")})
-
-	// version="" ⇒ 脚本不处理 --version，退出码 0 但输出不是版本串
-	bin := fakeZstdWithVersion(t, "", "echo 'no version here'\n")
-
-	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin})
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name string
+		out  string // --version 的输出
+	}{
+		{name: "输出里没有版本号", out: "no version here"},
+		{name: "版本号只有两段", out: "*** Zstandard CLI (64-bit) v1.5, by Yann Collet ***"},
+		{name: "版本号带后缀", out: "*** Zstandard CLI (64-bit) v1.5.7-beta, by Yann Collet ***"},
+		{name: "版本号段内非数字", out: "*** Zstandard CLI (64-bit) v1.x.7, by Yann Collet ***"},
 	}
-	err = s.Seal(context.Background(), ta.SealTask{
-		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spool, Rows: 1,
-	})
-	if !errors.Is(err, ta.ErrSealFailed) {
-		t.Fatalf("无法解析 zstd 版本时必须失败（ErrSealFailed），实际 %v", err)
-	}
-	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
-	if _, statErr := os.Stat(partPath); !os.IsNotExist(statErr) {
-		t.Fatal("版本无法确认时不得产生产物")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			spool := writeSpool(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("aaa")})
+
+			// version="" ⇒ 脚本不处理 --version，直接把这段输出打出来并成功退出
+			bin := fakeZstdWithVersion(t, "", "echo '"+tc.out+"'\n")
+
+			s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = s.Seal(context.Background(), ta.SealTask{
+				DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spool, Rows: 1,
+			})
+			if !errors.Is(err, ta.ErrSealFailed) {
+				t.Fatalf("无法解析 zstd 版本时必须失败（ErrSealFailed），实际 %v", err)
+			}
+			if msg := err.Error(); !strings.Contains(msg, "无法解析") {
+				t.Fatalf("必须报「无法解析」而不是让它落到「版本不符」（两者处置不同：换构建 vs 重新标定），实际: %v", err)
+			}
+			partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
+			if _, statErr := os.Stat(partPath); !os.IsNotExist(statErr) {
+				t.Fatal("版本无法确认时不得产生产物")
+			}
+		})
 	}
 }
 

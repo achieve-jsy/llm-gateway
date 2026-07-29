@@ -77,10 +77,13 @@ type Sealer struct {
 	opts  SealerOptions
 	paths Paths
 
-	// versionOK 记忆「编码器版本已核对通过」，避免每轮封块都 spawn 一次
-	// `<binary> --version`。只在成功时置位：失败会在每轮重新报错，
-	// 这正是版本守卫需要的可见性（静默通过才是危险的）。
-	versionOK bool
+	// 本结构体【没有运行期可变状态】（评审裁决 1）：版本探测刻意不做记忆化，
+	// 因此 Sealer 可以在多个 goroutine 间共享调用 Seal 而无需同步
+	//（唯一的例外是下面的测试注入钩子，它只在单测里、并发调用之前设置）。
+	//
+	// 为什么不做记忆化：省下的只是一天几十次（回溯追赶时最多上百次）
+	// `zstd --version`，合计秒级；而代价是引入一个未同步的可变字段，
+	// 让这个看起来可共享的值类型在并发下产生数据竞争。不划算。
 
 	// failBeforeRename 仅供测试注入故障，生产恒为 nil。
 	failBeforeRename func() error
@@ -264,7 +267,11 @@ func zstdLongArg(windowBytes int) (string, error) {
 	return strconv.Itoa(bits.Len(uint(windowBytes)) - 1), nil
 }
 
-// verifyZstdVersion 用 `<binary> --version` 探测编码器版本并与期望值比对（只探测一次）。
+// verifyZstdVersion 用 `<binary> --version` 探测编码器版本并与期望值比对。
+//
+// 【每次都探测，不做记忆化（评审裁决 1）】省下的是每天几十次 `zstd --version`
+// （约 5 ms/次，合计秒级），代价是给 Sealer 引入一个未同步的可变字段——
+// 一个看起来可以共享的值类型就不该有数据竞争。宁可每次多花几毫秒。
 //
 // 【为什么在这里而不是 NewSealer（评审裁决 3a）】
 //  1. 发现路径 (*Sealer).ListPendingSeals 是纯文件系统操作，不该要求一个可用的
@@ -274,10 +281,12 @@ func zstdLongArg(windowBytes int) (string, error) {
 //
 // 失败一律用既有哨兵 ErrSealFailed（不新增哨兵）：与「子进程非零退出/缺失」
 // 同属「这台机器上的编码器不可信」，调用方处置相同——保留 spool、告警、下轮重试。
+//
+// 【错误文案是诊断接口，不是装饰】四条错误路径各自的措辞都可被断言区分
+// （"找不到可执行文件" / "探测 zstd 版本失败" / "无法解析" / "期望 X，实际 Y"）：
+// 运维排查「为什么封块全停了」时，「输出不可解析」与「版本不符」指向完全不同的
+// 处置（换构建 vs 重新标定），所以文案有测试价值，不能随合并。
 func (s *Sealer) verifyZstdVersion() error {
-	if s.versionOK {
-		return nil
-	}
 	out, err := exec.Command(s.opts.ZstdBinary, "--version").Output()
 	if err != nil {
 		// 与 runZstd 同一分类：二进制缺失是部署事故，必须保留 exec.ErrNotFound 身份
@@ -297,7 +306,6 @@ func (s *Sealer) verifyZstdVersion() error {
 		return fmt.Errorf("%w: zstd 版本不符：期望 %s，实际 %s。压缩比标定是版本特定的（规格 §5.3.1.1/§11.1），换版本必须重新标定后才能放开",
 			ErrSealFailed, s.opts.ExpectedZstdVersion, got)
 	}
-	s.versionOK = true
 	return nil
 }
 

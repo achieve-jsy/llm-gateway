@@ -26,12 +26,12 @@ import (
 )
 
 func TestSealProducesArtifactAndRemovesSpool(t *testing.T) {
-	bin := requireZstd(t)
+	bin, ver := requireZstd(t)
 	root := t.TempDir()
 	lines := [][]byte{[]byte("aaa"), []byte("bbbb"), []byte("c")}
 	spool := writeSpool(t, root, "2026-09-24", "blue", 0, lines)
 
-	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin})
+	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin, ExpectedZstdVersion: ver})
 	if err != nil {
 		t.Fatalf("建封块器失败: %v", err)
 	}
@@ -159,12 +159,12 @@ func decodeVarints(b []byte, n int) ([]int64, error) {
 // TestSealFooterPointsAtValidTrailer 只经**公开格式契约**（规格 §5.2）验证
 // 「footer 指向的 trailer 能解出正确的行偏移」，不调用任何未导出符号。
 func TestSealFooterPointsAtValidTrailer(t *testing.T) {
-	bin := requireZstd(t)
+	bin, ver := requireZstd(t)
 	root := t.TempDir()
 	lines := [][]byte{[]byte("aaa"), []byte("bbbb"), []byte("cc")}
 	spool := writeSpool(t, root, "2026-09-24", "blue", 0, lines)
 
-	s, _ := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin})
+	s, _ := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin, ExpectedZstdVersion: ver})
 	if err := s.Seal(context.Background(), ta.SealTask{
 		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spool, Rows: len(lines),
 	}); err != nil {
@@ -346,7 +346,7 @@ func TestListPendingSealsSkipsFreshFiles(t *testing.T) {
 	root := t.TempDir()
 	writeSpool(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("x")})
 
-	tasks, err := ta.ListPendingSeals(root, time.Hour)
+	tasks, err := listPendingSeals(t, root, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestListPendingSealsReturnsStaleFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tasks, err := ta.ListPendingSeals(root, time.Hour)
+	tasks, err := listPendingSeals(t, root, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestListPendingSealsReturnsStaleFiles(t *testing.T) {
 	}
 
 	// 幂等且可重启：再扫一次结果相同（纯读，不修改任何状态）
-	again, err := ta.ListPendingSeals(root, time.Hour)
+	again, err := listPendingSeals(t, root, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestListPendingSealsIgnoresIllegalNames(t *testing.T) {
 		}
 	}
 
-	tasks, err := ta.ListPendingSeals(root, time.Hour)
+	tasks, err := listPendingSeals(t, root, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +491,7 @@ func TestSealDefaultsZstdBinaryFromPath(t *testing.T) {
 	dir := t.TempDir()
 	binDir := t.TempDir()
 	argsFile := filepath.Join(dir, "args.txt")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argsFile + "'\nexec /bin/cat\n"
+	script := fakeZstdScript(fakeZstdVersion, "printf '%s\\n' \"$@\" > '"+argsFile+"'\nexec /bin/cat\n")
 	if err := os.WriteFile(filepath.Join(binDir, "zstd"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +639,7 @@ func TestSealFailsWhenSpoolIsDirectory(t *testing.T) {
 // 每一个块都会被 ErrRowCountMismatch 永久拒绝：块永不封、spool 无限增长。
 // 这里把两条公开 API 串起来跑一遍（真实 zstd）。
 func TestSealAcceptsRowsZeroFromDiscoveryPath(t *testing.T) {
-	bin := requireZstd(t)
+	bin, ver := requireZstd(t)
 	root := t.TempDir()
 	lines := [][]byte{[]byte("aaa"), []byte("bbb")}
 	spool := writeSpool(t, root, "2026-09-24", "blue", 0, lines)
@@ -648,7 +648,7 @@ func TestSealAcceptsRowsZeroFromDiscoveryPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tasks, err := ta.ListPendingSeals(root, time.Hour)
+	tasks, err := listPendingSeals(t, root, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,7 +659,7 @@ func TestSealAcceptsRowsZeroFromDiscoveryPath(t *testing.T) {
 		t.Fatalf("扫目录时行数未知，Rows 应为 0，实际 %d", tasks[0].Rows)
 	}
 
-	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin})
+	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin, ExpectedZstdVersion: ver})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +684,7 @@ func TestSealAcceptsRowsZeroFromDiscoveryPath(t *testing.T) {
 // 「根目录不存在 = 还没写过正文，正常返回空」与「根目录读失败必须报错」。
 func TestListPendingSealsHandlesSpoolRootErrors(t *testing.T) {
 	t.Run("spool 根目录不存在返回空而非报错", func(t *testing.T) {
-		tasks, err := ta.ListPendingSeals(t.TempDir(), time.Hour)
+		tasks, err := listPendingSeals(t, t.TempDir(), time.Hour)
 		if err != nil {
 			t.Fatalf("还没写过任何正文时不应报错: %v", err)
 		}
@@ -697,7 +697,7 @@ func TestListPendingSealsHandlesSpoolRootErrors(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, "spool"), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := ta.ListPendingSeals(root, time.Hour); err == nil {
+		if _, err := listPendingSeals(t, root, time.Hour); err == nil {
 			t.Fatal("spool 根目录无法读取时必须报错，静默返回空会让封块永久停摆")
 		}
 	})
@@ -712,6 +712,13 @@ func TestListPendingSealsHandlesSpoolRootErrors(t *testing.T) {
 //   - spool/dt=2026-09-25（普通文件） → 只有 dt 的 IsDir 过滤能拦（否则 ReadDir 报错）
 //   - spool/dt=…/notinst/…            → 只有 "inst=" 前缀过滤能拦
 //   - spool/dt=…/inst=green（普通文件）→ 只有 inst 的 IsDir 过滤能拦
+//   - spool/2026-09-24/…（合法日期但缺 dt= 前缀）
+//     → 只有 dt 前缀过滤能拦：裁决 3b 的 validateDT 会【放行】它（"2026-09-24" 是合法日期）
+//   - spool/dt=…/blue/…（合法 inst 但缺 inst= 前缀）
+//     → 只有 inst 前缀过滤能拦：裁决 3b 的白名单会【放行】它（"blue" ∈ {blue,green}）
+//
+// 后两条是补的：加入裁决 3b 的目录名校验后，前四条会被「更严格的日期/白名单校验」
+// 顺带拦住，于是「删掉前缀过滤」不再有任何用例转红（实测 m27/m29 由红转绿）。
 func TestListPendingSealsIgnoresNonLayoutEntries(t *testing.T) {
 	root := t.TempDir()
 	old := time.Now().Add(-2 * time.Hour)
@@ -741,9 +748,11 @@ func TestListPendingSealsIgnoresNonLayoutEntries(t *testing.T) {
 	writeEntry("spool/dt=2026-09-25", false)                           // dt IsDir
 	writeEntry("spool/dt=2026-09-24/notinst/part-000003.jsonl", false) // inst= 前缀
 	writeEntry("spool/dt=2026-09-24/inst=green", false)                // inst IsDir
+	writeEntry("spool/2026-09-24/inst=blue/part-000010.jsonl", false)  // 缺 dt= 前缀（日期本身合法）
+	writeEntry("spool/dt=2026-09-24/blue/part-000011.jsonl", false)    // 缺 inst= 前缀（inst 本身合法）
 	writeEntry("spool/dt=2026-09-24/inst=blue/part-000004.jsonl", false)
 
-	tasks, err := ta.ListPendingSeals(root, time.Hour)
+	tasks, err := listPendingSeals(t, root, time.Hour)
 	if err != nil {
 		t.Fatalf("非布局条目不应让扫描报错（应被静默忽略）: %v", err)
 	}
@@ -861,11 +870,15 @@ func TestSealAcceptsEmptySpool(t *testing.T) {
 // 而 sealer 是独立进程、收不到任何信号；本进程无法区分「已停止追加」与
 // 「暂时空闲」，minAge 是唯一的保护，因此它必须是显式配置项且默认不得为 0。
 //
-// 两条断言：
+// 三条断言：
 //  1. 默认 minAge 非 0：1 分钟前写过的 spool 不能被当成「已停止追加」
 //     （默认值若为 0，cutoff=now，本用例转红）；
 //  2. 显式 minAge 被采纳：minAge=30s 时必须发现该 spool
-//     （字段没接到发现逻辑上时转红）。
+//     （字段没接到发现逻辑上时转红）；
+//  3. 默认值是 3 小时（裁决 1）：2 小时前写过的 spool 仍算「可能还在追加」而被跳过，
+//     4 小时前写过的必须被发现。钉住的是「默认值 > 网关滚动间隔（≤1h）且不是随手
+//     取的小数」——默认值若退回 15 分钟，第 3 条转红；若被改成不可用的超大值，
+//     第 3 条的「4 小时必须被发现」转红（推导见 sealer.go 的 defaultSealMinAge 注释）。
 func TestSealerListPendingSealsUsesConfiguredMinAge(t *testing.T) {
 	root := t.TempDir()
 	spool := writeSpool(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("x")})
@@ -896,5 +909,217 @@ func TestSealerListPendingSealsUsesConfiguredMinAge(t *testing.T) {
 	}
 	if len(tasks) != 1 || tasks[0].SpoolPath != spool {
 		t.Fatalf("显式 minAge=30s 应发现 1 分钟前写过的 spool，实际 %+v", tasks)
+	}
+
+	// 3. 默认 3h 的两侧边界
+	root2 := t.TempDir()
+	h2 := writeSpool(t, root2, "2026-09-24", "blue", 1, [][]byte{[]byte("two")})
+	twoHoursAgo := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(h2, twoHoursAgo, twoHoursAgo); err != nil {
+		t.Fatal(err)
+	}
+	h4 := writeSpool(t, root2, "2026-09-24", "blue", 2, [][]byte{[]byte("four")})
+	fourHoursAgo := time.Now().Add(-4 * time.Hour)
+	if err := os.Chtimes(h4, fourHoursAgo, fourHoursAgo); err != nil {
+		t.Fatal(err)
+	}
+
+	s3, err := ta.NewSealer(ta.SealerOptions{Root: root2}) // 默认 minAge
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err = s3.ListPendingSeals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].SpoolPath != h4 {
+		got := make([]string, 0, len(tasks))
+		for _, tk := range tasks {
+			got = append(got, tk.SpoolPath)
+		}
+		t.Fatalf("默认 minAge=3h 时应且仅应发现 4 小时前的块（2 小时前的仍可能在被追加），实际 %v", got)
+	}
+}
+
+// ===========================================================================
+// 以下用例为【评审裁决】要求补充的守卫：
+//   - 裁决 3a：zstd 版本校验（标定是版本特定的）
+//   - 裁决 3b：ListPendingSeals 的 dt/inst 目录名校验
+//   - 裁决 1：minAge 默认值 3h（追加在 UsesConfiguredMinAge 内）
+// ===========================================================================
+
+// TestSealRejectsMismatchedZstdVersion 覆盖版本守卫（裁决 3a）。
+//
+// 为什么必须有它：10.26x 的压缩比标定是【版本特定】的（规格 §5.3.1.1、§11.1：
+// 标定用生产 v1.4.8，本机是 v1.5.7）。换版本后压缩比会漂移，而验收线是按标定值
+// 定的，所以编码器版本必须被强制检查，绝不能静默通过。
+//
+// 删掉比对、或把期望值改成「不检查」，本用例转红。
+func TestSealRejectsMismatchedZstdVersion(t *testing.T) {
+	root := t.TempDir()
+	spool := writeSpool(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("aaa")})
+
+	// 假 zstd 报告一个与期望值（默认 defaultZstdVersion）不同的版本
+	bin := fakeZstdWithVersion(t, "1.9.9", "exec cat\n")
+
+	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Seal(context.Background(), ta.SealTask{
+		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spool, Rows: 1,
+	})
+	if !errors.Is(err, ta.ErrSealFailed) {
+		t.Fatalf("zstd 版本不符必须失败（ErrSealFailed），实际 %v", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "1.9.9") {
+		t.Fatalf("错误信息必须带上实际版本号，否则运维无法定位是哪个 zstd: %v", err)
+	}
+
+	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
+	if _, statErr := os.Stat(partPath); !os.IsNotExist(statErr) {
+		t.Fatal("版本不符时不得产生产物（产物会用未标定的编码器压缩）")
+	}
+	if _, statErr := os.Stat(partPath + ".tmp"); !os.IsNotExist(statErr) {
+		t.Fatal("版本不符时不得残留 .tmp")
+	}
+	if _, statErr := os.Stat(spool); statErr != nil {
+		t.Fatal("版本不符时必须保留 spool")
+	}
+}
+
+// TestSealRejectsUnparsableZstdVersion 覆盖版本守卫的另一支：
+// 探测命令成功退出但输出的不是版本号 —— 属于「无法确认编码器版本」。
+// 必须拒绝而不是「解析不出来就当通过」：静默通过等于没有这条守卫。
+func TestSealRejectsUnparsableZstdVersion(t *testing.T) {
+	root := t.TempDir()
+	spool := writeSpool(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("aaa")})
+
+	// version="" ⇒ 脚本不处理 --version，退出码 0 但输出不是版本串
+	bin := fakeZstdWithVersion(t, "", "echo 'no version here'\n")
+
+	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Seal(context.Background(), ta.SealTask{
+		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spool, Rows: 1,
+	})
+	if !errors.Is(err, ta.ErrSealFailed) {
+		t.Fatalf("无法解析 zstd 版本时必须失败（ErrSealFailed），实际 %v", err)
+	}
+	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
+	if _, statErr := os.Stat(partPath); !os.IsNotExist(statErr) {
+		t.Fatal("版本无法确认时不得产生产物")
+	}
+}
+
+// TestSealAcceptsConfiguredZstdVersion 覆盖「期望版本可配置」：
+// 显式传入与二进制一致的版本时必须放行。若实现把比对写死成默认常量
+// （而不是 opts.ExpectedZstdVersion），本用例转红。
+func TestSealAcceptsConfiguredZstdVersion(t *testing.T) {
+	root := t.TempDir()
+	spool := writeSpool(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("aaa")})
+	bin := fakeZstdWithVersion(t, "9.9.9", "exec cat\n")
+
+	s, err := ta.NewSealer(ta.SealerOptions{
+		Root: root, ZstdBinary: bin, ExpectedZstdVersion: "9.9.9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Seal(context.Background(), ta.SealTask{
+		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spool, Rows: 1,
+	}); err != nil {
+		t.Fatalf("显式期望版本与二进制一致时应放行（重新标定后的升级路径）: %v", err)
+	}
+	if _, err := os.Stat(spool); !os.IsNotExist(err) {
+		t.Fatal("封块成功后 spool 应被删除")
+	}
+}
+
+// TestListPendingSealsRejectsMalformedDirNames 覆盖裁决 3b：dt/inst 目录名校验。
+//
+// 为什么必须有它：dt/inst 直接来自【目录名】，而 SpoolDir/PartDir 走
+// filepath.Join —— 清理语义会把 "dt=.."/"inst=.." 带出 spool 子树
+// （任务 4 评审在写入侧已堵住，列举侧此前没有拦截）。一个畸形目录名就能产出
+// 带越界 DT/Inst 的 SealTask，让 Seal 把产物写到 spool 树之外。
+//
+// 语义是【跳过】而不是让整轮扫描报错：一个坏目录不该让当天的封块全停，
+// 因此本用例同时断言「合法目录仍被正常返回」（若实现改成 return err，转红）。
+func TestListPendingSealsRejectsMalformedDirNames(t *testing.T) {
+	root := t.TempDir()
+	old := time.Now().Add(-2 * time.Hour)
+	write := func(rel string) {
+		t.Helper()
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 全部 stale，因此「没被返回」只可能是因为目录名校验，而不是 minAge
+	write("spool/dt=2026-9-24/inst=blue/part-000001.jsonl")   // dt 未补零
+	write("spool/dt=20260924/inst=blue/part-000002.jsonl")    // dt 非 YYYY-MM-DD
+	write("spool/dt=../inst=blue/part-000003.jsonl")          // dt=.. ⇒ filepath.Join 会爬出子树
+	write("spool/dt=2026-02-30/inst=blue/part-000004.jsonl")  // 合法格式但日期不存在
+	write("spool/dt=2026-09-24/inst=bluex/part-000005.jsonl") // inst 不在白名单
+	write("spool/dt=2026-09-24/inst=../part-000006.jsonl")    // inst=.. ⇒ 同样爬出子树
+	write("spool/dt=2026-09-24/inst=blue/part-000007.jsonl")  // 唯一合法
+
+	tasks, err := listPendingSeals(t, root, time.Hour)
+	if err != nil {
+		t.Fatalf("畸形目录必须被跳过而不是让整轮扫描报错，实际: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("只应返回合法目录下的 spool，实际 %d: %+v", len(tasks), tasks)
+	}
+	got := tasks[0]
+	if got.DT != "2026-09-24" || got.Inst != "blue" || got.Part != 7 {
+		t.Fatalf("返回了畸形目录下的块（越界的 DT/Inst 会让 Seal 写到 spool 子树之外）: %+v", got)
+	}
+	if want := filepath.Join(root, "spool", "dt=2026-09-24", "inst=blue", "part-000007.jsonl"); got.SpoolPath != want {
+		t.Fatalf("SpoolPath 应为 %s，实际 %s", want, got.SpoolPath)
+	}
+}
+
+// TestSealRejectsFailedVersionProbe 覆盖版本守卫的第三条错误路径：
+// 探测命令本身失败（非 0 退出，且不是「文件不存在」）。
+//
+// 必须拒绝并保留探测的原始错误（含退出码），不能吞掉探测失败继续封块：
+// 「没能确认版本」与「版本不符」一样，都不允许静默通过（规格 §11.1）。
+func TestSealRejectsFailedVersionProbe(t *testing.T) {
+	root := t.TempDir()
+	spool := writeSpool(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("aaa")})
+
+	// version="" ⇒ 脚本不处理 --version，直接退出 7
+	bin := fakeZstdWithVersion(t, "", "exit 7\n")
+
+	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Seal(context.Background(), ta.SealTask{
+		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spool, Rows: 1,
+	})
+	if !errors.Is(err, ta.ErrSealFailed) {
+		t.Fatalf("版本探测失败必须返回 ErrSealFailed，实际 %v", err)
+	}
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 7 {
+		t.Fatalf("错误链里应保留探测进程的退出码 7（这要求用 %%w 包装探测错误），实际 %v", err)
+	}
+	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
+	if _, statErr := os.Stat(partPath); !os.IsNotExist(statErr) {
+		t.Fatal("版本无法确认时不得产生产物")
+	}
+	if _, statErr := os.Stat(spool); statErr != nil {
+		t.Fatal("版本无法确认时必须保留 spool")
 	}
 }

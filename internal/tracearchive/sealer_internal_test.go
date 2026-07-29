@@ -17,12 +17,12 @@ import (
 // 本文件只剩这一条注入用例与一条 parsePartSeq 的交叉验证。
 func TestSealIsAtomicOnCrash(t *testing.T) {
 	// 模拟压缩中途崩溃：产物目录不得出现半成品
-	bin := requireZstd(t)
+	bin, ver := requireZstd(t)
 	root := t.TempDir()
 	lines := [][]byte{[]byte("aaa"), []byte("bbb")}
 	spool := writeSpool(t, root, "2026-09-24", "blue", 0, lines)
 
-	s, _ := NewSealer(SealerOptions{Root: root, ZstdBinary: bin})
+	s, _ := NewSealer(SealerOptions{Root: root, ZstdBinary: bin, ExpectedZstdVersion: ver})
 	// 注入错误：让 rename 之前的一步失败
 	s.failBeforeRename = func() error { return os.ErrPermission }
 	err := s.Seal(context.Background(), SealTask{

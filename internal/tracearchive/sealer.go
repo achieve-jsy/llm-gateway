@@ -18,6 +18,37 @@ import (
 	"time"
 )
 
+// defaultZstdVersion 是标定过的 zstd 版本（生产部署版本），封块前会与实际
+// 二进制核对（见 Sealer.verifyZstdVersion）。
+//
+// 【为什么版本要锁死】规格 §5.3.1.1 的压缩比标定是【版本特定】的：方案 C 采用
+// C 版 zstd CLI 的结论建立在 v1.4.8 的实测上（同数据 CLI 产物 202.6 MB，Go 库
+// 384.0 MB，比值 1.90x），验收线（≤1.30x CLI）也是按这个版本定的。zstd 的
+// 匹配查找器/熵编码在不同版本间会变，换版本后压缩比可能漂移出验收区间，
+// 因此【换版本必须重新标定】，不能让它静默通过。
+//
+// ⚠️ 本机开发环境实测是 v1.5.7，与生产 v1.4.8 不同：本地跑真封块用例时必须把
+// 本机版本显式传给 SealerOptions.ExpectedZstdVersion（测试辅助 requireZstd
+// 已返回本机版本），这也是「期望版本必须可配置」的原因之一。
+const defaultZstdVersion = "1.4.8"
+
+// defaultSealMinAge 是「认定一个 spool 已停止追加」的默认最小静默时长（3 小时）。
+//
+// 【取值推导（评审裁决 1）——这个数不是随手取的】
+//   - 实测摄取速率 ≈ 37 GiB/天 ≈ 1.54 GiB/小时；
+//   - 块大小目标 defaultBlockBytes = 1536 MiB ⇒ 满流量下约 1 小时填满一个块；
+//   - 网关的 part 滚动间隔应取 ~1 小时：让【大小】阈值先触发，从而保住已标定的
+//     10.26x 压缩比（若按时间过早截断，块会缩到 ~400 MB，压缩比落进未标定的区间）；
+//   - 本进程唯一的保护就是这个时间差（见 (*Sealer).ListPendingSeals 的说明），
+//     且它必须【严格大于】网关的滚动间隔 ⇒ 取 3 × 1h = 3 小时，留 3 倍安全余量。
+//
+// 成本核算：未封块 spool 约 3h × 1.54 GiB/h ≈ 4.6 GiB 未压缩驻留，
+// 相对 /datalog 的 240 GiB 可用空间可忽略。
+//
+// ⚠️ 对端约束：网关的滚动间隔必须 ≤ 1h（计划 2 落地；现有常量
+// defaultSealInterval=15m 已满足，且 3h 对它有 12 倍余量），否则本值不再成立。
+const defaultSealMinAge = 3 * time.Hour
+
 // SealerOptions 是封块器配置。
 type SealerOptions struct {
 	Root            string
@@ -25,6 +56,11 @@ type SealerOptions struct {
 	ZstdLevel       int    // 0 取 defaultZstdLevel
 	ZstdWindowBytes int    // 0 取 defaultZstdWindowBytes；换算为 CLI 的 --long=<log2(窗口)>
 	MinAge          time.Duration
+
+	// ExpectedZstdVersion 是期望的 zstd 版本（"X.Y.Z"）；空则取 defaultZstdVersion。
+	// 首次封块时用 `<ZstdBinary> --version` 探测一次并比对，不符则拒绝封块
+	// （标定是版本特定的，规格 §11.1；推理见 defaultZstdVersion 注释）。
+	ExpectedZstdVersion string
 }
 
 // Sealer 把 spool 明文封块为带内嵌索引的产物文件。
@@ -40,6 +76,11 @@ type SealerOptions struct {
 type Sealer struct {
 	opts  SealerOptions
 	paths Paths
+
+	// versionOK 记忆「编码器版本已核对通过」，避免每轮封块都 spawn 一次
+	// `<binary> --version`。只在成功时置位：失败会在每轮重新报错，
+	// 这正是版本守卫需要的可见性（静默通过才是危险的）。
+	versionOK bool
 
 	// failBeforeRename 仅供测试注入故障，生产恒为 nil。
 	failBeforeRename func() error
@@ -60,7 +101,10 @@ func NewSealer(opts SealerOptions) (*Sealer, error) {
 		opts.ZstdWindowBytes = defaultZstdWindowBytes
 	}
 	if opts.MinAge <= 0 {
-		opts.MinAge = defaultSealInterval
+		opts.MinAge = defaultSealMinAge
+	}
+	if opts.ExpectedZstdVersion == "" {
+		opts.ExpectedZstdVersion = defaultZstdVersion
 	}
 	if _, err := zstdLongArg(opts.ZstdWindowBytes); err != nil {
 		return nil, err
@@ -97,6 +141,16 @@ func (s *Sealer) Seal(ctx context.Context, task SealTask) error {
 	if task.Rows > 0 && len(offsets) != task.Rows {
 		return fmt.Errorf("%w: 扫描=%d 调用方=%d（拒绝封块，保留 spool）",
 			ErrRowCountMismatch, len(offsets), task.Rows)
+	}
+
+	// 【版本守卫的位置（评审裁决 3a）】放在【所有不依赖编码器的判定之后、
+	// 第一次触碰编码器之前】：产物已存在（ErrPartExists）与行数不符
+	// （ErrRowCountMismatch）都是纯粹的判定 + 读取，必须在 zstd 缺失/版本不符时
+	// 照样能报出来——否则一个配错的编码器会掩盖「产物已存在」「行数不符」这两类
+	// 真实的数据问题，运维看到的根因就是错的（简报的这两个用例明确要求了这个顺序）。
+	// 放在这里同时也保证了：确认编码器可信之前，不创建任何文件（含 .tmp）。
+	if err := s.verifyZstdVersion(); err != nil {
+		return err
 	}
 
 	// 【落地修正 1】产物目录必须在创建 .tmp 之前建好。
@@ -210,6 +264,76 @@ func zstdLongArg(windowBytes int) (string, error) {
 	return strconv.Itoa(bits.Len(uint(windowBytes)) - 1), nil
 }
 
+// verifyZstdVersion 用 `<binary> --version` 探测编码器版本并与期望值比对（只探测一次）。
+//
+// 【为什么在这里而不是 NewSealer（评审裁决 3a）】
+//  1. 发现路径 (*Sealer).ListPendingSeals 是纯文件系统操作，不该要求一个可用的
+//     zstd 二进制；构造期探测会让「只做发现」也依赖编码器版本。
+//  2. 版本校验失效的是【封块产物】，放在 Seal 入口正好覆盖它，且「二进制缺失」
+//     仍与 runZstd 同处一类错误，不重复报错。
+//
+// 失败一律用既有哨兵 ErrSealFailed（不新增哨兵）：与「子进程非零退出/缺失」
+// 同属「这台机器上的编码器不可信」，调用方处置相同——保留 spool、告警、下轮重试。
+func (s *Sealer) verifyZstdVersion() error {
+	if s.versionOK {
+		return nil
+	}
+	out, err := exec.Command(s.opts.ZstdBinary, "--version").Output()
+	if err != nil {
+		// 与 runZstd 同一分类：二进制缺失是部署事故，必须保留 exec.ErrNotFound 身份
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: 探测 zstd 版本失败，找不到可执行文件 %q（部署事故，规格 §11.1）: %w: %w",
+				ErrSealFailed, s.opts.ZstdBinary, exec.ErrNotFound, err)
+		}
+		return fmt.Errorf("%w: 探测 zstd 版本失败（%s --version）: %w",
+			ErrSealFailed, s.opts.ZstdBinary, err)
+	}
+	got, ok := parseZstdVersion(string(out))
+	if !ok {
+		return fmt.Errorf("%w: 无法解析 zstd 版本输出 %q，无法确认编码器版本（规格 §11.1 要求锁定版本，拒绝在未标定的编码器上封块）",
+			ErrSealFailed, strings.TrimSpace(string(out)))
+	}
+	if got != s.opts.ExpectedZstdVersion {
+		return fmt.Errorf("%w: zstd 版本不符：期望 %s，实际 %s。压缩比标定是版本特定的（规格 §5.3.1.1/§11.1），换版本必须重新标定后才能放开",
+			ErrSealFailed, s.opts.ExpectedZstdVersion, got)
+	}
+	s.versionOK = true
+	return nil
+}
+
+// parseZstdVersion 从 `zstd --version` 的输出里取出三段式版本号。
+// 输出形如：*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***
+//
+// 严格三段数字：形如 "1.5.7-beta" 一律视为不可解析（宁可拒绝，也不要把一个
+// 未标定的构建当成已标定版本放过去）。
+func parseZstdVersion(out string) (string, bool) {
+	i := strings.Index(out, " v")
+	if i < 0 {
+		return "", false
+	}
+	rest := out[i+2:]
+	j := strings.IndexByte(rest, ',')
+	if j < 0 {
+		return "", false
+	}
+	v := strings.TrimSpace(rest[:j])
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return "", false
+	}
+	for _, p := range parts {
+		if p == "" {
+			return "", false
+		}
+		for k := 0; k < len(p); k++ {
+			if p[k] < '0' || p[k] > '9' {
+				return "", false
+			}
+		}
+	}
+	return v, true
+}
+
 // runZstd 用 C 版 zstd CLI 把 spoolPath 压缩为 tmpPath，
 // 返回 zstd 帧字节的 sha256 前 8 字节。
 //
@@ -253,18 +377,12 @@ func (s *Sealer) runZstd(ctx context.Context, spoolPath, tmpPath string) ([8]byt
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return empty, fmt.Errorf("%w: 封块上下文取消: %w", ErrSealFailed, ctxErr)
 		}
-		// 【落地修正 2】把「子进程因二进制缺失而无法启动」归一化到 exec.ErrNotFound。
-		//
-		// 为什么不能只靠 %w：exec.Command 只对【不含路径分隔符】的 name 走 LookPath，
-		// 而部署时 ZstdBinary 往往是一个绝对路径（/usr/bin/zstd）。实测
-		//（go1.26.1/darwin）此时 cmd.Run 返回的是 *fs.PathError(ENOENT)，
-		// errors.Is(err, exec.ErrNotFound) 为 false —— 调用方（sealer 循环/告警）
-		// 就无法把「zstd 没装/路径配错」这类部署事故与「压缩本身失败」区分开。
-		// 因此这里显式把「文件不存在」这一支同时挂上 exec.ErrNotFound 与原始错误。
-		if errors.Is(err, os.ErrNotExist) {
-			return empty, fmt.Errorf("%w: 找不到 zstd 可执行文件 %q（部署事故，规格 §11.1）: %w: %w",
-				ErrSealFailed, s.opts.ZstdBinary, exec.ErrNotFound, err)
-		}
+		// 「二进制缺失 → 部署事故」的归一化只保留在 verifyZstdVersion 一处：
+		// 版本探测先于压缩执行，二进制不存在时在探测阶段就会以
+		// ErrSealFailed + exec.ErrNotFound 失败（见 TestSealFailsWhenZstdMissing）。
+		// 这里原样上抛子进程错误即可；若二进制在探测与压缩之间被删（TOCTOU），
+		// 报出来的仍是响亮失败，只是不再额外挂 ErrNotFound 身份——那个窗口不值得
+		// 第二份重复的归一化代码（重复分支无法被任何用例区分）。
 		return empty, fmt.Errorf("%w: zstd 子进程失败（args=%v）: %w（stderr: %s）",
 			ErrSealFailed, args, err, strings.TrimSpace(stderr.String()))
 	}
@@ -348,10 +466,19 @@ func fsyncDir(dir string) error {
 //
 // 调用方还必须保证 minAge 远大于网关的 flush 周期（规格 §7.1）：刚建立的块在
 // 磁盘上可能还是空文件、mtime 停留在创建时刻，只有 flush 才会推进它。
-// 默认值取 defaultSealInterval（15 分钟，与规格 seal_interval 同值）。
-func ListPendingSeals(root string, minAge time.Duration) ([]SealTask, error) {
-	spoolRoot := filepath.Join(root, "spool")
-	cutoff := time.Now().Add(-minAge)
+// 默认值见 defaultSealMinAge（3 小时）——取值推导与对端约束都写在那个常量上。
+//
+// 【目录名校验（评审裁决 3b）】dt/inst 直接来自目录名，非法值一律跳过该目录
+// （不报错中断整轮扫描）：畸形名（"dt=.."、"inst=.."、"dt=2026-9-24"）会被
+// filepath.Join 的清理语义带出 spool 子树，而写入侧已严格校验，两侧必须对称。
+//
+// 【为什么只有方法、没有包级函数（评审裁决 2）】发现路径需要 Root 与 MinAge
+// 两个配置项，包级 ListPendingSeals(root, minAge) 允许它们来自不同来源，
+// 从而产生「用 A 实例的 root 配 B 实例的 minAge」这类组合错误；方法形式
+// 只可能拿到同一份 SealerOptions，因此本包只暴露 (*Sealer).ListPendingSeals()。
+func (s *Sealer) ListPendingSeals() ([]SealTask, error) {
+	spoolRoot := filepath.Join(s.opts.Root, "spool")
+	cutoff := time.Now().Add(-s.opts.MinAge)
 
 	dts, err := os.ReadDir(spoolRoot)
 	if err != nil {
@@ -367,6 +494,16 @@ func ListPendingSeals(root string, minAge time.Duration) ([]SealTask, error) {
 			continue
 		}
 		dt := strings.TrimPrefix(dtEnt.Name(), "dt=")
+		// 【裁决 3b】dt 来自【目录名】，而 SpoolDir/PartDir 走 filepath.Join 的
+		// 清理语义：目录名 "dt=.." 会让 "<root>/spool/dt=../inst=blue" 被 Clean 成
+		// "<root>/spool/inst=blue"，即越过 spool 子树（任务 4 评审在写入侧已堵住，
+		// 列举侧此前没有拦截）。畸形目录名会让下游 Seal 把产物写到布局之外。
+		//
+		// 非法即【跳过】而不是报错：一个坏目录不该让当天所有封块停摆
+		// （与下面「非布局条目静默忽略」同一策略），所以这里是 continue。
+		if err := validateDT(dt); err != nil {
+			continue
+		}
 		dtDir := filepath.Join(spoolRoot, dtEnt.Name())
 
 		insts, err := os.ReadDir(dtDir)
@@ -378,6 +515,11 @@ func ListPendingSeals(root string, minAge time.Duration) ([]SealTask, error) {
 				continue
 			}
 			inst := strings.TrimPrefix(instEnt.Name(), "inst=")
+			// 【裁决 3b】同 dt：白名单外（含 "inst=.."、"inst=bluex"）一律跳过。
+			// 与写入侧 Writer 的 Inst 白名单对称，避免「写侧严格、列举侧宽松」。
+			if inst != instBlue && inst != instGreen {
+				continue
+			}
 			dir := filepath.Join(dtDir, instEnt.Name())
 
 			ents, err := os.ReadDir(dir)
@@ -423,13 +565,4 @@ func ListPendingSeals(root string, minAge time.Duration) ([]SealTask, error) {
 		return out[i].Part < out[j].Part
 	})
 	return out, nil
-}
-
-// ListPendingSeals 用本实例配置的 MinAge 发现待封块。
-//
-// 与包级 ListPendingSeals(root, minAge) 是同一个实现：Sealer 持有 Root 与 MinAge
-// 两个配置项，sealer 循环（计划 4/8）只需构造一次 Sealer 即可发现并封块，
-// 不必在两处各自维护同一组参数。
-func (s *Sealer) ListPendingSeals() ([]SealTask, error) {
-	return ListPendingSeals(s.opts.Root, s.opts.MinAge)
 }

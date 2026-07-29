@@ -1244,7 +1244,7 @@ ErrSealFailed 三个哨兵，供方案 C 的 sealer 调用方用 errors.Is 分�
   - `func (w *Writer) Close() error`
   - **参数校验**（均为无哨兵的参数校验：启动期/调用期的致命错误，调用方无从分支处理，故沿用本包约定只断言「必须报错」，不新增 `ErrInvalidInst` 之类的哨兵）。
     - **`Inst` 白名单（现状，已落地在提交 `8cd873e7`）**：只接受 `"blue"`/`"green"`。`inst` 直接拼进目录名，而 `filepath.Join` 会做路径清理——`Inst="../green"` 会被清成 `<root>/dt=X/green`（越过 `inst=` 子树，把两个实例的正文混进同一目录），`Inst="blue/"` 会被清成 `blue` 而与标识不符；**用一条白名单分支同时涵盖空值与非法值**（`""` 不在枚举里），不再单列「Inst 非空」分支——删掉那个独立分支没有任何用例转红，是零覆盖守卫。
-    - **⚠️ `dt` 格式校验（要求，待落地）**：`Append`/`AppendFailed` 收到的 `dt` 必须用 `time.Parse("2006-01-02", dt)` 校验（必须成功）。理由与 `Inst` 白名单同类——`dt` 同样直接拼进目录名，`dt="../x"` 借 `filepath.Join` 的路径清理把文件写进 `<root>/x`，越过 `dt=` 子树。**提交 `8cd873e7` 尚未包含这条修正**（Task 5 实现者已在报告 §7.C 登记为建议，控制者已下达该修正）；这是**要求**，不是现状。
+    - **⚠️ `dt` 格式校验（现状，已落地在评审修正 `52ccc9b2`）**：`Append`/`AppendFailed` 收到的 `dt` 由 `validateDT` 校验（`time.Parse("2006-01-02", dt)` 必须成功，日期形式常量 `dateLayout`）。理由与 `Inst` 白名单同类，**两者是同一个洞的两半**——`dt` 同样直接拼进目录名，`dt="../x"` 借 `filepath.Join` 的路径清理把文件写进 `<root>/x`，越过 `dt=` 子树。`time.Parse` 一次挡住四类输入：路径穿越与空串（`"../x"`、`""`）、长度不符（`"20260924"`）、**未补零（`"2026-9-24"`，会让同一天出现两个目录名而点读只认其中一个）**、非法日期（`"2026-13-01"`、`"2026-02-30"`）。校验放在 `w.mu.Lock()` **之前**，先于任何文件系统副作用——非法 `dt` 不得留下任何目录；`AppendFailed` 复用 `Append`，因此两个写入入口共用同一道校验。同样不设哨兵。
 
   ```go
   type SealTask struct {
@@ -1517,12 +1517,14 @@ func TestNewWriterRejectsIllegalInst(t *testing.T) {
 	}
 }
 
-// ⚠️【要求，待落地】TestWriterRejectsIllegalDT 对应控制者下达的 dt 格式校验修正。
-// 提交 8cd873e7 **尚未包含**该修正（Task 5 实现者已在报告 §7.C 登记为建议），
-// 因此在本条要求落地前，本用例会失败 —— 它正是用来驱动那次修正的。
-// 理由与 Inst 白名单同类：dt 也直接拼进目录名，dt="../x" 会经 filepath.Join 的
-// 路径清理把文件写进 <root>/x，越过 dt= 子树。
-func TestWriterRejectsIllegalDT(t *testing.T) {
+// TestWriterAppendRejectsIllegalDT 锁定 dt 的「路径分量」校验（已落地在 `52ccc9b2`）。
+//
+// dt 与 inst 是同一个洞的两半：两者都直接拼进目录名，而 filepath.Join 会做
+// 路径清理，dt="../x" 会被清成 <root>/x（越过 dt= 子树）。因此 dt 必须是
+// 严格日期 YYYY-MM-DD，time.Parse 一次挡住路径穿越、空串、未补零、非法日期。
+//
+// 判据：删掉 Append 里的 validateDT 调用，本用例转红（第一类断言即 err == nil）。
+func TestWriterAppendRejectsIllegalDT(t *testing.T) {
 	root := t.TempDir()
 	w, err := NewWriter(WriterOptions{Root: root, Inst: "blue", BlockBytes: 1 << 30})
 	if err != nil {
@@ -1530,14 +1532,43 @@ func TestWriterRejectsIllegalDT(t *testing.T) {
 	}
 	defer w.Close()
 
-	for _, dt := range []string{"", "../x", "2026-9-24", "2026-09-24/../../x", "2026-09-24 "} {
+	bad := []string{
+		"",                     // 空串
+		"../x",                 // 路径穿越：Join 会清成 <root>/x
+		"2026-9-24",            // 未补零：同一天会出现两个目录名
+		"2026-13-01",           // 非法月份
+		"2026-02-30",           // 非法日期
+		"2026-09-24T00:00:00Z", // 带时间部分（多出文本）
+		"2026-09-24/../..",     // 以合法日期开头的穿越
+		"20260924",             // 无分隔符
+	}
+	for _, dt := range bad {
 		if _, err := w.Append(dt, []byte("x\n")); err == nil {
-			t.Fatalf("dt=%q 应被拒绝（越过 dt= 子树或不是 YYYY-MM-DD）", dt)
+			t.Fatalf("Append 的 dt=%q 应被拒绝", dt)
+		}
+		if err := w.AppendFailed(dt); err == nil {
+			t.Fatalf("AppendFailed 的 dt=%q 应被拒绝", dt)
 		}
 	}
-	// 反向断言：合法日期必须仍然可用，否则「一律拒绝」也会让上面的用例全绿。
-	if _, err := w.Append("2026-09-24", []byte("x\n")); err != nil {
+	// 校验必须先于任何文件系统副作用：全部非法输入被拒后，归档根目录必须是空的。
+	ents, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 0 {
+		t.Fatalf("非法 dt 不得产出任何文件/目录，实际在 %s 下看到 %v", root, ents)
+	}
+
+	// 反向断言：合法日期必须仍被接受（否则「一律拒绝」也会让上面的断言全绿）
+	ref, err := w.Append("2026-09-24", []byte("x\n"))
+	if err != nil {
 		t.Fatalf("合法 dt 应被接受: %v", err)
+	}
+	if ref.DT != "2026-09-24" || ref.Part != 0 || ref.Row != 0 {
+		t.Fatalf("合法 dt 的定位键不符: %s", ref)
+	}
+	if err := w.AppendFailed("2026-09-25"); err != nil {
+		t.Fatalf("AppendFailed 的合法 dt 应被接受: %v", err)
 	}
 }
 
@@ -1572,13 +1603,12 @@ func countLines(b []byte) int {
 
 - [ ] **步骤 2：运行测试并确认失败**
 
-运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestWriterAppendAssignsDenseRowSeq|TestWriterAppendFailedWritesMarkerLineAndAdvancesRow|TestWriterPendingSealsBySize|TestWriterPendingSealsFlushesBuffer|TestWriterPendingSealsByInterval|TestWriterNextSeqResumesFromDirectory|TestNewWriterRejectsEmptyRootAndInst|TestNewWriterRejectsIllegalInst|TestWriterPendingSealsNilBeforeAnyAppend' -v`
-（`TestWriterRejectsIllegalDT` 属**待落地**的 `dt` 校验要求，见接口一节；该修正落地后必须把它追加进上面的 `-run` 组合。）
+运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestWriterAppendAssignsDenseRowSeq|TestWriterAppendFailedWritesMarkerLineAndAdvancesRow|TestWriterPendingSealsBySize|TestWriterPendingSealsFlushesBuffer|TestWriterPendingSealsByInterval|TestWriterNextSeqResumesFromDirectory|TestNewWriterRejectsEmptyRootAndInst|TestNewWriterRejectsIllegalInst|TestWriterPendingSealsNilBeforeAnyAppend|TestWriterAppendRejectsIllegalDT' -v`
 预期：`./tests/tracearchive/` 编译失败，提示 `undefined: ta.NewWriter`、`undefined: ta.WriterOptions`、`undefined: ta.SealTask`；`./internal/tracearchive/` 无此任务的用例（任务 2~4 的 A 层用例因 `-run` 过滤而不执行）。
 
 > 注意 `TestNewWriterRejectsEmptyRootAndInst` / `TestNewWriterRejectsIllegalInst` / `TestWriterPendingSealsNilBeforeAnyAppend` **不以 `TestWriter` 开头**，写完的 `-run` 组合里必须显式带上它们。
 
-> **用例清单相对简报原文的变化（与提交 `8cd873e7` 对齐）**：`TestWriterAppendFailedAdvancesRowSeqWithoutBytes` 已按控制者裁决**改名并改期望**为 `TestWriterAppendFailedWritesMarkerLineAndAdvancesRow`（spool 由 2 行变为 3 行：`line0`/`null`/`line2`，`ref.Row == 2` 不变，读文件前先用 `PendingSeals()` 落缓冲）；新增 `TestNewWriterRejectsIllegalInst`（Inst 白名单，现状）；`TestWriterRejectsIllegalDT`（`dt` 格式校验）为**要求、待落地**。交付的实际测试文件还补了若干简报未列的守卫用例（默认阈值、`SealTask` 全字段、末尾换行、跨天换块、spool 目录不可用、`Close` 幂等、`MarkSealed` 换块），与任务 4 交付时「用例超出简报」的既有做法一致，本节不再逐一列出。
+> **用例清单相对简报原文的变化（与提交 `8cd873e7` + 评审修正 `52ccc9b2` 对齐）**：`TestWriterAppendFailedAdvancesRowSeqWithoutBytes` 已按控制者裁决**改名并改期望**为 `TestWriterAppendFailedWritesMarkerLineAndAdvancesRow`（spool 由 2 行变为 3 行：`line0`/`null`/`line2`，`ref.Row == 2` 不变，读文件前先用 `PendingSeals()` 落缓冲）；新增 `TestNewWriterRejectsIllegalInst`（Inst 白名单）与 `TestWriterAppendRejectsIllegalDT`（dt 路径分量校验：8 个非法输入 + 「非法 dt 不得留下任何文件/目录」+ 合法日期反向断言），二者均**已落地**；`TestWriterListPartsFiltersIllegalNames` 随 `ListParts` 按 YAGNI 一并删除。交付的实际测试文件还补了若干简报未列的守卫用例（默认阈值、`SealTask` 全字段、末尾换行、跨天换块、spool 目录不可用、`Close` 幂等、`MarkSealed` 换块），与任务 4 交付时「用例超出简报」的既有做法一致，本节不再逐一列出。
 
 - [ ] **步骤 3：编写最小实现**
 
@@ -1596,16 +1626,43 @@ import (
 	"time"
 )
 
-// 实例标识白名单。
+// 路径分量校验（dt 与 inst 必须成对看待，一处漏掉就是同一个洞的另一半）。
 //
-// inst 直接拼进目录名（<root>/dt=X/inst=<inst>），而 filepath.Join 会做路径清理：
-// Inst="../green" 会被清成 <root>/dt=X/green（越过 inst= 子树，两个实例的正文
-// 混进同一目录），Inst="blue/" 会被清成 blue 而与标识不符。因此取值必须枚举，
-// 不能只查非空。
+// 两个分量都直接拼进目录名（<root>/dt=<dt>/inst=<inst>），而 filepath.Join
+// 会做路径清理：
+//   - Inst="../green" 会被清成 <root>/dt=X/green，越过 inst= 子树，把两个实例
+//     的正文混进同一目录；
+//   - dt="../x" 会被清成 <root>/x，越过 dt= 子树。
+//
+// 因此两者都用严格取值而不是「非空」：
+//   - inst：枚举白名单（见 NewWriter）；
+//   - dt：严格日期格式（见 validateDT）。
 const (
 	instBlue  = "blue"
 	instGreen = "green"
+
+	// dateLayout 是 dt 的唯一合法形式：YYYY-MM-DD，且必须补零。
+	// 不补零（"2026-9-24"）会让同一天出现两个目录名，而点读只能按 Ref.DT
+	// 拼出其中一个路径，另一个目录里的正文就永远读不到。
+	dateLayout = "2006-01-02"
 )
+
+// validateDT 校验归属天分量（与 NewWriter 的 Inst 白名单同属「路径分量校验」）。
+//
+// time.Parse 一次挡住四类输入：
+//   - 路径穿越与空串（"../x"、""）；
+//   - 长度不符（"20260924"、"26-09-24"）；
+//   - 未补零（"2026-9-24"）；
+//   - 非法日期（"2026-13-01"、"2026-02-30"）。
+//
+// 不设哨兵错误：与 Inst 同理——这是调用方无从分支处理的参数错误，
+// 加进本包的错误集合只会扩冻结接口。
+func validateDT(dt string) error {
+	if _, err := time.Parse(dateLayout, dt); err != nil {
+		return fmt.Errorf("tracearchive: dt 必须是 %s 形式的合法日期，实际 %q", dateLayout, dt)
+	}
+	return nil
+}
 
 // WriterOptions 是追加写入器的配置。
 type WriterOptions struct {
@@ -1654,6 +1711,7 @@ func NewWriter(opts WriterOptions) (*Writer, error) {
 	if opts.Root == "" {
 		return nil, fmt.Errorf("tracearchive: Root 不能为空")
 	}
+	// inst 是路径分量，与 dt 的校验成对（见文件头的「路径分量校验」与 validateDT）。
 	// 空值也被这条白名单涵盖（"" 不在枚举里），因此不再单列「非空」分支：
 	// 一个永远无法被测试区分的分支就是零覆盖的守卫。
 	if opts.Inst != instBlue && opts.Inst != instGreen {
@@ -1670,19 +1728,19 @@ func NewWriter(opts WriterOptions) (*Writer, error) {
 
 // Append 追加一行，返回该行的定位键。line 末尾的换行可有可无。
 //
+// dt 是路径分量（与 NewWriter 的 Inst 白名单成对），这里的校验是唯一的
+// dt 入口：AppendFailed 复用本方法，因此两个写入入口共用同一道校验。
+// 校验放在加锁之前——先于任何文件系统副作用，非法 dt 不得留下任何目录。
+//
 // 写入失败时不推进行号：bufio 的错误是粘性的，一次写失败后该块再也写不进
 // 任何字节，调用方只能走 AppendFailed。因此不存在「行号已推进而字节没写」
 // 的窗口（承重约束 3）。
 func (w *Writer) Append(dt string, line []byte) (Ref, error) {
+	if err := validateDT(dt); err != nil {
+		return Ref{}, err
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	// ⚠️【要求，待落地】dt 格式校验：提交 8cd873e7 尚未包含这一段，
-	// 但控制者已下达该修正（理由见本任务「接口/参数校验」：dt 同样直接拼进
-	// 目录名，dt="../x" 会经 filepath.Join 的路径清理越过 dt= 子树）。
-	if _, err := time.Parse("2006-01-02", dt); err != nil {
-		return Ref{}, fmt.Errorf("tracearchive: dt 必须是 YYYY-MM-DD，实际 %q: %w", dt, err)
-	}
 
 	cur, err := w.ensureBlockLocked(dt)
 	if err != nil {
@@ -1729,6 +1787,8 @@ var failedRowMarker = []byte("null")
 //
 // 读取侧约定：遇到标记行应返回 ErrBodyMissing（正文从未落盘），
 // 不得把 "null" 当作正文返回。该约定由任务 7 的 Reader 落实。
+//
+// dt 的路径分量校验由 Append 承担（本方法复用它），因此非法 dt 在这里同样报错。
 func (w *Writer) AppendFailed(dt string) error {
 	// 刻意复用 Append，而不是自己再写一遍写入逻辑：
 	// 标记行与真实正文在 trim/换行/行号推进/字节计数上共用同一段代码，
@@ -1889,10 +1949,10 @@ func (w *Writer) nextSeqLocked(dt string) (int, error) {
 }
 
 // 【曾有 ListParts(dt string) ([]int, error)：返回某天某实例已存在的产物块序号（升序）】
-// 控制者已裁定按 YAGNI 移除：本包内没有消费者——任务 6 用自己的 ListPendingSeals
-// 扫目录，任务 6/7/8 的简报均未引用它。故这里不再提供它，也不再需要 "sort" 导入。
-// ⚠️ 待落地：提交 8cd873e7 仍保留该方法及其用例 TestWriterListPartsFiltersIllegalNames
-// （实现者报告 §7.B 说明它来自简报代码块、被主动保留并补了用例），删除动作尚未提交。
+// 控制者按 YAGNI 裁定移除：本包内没有消费者——任务 6 用自己的 ListPendingSeals
+// 扫目录，任务 7 从 Ref 推导路径，后续计划也未用到。
+// 已落地在评审修正 52ccc9b2：整段删除该方法、它唯一用到的 "sort" 导入，
+// 以及它的两条分支用例（TestWriterListPartsFiltersIllegalNames）。
 
 func trimNewline(b []byte) []byte {
 	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
@@ -1904,10 +1964,9 @@ func trimNewline(b []byte) []byte {
 
 - [ ] **步骤 4：运行测试并确认通过**
 
-运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestWriterAppendAssignsDenseRowSeq|TestWriterAppendFailedWritesMarkerLineAndAdvancesRow|TestWriterPendingSealsBySize|TestWriterPendingSealsFlushesBuffer|TestWriterPendingSealsByInterval|TestWriterNextSeqResumesFromDirectory|TestNewWriterRejectsEmptyRootAndInst|TestNewWriterRejectsIllegalInst|TestWriterPendingSealsNilBeforeAnyAppend' -v`
-（`TestWriterRejectsIllegalDT` 属**待落地**的 `dt` 校验要求，见接口一节；该修正落地后必须把它追加进上面的 `-run` 组合。）
-预期：PASS（含 `AppendFailed` 行号推进 + `null` 标记行、双触发封块、目录恢复块序号、`Inst` 白名单、无当前块五组）。
-> ⚠️ 状态说明（以代码为准）：除 `TestWriterRejectsIllegalDT` 外，上面全部用例已在提交 `8cd873e7` 落地且 PASS；`dt` 格式校验及其用例**尚未落地**（控制者已下达，实现者报告 §7.C 登记），故该用例现在是红的——它要在那次修正里一起变绿。
+运行：`go test ./internal/tracearchive/ ./tests/tracearchive/ -run 'TestWriterAppendAssignsDenseRowSeq|TestWriterAppendFailedWritesMarkerLineAndAdvancesRow|TestWriterPendingSealsBySize|TestWriterPendingSealsFlushesBuffer|TestWriterPendingSealsByInterval|TestWriterNextSeqResumesFromDirectory|TestNewWriterRejectsEmptyRootAndInst|TestNewWriterRejectsIllegalInst|TestWriterPendingSealsNilBeforeAnyAppend|TestWriterAppendRejectsIllegalDT' -v`
+预期：PASS（含 `AppendFailed` 行号推进 + `null` 标记行、双触发封块、目录恢复块序号、`Inst` 白名单与 `dt` 路径分量校验、无当前块五组）。
+> 状态（以代码为准）：上面全部用例已在提交 `8cd873e7`（写入器主体）与评审修正 `52ccc9b2`（`dt` 校验、删除 `ListParts`）落地且 PASS。
 
 - [ ] **步骤 5：提交**
 
@@ -3844,11 +3903,12 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 
 **D6 的下游约定**：任务 6 的行数交叉校验由此**天然对齐**，不得为「跳号」添加补偿逻辑（见任务 6 的登记说明）；任务 7 的两条读取路径（产物 / spool）遇到标记行必须返回 **`ErrBodyMissing`**，不得把 `"null"` 当正文递出去（见任务 7 的接口与用例）。
 
-**同批报备但不属计划缺陷的一条**（登记以免后人误判为遗漏）：`Inst` 白名单（只允许 `blue`/`green`）用**一条**分支同时涵盖空值与非法值，取代简报里的独立「非空 Inst」分支——理由是删掉那个独立分支没有任何用例转红（零覆盖守卫）。已落地在 `8cd873e7`。
+**同批报备但不在上表的两条**（登记以免后人误判为遗漏），**均已在评审修正 `52ccc9b2` 落地**：
 
-**尚未落地、控制者已下达的两条**（不得当成现状）：
-- **`dt` 格式校验**（`time.Parse("2006-01-02", dt)`）：Task 5 实现者在报告 §7.C 登记为建议但未获授权动手，控制者已下达该修正；本文档已在任务 5 的接口、用例清单与自检中标记为**要求，待落地**。
-- **移除 `ListParts`**：控制者裁定按 YAGNI 移除（本包内无消费者），但提交 `8cd873e7` 仍保留该方法及其用例 `TestWriterListPartsFiltersIllegalNames`；任务 5 的代码块已按裁定删除，并注明该删除**尚未提交**。
+- **`Inst` 白名单（`8cd873e7`）与 `dt` 路径分量校验（`52ccc9b2`）成对**：两者是同一个洞的两半——`inst` 与 `dt` 都直接拼进目录名而 `filepath.Join` 会做路径清理。`Inst` 用一条枚举分支（同时涵盖空值与非法值，取代简报里的独立「非空 Inst」分支，理由是删掉它没有任何用例转红）；`dt` 用 `validateDT`（`time.Parse`）挡住路径穿越/空串/未补零/非法日期，且校验先于任何文件系统副作用。两条都不设哨兵（调用方无从分支处理的参数错误）。
+- **移除 `ListParts`（`52ccc9b2`）**：控制者按 YAGNI 裁定移除（本包内无消费者：任务 6 用 `ListPendingSeals` 扫 spool，任务 7 从 `Ref` 推导路径），已连同它唯一用到的 `sort` 导入与用例 `TestWriterListPartsFiltersIllegalNames` 一并删除。
+
+> **说明（本节的时效）**：Task 5 的报告（`.superpowers/sdd/2026-09-24-tracearchive-storage-primitives/task-5-report.md`）§7.B/§7.C 把 `ListParts` 记为「保留并补了用例」、把 `dt` 校验记为「建议，未实现」；那是提交 `8cd873e7` 时点的状态，已被评审修正 `52ccc9b2` 取代。**以代码为准**：截至 `52ccc9b2`，两条修正都已落地。
 
 ---
 
@@ -3895,7 +3955,7 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 
 **3. 测试命令与断言自检（方案 C 修订新增）**：
 - 全文不再出现 `-run TestXxx` 单模式命令；每个任务的 RED/GREEN 命令都显式列出该任务的全部测试名（`|` 连接）。理由：Go 的 `-run` 是**子串匹配**，`-run TestTrailer` 会漏掉三个 `TestDecodeTrailer*`、`-run TestFooter` 会漏掉四个 `TestDecodeFooterRejects*`、`-run TestReader` 会漏掉新增的 `TestReaderRejectsOversizedTrailerLen`。
-- 每个「应当失败」的断言都带**错误身份**：`ErrTrailerCorrupt`（任务 2）、`ErrFooterCorrupt`（任务 3、7）、`ErrPartExists` / `ErrRowCountMismatch` / `ErrSealFailed`（任务 4 定义、任务 6 使用）、`ErrNotArchived` / **`ErrBodyMissing`**（任务 4 定义、任务 7 使用：标记行 ⇒ `ErrBodyMissing`，规格 §8.2）。无哨兵的参数校验错误（`NewWriter` 的空 Root、**`Inst` 白名单**、`Append`/`AppendFailed` 的 `dt` 格式校验〔**要求，待落地**〕、`NewSealer` 的空 Root、`zstdLongArg` 的非 2 的幂窗口）只断言「必须报错」，已在计划中注明理由。
+- 每个「应当失败」的断言都带**错误身份**：`ErrTrailerCorrupt`（任务 2）、`ErrFooterCorrupt`（任务 3、7）、`ErrPartExists` / `ErrRowCountMismatch` / `ErrSealFailed`（任务 4 定义、任务 6 使用）、`ErrNotArchived` / **`ErrBodyMissing`**（任务 4 定义、任务 7 使用：标记行 ⇒ `ErrBodyMissing`，规格 §8.2）。无哨兵的参数校验错误（`NewWriter` 的空 Root、**`Inst` 白名单**、**`Append`/`AppendFailed` 的 `dt` 路径分量校验**、`NewSealer` 的空 Root、`zstdLongArg` 的非 2 的幂窗口）只断言「必须报错」，已在计划中注明理由。
 - 三条 **golden 逐字节**测试各覆盖一处格式契约：trailer 差分 varint（任务 2）、footer 32 字节字段布局（任务 3）、产物整体「帧+trailer+footer」（任务 6）。它们与「往返测试」互补——往返测试对**对称的**布局 bug 是盲的。
 - **方案 C 的新增测试依赖**：任务 6/7/8 的封块类用例需要本机 `zstd`（`requireZstd` 缺失即 skip），CI 镜像必须安装；失败语义与字节布局用例用假 `zstd` 脚本，不依赖真实版本。
 

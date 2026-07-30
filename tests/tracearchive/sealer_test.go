@@ -611,29 +611,97 @@ func TestSealFailsWhenSpoolMissing(t *testing.T) {
 // 产物会以 Ref 寻址、却装进另一个文件的内容 —— 点读会【静默返回错正文】，
 // 这是本项目最不可接受的一类失效。删掉这条校验，本用例转红。
 //
-// 顺带钉住执行顺序：本用例不提供 zstd（SealerOptions 没给 ZstdBinary），
-// 说明该判定发生在版本探测与一切 I/O 之前 —— 畸形调用不该先去看世界状态。
+// 顺带钉住【执行顺序】（复审第 1 条：原判据「先于版本探测与一切 I/O」超出用例能钉住的
+// 范围，已收窄为两条各自可被实测钉住的命题）：
+//
+//	(a) 先于版本探测。本用例把 ZstdBinary 指向一个**不存在的文件**：
+//	    - 判定在前 ⇒ 错误是「不一致」（本用例断言的东西）；
+//	    - 判定在后 ⇒ 错误会变成「版本探测失败：找不到 zstd」，断言 628 行即红。
+//	  比原来的「不给 ZstdBinary」强：默认值 "zstd" 在本机是**存在**的，
+//	  若本机版本恰好等于默认版本，探测会通过，那条断言就钉不住任何顺序。
+//
+//	(b) 先于产物存在性检查。本用例先放一份 part 0 的**既有产物**（哨兵内容）：
+//	    - 判定在前 ⇒ 不一致 ⇒ 走不到 ErrPartExists（629 行的 errors.Is(ErrSealFailed) 成立）；
+//	    - 判定在后 ⇒ 产物存在 ⇒ ErrPartExists（它**不**包裹 ErrSealFailed）⇒ 625 行即红。
+//	  并反向断言「把 SpoolPath 换成正确路径就真的会撞 ErrPartExists」，证明哨兵确实生效、
+//	  而不是这条 fixture 永远不会触发它（否则 (b) 是空断言）。
 func TestSealRejectsSpoolPathNotMatchingRef(t *testing.T) {
 	root := t.TempDir()
 	// 真实存在、但属于 part 1 的 spool；任务却声称它是 part 0
 	other := writeSpool(t, root, "2026-09-24", "blue", 1, [][]byte{[]byte("属于 part 1 的正文")})
 
-	s, _ := ta.NewSealer(ta.SealerOptions{Root: root})
+	// part 0 的既有产物（用于 (b)：断言「先于产物存在性检查」）
+	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
+	if err := os.MkdirAll(filepath.Dir(partPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const sentinel = "既有产物，绝不能被碰"
+	if err := os.WriteFile(partPath, []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// (a) 指向不存在的 zstd ⇒ 若判定晚于版本探测，错误文案不会是「不一致」
+	s, _ := ta.NewSealer(ta.SealerOptions{
+		Root: root, ZstdBinary: filepath.Join(root, "这个-zstd-不存在"),
+	})
 	err := s.Seal(context.Background(), ta.SealTask{
 		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: other, Rows: 1,
 	})
 	if !errors.Is(err, ta.ErrSealFailed) {
 		t.Fatalf("SpoolPath 与 Ref 不一致必须失败（ErrSealFailed），实际 %v", err)
 	}
+	if errors.Is(err, ta.ErrPartExists) {
+		t.Fatalf("该判定必须先于产物存在性检查（否则报的是产物已存在），实际 %v", err)
+	}
 	if msg := err.Error(); !strings.Contains(msg, "不一致") {
 		t.Fatalf("错误信息必须点明路径不一致（否则运维看不出是调用方构造错了），实际: %v", err)
 	}
-	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
-	if _, statErr := os.Stat(partPath); !os.IsNotExist(statErr) {
-		t.Fatal("路径不一致时不得产出 part 0 的产物（否则点读 part 0 会返回 part 1 的正文）")
+	if b, readErr := os.ReadFile(partPath); readErr != nil || string(b) != sentinel {
+		t.Fatalf("既有产物不得被碰（读回 %q, err=%v）", b, readErr)
 	}
 	if _, statErr := os.Stat(partPath + ".tmp"); !os.IsNotExist(statErr) {
 		t.Fatal("路径不一致时不应创建 .tmp")
+	}
+
+	// 反向：同一个 task 只要 SpoolPath 正确，就会走到产物存在性检查 ⇒ ErrPartExists。
+	// （若这里不红，说明上面的哨兵 fixture 无效，(b) 就成了空断言。）
+	spool := writeSpool(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("part 0 的正文")})
+	err = s.Seal(context.Background(), ta.SealTask{
+		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spool, Rows: 1,
+	})
+	if !errors.Is(err, ta.ErrPartExists) {
+		t.Fatalf("哨兵 fixture 必须能触发 ErrPartExists（否则 (b) 是空断言），实际 %v", err)
+	}
+}
+
+// TestSealAcceptsCleanedEquivalentSpoolPath 锁定 ⑤ 守卫的比较方式（复审「轻微 3」）：
+// 与规范路径**等价但拼写不同**的 SpoolPath（含 "./"）必须被接受，而不是被误拒。
+//
+// 为什么：Seal 是导出 API，未来调用方完全可能用 root + "/./spool/..." 拼路径。
+// 删掉守卫里的 filepath.Clean，本用例转红（会被判成「路径不一致」而拒绝封块）。
+// 刻意的边界：只做 Clean，不做 EvalSymlinks —— 后者要读文件系统，会破坏
+// 「纯内存判定」的性质；符号链接造成的误拒登记为已知限制。
+func TestSealAcceptsCleanedEquivalentSpoolPath(t *testing.T) {
+	root := t.TempDir()
+	spool := writeSpool(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("aaa")})
+	// 手工拼接（不能用 filepath.Join：它自己就会 Clean，拼不出带 "./" 的形式）
+	dotted := root + "/./spool/dt=2026-09-24/inst=blue/part-000000.jsonl"
+	if dotted == spool {
+		t.Fatalf("fixture 无效：拼接结果与规范路径相同（%q）", dotted)
+	}
+
+	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: fakeZstd(t, "exec cat\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Seal(context.Background(), ta.SealTask{
+		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: dotted, Rows: 1,
+	}); err != nil {
+		t.Fatalf("与规范路径等价的 SpoolPath（含 ./）不该被拒: %v", err)
+	}
+	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
+	if _, statErr := os.Stat(partPath); statErr != nil {
+		t.Fatalf("封块应正常产出: %v", statErr)
 	}
 }
 
@@ -1200,10 +1268,10 @@ func TestListPendingSealsRejectsMalformedDirNames(t *testing.T) {
 	// 全部 stale，因此「没被返回」只可能是因为目录名校验，而不是 minAge
 	write("spool/dt=2026-9-24/inst=blue/part-000001.jsonl")   // dt 未补零
 	write("spool/dt=20260924/inst=blue/part-000002.jsonl")    // dt 非 YYYY-MM-DD
-	write("spool/dt=../inst=blue/part-000003.jsonl")          // dt=.. ⇒ filepath.Join 会爬出子树
+	write("spool/dt=../inst=blue/part-000003.jsonl")          // dt=.. ⇒ 目录名与标识不符（Join **不**折叠，理由见本用例上方注释）
 	write("spool/dt=2026-02-30/inst=blue/part-000004.jsonl")  // 合法格式但日期不存在
 	write("spool/dt=2026-09-24/inst=bluex/part-000005.jsonl") // inst 不在白名单
-	write("spool/dt=2026-09-24/inst=../part-000006.jsonl")    // inst=.. ⇒ 同样爬出子树
+	write("spool/dt=2026-09-24/inst=../part-000006.jsonl")    // inst=.. ⇒ 同上（不折叠；且目录名不可能含 "/"，故此处穿越不成立）
 	write("spool/dt=2026-09-24/inst=blue/part-000007.jsonl")  // 唯一合法
 
 	tasks, err := listPendingSeals(t, root, time.Hour)

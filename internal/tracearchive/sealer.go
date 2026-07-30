@@ -138,8 +138,14 @@ func (s *Sealer) Seal(ctx context.Context, task SealTask) error {
 	//
 	// 当前唯一调用方 ListPendingSeals 由 SpoolFile 构造 path，天然自洽；这条守卫是
 	// 给未来调用方与重构用的。
+	//
+	// 比较前对 task.SpoolPath 做 filepath.Clean（评审复审 3）：调用方可能用 "./"、
+	// "x/../" 这类**等价但拼写不同**的路径构造 task，Clean 后仍指向同一文件，不该被误拒。
+	// 刻意【不】做 EvalSymlinks：那要读文件系统，会破坏「纯内存判定」这一性质。
+	// 已知残余限制（只登记，不修）：经符号链接或不同绝对拼写指向同一文件的 Root
+	// 仍可能被误拒——放宽它需要 I/O，代价大于收益。
 	wantSpool := s.paths.SpoolFile(Ref{DT: task.DT, Inst: task.Inst, Part: task.Part})
-	if task.SpoolPath != wantSpool {
+	if filepath.Clean(task.SpoolPath) != wantSpool {
 		return fmt.Errorf("%w: task.SpoolPath=%q 与 Ref{%s, %s, %d} 对应的 %q 不一致（拒绝封块：产物会以 Ref 寻址却装进另一文件的内容）",
 			ErrSealFailed, task.SpoolPath, task.DT, task.Inst, task.Part, wantSpool)
 	}

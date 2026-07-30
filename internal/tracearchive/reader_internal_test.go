@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // 本文件是任务 7（按定位键点读）的 A 层（包内）测试。
@@ -18,7 +19,8 @@ import (
 //     「上界的边界用例」，改常量时用例不会跟着动，等于把守卫与用例解耦。
 //     此外它要用未导出的 footer/encodeFooter 构造「帧摘要与邻接都自洽、唯独 trailer_len
 //     越界」的产物，这种自洽只能靠包内的编码器表达。
-//  2. TestReaderReleasesConcurrencySlots：断言要读 Reader 的内部状态 r.inFlight()
+//  2. TestReaderReleasesConcurrencySlots 与 TestReaderHonorsContextCancelWhileWaitingForSlot：
+//     前者的断言要读 Reader 的内部状态 r.inFlight()
 //     （= len(r.sem)）。外部包只能观察到「读成功了」，观察不到「槽位还回来了」——
 //     而槽位泄漏正是并发上限实现最容易出的 bug（跑满 MaxConcurrent 后永久卡死）。
 //     对应的公开行为断言留在 B 层：tests/tracearchive/reader_test.go 的
@@ -115,5 +117,75 @@ func TestReaderReleasesConcurrencySlots(t *testing.T) {
 		if got := r.inFlight(); got != 0 {
 			t.Fatalf("第 %d 次读取后并发槽位未释放，残留 %d", i, got)
 		}
+	}
+}
+
+// TestReaderHonorsContextCancelWhileWaitingForSlot 覆盖「等待并发槽位期间的取消」
+// （reader.go:109-114 的 select 的 case <-ctx.Done() 那一支）。
+//
+// 【为什么破例放包内】要**确定性地**走到该分支，必须先把槽位占满；而占满的唯一办法
+// 是直接向未导出的 r.sem 投一个令牌——外部包既观察不到 r.sem，也造不出「槽位已满」
+// 这个状态。占满之后 select 的两个分支里只有 ctx.Done() 就绪（向已满的带缓冲 channel
+// 发送不可就绪），所以本用例不依赖调度时序、不 sleep、没有竞态。
+//
+// 【它守的是什么】槽位被占满时，调用方的取消必须立刻返回 context.Canceled，而不是
+// 无限期排队等槽位。没有这一支，被取消的请求会一直占着调用方 goroutine（以及 HTTP
+// 连接）直到前面那次 decode 结束——而 decode 可能持续数秒。
+//
+// 【为什么用带界的 select 而不是直接调用】直接调用在「该分支被删」时会永久阻塞，
+// 把整个测试包拖成超时挂死（其他用例的判决一起丢掉）。这里给 10 s 上界：正常路径
+// 微秒级返回，上界只在守卫缺失时才起作用，失败信息因此是**干净且定位到本条用例**的。
+func TestReaderHonorsContextCancelWhileWaitingForSlot(t *testing.T) {
+	root := t.TempDir()
+	sealLines(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte("x")})
+
+	r, err := NewReader(ReaderOptions{Root: root, MaxConcurrent: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	ref := Ref{DT: "2026-09-24", Inst: "blue", Part: 0, Row: 0}
+
+	// ① 正向对照：槽位空闲时同一请求必须成功——保证下面的失败确实来自取消。
+	if _, err := r.GetBody(context.Background(), ref); err != nil {
+		t.Fatalf("槽位空闲时读取应成功: %v", err)
+	}
+
+	// ② 占满唯一槽位（等价于「另一次点读正在解压」）。
+	r.sem <- struct{}{}
+	if got := r.inFlight(); got != 1 {
+		t.Fatalf("用例自检失败：槽位未按预期占满，残留 %d", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	type result struct{ err error }
+	done := make(chan result, 1)
+	go func() {
+		_, err := r.GetBody(ctx, ref)
+		done <- result{err}
+	}()
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, context.Canceled) {
+			t.Fatalf("等待槽位期间的取消必须立刻返回 context.Canceled，实际 %v", got.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("等待槽位期间的取消没有返回：ctx.Done() 分支缺失（该请求会一直占着调用方 goroutine）")
+	}
+
+	// ③ 取消路径不得动到别人占着的槽位。
+	if got := r.inFlight(); got != 1 {
+		t.Fatalf("取消路径不得释放别人的槽位，实际残留 %d", got)
+	}
+
+	// ④ 取消只影响那一次调用：归还槽位后同一 Reader 必须照常工作。
+	<-r.sem
+	if _, err := r.GetBody(context.Background(), ref); err != nil {
+		t.Fatalf("取消不应损坏 Reader，后续读取失败: %v", err)
+	}
+	if got := r.inFlight(); got != 0 {
+		t.Fatalf("后续读取后槽位未完全归还，残留 %d", got)
 	}
 }

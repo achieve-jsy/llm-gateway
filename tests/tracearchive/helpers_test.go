@@ -2,6 +2,7 @@ package tracearchive_test
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,6 +110,39 @@ func listPendingSeals(t *testing.T, root string, minAge time.Duration) ([]ta.Sea
 		t.Fatalf("NewSealer: %v", err)
 	}
 	return s.ListPendingSeals()
+}
+
+// sealLines 辅助：写 spool 并封块，供任务 7（按定位键点读）的产物路径用例使用。
+//
+// 方案 C：封块路径需要 C 版 zstd CLI，故先 requireZstd（缺失则整组用例 skip）。
+// 只用公开 API（ta.NewSealer/ta.SealerOptions/ta.SealTask），不触达未导出符号。
+//
+// 【与简报 task-7-brief.md:37-50 的差异（必须在报告里指出）】简报写的是
+//
+//	bin := requireZstd(t)
+//	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin})
+//
+// 而本仓库的 requireZstd 返回 (bin, 本机版本)，且 NewSealer 在
+// ExpectedZstdVersion 为空时取默认值 defaultZstdVersion = "1.4.8"（生产标定版本）。
+// 照抄简报会让每一次封块都被版本守卫拒绝（本机/CI 实测 zstd 为 v1.5.7）⇒
+// 任务 7 的产物路径用例全部转红。因此这里必须把本机版本透传下去——Task 6 的
+// 用例也都是这么做的（见 tests/tracearchive/sealer_test.go 的 `bin, ver := requireZstd(t)`）。
+//
+// ⚠️ 与 A 层（internal/tracearchive/testhelpers_test.go）的同名函数【故意重复】，
+// 理由见文件头；两处除限定符（ta. / 无）外保持一致。
+func sealLines(t *testing.T, root, dt, inst string, part int, lines [][]byte) {
+	t.Helper()
+	bin, ver := requireZstd(t)
+	spool := writeSpool(t, root, dt, inst, part, lines)
+	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin, ExpectedZstdVersion: ver})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Seal(context.Background(), ta.SealTask{
+		DT: dt, Inst: inst, Part: part, SpoolPath: spool, Rows: len(lines),
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // writeSpool 辅助：把若干行写入指定块的 spool 文件，返回文件路径。

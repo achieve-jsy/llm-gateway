@@ -2,6 +2,7 @@ package tracearchive
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,6 +108,28 @@ func listPendingSeals(t *testing.T, root string, minAge time.Duration) ([]SealTa
 		t.Fatalf("NewSealer: %v", err)
 	}
 	return s.ListPendingSeals()
+}
+
+// sealLines 辅助：写 spool 并封块，供任务 7（按定位键点读）的产物路径用例使用。
+//
+// 与 B 层 tests/tracearchive/helpers_test.go 里的同名函数【故意重复】（理由见文件头）。
+// 唯一差别是不带 ta. 限定符，且这里直接调用包内的 NewSealer/SealerOptions/SealTask。
+//
+// 与简报的差异同 B 层：简报写 `bin := requireZstd(t)` 且不传 ExpectedZstdVersion，
+// 那会走默认值 "1.4.8" 而被版本守卫拒绝（本机实测 v1.5.7）⇒ 用例全部转红。
+func sealLines(t *testing.T, root, dt, inst string, part int, lines [][]byte) {
+	t.Helper()
+	bin, ver := requireZstd(t)
+	spool := writeSpool(t, root, dt, inst, part, lines)
+	s, err := NewSealer(SealerOptions{Root: root, ZstdBinary: bin, ExpectedZstdVersion: ver})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Seal(context.Background(), SealTask{
+		DT: dt, Inst: inst, Part: part, SpoolPath: spool, Rows: len(lines),
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // writeSpool 辅助：把若干行写入指定块的 spool 文件，返回文件路径。

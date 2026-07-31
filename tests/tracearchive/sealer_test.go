@@ -119,6 +119,39 @@ func TestSealRejectsRowCountMismatch(t *testing.T) {
 	}
 }
 
+// TestSealRejectsRowCountMismatchWhenSpoolHasMoreRows 覆盖交叉校验的**另一个方向**：
+// 实际行数**多于**调用方声明（修复轮 3 的重要项 ⑥）。
+//
+// 为什么必须有它：上面那条用例是「声明 3、实际 2」，它只能杀死把 `!=` **收紧**成
+// `>` 的变异（`>` 下 2 > 3 不成立 ⇒ 守卫被绕过 ⇒ 那条用例红）。反过来把 `!=`
+// **放宽**成 `<`（只拦「少于声明」）时，2 < 3 仍成立 ⇒ 守卫照旧报错 ⇒ 上面那条
+// 用例**判绿**，也就是「实际多于声明」这一半没有任何覆盖。
+// 本用例是「声明 1、实际 2」：`<` 变异下 2 < 1 不成立 ⇒ 守卫被绕过 ⇒ 本用例红。
+func TestSealRejectsRowCountMismatchWhenSpoolHasMoreRows(t *testing.T) {
+	root := t.TempDir()
+	lines := [][]byte{[]byte("aaa"), []byte("bbb")}
+	spool := writeSpool(t, root, "2026-09-24", "blue", 0, lines)
+
+	// 与该守卫的其他用例一样不需要真 zstd：检查在启动子进程之前完成
+	s, _ := ta.NewSealer(ta.SealerOptions{Root: root})
+	err := s.Seal(context.Background(), ta.SealTask{
+		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: spool, Rows: 1, // 实际 2 行
+	})
+	if !errors.Is(err, ta.ErrRowCountMismatch) {
+		t.Fatalf("实际行数多于声明时也必须返回 ErrRowCountMismatch，实际 %v", err)
+	}
+	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
+	if _, err := os.Stat(partPath); !os.IsNotExist(err) {
+		t.Fatal("行数不符时不得产生产物")
+	}
+	if _, err := os.Stat(partPath + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("行数不符时不得残留 .tmp（检查发生在压缩之前）")
+	}
+	if _, err := os.Stat(spool); err != nil {
+		t.Fatal("行数不符时必须保留 spool")
+	}
+}
+
 // decodeVarints 在测试里**独立实现一遍** trailer 的差分 varint 解码。
 //
 // 为什么不用实现里的 decodeTrailer：一是它是未导出符号（B 层拿不到），
@@ -604,33 +637,85 @@ func TestSealFailsWhenSpoolMissing(t *testing.T) {
 	}
 }
 
-// TestSealRejectsSpoolPathNotMatchingRef 覆盖评审第 ⑤ 条新增的守卫：
-// task.SpoolPath 必须就是 (DT,Inst,Part) 对应的那个 spool 文件。
+// 下面两条用例共同覆盖评审第 ⑤ 条新增的守卫：task.SpoolPath 必须就是
+// (DT,Inst,Part) 对应的那个 spool 文件。
 //
 // 为什么必须有它：Seal 是【导出 API】，task 由调用方构造。若 path 与 Ref 不匹配，
 // 产物会以 Ref 寻址、却装进另一个文件的内容 —— 点读会【静默返回错正文】，
-// 这是本项目最不可接受的一类失效。删掉这条校验，本用例转红。
+// 这是本项目最不可接受的一类失效。删掉这条校验，两条用例都转红。
 //
-// 顺带钉住【执行顺序】（复审第 1 条：原判据「先于版本探测与一切 I/O」超出用例能钉住的
-// 范围，已收窄为两条各自可被实测钉住的命题）：
+// 【为什么必须是两条独立用例（修复轮 3 的 ④，实测坐实）】原实现把两个顺序命题
+// 塞进同一条用例：为了钉 (b) 而先放了一份 part 0 的既有产物（哨兵）。于是**任何**
+// 「把守卫往后搬」的变异都会更早地撞上哨兵 ⇒ 报 ErrPartExists（它不包裹
+// ErrSealFailed）⇒ 用例在「错误必须是 ErrSealFailed」那一行就红了，**根本走不到**
+// 钉 (a) 的「错误文案必须含『不一致』」断言 ⇒ (a) 的判别断言从未被执行，
+// 「两次搬家验证」其实只验了同一件事。拆开之后，(a) 不放哨兵、(b) 放哨兵，
+// 两条断言各自独立可被执行。
 //
-//	(a) 先于版本探测。本用例把 ZstdBinary 指向一个**不存在的文件**：
-//	    - 判定在前 ⇒ 错误是「不一致」（本用例断言的东西）；
-//	    - 判定在后 ⇒ 错误会变成「版本探测失败：找不到 zstd」，断言 628 行即红。
-//	  比原来的「不给 ZstdBinary」强：默认值 "zstd" 在本机是**存在**的，
-//	  若本机版本恰好等于默认版本，探测会通过，那条断言就钉不住任何顺序。
+// 自指方式：本文件**不再写行号**（旧注释写「断言 628 行即红」，实测 628 是 func
+// 声明、625 是注释 —— 轻微项 ⑨ 就是这么来的）。每条断言的定位以「它断言什么」
+// 描述；需要行号的读者请查任务报告，那里给的是绑定提交哈希的 `文件:行号`。
 //
-//	(b) 先于产物存在性检查。本用例先放一份 part 0 的**既有产物**（哨兵内容）：
-//	    - 判定在前 ⇒ 不一致 ⇒ 走不到 ErrPartExists（629 行的 errors.Is(ErrSealFailed) 成立）；
-//	    - 判定在后 ⇒ 产物存在 ⇒ ErrPartExists（它**不**包裹 ErrSealFailed）⇒ 625 行即红。
-//	  并反向断言「把 SpoolPath 换成正确路径就真的会撞 ErrPartExists」，证明哨兵确实生效、
-//	  而不是这条 fixture 永远不会触发它（否则 (b) 是空断言）。
-func TestSealRejectsSpoolPathNotMatchingRef(t *testing.T) {
+// 这两条用例锚定的是 sealer.go 里 Seal ⓪ 段的位置：
+//
+//	(a) 先于版本探测（verifyZstdVersion）。构造：**不放**任何既有产物，并把
+//	    ZstdBinary 指向一个不存在的文件。
+//	    - 判定在前 ⇒ 错误文案是「不一致」；
+//	    - 判定在后（搬到 verifyZstdVersion 之后）⇒ 先撞「找不到可执行文件」，
+//	      文案不再是「不一致」⇒ 本用例在最后那条文案断言上红。
+//	  比「不给 ZstdBinary」强：默认值 "zstd" 在本机是**存在**的，若本机版本恰好
+//	  等于默认版本，探测会通过，那条断言就钉不住任何顺序。
+//
+//	(b) 先于产物存在性检查（os.Stat(partPath)）。构造：**放**一份 part 0 的既有
+//	    产物（哨兵内容），并把 ZstdBinary 指向**可用**的假 zstd（版本探测会通过），
+//	    于是唯一变量就是「守卫在 os.Stat 之前还是之后」。
+//	    - 判定在前 ⇒ 报「不一致」（ErrSealFailed，不是 ErrPartExists），哨兵原封不动；
+//	    - 判定在后 ⇒ 报 ErrPartExists（它不包裹 ErrSealFailed）⇒ 本用例在
+//	      「不得报 ErrPartExists」那条断言上红。
+func TestSealRejectsSpoolPathNotMatchingRefBeforeVersionProbe(t *testing.T) {
 	root := t.TempDir()
 	// 真实存在、但属于 part 1 的 spool；任务却声称它是 part 0
 	other := writeSpool(t, root, "2026-09-24", "blue", 1, [][]byte{[]byte("属于 part 1 的正文")})
 
-	// part 0 的既有产物（用于 (b)：断言「先于产物存在性检查」）
+	// 【刻意不放 part 0 的既有产物】放了就退化成在验 (b)，(a) 的判别断言又会被遮蔽。
+	// 指向不存在的 zstd ⇒ 若判定晚于版本探测，错误文案不会是「不一致」
+	s, err := ta.NewSealer(ta.SealerOptions{
+		Root: root, ZstdBinary: filepath.Join(root, "这个-zstd-不存在"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Seal(context.Background(), ta.SealTask{
+		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: other, Rows: 1,
+	})
+	if err == nil {
+		t.Fatal("SpoolPath 与 Ref 不一致必须失败，实际 nil（守卫被绕过）")
+	}
+	// 【判别断言放在最前】这样「把守卫往后搬」的变异一定命中本行，而不是被后面
+	// 某条通用断言（如 errors.Is(ErrSealFailed)）提前遮住 —— 遮蔽正是 ④ 要修的病。
+	// 搬到 verifyZstdVersion 之后时会先报「探测 zstd 版本失败，找不到可执行文件」。
+	if msg := err.Error(); !strings.Contains(msg, "不一致") {
+		t.Fatalf("(a) 路径一致性判定必须先于 zstd 版本探测：错误文案必须点明「不一致」，实际: %v", err)
+	}
+	if !errors.Is(err, ta.ErrSealFailed) {
+		t.Fatalf("SpoolPath 与 Ref 不一致必须失败（ErrSealFailed），实际 %v", err)
+	}
+	// 纯内存判定：不建目录、不建 .tmp、不产生产物
+	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
+	if _, statErr := os.Stat(partPath); !os.IsNotExist(statErr) {
+		t.Fatal("路径不一致时不得产生产物")
+	}
+	if _, statErr := os.Stat(partPath + ".tmp"); !os.IsNotExist(statErr) {
+		t.Fatal("路径不一致时不应创建 .tmp")
+	}
+}
+
+func TestSealRejectsSpoolPathNotMatchingRefBeforePartExistsCheck(t *testing.T) {
+	root := t.TempDir()
+	// 真实存在、但属于 part 1 的 spool；任务却声称它是 part 0
+	other := writeSpool(t, root, "2026-09-24", "blue", 1, [][]byte{[]byte("属于 part 1 的正文")})
+
+	// part 0 的既有产物（哨兵：用于断言「先于产物存在性检查」）
 	partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0})
 	if err := os.MkdirAll(filepath.Dir(partPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -640,18 +725,27 @@ func TestSealRejectsSpoolPathNotMatchingRef(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// (a) 指向不存在的 zstd ⇒ 若判定晚于版本探测，错误文案不会是「不一致」
-	s, _ := ta.NewSealer(ta.SealerOptions{
-		Root: root, ZstdBinary: filepath.Join(root, "这个-zstd-不存在"),
+	// 可用的假 zstd ⇒ 版本探测通过，于是本用例只钉「先于产物存在性检查」这一条
+	s, err := ta.NewSealer(ta.SealerOptions{
+		Root: root, ZstdBinary: fakeZstd(t, "exec cat\n"), ExpectedZstdVersion: fakeZstdVersion,
 	})
-	err := s.Seal(context.Background(), ta.SealTask{
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Seal(context.Background(), ta.SealTask{
 		DT: "2026-09-24", Inst: "blue", Part: 0, SpoolPath: other, Rows: 1,
 	})
+	if err == nil {
+		t.Fatal("SpoolPath 与 Ref 不一致必须失败，实际 nil（守卫被绕过）")
+	}
+	// 【判别断言放在最前】(b) 的判别断言：搬到 os.Stat(partPath) 之后时会报
+	// ErrPartExists，本行即红 —— 而不是被下面那条通用的 ErrSealFailed 断言遮住
+	// （ErrPartExists 不包裹 ErrSealFailed，旧合并用例的红点正是这条）。
+	if errors.Is(err, ta.ErrPartExists) {
+		t.Fatalf("(b) 该判定必须先于产物存在性检查（否则报的是产物已存在），实际 %v", err)
+	}
 	if !errors.Is(err, ta.ErrSealFailed) {
 		t.Fatalf("SpoolPath 与 Ref 不一致必须失败（ErrSealFailed），实际 %v", err)
-	}
-	if errors.Is(err, ta.ErrPartExists) {
-		t.Fatalf("该判定必须先于产物存在性检查（否则报的是产物已存在），实际 %v", err)
 	}
 	if msg := err.Error(); !strings.Contains(msg, "不一致") {
 		t.Fatalf("错误信息必须点明路径不一致（否则运维看不出是调用方构造错了），实际: %v", err)

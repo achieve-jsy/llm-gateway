@@ -145,6 +145,74 @@ func sealLines(t *testing.T, root, dt, inst string, part int, lines [][]byte) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// 任务 8 追加的 B 层共享 helper（端到端往返）
+// ---------------------------------------------------------------------------
+
+// sealPending 驱动一轮「发现 → 封块 → 标记」循环：
+// Writer.PendingSeals 报出待封块 → Sealer.Seal 封块（C 版 zstd CLI）→
+// Writer.MarkSealed 清空当前块。这正是方案 C 下生产里 sealer 的循环
+// （sealer 进程的 main 与循环入口属计划 4，任务 8 的端到端用例扮演它）。
+//
+// 返回本轮封掉的块数。bin/ver 由 requireZstd 取得并显式透传：版本守卫
+// （sealer.go 的 verifyZstdVersion）要求调用方声明本机版本，否则真封块用例会被
+// 默认值 defaultZstdVersion = "1.4.8" 拒绝（理由见本文件 sealLines 的说明）。
+func sealPending(t *testing.T, w *ta.Writer, root, bin, ver string) int {
+	t.Helper()
+	tasks, err := w.PendingSeals()
+	if err != nil {
+		t.Fatalf("PendingSeals: %v", err)
+	}
+	for _, task := range tasks {
+		sealTask(t, root, bin, ver, task)
+		w.MarkSealed(task.DT, task.Part)
+	}
+	return len(tasks)
+}
+
+// sealTask 封一个块。task.Rows 由调用方给出（写侧自己报的行数），
+// 因而会经过 sealer 的行数交叉校验——这让「写出的物理行数」也被端到端断言。
+func sealTask(t *testing.T, root, bin, ver string, task ta.SealTask) {
+	t.Helper()
+	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin, ExpectedZstdVersion: ver})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Seal(context.Background(), task); err != nil {
+		t.Fatalf("封块失败 (dt=%s inst=%s part=%d rows=%d): %v",
+			task.DT, task.Inst, task.Part, task.Rows, err)
+	}
+}
+
+// sealExistingSpool 对「Writer 写出的」spool 封块。
+//
+// 刻意不复用 writeSpool + sealLines：后者会用 writeSpool 重建 spool 文件，
+// 把写入器刚写的字节覆盖掉——本 helper 只封既有的那份文件。
+// 顺带断言 I5：封块成功后 spool 必须已被删除（否则「产物与 spool 不会同时存在」
+// 这条读取侧的前提就被破坏了）。
+func sealExistingSpool(t *testing.T, root, dt, inst string, part, rows int) {
+	t.Helper()
+	bin, ver := requireZstd(t)
+	spool := ta.NewPaths(root).SpoolFile(ta.Ref{DT: dt, Inst: inst, Part: part})
+	sealTask(t, root, bin, ver, ta.SealTask{
+		DT: dt, Inst: inst, Part: part, SpoolPath: spool, Rows: rows,
+	})
+	if _, err := os.Stat(spool); !os.IsNotExist(err) {
+		t.Fatalf("封块成功后 spool 必须已被删除（I5）: %s (stat err=%v)", spool, err)
+	}
+}
+
+// concatLines 把若干行按 spool 的物理布局拼成一个字节串（每行后跟一个 '\n'），
+// 供「盘上字节必须逐字节等于写入内容」的断言使用。
+func concatLines(lines [][]byte) []byte {
+	var buf bytes.Buffer
+	for _, l := range lines {
+		buf.Write(l)
+		buf.WriteByte('\n')
+	}
+	return buf.Bytes()
+}
+
 // writeSpool 辅助：把若干行写入指定块的 spool 文件，返回文件路径。
 // 只用公开 API（ta.NewPaths/ta.Ref），因此不依赖实现内部字段。
 //

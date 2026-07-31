@@ -37,14 +37,30 @@ func dirUsage(t *testing.T, dir string) int64 {
 	return total
 }
 
-// dirEntryCount 统计目录的**直接**子项数（不递归）。
-func dirEntryCount(t *testing.T, dir string) int {
+// treeFileCount 统计目录树里的文件数（递归）。
+//
+// 【为什么必须与 dirUsage 配对，而不能只比字节数】A4 是「磁盘占用零增量」，而占用
+// 不止字节数：新建的 **0 字节临时文件**同样是落盘产物（占目录项/inode），
+// 它在「总字节数」口径下**完全不可见**。这不是推测——本任务的变异
+// `task-8-reader.py` 的 m04（每次读 spool 都 os.CreateTemp 一个空临时文件）
+// 在「只比字节数」的旧口径下**判绿（零覆盖）**，加入本观测量后转红。
+// 即：只有两个观测量一起比，A4 的断言才对「落空文件」这类实现有效。
+func treeFileCount(t *testing.T, dir string) int {
 	t.Helper()
-	ents, err := os.ReadDir(dir)
+	n := 0
+	err := filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			n++
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return len(ents)
+	return n
 }
 
 // scratchTempDir 把本进程的临时目录指向一个专属目录并返回它。
@@ -73,7 +89,8 @@ func scratchTempDir(t *testing.T) string {
 // 若实现被改成「解压到 /tmp 再读」或「把解压结果落盘缓存」，此测试会立刻转红。
 //
 // 【本用例抓得到什么、抓不到什么（如实登记）】
-//   - 抓得到：读取期间在 root 下新增/增长的文件，以及通过 TMPDIR 落下的临时文件；
+//   - 抓得到：读取期间 root 下新增/增长的文件（**含 0 字节的新文件**，见
+//     treeFileCount）、以及通过 TMPDIR 落下的临时文件；
 //   - 抓不到：① 写死在代码里的绝对路径（如 "/tmp/x"）；
 //     ② C3「不缓存**已解压块**」的内存形态 —— 那是堆内存约束，磁盘占用观测不到。
 //     本计划没有任何用例约束 C3 的内存形态（已登记在任务报告里，不是静默遗漏）。
@@ -98,7 +115,8 @@ func TestReadsDoNotGrowDiskUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := dirUsage(t, root)
-	beforeScratch := dirEntryCount(t, scratch)
+	beforeFiles := treeFileCount(t, root)
+	beforeScratch := treeFileCount(t, scratch)
 
 	for i := 0; i < 1000; i++ {
 		if _, err := r.GetBody(context.Background(), ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0, Row: i % 3}); err != nil {
@@ -108,8 +126,12 @@ func TestReadsDoNotGrowDiskUsage(t *testing.T) {
 	if after := dirUsage(t, root); after != before {
 		t.Fatalf("读取 1000 次后磁盘占用从 %d 变为 %d（违反 §8.3 C1~C4）", before, after)
 	}
-	if after := dirEntryCount(t, scratch); after != beforeScratch {
-		t.Fatalf("读取 1000 次后进程临时目录（TMPDIR=%s）从 %d 项变为 %d 项"+
+	if after := treeFileCount(t, root); after != beforeFiles {
+		t.Fatalf("读取 1000 次后归档根目录下的文件数从 %d 变为 %d（新增的 0 字节文件在"+
+			"「总字节数」口径下不可见，故必须单独统计）", beforeFiles, after)
+	}
+	if after := treeFileCount(t, scratch); after != beforeScratch {
+		t.Fatalf("读取 1000 次后进程临时目录（TMPDIR=%s）的文件数从 %d 变为 %d"+
 			"（C2「不落任何临时文件」）", scratch, beforeScratch, after)
 	}
 }
@@ -134,6 +156,7 @@ func TestUnsealedReadsAlsoDoNotGrow(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := dirUsage(t, root)
+	beforeFiles := treeFileCount(t, root)
 	for i := 0; i < 500; i++ {
 		if _, err := r.GetBody(context.Background(), ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0, Row: i % 2}); err != nil {
 			t.Fatalf("第 %d 次读取失败: %v", i, err)
@@ -141,6 +164,11 @@ func TestUnsealedReadsAlsoDoNotGrow(t *testing.T) {
 	}
 	if after := dirUsage(t, root); after != before {
 		t.Fatalf("spool 读取后磁盘占用从 %d 变为 %d", before, after)
+	}
+	// 文件数同样必须不变：空临时文件（0 字节）只在这一口径下可见
+	//（实测：task-8-reader.py 的 m04 在「只比字节数」的旧口径下判绿、加本观测量后转红）。
+	if after := treeFileCount(t, root); after != beforeFiles {
+		t.Fatalf("spool 读取后归档根目录下的文件数从 %d 变为 %d", beforeFiles, after)
 	}
 }
 

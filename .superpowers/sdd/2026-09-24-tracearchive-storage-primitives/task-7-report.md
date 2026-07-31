@@ -90,7 +90,7 @@ SKIP = 0
 * `SKIP == 0` 关键（`tests/tracearchive/helpers_test.go:38-44` 自己写明「未找到 zstd 则 skip」）：本机 `/opt/homebrew/bin/zstd` 为 C 版 v1.5.7，真封块用例全部实际执行。变异脚本的自检 C 用合成输出验证了「全 SKIP 会被判为**证据无效**而不是绿」。
 * 步骤 2 红灯的原始输出 `red-step2-build-failed.txt`：`undefined: ta.NewReader`、`undefined: ta.ReaderOptions`、`undefined: maxTrailerBytes`，`=== RUN` 行数 = 0，退出码 1。**0 个用例执行 ⇒ 无效，而不是绿**。
 
-**分包的顶层用例数**：`internal/tracearchive`（A 层）3 条（`reader_internal_test.go:48`、`:103`、`:138`——均指函数声明行）；`tests/tracearchive`（B 层）19 条（`reader_test.go`）。两包都无子用例（`t.Run`）。
+**分包的顶层用例数**：`internal/tracearchive`（A 层）3 条（`reader_internal_test.go:48`、`:103`、`:138`——均指函数声明行）；`tests/tracearchive`（B 层）19 条（`reader_test.go`）。**本任务的两个测试文件均无子用例（`t.Run`）**；但**两个包内共有 37 个子用例**，全部来自同包的 Task 5/6 测试文件（`footer_test.go`、`index_test.go`、`ref_internal_test.go`、`sealer_test.go`），不在本任务的 22 条 `-run` 名单内（故 §2 的 `-run` 运行里子用例终判行数为 0，而全量运行的 37 个子用例见上一表的「子用例」列）。
 
 ---
 
@@ -441,7 +441,7 @@ python3 task-7-mutate.py --side m01 m02 m04 m32 m07 m08   # R10 双侧原始输�
 3. **子进程继承环境**：`go test` 子进程继承 `GOFLAGS` 等变量，`GOFLAGS=-exec=<wrapper>` 可整体替换测试输出，而脚本察觉不到。
    *本任务未做任何缓解*。
 4. **断言 3 只数顶层 SKIP**：`^--- SKIP` 不含缩进的子测试 SKIP ⇒ 若本任务将来引入 `t.Run` 子用例并让它们 skip，`SKIP==0` 会失效。
-   *本任务的部分缓解*：本任务两包**没有任何子用例**（本报告独立给出「子用例 0 条」的计数），因此当前不存在子用例 SKIP。**注意（复审更正）**：原报告称「脚本另有『子用例终判行数』一栏」，该栏**只存在于 `three-assertions.sh:48`**，**变异工具 `task-7-mutate.py` 里没有这一栏**（它的三/四断言只匹配顶层 `^--- PASS/FAIL/SKIP: Test…`，见该脚本 `verify()`）⇒ 该缓解**只对 `three-assertions.sh` 成立，对变异工具不成立**：一旦出现子用例，变异工具既不会显式打印子用例终判，也不会因「子用例被 skip 而顶层仍绿」而判无效。
+   *本任务的部分缓解*：**本任务的两个测试文件没有任何子用例**（`reader_test.go` / `reader_internal_test.go` 内无 `t.Run`，22 条 `-run` 名单里因此没有子用例），且全量运行（含同包 Task 5/6 的 37 个子用例）`SKIP` 也为 0，故当前不失效。**注意（复审更正）**：原报告称「脚本另有『子用例终判行数』一栏」并称「两包无子用例」——前半句错在栏目归属，该栏**只存在于 `three-assertions.sh:48`**，**变异工具 `task-7-mutate.py` 里没有这一栏**（它的三/四断言只匹配顶层 `^--- PASS/FAIL/SKIP: Test…`，见该脚本 `verify()`）；后半句则与 §2 的「子 37」自相矛盾：**两个包里确有 37 个子用例**，只是全来自 Task 5/6 的测试文件、不在本任务名单内。⇒ 该缓解**只对 `three-assertions.sh` 成立，对变异工具不成立**：一旦 Task 7 引入子用例，变异工具既不会显式打印子用例终判，也不会因「子用例被 skip 而顶层仍绿」而判无效。
 5. **`PROVENANCE.txt` 是人手写的，不是工具产出**（本任务缓解的边界，必须明说）：复审核实其内容**全部正确**（5 个被测文件 blob 哈希、43 条归档 sha256 全部匹配、`git diff --stat b691ab11..HEAD` 为 0 行、工作树干净），但它是**手工声明**——**没有生成脚本**，且**不记工具自身哈希、不记变异输入（内嵌清单/变异定义）、也没有任何机制把 `raw-m*.txt` 绑到被测 blob**。因此它给出的是**声明，不是事实**：它能证明「有人核对过」，**不能**证明「这些归档确实由那份脚本、在那棵树、按那份输入产出」。这正是共享工具 `tools/trace-mutate/`（Task 6 修复轮 3 已落地）要在 **R11 重跑**时取代的东西——届时版本谱系、提交绑定、封闭子进程环境、子测试 SKIP 四项由工具强制，而非人手。
 
 **结论**：本任务的证据在修复轮 3 之后**应使用共享工具重跑**（清单、提交绑定、封闭子进程环境、子测试 SKIP 四项都会被覆盖，`PROVENANCE.txt` 这类人手声明也将被工具产出取代）。在此之前，请把本报告的全部结论视为「在 §10 所述权威归档与 `PROVENANCE.txt` 的**人手声明**（见第 5 条，是声明不是工具事实）成立的前提下有效」。

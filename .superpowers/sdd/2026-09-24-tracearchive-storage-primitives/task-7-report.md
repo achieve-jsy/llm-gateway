@@ -39,7 +39,7 @@
 | `tests/tracearchive/helpers_test.go` | 168（+34） | 追加 B 层 `sealLines`（含 `context` 导入） |
 | `internal/tracearchive/testhelpers_test.go` | 152（+23） | 追加 A 层 `sealLines`（同上） |
 
-提交：`f7033774`（5 files, +1197）+ `b691ab11`（1 file, +73/-1）。两个提交后 `git status --porcelain` 均为空；此后未再改动受版本控制的文件（`.superpowers/` 被该目录内 `.gitignore` 忽略，见 `.superpowers/sdd/.gitignore:1`）。
+提交：`f7033774`（5 files, +1197）+ `b691ab11`（1 file, +73/-1）。两个提交后 `git status --porcelain` 均为空；此后未再改动受版本控制的文件（`.superpowers/` 被该目录内 `.gitignore` 忽略，见 `.superpowers/sdd/.gitignore:1`）。（**本轮更正例外**：为把这份报告纳入版本控制，报告文件本身被 `git add -f` 加入跟踪，见提交 `62572d42`；证据工具 `task-7-mutate.py` 与全部 `raw-*` 归档仍被忽略。上面这句「此后未再改动受版本控制的文件」指 `b691ab11` 之后、本轮更正之前的那段时间。）
 **提交 2 的来由**：协调者在裁决里邀请补一条 A 层用例覆盖此前唯一的零覆盖分支（`reader.go:112-113` 的 `ctx.Done()`）。它**超出简报对 A 层「两条」的限定**，故单独成一个提交、不动 `f7033774`（该提交此前被我 amend 过一次，发现违反「不改既有提交」后已 `git reset --hard f7033774` 复原，最终历史里它是独立提交）。
 
 ---
@@ -434,7 +434,7 @@ python3 task-7-mutate.py --side m01 m02 m04 m32 m07 m08   # R10 双侧原始输�
 
 本任务的证据工具是 `.superpowers/sdd/.../task-7-mutate.py`（与 Task 6 的 `task-6-mutate.py` 同源）。它在 gitignore 之外，存在四项已知局限，另有一项必须明说的边界（第 5 条）——**这些是各任务证据工具共有的问题，不是本任务独有**；修复轮 3 已产出共享工具（`tools/trace-mutate/`，本分支已落地）取代它。本任务**没有**自行实现这些修复（按协调者指令），只在这里登记：
 
-1. **没有版本谱系**：工具与归档都在被 `.gitignore` 忽略的 `.superpowers/` 下（`git ls-files .superpowers` 输出为空）⇒ 谁把内嵌清单改小、或把归档换成一次「更好看」的运行，`git diff` 看不见。
+1. **没有版本谱系**：证据工具与被 `.gitignore` 忽略的归档都在 `.superpowers/` 下（`git ls-files .superpowers` 在本轮更正前输出为空；本轮为把这份报告落进版本控制而 `git add -f` 了它本身，故该命令现在只输出这一个报告文件，`task-7-mutate.py` 与全部 `raw-*` 归档仍不可见）⇒ 谁把内嵌清单改小、或把归档换成一次「更好看」的运行，`git diff` 看不见。
    *本任务的部分缓解*：内嵌清单可从受版本控制的测试文件逐条重推导（推导命令写在 §4 与脚本 docstring 里，并同时断言「正则集合 == 内嵌清单」与「执行集合 == 内嵌清单」）；`PROVENANCE.txt` 记下被测文件的 blob 哈希与各归档 sha256。
 2. **证据不绑定提交**：脚本本身不做 `git rev-parse` / 树状态校验。
    *本任务的部分缓解*：`task-7-evidence/PROVENANCE.txt` 记录 `HEAD`、父提交、`git status --porcelain` 行数、被测文件 blob 哈希、全部归档 sha256。但这仍**不是强制**的——它是人写的一步，不是工具的一步，而且这份文件本身也是人手写的**声明**（见第 5 条）。

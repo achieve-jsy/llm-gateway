@@ -306,6 +306,42 @@ MUTATIONS["m50_忽略cmd.Run错误"] = [
             '\tif err := cmd.Run(); err != nil && false {'),
 ]
 
+# ---- 修复轮 3 新增：让 ⑥ 的修法**可被重跑**，而不是只写在报告里 ----
+# 复审者自设计的 x1：把行数交叉校验的 != 放宽为 <（只拦「少于声明」）。
+# 修复前的 fixture 是「声明 3、实际 2」⇒ 2 < 3 仍成立 ⇒ 该变异**判绿**（零覆盖）。
+# 修复后新增「声明 1、实际 2」的用例 ⇒ 2 < 1 不成立 ⇒ 守卫被绕过 ⇒ 转红。
+MUTATIONS["m51_行数校验放宽为只拦少于"] = [
+    ("sub", 'if task.Rows > 0 && len(offsets) != task.Rows {',
+            'if task.Rows > 0 && len(offsets) < task.Rows {'),
+]
+
+# ---- 修复轮 3 新增：④ 的两次「搬家」各自入集合（让「两次独立验证」可复核）----
+# 旧用例把 (a)(b) 塞在一起，于是 relocA 与 relocB 都红在同一行，(a) 的判别断言
+# 从未被执行 —— 「两次搬家验证」不是两次独立验证。拆成两条用例后：
+#   relocA ⇒ (a) 与 (b) 都红（两个用例各死在自己的判别断言上）
+#   relocB ⇒ **只有 (b) 红**，(a) 绿 ⇒ 这是两次**独立**验证的直接证据
+_GUARD_BLOCK = (
+    '\twantSpool := s.paths.SpoolFile(Ref{DT: task.DT, Inst: task.Inst, Part: task.Part})\n'
+    '\tif filepath.Clean(task.SpoolPath) != wantSpool {\n'
+    '\t\treturn fmt.Errorf("%w: task.SpoolPath=%q 与 Ref{%s, %s, %d} 对应的 %q 不一致（拒绝封块：产物会以 Ref 寻址却装进另一文件的内容）",\n'
+    '\t\t\tErrSealFailed, task.SpoolPath, task.DT, task.Inst, task.Part, wantSpool)\n'
+    '\t}\n'
+)
+_VERIFY_BLOCK = '\tif err := s.verifyZstdVersion(); err != nil {\n\t\treturn err\n\t}\n'
+_PARTEXISTS_BLOCK = ('\t} else if !os.IsNotExist(err) {\n'
+                     '\t\treturn fmt.Errorf("tracearchive: 检查产物失败: %w", err)\n\t}\n')
+
+MUTATIONS["m52_守卫搬到版本探测之后"] = [
+    ("cut", '\twantSpool := s.paths.SpoolFile(',
+            '\t\t\tErrSealFailed, task.SpoolPath, task.DT, task.Inst, task.Part, wantSpool)\n\t}\n'),
+    ("sub", _VERIFY_BLOCK, _VERIFY_BLOCK + "\n" + _GUARD_BLOCK),
+]
+MUTATIONS["m53_守卫搬到产物存在检查之后"] = [
+    ("cut", '\twantSpool := s.paths.SpoolFile(',
+            '\t\t\tErrSealFailed, task.SpoolPath, task.DT, task.Inst, task.Part, wantSpool)\n\t}\n'),
+    ("sub", _PARTEXISTS_BLOCK, _PARTEXISTS_BLOCK + "\n" + _GUARD_BLOCK),
+]
+
 # ---------------------------------------------------------------------------
 # 预期**不转红**的条目（零覆盖）—— 每条都必须写明保留理由；未登记的绿 ⇒ 整轮失败。
 # 这条机制存在的意义：「零覆盖」不能靠报告里的散文解释，必须在集合里显式登记，
@@ -390,5 +426,23 @@ REQUIREMENTS = [
         "mutations": ["m31_删除jsonl后缀过滤"],
         "checks": [],
         "note": "TestListPendingSealsIgnoresIllegalNames 必须转红。",
+    },
+    {
+        "plan": "task-6-fix3-items.md 重要 ⑥ 行数交叉校验缺「实际多于声明」方向（复审自设计变异 x1）",
+        "mutations": ["m51_行数校验放宽为只拦少于"],
+        "checks": [],
+        "note": (
+            "修复前该变异**判绿**（fixture 是「声明 3、实际 2」，2 < 3 仍成立）；"
+            "新增「声明 1、实际 2」的用例后转红 ⇒ 缺口已闭合且可复核。"
+        ),
+    },
+    {
+        "plan": "task-6-fix3-items.md 重要 ④ 把 (a)/(b) 做成两次**独立**的搬家验证",
+        "mutations": ["m52_守卫搬到版本探测之后", "m53_守卫搬到产物存在检查之后"],
+        "checks": [],
+        "note": (
+            "relocA ⇒ (a)(b) 两条用例各死在自己的判别断言；relocB ⇒ **只有 (b) 红、(a) 绿**。"
+            "「两次搬家验证不是两次独立验证」由此可复核（旧用例两处都红在同一行）。"
+        ),
     },
 ]

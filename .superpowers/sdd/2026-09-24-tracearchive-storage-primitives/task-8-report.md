@@ -50,7 +50,7 @@
 |---|---|
 | `0476da1d` | 两个测试文件 + helpers 追加 + 两个变异集合 |
 | `0243b1df` | A4 空间约束补「文件数」观测量（§9 的修复） |
-| 本报告提交（哈希见 §15） | `git add -f .superpowers/.../task-8-report.md` |
+| 本报告提交 | `git add -f .superpowers/.../task-8-report.md`；哈希用 `git log -1 --format=%H -- .superpowers/sdd/2026-09-24-tracearchive-storage-primitives/task-8-report.md` 取（提交无法含自身哈希，故不写死） |
 
 未 amend、未 reset、未 rebase。变异证据绑定在 `0243b1df`（见 §7 的证据头部）。
 
@@ -392,7 +392,7 @@ $ gofmt -l internal/tracearchive/ tests/tracearchive/     → 无输出
 1 交付：tests/tracearchive/roundtrip_test.go(408) constraints_test.go(230) 新；helpers_test.go +68（4 个 helper）
 2 变异集合（git-tracked）：tools/trace-mutate/sets/task-8.py(153) + task-8-reader.py(173)（工具单 target ⇒ 拆两份）
 3 前置：起始 HEAD c967ecf7…、工作树干净、无竞争进程 ⇒ 通过
-4 提交：0476da1d（测试+集合）、0243b1df（A4 补文件数观测量）；报告另提交；未 amend/reset
+4 提交：0476da1d（测试+集合）、0243b1df（A4 补文件数观测量）；报告单独提交（哈希见 §3 的取值命令）；未 amend/reset
 5 变异计数（证据绑定 0243b1df）：9 条 → 9 红 = 9 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
 6            未登记的绿 0、证据无效 0；两张表 RC 均为 0；原始侧自证 names=7 ran=7 diff=0 SKIP=0
 7 分层/隔离：单条目探针 3 条（reader m01/m04/m06 各杀 1 条用例），两侧原始输出已归档

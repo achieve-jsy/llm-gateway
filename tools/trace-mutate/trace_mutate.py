@@ -671,6 +671,14 @@ def main():
         print()
         print("## 计数口径")
         print("变异总数                 = %d" % len(selected))
+        # 【完整性自标识】权威表必须是**集合里的全部变异**。子集运行（--only/--skip）
+        # 只该用于排障；这里让子集表自己带着醒目的标记，避免「拿一张子集表冒充权威表」
+        # 这种既不需要篡改工具、也不需要篡改集合的「悄悄丢变异」。
+        if len(selected) != len(setmod.MUTATIONS):
+            print("!!! 本次只跑了 %d 条，而集合里有 %d 条 ⇒ **这是子集，不能作为权威表**"
+                  % (len(selected), len(setmod.MUTATIONS)))
+        else:
+            print("集合里的变异总数          = %d（本次运行 == 全集 ✓）" % len(setmod.MUTATIONS))
         print("断言支撑的红             = %d 条（清单全部执行 + 全部终判 + SKIP=0）" % len(buckets["red"]))
         crash_names = ", ".join("%s(%s)" % (n, v) for n, v in buckets["crash"])
         print("崩溃/超时/编译红         = %d 条（**没有**「用例执行+终判」证据，"

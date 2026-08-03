@@ -54,6 +54,12 @@
 
 未 amend、未 reset、未 rebase。变异证据绑定在 `0243b1df`（见 §7 的证据头部）。
 
+**证据在最终 HEAD 上依然有效（可复核）**：`git diff --name-only 0243b1df..HEAD` 只列出本报告文件
+⇒ 被测文件与集合的 sha256 与两张表的证据头部逐字一致（实测：`writer.go` `3a9829071de9f7d7…`、
+`reader.go` `6bb58fdd33c1407c…`、`roundtrip_test.go` `2f72a85fa7e5d519…`、
+`constraints_test.go` `2ba8f24ecd381b0e…`、`task-8.py` `5c9511bd5424b7cf…`）。
+第三方（含 R11 分支收尾）可在最终 HEAD 上直接重跑两张表，结果应逐字相同。
+
 **关于「集合必须先提交」**：变异工具用 `git archive HEAD` 现取现解 pristine 树，且拒绝脏树
 ⇒ **测试与集合都必须先提交**，证据才能在 HEAD 上产出。因此提交顺序是「测试+集合 → 跑证据 → 报告」。
 

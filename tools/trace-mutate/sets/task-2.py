@@ -10,8 +10,14 @@ gitignored 的证据目录（`.superpowers/sdd/` 被 `.gitignore` 的 `*` 整体
   ("sub", a, b)  把 a 精确替换成 b（a 必须在目标文件里恰好出现一次）
   ("cut", a, b)  删除 a 到 b（含）之间的内容（a 必须在目标文件里恰好出现一次）
 
-本集合的 4 条守卫变异对应 task-2-brief.md:255-259 的四条计划要求；第 5 条
-`%w → %v` 是简报第 4 条「任意一处 %w 改 %v」的**全量**形态（见 m05 的说明）。
+本集合的 5 条变异：m01/m03/m04 逐一对应 task-2-brief.md:255-259 的计划要求，m05 是
+简报第 4 条「任意一处 `%w` 改 `%v`」的**全量**形态（见 m05 说明），m02 则来自作者
+报告里的一处**失实主张** —— task-2-report.md:130-133 称「把 `if delta < 0` 改成
+`if false && delta < 0` ⇒ TestDecodeTrailerRejectsNonMonotonic 应 FAIL」，
+而本集合重跑判定为**绿**（该用例的差分 -5 让 out[1] 变成负数，被紧随其后的
+`out[i] < 0` 接住）。**这是真实的测试缺口，不是等价变异**：守卫承重、只是没有
+用例约束它。本轮已按裁决在 `index_test.go` 的既有表驱动用例里补入
+「差分为负但偏移仍非负」子用例，m02 因此是**普通变异**（不再是允许的绿）。
 
 ⚠️ **PACKAGES 只列 B 层包 `./internal/tracearchive/`，不列 `./tests/tracearchive/`**：
 名字清单只覆盖 `internal/tracearchive/index_test.go` 的 7 条顶层用例，而工具的
@@ -26,8 +32,18 @@ gitignored 的证据目录（`.superpowers/sdd/` 被 `.gitignore` 的 `*` 整体
     ok   .../tests/tracearchive 0.006s [no tests to run]
 
 ⇒ 两包并列会让这一轮**永远**判「证据无效」，因此这里必须收窄。同前例见
-`tools/trace-mutate/sets/task-8-reader.py:13` 的同一警告。收窄不损失覆盖：
-`index.go` 的三个编解码函数只由 `index_test.go` 这 7 条用例直接约束。
+`tools/trace-mutate/sets/task-8-reader.py:13` 的同一警告。
+
+⚠️⚠️ **收窄包是一条可被误用的自由，判据只有一条（写下来供下一个编辑者核对）**：
+**收窄只有在「被省略的包里没有任何一条能杀死本集合变异」时才成立。**
+本集合的该条件是**逐条实测**过的（pristine HEAD 树 + 工具自身的 apply_mutation:
+m01 由 `RejectsOversizedCount`、m03 由 `RejectsNegativeOrWrappedOffset`、
+m04 由 `RejectsTrailingGarbage`、m05 由 6 条拒绝断言各自的 errors.Is 杀死，
+四者都在 `./internal/tracearchive/` 内；m02 由本轮补进
+`TestDecodeTrailerRejectsNonMonotonic` 的子用例杀死 —— 同样在 `internal/` 内）。
+即 5/5 条变异都不需要 `tests/` 包；反过来，把 `tests/` 包列上**只会**让运行判无效
+（它在这个 `-run` 清单下一条用例也匹配不到）。删掉或弱化上述任一用例前，
+请先重跑本判据，不要假定「收窄无代价」。
 """
 
 NAME = "task-2"
@@ -65,19 +81,20 @@ MUTATIONS["m01_删除上界守卫"] = [
 ]
 
 # ---- index.go:77 的 `delta < 0` 非单调（负差分）守卫 ----
-# ⚠️ 这条守卫**在当前用例集下判绿**（已登记在 EXPECTED_GREEN）：唯一的非单调用例
-# TestDecodeTrailerRejectsNonMonotonic 构造的是「上一条偏移 = 0、差分 = -5」，
-# 于是 out[i] = -5 < 0，被紧随其后的 `out[i] < 0` 守卫拦下并**仍**返回
-# ErrTrailerCorrupt ⇒ errors.Is 断言通过。
+# ⚠️ 这条守卫**曾经判绿**（零覆盖）：唯一的非单调用例 TestDecodeTrailerRejectsNonMonotonic
+# 构造的是「上一条偏移 = 0、差分 = -5」，于是 out[i] = 0 + (-5) = -5 < 0，
+# 被紧随其后的 `out[i] < 0` 守卫拦下并**仍**返回 ErrTrailerCorrupt ⇒ errors.Is 断言
+# 通过 ⇒ 删掉 delta < 0 也照旧全绿。
 # 注意 task-2-report.md:130-133 的探针**主张**这条变异会转红（"RejectsNonMonotonic
 # 应 FAIL"）；在 HEAD 的实现（负值检查后置到 append 之后）下该主张**不成立**，
-# 本集合把它变成可重跑的判定而不是散文结论（实测判绿，见 EXPECTED_GREEN）。
-# 要真正杀死它，需要一条「递减但结果仍非负」的用例，例如 offsets {10, 5}：
-# 差分 -5 相加得 5 ≥ 0，只有 delta < 0 这道检查能拦。
-# 该闭合方式已用**隔离探针**实测（/tmp 树，不进仓库）：在 pristine 树上注入
-# TestProbeNonMonotonicStaysNonNegative（断言 decodeTrailer(encodeTrailer({10,5}), 2)
-# 报 ErrTrailerCorrupt）后，pristine PASS / m02 FAIL / m03 PASS ⇒ 该用例专杀 m02，
-# 且对 m03 不敏感 ⇒ 两条守卫语义独立（不是「等价变异」）。
+# 那是一条**失实主张**，而该变异之所以逃过用例只是**输入凑巧**（差分为 -5 使结果变负）。
+# 【本轮处置】守卫是承重的：offsets {10, 5} ⇒ out[1] = 10 + (-5) = 5 ≥ 0，
+# 只有 delta < 0 能拦；缺它时解码会**成功**返回一个非单调（错误）的偏移序列，
+# 属静默错读 ⇒ 这是**真实的测试缺口**，正确处置是补用例而不是登记为允许的绿。
+# 已在 index_test.go 的 TestDecodeTrailerRejectsNonMonotonic（本轮改为表驱动，
+# 顶层用例数仍为 7）补入子用例「差分为负但偏移仍非负」= encodeTrailer([]int64{10, 5})，
+# 断言 errors.Is(err, ErrTrailerCorrupt)。该子用例**专杀本变异**：
+# 删 delta < 0 时它转红，而删 out[i] < 0（m03）时它仍 PASS（两守卫语义独立，已实测）。
 MUTATIONS["m02_删除非单调守卫"] = [
     ("sub", 'if delta < 0 {', 'if false && delta < 0 {'),
 ]
@@ -129,27 +146,14 @@ CHECKS = []
 # 未登记的绿 ⇒ 整轮失败。分类（task-6 集合沿用）：
 #   [零覆盖]   行为**存在**但**没有用例约束**它 ⇒ **测试缺陷**，必须有保留理由
 #   [等价变异] 该行在框架/标准库契约下**冗余** ⇒ 关于代码本身的发现
+#
+# 本集合为**空**（5/5 条变异都必须转红）—— 这里曾经登记过 m02（[零覆盖]），
+# 但那个「零覆盖」是**真实测试缺口**（守卫承重、无用例约束 ⇒ 静默错读风险），
+# 正确处置是补用例而非登记例外：本轮已在 index_test.go 的
+# TestDecodeTrailerRejectsNonMonotonic 里补入「差分为负但偏移仍非负」子用例，
+# m02 转为普通变异。发现记录保留在 m02 的注释与 REQUIREMENTS 的 note 里。
 # ---------------------------------------------------------------------------
-EXPECTED_GREEN = {
-    "m02_删除非单调守卫": (
-        "[零覆盖] `delta < 0`（偏移非单调）这道检查**没有任何用例单独约束它**："
-        "唯一相关的 TestDecodeTrailerRejectsNonMonotonic 构造的是"
-        "「上一条偏移 = 0、差分 = -5」，于是 out[i] = 0 + (-5) = -5 < 0，"
-        "被紧随其后的 `out[i] < 0` 守卫拦下，**仍**返回 ErrTrailerCorrupt，"
-        "而该用例只断言 errors.Is(err, ErrTrailerCorrupt) ⇒ 变异后照旧 PASS。"
-        "这不是等价变异：`delta < 0` 拒绝的是「递减但结果非负」的偏移表"
-        "（例如 {10, 5}），`out[i] < 0` 对它完全无感 —— 两条守卫的语义不同，"
-        "缺的是用例，不是冗余代码。"
-        "【缺口闭合方式（未在本轮实施，属控制者裁决范围）】在"
-        " TestDecodeTrailerRejectsNonMonotonic 之外补一条 offsets = {10, 5} 的用例"
-        "（期望 decodeTrailer 报 ErrTrailerCorrupt）；**该闭合方式已实测**："
-        "在 pristine 树上注入等价探针 TestProbeNonMonotonicStaysNonNegative 后，"
-        "pristine PASS / 本变异 FAIL / m03(删 out[i] < 0) PASS ⇒ 它专杀 m02，"
-        "且 m03 仍由现有的两个负值子用例杀死 ⇒ 两条守卫各自独立承重。"
-        "【对照】task-2-report.md:130-133 曾把这条变异记为「应 FAIL」；"
-        "在本集合上重跑判定为**绿**，即那份散文证据与 HEAD 实现不符。"
-    ),
-}
+EXPECTED_GREEN = {}
 
 # ---------------------------------------------------------------------------
 # 映射表（追加 G）：计划写的每条变异要求 → 集合里的对应条目。
@@ -206,9 +210,19 @@ REQUIREMENTS = [
         "mutations": ["m02_删除非单调守卫"],
         "checks": [],
         "note": (
-            "本集合把这条**散文主张**变成可重跑判定，结论是**不成立**：该变异判绿，"
-            "依据见 EXPECTED_GREEN[m02]（用例的差分 -5 被 `out[i] < 0` 兜住，"
-            "唯一缺失的是「递减但结果非负」的用例）。登记为覆盖缺口，不是缺口掩盖。"
+            "【发现的记录】本集合把这条**散文主张**变成可重跑判定，结论是**不成立**："
+            "判绿。原因是用例的输入凑巧 —— 差分 -5 使 out[1] = -5 变负，被紧随其后的 "
+            "`out[i] < 0` 守卫接住，仍返回 ErrTrailerCorrupt，而它只断言 errors.Is ⇒ "
+            "删掉 `delta < 0` 也全绿。守卫本身是承重的（offsets {10, 5} 时 "
+            "out[1] = 5 ≥ 0，只有 `delta < 0` 能拦；缺它即静默接受非单调偏移序列），"
+            "所以这是**真实测试缺口**而非等价变异。"
+            "【本轮处置（控制者裁决 1）】补用例而非登记例外：index_test.go 的 "
+            "TestDecodeTrailerRejectsNonMonotonic 已改为表驱动（顶层用例数仍为 7），"
+            "新增子用例「差分为负但偏移仍非负」= encodeTrailer([]int64{10, 5})，"
+            "断言 errors.Is(err, ErrTrailerCorrupt)；该子用例专杀 m02（删 `out[i] < 0` "
+            "时它仍 PASS ⇒ 两守卫语义独立，已实测）⇒ m02 现为**普通变异**，"
+            "EXPECTED_GREEN 已清空。报告 :130-133 的正式更正由 R11 阶段③统一处理，"
+            "本集合不改报告。"
         ),
     },
 ]

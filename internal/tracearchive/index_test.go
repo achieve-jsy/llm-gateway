@@ -70,12 +70,37 @@ func TestDecodeTrailerRejectsOversizedCount(t *testing.T) {
 }
 
 func TestDecodeTrailerRejectsNonMonotonic(t *testing.T) {
-	// 手工构造一个偏移递减的 trailer：差分编码下即为负增量
-	b := []byte{}
-	b = appendVarint(b, 0)
-	b = appendVarint(b, ^uint64(5-1)) // 负增量（补码表示）
-	if _, err := decodeTrailer(b, 2); !errors.Is(err, ErrTrailerCorrupt) {
-		t.Fatalf("偏移非单调时应报 ErrTrailerCorrupt，实际 err=%v", err)
+	// 两条子用例分别锁住**两道不同的守卫**，缺一不可（变异验证 m02/m03）：
+	//   「差分为负且偏移变负」：out[1] = 0 + (-5) = -5 ⇒ 由 `out[i] < 0` 兜住；
+	//     单独删掉 `delta < 0` 时它**仍然 PASS**（不是它不承重，而是这个输入凑巧
+	//     让结果变负，被下一条守卫接住了）。
+	//   「差分为负但偏移仍非负」：out[1] = 10 + (-5) = 5 ≥ 0 ⇒ **只有** `delta < 0`
+	//     能拦（`out[i] < 0` 对它完全无感）。缺这道检查时解码会**成功返回一个
+	//     非单调、因而错误的偏移序列**（静默错读，不是无害差异）——这条专杀 m02。
+	cases := []struct {
+		name string
+		b    []byte
+		n    int
+	}{
+		{
+			// 手工构造一个偏移递减的 trailer：差分编码下即为负增量（补码表示）
+			name: "差分为负且偏移变负",
+			b:    appendVarint(appendVarint(nil, 0), ^uint64(5-1)),
+			n:    2,
+		},
+		{
+			// 差分 -5 相加后仍非负：非单调性与「偏移为负」在此**分离**
+			name: "差分为负但偏移仍非负",
+			b:    encodeTrailer([]int64{10, 5}),
+			n:    2,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := decodeTrailer(c.b, c.n); !errors.Is(err, ErrTrailerCorrupt) {
+				t.Fatalf("偏移非单调时应报 ErrTrailerCorrupt，实际 err=%v", err)
+			}
+		})
 	}
 }
 

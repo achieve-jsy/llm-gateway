@@ -9,9 +9,9 @@
 它此前只有散文记录（`task-3-report.md:288-294`）；本文件把那次手工实验落成
 **可重跑、绑定提交**的集合。编号与简报里的代号对应关系：
 
-    m01_A  删掉负值 / 负 row_count 守卫
-    m02_B  五处 %w 全部退化 %v（错误身份）
-    m03_C  对称调换 [14:18) trailer_len 与 [18:22) row_count 的**读写两侧**
+    m01_A        删掉负值 / 负 row_count 守卫
+    m02_B1..B5   逐处把 %w 退化 %v（错误身份）—— **逐处独立，不是并集**
+    m03_C        对称调换 [14:18) trailer_len 与 [18:22) row_count 的**读写两侧**
 
 每条变异 = 一个「删掉/放宽某道防线」的操作序列：
   ("sub", a, b)  把 a 精确替换成 b（a 必须在目标文件里恰好出现一次）
@@ -40,10 +40,14 @@
    （那是 task-6 的 `TestSealGoldenLayout`），**真实名字是 `TestFooterGoldenBytes`**
    （`internal/tracearchive/footer_test.go:35`）。本集合的 MANIFEST 里没有前者。
 
-3. **m02_B 是「五处一起改」的并集，不证明逐处独立**：简报说「把五处 %w **任一**改成
-   %v → 对应用例必须转红」，而 B 一次改全部五处 ⇒ 它证明的是「五处都退化时 5 条拒绝
-   用例全红」，**没有**证明「每处各自有一条专属断言承重」。若要与 task-6 的
-   m05/m08/m12（一条哨兵一条变异）同强度，下一轮应把 B 拆成 5 条。本轮按裁决保持 3 条。
+3. **m02_B 已按裁决拆成 m02_B1..m02_B5（逐处独立）**：简报的要求是「把五处 %w **任一**
+   改成 %v → 对应用例必须转红」，它要求的是**逐处**可验证。旧的并集形态（五处一起改）
+   只证明「全都退化时 5 条拒绝用例全红」，**证明不了任何单独一处** ⇒ 把该要求映射到并集
+   条目构成**虚假的要求满足**：映射表说「有对应条目」，而那条要求实际上**没有被验证**
+   （这正是本项目 D17 记录的失败形态）。因此这里给 5 条**各只改一处**的条目，
+   REQUIREMENTS 逐条引用它们；旧并集编号登记在 RETIRED。
+   对每一条：**红** ⇒ 该错误点有断言承重；**绿 ⇒ 必须登记 EXPECTED_GREEN 并写出零覆盖
+   理由**（绿不是失败而是发现：该错误点没有任何用例约束）。**不得为凑红把两处并回一条。**
 
 4. **m03_C 是本集合唯一能验证 `[14:18)`/`[18:22)` 字段顺序的条目**，且它是**静默错误**：
    trailer_len 与 row_count 都是 4 字节整数、类型相同 ⇒ 编译通过、往返自洽。
@@ -70,8 +74,16 @@ MANIFEST_DERIVATION = (
 # 任何 SKIP 都说明「没跑」，必须判无效（默认空 ⇒ 任何 SKIP 都判无效）。
 SKIP_WHITELIST = []
 
-# 已退役编号：本集合首次落地，无退役项。显式留空以便第三方核对「没有隐藏的历史编号」。
-RETIRED = {}
+# 已退役编号：编号一经发布就不再改动（历史报告/提交表可直接对照），因此退役项必须登记，
+# 读者不需要问「m02_B 去哪了」。此编号已在提交 76ee50e3 里发布过，故不能静默删除。
+RETIRED = {
+    "m02_B_五处w改v错误身份退化": (
+        "**并集形态**：五处 %w 一次性全改 %v，只证明「全都退化时 5 条拒绝用例全红」，"
+        "对「任意**一处**退化是否也有用例承重」零信息 ⇒ 映射表若指向它，就是"
+        "「要求被声称满足、实际未被验证」（D17 同类失败）。控制者裁决：拆成 "
+        "m02_B1..m02_B5 五条各只改一处的条目取代它。"
+    ),
+}
 
 # ---------------------------------------------------------------------------
 # 单一事实源：本任务的全部变异
@@ -90,15 +102,31 @@ MUTATIONS["m01_A_删除负值与负row_count守卫"] = [
             '\t\treturn f, fmt.Errorf("%w: 负 row_count %d", ErrFooterCorrupt, f.RowCount)\n\t}\n'),
 ]
 
-# ---- m02_B：五处错误身份 `%w` → `%v` ----
-# 分别对应 footer.go 的 5 处 fmt.Errorf：长度、magic、format_version、
-# 负偏移/负长度、负 row_count。全部改完后 ErrFooterCorrupt 不再被 wrap ⇒
-# 5 条拒绝类用例的 errors.Is 断言全红（RoundTrip/Golden/RowCountRoundTrip 不带错误断言，仍绿）。
-MUTATIONS["m02_B_五处w改v错误身份退化"] = [
+# ---- m02_B1..B5：逐处错误身份 `%w` → `%v`（**一条只改一处**）----
+# 分别对应 footer.go 的 5 处 fmt.Errorf，按文件出现顺序编号。每处退化后
+# ErrFooterCorrupt 在该返回路径上不再被 wrap ⇒ 对应的 errors.Is 断言必须转红。
+# 与旧的并集形态（已退役 m02_B）的区别就是**独立性**：这里每条各自承重，
+# 谁红谁绿都能归因到**单独一个错误点**，REQUIREMENTS 也因此能逐条引用。
+#
+# 逐处对应关系（footer.go 行号）：
+#   B1 :59  长度           → TestDecodeFooterRejectsWrongLength（2 个子例）
+#   B2 :62  magic          → TestDecodeFooterRejectsBadMagic
+#   B3 :65  format_version → TestDecodeFooterRejectsUnknownVersion
+#   B4 :73  负偏移/负长度   → TestDecodeFooterRejectsNegativeOffsetOrLen（2 个子例）
+#   B5 :76  负 row_count    → TestDecodeFooterRejectsNegativeRowCount
+MUTATIONS["m02_B1_长度错误身份退化"] = [
     ("sub", 'fmt.Errorf("%w: 长度应为', 'fmt.Errorf("%v: 长度应为'),
+]
+MUTATIONS["m02_B2_magic错误身份退化"] = [
     ("sub", 'fmt.Errorf("%w: magic 不符', 'fmt.Errorf("%v: magic 不符'),
+]
+MUTATIONS["m02_B3_未知版本错误身份退化"] = [
     ("sub", 'fmt.Errorf("%w: 未知 format_version', 'fmt.Errorf("%v: 未知 format_version'),
+]
+MUTATIONS["m02_B4_负偏移或负长度错误身份退化"] = [
     ("sub", 'fmt.Errorf("%w: 负偏移或负长度', 'fmt.Errorf("%v: 负偏移或负长度'),
+]
+MUTATIONS["m02_B5_负row_count错误身份退化"] = [
     ("sub", 'fmt.Errorf("%w: 负 row_count', 'fmt.Errorf("%v: 负 row_count'),
 ]
 
@@ -141,9 +169,12 @@ MUTATIONS["m03_C_对称调换trailer_len与row_count"] = [
 ]
 
 # ---------------------------------------------------------------------------
-# 允许的绿：本集合**没有**登记任何条目 —— 三条变异都预期转红（m01/m02 由断言红，
-# m03 由 TestFooterGoldenBytes 红）。未登记的绿 ⇒ 整轮失败，这与「本任务三条防线
-# 都有专属断言承重」的结论一致。若将来某条判绿，必须在这里补登记并给出分类：
+# 允许的绿：本集合**没有**登记任何条目 —— 7 条变异都预期转红，且已逐条实测：
+#   m01_A 由 2 条负值用例红；m02_B1..B5 **各自**由对应的那条拒绝用例红
+#   （B1→WrongLength、B2→BadMagic、B3→UnknownVersion、B4→NegativeOffsetOrLen、
+#     B5→NegativeRowCount）；m03_C 由 TestFooterGoldenBytes 红。
+# ⇒ 本任务「五处错误身份 + 两处负值守卫 + 字段顺序」每一处都有专属断言承重，
+#   没有零覆盖残留。未登记的绿 ⇒ 整轮失败。若将来某条判绿，必须在这里补登记并分类：
 #   [零覆盖]（行为存在但无用例约束 ⇒ 测试缺陷）/ [等价变异]（代码冗余 ⇒ 代码发现）。
 # ---------------------------------------------------------------------------
 EXPECTED_GREEN = {}
@@ -201,12 +232,20 @@ REQUIREMENTS = [
     },
     {
         "plan": "task-3-brief.md:267 把五处 %w 任一改成 %v → 对应用例必须转红（错误身份）",
-        "mutations": ["m02_B_五处w改v错误身份退化"],
+        "mutations": [
+            "m02_B1_长度错误身份退化",
+            "m02_B2_magic错误身份退化",
+            "m02_B3_未知版本错误身份退化",
+            "m02_B4_负偏移或负长度错误身份退化",
+            "m02_B5_负row_count错误身份退化",
+        ],
         "checks": [],
         "note": (
-            "B 是**并集变异**（五处一起改），预期 5 条拒绝类用例全红（含 3 个子例）。"
-            "它没有证明「每一处各自有一条专属断言」—— 见文件头第 3 条；"
-            "若要同 task-6 的 m05/m08/m12 同强度，下一轮拆成 5 条。"
+            "要求是「**任一**处改 %v ⇒ 对应用例必须转红」⇒ 必须**逐处**可验证，"
+            "因此由 5 条各只改一处的条目共同满足（旧的并集 m02_B 已退役，它证明不了单独一处）。"
+            "实测（非权威探针，清单范围）：B1/B2/B3/B4/B5 **全部转红**，各自杀死上面注释里"
+            "对应的那条用例 ⇒ 五处错误点各有一条断言承重，本要求**无零覆盖残留**，"
+            "EXPECTED_GREEN 无新增。"
         ),
     },
     {

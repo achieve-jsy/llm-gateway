@@ -41,6 +41,19 @@ task-5 的变异证据此前**只存在于报告散文里**（`task-5-report.md`
 其中带 `[散文]` 标记的条目**照抄报告结论**，带 `[推断]` 标记的是本轮新写的等价变异
 （与原编号同一守卫，但操作序列按 HEAD 重写 —— HEAD 之后的结构变了，旧文本已不可定位）。
 
+本轮另跑过一次**非权威的辅助自检**（临时 pristine 树 + 逐条 go build/go test，
+无提交绑定、不具备工具的三条判据）：基线 26 PASS/SKIP=0；25 条里
+**红 24 + 绿（已登记 m13）1 + 未登记的绿 0 + 编译失败 0 + 证据无效 0**。
+这一步抓到一个真实缺陷并已修：m22 的初稿把 `notes` 声明一起 cut 掉 ⇒
+`undefined: notes`，那会以「红(编译失败)」的形态混进证据（编译红是弱一档的证据：
+没有「用例执行 + 终判」），而工具**不会**因此判整轮失败（它落在 crash 桶）。
+辅助输出见 `task-5-evidence/aux-NOT-authoritative-verdict-prediction.txt`。
+
+另有 `COVERAGE_GAPS`（**人类可读登记，工具读不到**）：登记本轮**没有**变异覆盖的
+守卫（`NewWriter` 的两个阈值默认值分支）—— 位置、是否可达、补法、该由谁补。
+它与 `EXPECTED_GREEN` 分开存放，因为后者是**变异名**表，塞进无变异体的守卫会让
+阶段② 的「每个 EXPECTED_GREEN 键都要落在允许的绿计数里」核对出现永远对不上的键。
+
 集合里每条变异 = 一个「删掉/放宽某道防线」的操作序列：
   ("sub", a, b)  把 a 精确替换成 b（a 必须在目标文件里恰好出现一次）
   ("cut", a, b)  删除 a 到 b（含）之间的内容（a 必须在目标文件里恰好出现一次）
@@ -361,6 +374,61 @@ EXPECTED_GREEN = {
         "杀不死的原因纯粹是**没有用例构造该状态**，故归类为 [零覆盖]。"
     ),
 }
+
+# ---------------------------------------------------------------------------
+# 零变异覆盖的守卫登记（**只是给人看的登记，工具读不到、不参与任何判定**）
+#
+# 为什么单独一个结构、而不是写进 EXPECTED_GREEN：EXPECTED_GREEN 的键被工具当作
+# **变异名**处理，阶段② 还要核对「每个键都确实落在『允许的绿』计数里」——
+# 把「没有变异体的守卫」塞进去，会让那张核对表出现一个永远对不上的键。因此本结构
+# 与 task-6.py 的 PENDING 同一用途：进版本库、可被 git diff 审计的人类可读登记。
+#
+# 登记口径与 m13 的 EXPECTED_GREEN 条目对齐：位置 / 是否可达 / 缺的是什么 / 谁来补。
+# 裁决（控制者，本轮）：**不新增条目**，但必须登记 —— 一个守卫没有变异覆盖
+# 不自动等于缺陷（m13 就是「不可达 + 有意保留」的那类）。
+# ---------------------------------------------------------------------------
+COVERAGE_GAPS = [
+    {
+        "id": "gap-1-NewWriter两个阈值默认值分支零变异覆盖",
+        "title": ("NewWriter 的「BlockBytes/SealInterval 为 0 取默认值」两处赋值"
+                  "没有任何变异条目（旧 30 条里也没有）"),
+        "where": [
+            "internal/tracearchive/writer.go:196-198  if opts.BlockBytes <= 0 { opts.BlockBytes = defaultBlockBytes }",
+            "internal/tracearchive/writer.go:199-201  if opts.SealInterval <= 0 { opts.SealInterval = defaultSealInterval }",
+        ],
+        "reachable": (
+            "**可达**，且两处都已被用例约束：TestWriterPendingSealsAppliesDefaultThresholds "
+            "（不传任何阈值）断言「刚写入一行不应封块」。删掉任一条赋值会让该阈值变成 0："
+            "bySize 的 `cur.bytes >= 0` / byTime 的 `time.Since(...) >= 0` 恒真 ⇒ 第一次 "
+            "PendingSeals 就报出 1 个任务 ⇒ 该用例的 `len(tasks) != 0` 断言转红。"
+            "因此缺的**不是覆盖**，而是「变异证据」——即没有一条变异证明这个用例真的在"
+            "约束这两行（若这两行将来被删，只有这条用例会红，而表里没有对应条目）。"
+        ),
+        "how_to_close": (
+            "补两条变异即可（编号建议 m34/m35，实际由补条者定；两条各自独立、不要合并，"
+            "因为两个阈值是两处独立守卫）：\n"
+            "  (\"cut\", '\\tif opts.BlockBytes <= 0 {', '\\t\\topts.BlockBytes = defaultBlockBytes\\n\\t}\\n')\n"
+            "  (\"cut\", '\\tif opts.SealInterval <= 0 {', '\\t\\topts.SealInterval = defaultSealInterval\\n\\t}\\n')\n"
+            "补条时请把本字段的依据写进那两条的注释，并跑一次 --check。"
+        ),
+        "aux_verified": (
+            "两条建议的 pattern 本轮已**实测**（非权威、无提交绑定：临时 pristine 树；"
+            "writer.go 在 a2bbfdf8..aceb59ee 之间未变）：各自在 HEAD 上唯一定位、编译通过、"
+            "判定为「红」且杀死用例恰为 TestWriterPendingSealsAppliesDefaultThresholds"
+            "（PASS=25 SKIP=0 FAIL=1）。⇒ 补这两条只需照抄 pattern，判定不需要猜。"
+            "（权威表仍须由工具在干净树上产出。）"
+        ),
+        "why_not_this_round": (
+            "控制者裁决：本阶段只在「旧 30 条 + 简报要求」范围内收敛，不扩范围 "
+            "（我此前按「不编造、不扩范围」把它作为待决项上报，未自行补）。"
+            "注意它**不属于** m13 那种「不可达的纵深防御」：它是可达的、有用例的，"
+            "缺的是变异证据本身 —— 归类上更接近「旧证据的强度被高估」"
+            "（与 brief:253-254 那条缺口同类，后者已由 m33 关闭）。"
+        ),
+        "owner": "R11 / 阶段② 控制者（登记进 R11 报告与终审输入）",
+        "this_round": "仅登记，不补条目（裁决：不新增）",
+    },
+]
 
 # ---------------------------------------------------------------------------
 # 静态检查（追加 G）：**变异测不到**的要求必须有静态检查行。

@@ -20,7 +20,7 @@
 | 工作树 | 跑前 `git status --porcelain` 空 / 跑后仍空 | 9/9 表的 `git status --porcelain` 行 |
 | 工具 sha256 | `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`（`tools/trace-mutate/trace_mutate.py`） | **9/9 表逐位相同** |
 | 调用参数 | 未传 `--only` / `--skip`（即每次都是全集运行） | 各片段「命令」条 |
-| 退出码 / stderr | 9/9 退出码 0；stderr **0 字节**（`e3b0c442…`，即空文件 sha256） | 各片段；`task-7-evidence/r11-task-7-table.stderr.txt` |
+| 退出码 / stderr | 9/9 退出码 0 = **强推断，非机器记录**（原始归档**不含**工具退出码；task-6 归档末行的 `[status: completed, exit code: 0]` 是作业框架追加的页脚，不是工具 stdout。推断依据：9/9 归档完整 + 9/9 无 `!!!` + stderr 0 字节）；stderr **0 字节**（`e3b0c442…`，即空文件 sha256） | 各 `r11-section.md` **自述**；`task-7-evidence/r11-task-7-table.stderr.txt` |
 | 证据归档 | 全部写入 gitignored 的 `task-N-evidence/`（`.superpowers/sdd/.gitignore` 内容为 `*`）⇒ 写证据不弄脏树 | `progress.md:2977-2982` |
 
 ### 0.1 计数口径（工具定义，9 张表共用）
@@ -48,6 +48,16 @@
 | `task-7-evidence/r11-task-7-goflags-counterproof-record.md` | `967035bdee7319101ec38b0c0dbf049d4a187322fc5696630e5b176783dfc4ee` |
 | `task-8-evidence/r11-timing-probe.txt` | `3316c553ae369be2fca7436626c609b9bd00ca579333ee57045e80754ca6ef05` |
 
+### 0.3 关于锚定：9 张表**跑在** `c13b64bc`，本报告**归档在**其后的文档树上
+
+- 冻结 HEAD `c13b64bcc2a344193f854063adbf5a94c0e86760` 是当前 HEAD 的**祖先**：9 张权威表**跑在** `c13b64bc`，而 `r11-report.md` 与 Task 1–6 报告**归档在**其后的提交树上。
+- **为什么判据仍然可比**：`git diff --name-status c13b64bc..HEAD` 的结果**只有 8 个文档**，且**没有任何** `internal/`、`tests/`、`tools/trace-mutate/sets/` 或 `tools/trace-mutate/trace_mutate.py` 的改动：
+  - `A` `.superpowers/sdd/2026-09-24-tracearchive-storage-primitives/r11-report.md`
+  - `A` 同目录 `task-1-report.md` ~ `task-6-report.md`（6 个）
+  - `M` `docs/superpowers/plans/2026-09-24-tracearchive-storage-primitives.md`
+  ⇒ 表的判据（被测代码、测试文件、变异集合、工具）与归档树**逐字节可比**；后续提交（含本更正提交）只再修改这些**已列出的文档**，不引入代码/测试/集合改动。
+- 出处：本报告实测 `git diff --name-status c13b64bc..HEAD`（终审 B 提出并要求显式写明）。
+
 ---
 
 ## 1. 逐集合权威表
@@ -67,9 +77,11 @@
 | task-8-reader | 7 | 6 | 0 | 0 | 0 | 0 | 6 | 0 | 无 | 无 | `r11-task-8-reader-table.txt` | `b1f2ad30945e0c912d8d954139cdf25d294af547cbefbfd80e71429801d35691` |
 | **合计** | — | **124** | **9** | **3** | **0** | **0** | **136** | **0** | 9/9 无 | 9/9 无 | — | — |
 
-> 上表的 sha256 逐位抄自 9 份 `r11-section.md` 片段里的「归档: … sha256 = …」行（`task-6` 的见其片段「归档:」条）。
-> 注意：归档文件自己的 sha256 **不可能**出现在它自身的「## 证据绑定」头部（自指），头部记录的是 HEAD、工具/集合/清单/被测文件的哈希。
-> 本报告已用 `shasum -a 256` 对 9 个归档文件复算，结果与片段记录逐位一致。
+> 上表 sha256 的**抄录 / 复算来源必须分开标注**（终审 B 复核结论）：
+> - **8/9 抄自片段**：`task-2` / `task-3` / `task-4` / `task-4-errors` / `task-5` / `task-6` / `task-8` / `task-8-reader` 的 `r11-section.md`「归档: … sha256 = …」行。
+> - **1/9 由本报告复算**：**`task-7` 的片段没有给出该 sha256**（其「归档:」行只有文件名），`f0daaf72…` 是本报告执行 `shasum -a 256 .superpowers/sdd/2026-09-24-tracearchive-storage-primitives/task-7-evidence/r11-task-7-table.txt` 复算所得。
+> - 注意：归档文件自己的 sha256 **不可能**出现在它自身的「## 证据绑定」头部（自指），头部记录的是 HEAD、工具/集合/清单/被测文件的哈希。
+> - 本报告已用 `shasum -a 256` 对 9 个归档文件**全部复算**，结果与上表逐位一致。
 > `!!!` 计数亦由本报告对 9 个归档全文 `grep -c '!!!'` 复算，均为 0；「这是子集」横幅 grep 零命中。
 
 ### 1.1 task-2（`index.go`，5 条）
@@ -256,7 +268,7 @@
 ### 3.2 两处**非漂移**的差异（如实登记，避免误读）
 
 1. **task-7 `m27` 的辅助列**：新表写 `超时(用例未终判)`，旧归档写 `TestReaderReleasesConcurrencySlots`；**判定桶两者同为 `红(超时/挂死)`** ⇒ 不构成漂移，且**新表描述才准确**（超时意味着该用例**没有**做出终判，旧归档点名「杀死它的用例」是错的）。出处：`task-7-evidence/r11-section.md`、`progress.md:3383-3385`。
-2. **task-6 归档的第 10/28 行**（counterproof 轮）：分别是 pristine 临时树随机路径与被剔除的敏感变量，**均与判定无关**。出处：`task-7-evidence/r11-section.md`（counterproof 小节）。
+2. **task-7 归档的第 10/28 行**（counterproof 轮；终审 B 已独立 diff 复核：**仅第 10、28 行不同，32 行判定表逐字节相同**）：分别是 pristine 临时树随机路径与被剔除的敏感变量，**均与判定无关**。出处：`task-7-evidence/r11-section.md`（counterproof 小节）。
 
 ---
 
@@ -272,19 +284,20 @@
 - **正确读法**：空真集合的映射表「静态检查」列均为 `—` ⇒ 它们**没有声称**任何要求由静态检查覆盖 ⇒ **非缺口**，但**也绝不是证据**。
 - 出处：`task-2`/`task-4`/`task-4-errors`/`task-5` 各 `r11-section.md` 的「异常与如实说明」；`task-8-evidence/r11-section.md` 异常 2；`progress.md:3146-3150`、`3320-3331`。
 
-### 4.2 🔴 `names.txt` **未由提交内容锚定**
+### 4.2 🔴 `names.txt` **未由提交内容锚定**（但**事后替换清单无法产出一张无 `!!!` 的表**）
 
 - **事实**：清单位于 gitignored 的 `task-N-evidence/` ⇒ `git show HEAD:…names.txt` **取不到**（本报告实测：exit 128，`致命错误：路径 … 在磁盘上，但是不在 'HEAD' 中`）。
-- **后果**：清单完整性**只由本轮记录的 sha256 + 工具的「推导命令 ↔ 清单」比对**锚定，**不由提交内容锚定**。
-- **本轮状态**：9/9 集合的推导比对均「一致」⇒ 可接受。
-- 出处：`task-8-evidence/r11-section.md` 异常 3；`progress.md:3333-3337`。
+- **控制者已读源码核实的一半（不成立的那一半）**：工具的 `MANIFEST_DERIVATION` **不是**纯声明 —— 它在 **pristine 树里实际执行**推导命令（`trace_mutate.py:562-565`，`cwd=tree`），且当**推导集合 ≠ 清单集合**时直接 `SystemExit`（`:571-572`，原文即「**清单可能被改小**」）。推导命令住在**被跟踪的集合文件**里（如 task-2 的 `grep -h '^func Test' internal/tracearchive/index_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort`），比对的是**集合**而非计数 ⇒ **事后替换 `names.txt` 无法产出一张无 `!!!` 的表**。
+- **仍然成立的一半（必须写明）**：**脱离「提交的树 + 工具 + 被跟踪的集合」无法独立复核归档** —— 归档**不自足**。这是**有意设计**：审计链 = **计划 + 集合 + 工具 + 报告**，原始归档可由前三者重新生成。读者不应把 `task-N-evidence/` 当作可独立取信的成品。
+- **本轮状态**：9/9 集合的推导比对均「一致」，且推导命令内嵌于被跟踪的集合 ⇒ 清单完整性由「本轮 sha256 + 集合内的推导命令在 pristine 树上的实跑比对」共同锚定；**不由提交内容锚定**。
+- 出处：`task-8-evidence/r11-section.md` 异常 3；`progress.md:3333-3337`；工具机制 `trace_mutate.py:562-572`（终审 B 复核）。
 
 ### 4.3 🔴 「未被引用的变异」**不是缺陷**
 
 - **事实**：`REQUIREMENTS`（映射表）的用途是抓「**要求没有条目**」的**缺口**（gap），**不是**要求每条变异都能追到一行简报。
 - **本轮数字**：task-6 未被引用 **41**、task-5 **24**、task-7 **12**（合计 77）——均属正常；它们同样在 **git-tracked** 的集合里，删掉会被 `git diff` 看见。
 - **对比**：本轮真正由映射表抓出的缺口是 task-6 `brief:962`（忽略 `cmd.Run()` 的 error）**没有任何对应条目**，已由新增 `m50` 关闭。
-- 出处：`task-6-evidence/r11-table.txt:49`、`task-5-evidence/r11-table.txt:39`、`task-7-evidence/r11-table.txt:48`；`progress.md:3281-3286`。
+- 出处：`task-6-evidence/r11-task-6-table.txt:49`、`task-5-evidence/r11-task-5-table.txt:39`、`task-7-evidence/r11-task-7-table.txt:48`；`progress.md:3281-3286`。
 
 ### 4.4 ⚠️ 工具正常模式**不归档每条变异的原始 `go test` 输出**（需 `--side`）
 
@@ -343,6 +356,8 @@
 | 11 | **task-6 的 `PENDING`（显式 `sort.Slice` 冗余）⇒ 结案**：冗余成立（`m34` 绿证实 + `os.ReadDir` 排序契约 `$GOROOT/src/os/dir.go:109-126`）；保留排序是**有意的显式化** | `task-6-evidence/r11-task-6-table.txt` 的 `[允许的绿] m34` 理由行；`progress.md:3156-3185` | **并更正**它自己那句「加一个断言顺序的用例会让它不再冗余」——删掉 `sort.Slice` 后顺序仍对 ⇒ 那种用例照样通过 ⇒ **只算可选文档，不是修复**（D24） |
 | 12 | **GOFLAGS `-exec` 伪造路径已测量关闭** | `task-7-evidence/r11-task-7-goflags-counterproof.txt`（`162d72e8…`）、`…-record.md`（`967035bd…`）；机制在 `trace_mutate.py:97-105`（`build_env()`）与 `:272`（`run_tests(env=env)`）；`progress.md:3464-3496` | 三问全符合：剔除行列 `GOEXPERIMENT, GOFLAGS`、wrapper 调用 **0 次**、32 行判定表**逐字节相同**、整份归档仅 2 行不同且均与判定无关 ⇒ 结论「**迁移关闭了 `GOFLAGS` 伪造路径**」。边界：只证伪 `GOFLAGS=-exec` 一条向量，`GOEXPERIMENT` 未单独构造行为差异测量 |
 | 13 | Task 6 的 `brief:962`（忽略 `cmd.Run()` 的 error）在映射表首次生成时**没有对应条目**（D17 的实测实例） | `task-6-evidence/r11-task-6-table.txt:41` | **已由新增 `m50_忽略cmd.Run错误` 关闭** |
+| 14 | **（终审 B 发现）本报告初稿的出处指错**：引用不存在的文件名 `task-{5,6,7}-evidence/r11-table.txt`、把 counterproof 的两行差异指错为 task-6 归档、把 task-7 的归档 sha256（实为 `shasum` 复算）说成「抄自片段」；**数字本身全部正确** | 终审 B（证据链审计轴）逐格复核；更正落点见本报告 §1.0 注、§3.2、§4.3 | **已更正**（路径限定的更正中提交；4 处引用逐一 `ls`/`sed -n` 自检）；登记为计划缺陷 **D26** |
+| 15 | **（终审 B 发现）强推断被写成直接证据**：§0 的「9/9 退出码 0」原始归档并不含（仅各片段自述；task-6 归档末行是作业框架页脚） | 终审 B；更正落点见本报告 §0 表「退出码 / stderr」行 | **已标注为「强推断，非机器记录」**并写明依据；登记为计划缺陷 **D27** |
 
 ---
 

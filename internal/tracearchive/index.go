@@ -55,6 +55,18 @@ func decodeTrailer(b []byte, n int) ([]int64, error) {
 	if n > len(b) {
 		return nil, fmt.Errorf("%w: 期望 %d 条但仅 %d 字节", ErrTrailerCorrupt, n, len(b))
 	}
+	// 条目数上界（读侧内存预算的另一半，见 reader.go 的 maxTrailerEntries）。
+	// n > len(b) 只挡「结构上不可能」，挡不住「结构上可能但超出预算」：len(b) 被
+	// maxTrailerBytes 限制在 64 MiB，而最坏情形（每个字节都是一个 1 字节 varint）
+	// 给出 n = len(b) = 64 Mi 条 ⇒ make 分配 8n = 512 MiB。实测该输入【成功解码】
+	// （err=nil，不是报错），故必须在此硬拦，且同样在 make 之前。
+	//
+	// 超限一律 ErrTrailerCorrupt（footer 的 row_count 与 trailer 字节数不相容
+	// ⇒ 产物损坏），【绝不截断】到上界条数：截断会让「损坏」伪装成一次正常读取。
+	if n > maxTrailerEntries {
+		return nil, fmt.Errorf("%w: 期望 %d 条超过条目数上界 %d（8 字节/条 ⇒ 索引约 %.0f MiB，超出读侧内存预算）",
+			ErrTrailerCorrupt, n, maxTrailerEntries, float64(8*n)/(1<<20))
+	}
 	if n == 0 {
 		if len(b) != 0 {
 			return nil, fmt.Errorf("%w: 期望 0 条但剩余 %d 字节", ErrTrailerCorrupt, len(b))

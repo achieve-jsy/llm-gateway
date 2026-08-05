@@ -1,6 +1,7 @@
 package tracearchive
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -14,11 +15,12 @@ import (
 //
 // 【为什么必须触达未导出符号（全局约束要求写明）】两条断言都无法用公开 API 表达：
 //
-//  1. TestReaderRejectsOversizedTrailerLen：边界值就是未导出的 maxTrailerBytes 本身
-//     （64 << 20）。B 层若要表达，只能内联一个自己抄来的字面量——那样它就不再是
+//  1. TestReaderRejectsOversizedTrailerLen 与 TestReaderRejectsTrailerEntryCountOverBound：
+//     两者的边界值分别是未导出的 maxTrailerBytes（64 << 20）与 maxTrailerEntries
+//     （64 << 20 / 8）。B 层若要表达，只能内联一个自己抄来的字面量——那样它就不再是
 //     「上界的边界用例」，改常量时用例不会跟着动，等于把守卫与用例解耦。
-//     此外它要用未导出的 footer/encodeFooter 构造「帧摘要与邻接都自洽、唯独 trailer_len
-//     越界」的产物，这种自洽只能靠包内的编码器表达。
+//     此外它们要用未导出的 footer/encodeFooter 构造「帧摘要与邻接都自洽、唯独越界」
+//     的产物，这种自洽只能靠包内的编码器表达。
 //  2. TestReaderReleasesConcurrencySlots 与 TestReaderHonorsContextCancelWhileWaitingForSlot：
 //     前者的断言要读 Reader 的内部状态 r.inFlight()
 //     （= len(r.sem)）。外部包只能观察到「读成功了」，观察不到「槽位还回来了」——
@@ -92,6 +94,77 @@ func TestReaderRejectsOversizedTrailerLen(t *testing.T) {
 	_, err = r.GetBody(context.Background(), Ref{DT: "2026-09-24", Inst: "blue", Part: 0, Row: 0})
 	if !errors.Is(err, ErrFooterCorrupt) {
 		t.Fatalf("trailer_len 超过上界应返回 ErrFooterCorrupt（产物损坏），实际 %v", err)
+	}
+}
+
+// TestReaderRejectsTrailerEntryCountOverBound 覆盖 Reader 对 trailer【条目数】上界的校验。
+//
+// 【为什么必须有（与上面那条字节上界是两半）】maxTrailerBytes 只压 trailer 的字节数，
+// 而 decodeTrailer 的分配是 8 × 条目数：trailer 的每个字节都可以是一个恰好 1 字节的
+// varint（全 0x00 ⇒ 差分 0、偏移单调不减），于是 64 MiB 的 trailer 能【合法地】声称
+// 67,108,864 条。F1 实测：这份输入让 decodeTrailer 成功返回（err=nil）并分配
+// 512.0 MiB（536,876,232 字节，213 ms）；装进产物后单次点读峰值堆 1090 MiB
+// （索引 512 + tb 64 + 解码窗口 512），MaxConcurrent=2 时超出规格 §8.4 C5 的预算。
+// 上界因此必须同时施加在条目数上（见 reader.go 的 maxTrailerEntries），
+// 超限返回 ErrTrailerCorrupt，【不截断】。
+//
+// 【为什么放 A 层】边界值是未导出的 maxTrailerEntries（同上面那条 maxTrailerBytes：
+// 内联抄来的字面量会让用例与常量解耦），且要用未导出的 footer/encodeFooter 构造
+// 「真实 zstd 帧 + 帧摘要自洽 + trailer 紧邻 footer + trailer_len 未越界，唯独条目数越界」
+// 的产物。
+//
+// 【杀伤力（F1 变异条目）】删掉 decodeTrailer 里 `n > maxTrailerEntries` 分支后，
+// 这份产物的 trailer 会被【完整解码】（n == len(b)，尾部无多余字节）：全 0 偏移 ⇒
+// 目标偏移 0 ⇒ 真实帧正常解压 ⇒ GetBody **成功返回第一行正文且 err == nil**。
+// 断言错误身份（errors.Is ErrTrailerCorrupt）而非「有没有报错」，正是为了这一点：
+// 变异后不是「换个错误」而是「静默读出一行」，用例在 err 上转红。
+func TestReaderRejectsTrailerEntryCountOverBound(t *testing.T) {
+	root := t.TempDir()
+	sealLines(t, root, "2026-09-24", "blue", 0, [][]byte{[]byte(`{"a":1}`), []byte(`{"b":2}`)})
+	ref := Ref{DT: "2026-09-24", Inst: "blue", Part: 0, Row: 0}
+	partPath := NewPaths(root).PartFile(ref)
+
+	// 以真实封块的产物为底：只换掉 trailer 与 footer，帧字节与其摘要保持自洽。
+	raw, err := os.ReadFile(partPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := decodeFooter(raw[len(raw)-FooterSize:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := raw[:old.TrailerOffset]
+	sum := sha256.Sum256(frame)
+	var sha8 [8]byte
+	copy(sha8[:], sum[:8])
+
+	// 条目数与 trailer 长度都取上界 +1，且长度【恰好等于】条目数：
+	// 每个字节都是一个合法单字节 varint（0x00），故除了条目数上界之外全部成立。
+	n := int64(maxTrailerEntries) + 1
+	var buf bytes.Buffer
+	buf.Write(frame)
+	buf.Write(make([]byte, int(n)))
+	if _, err := buf.Write(encodeFooter(footer{
+		TrailerOffset: int64(len(frame)),
+		TrailerLen:    int32(n),
+		RowCount:      int32(n),
+		FrameSHA:      sha8,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(partPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := NewReader(ReaderOptions{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	line, err := r.GetBody(context.Background(), ref)
+	if !errors.Is(err, ErrTrailerCorrupt) {
+		t.Fatalf("条目数超过上界 %d 应返回 ErrTrailerCorrupt（产物损坏），实际 err=%v line=%q",
+			maxTrailerEntries, err, line)
 	}
 }
 

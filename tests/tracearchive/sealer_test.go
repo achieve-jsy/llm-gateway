@@ -1418,3 +1418,113 @@ func TestSealRejectsFailedVersionProbe(t *testing.T) {
 		t.Fatal("版本无法确认时必须保留 spool")
 	}
 }
+
+// TestSealRejectsIllegalDTAndInst 锁定 Seal 入口的「路径分量」校验（终审 A 的缺陷 ②）。
+//
+// 【为什么必须有】Seal 是导出 API，SealTask 由调用方构造，而 DT/Inst 直接拼进
+// SpoolDir/PartDir。filepath.Join 的清理只对【裸 ".." 元素】生效：值里含 "/" 时其中
+// 的 ".." 会被折叠。实测（修复前）：DT="2026-09-24/../.." ⇒ Seal 返回 **nil**，
+// PartFile = <base>/inst=blue/part-000000.jsonl.zst（已在 <root> 之外、越出
+// dt=/inst= 布局）；Inst="../../green" 同理越出 inst= 层。Append 早就有这套校验
+// （见 writer_test.go 的 TestWriterAppendRejectsIllegalDT），封块侧必须同样有。
+//
+// 【杀伤力（F1 变异条目）】这里刻意把 spool 建在 SpoolFile(Ref{坏值}) 算出的路径上：
+// 入口校验一旦被删，Seal 会一路走完并【返回 nil】（路径一致性判定用的是同一组
+// Paths 函数，因此也放行）⇒ 用例在 err == nil 上转红。只断言 err != nil 不够：
+// 删掉校验后「打开 spool 失败」也会给出一个错误，因此判据是错误【文案】
+// （"dt 必须是" / "Inst 必须是"），它只可能来自路径分量校验。
+//
+// 断言同时覆盖「未产生任何产物」：Ref 路径、其 .tmp、以及 base 下任何
+// part-*.jsonl.zst 都不得存在（越界产物落在 root 之外，所以必须在 base 上找）。
+func TestSealRejectsIllegalDTAndInst(t *testing.T) {
+	bin, ver := requireZstd(t)
+
+	listProducts := func(base string) []string {
+		var out []string
+		_ = filepath.WalkDir(base, func(p string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.HasSuffix(p, ".jsonl.zst") {
+				out = append(out, p)
+			}
+			return nil
+		})
+		return out
+	}
+
+	cases := []struct {
+		name    string
+		dt      string
+		inst    string
+		wantMsg string
+	}{
+		{"dt 路径穿越", "2026-09-24/../..", "blue", "dt 必须是"},
+		{"dt 路径穿越带尾段", "2026-09-24/../../x", "blue", "dt 必须是"},
+		{"dt 空串", "", "blue", "dt 必须是"},
+		{"dt 未补零", "2026-9-24", "blue", "dt 必须是"},
+		{"dt 非法日期", "2026-02-30", "blue", "dt 必须是"},
+		{"dt 非日期", "../x", "blue", "dt 必须是"},
+		{"inst 路径穿越", "2026-09-24", "../../green", "Inst 必须是"},
+		{"inst 越出前缀", "2026-09-24", "a/../../green", "Inst 必须是"},
+		{"inst 白名单外", "2026-09-24", "bluex", "Inst 必须是"},
+		{"inst 空串", "2026-09-24", "", "Inst 必须是"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			base := t.TempDir()
+			// root 下再嵌一层：越界产物落在 base 内（可断言、可清理），但已在 root 之外。
+			root := filepath.Join(base, "root")
+			spool := writeSpool(t, root, c.dt, c.inst, 0, [][]byte{[]byte(`{"a":1}`)})
+			s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin, ExpectedZstdVersion: ver})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = s.Seal(context.Background(), ta.SealTask{
+				DT: c.dt, Inst: c.inst, Part: 0, SpoolPath: spool, Rows: 1,
+			})
+			if err == nil {
+				t.Fatalf("DT=%q Inst=%q 必须被路径分量校验拒绝，实际返回 nil；已产出的产物：%v",
+					c.dt, c.inst, listProducts(base))
+			}
+			if !strings.Contains(err.Error(), c.wantMsg) {
+				t.Fatalf("DT=%q Inst=%q 的拒绝理由应是路径分量校验（文案含 %q），实际错误：%v",
+					c.dt, c.inst, c.wantMsg, err)
+			}
+			// 「返回错误」必须同时是「未产生任何产物」。
+			partPath := ta.NewPaths(root).PartFile(ta.Ref{DT: c.dt, Inst: c.inst, Part: 0})
+			if _, statErr := os.Stat(partPath); !os.IsNotExist(statErr) {
+				t.Fatalf("被拒的封块不得产出产物 %s（stat 得 %v）", partPath, statErr)
+			}
+			if _, statErr := os.Stat(partPath + ".tmp"); !os.IsNotExist(statErr) {
+				t.Fatalf("被拒的封块不得留下 .tmp（stat 得 %v）", statErr)
+			}
+			if products := listProducts(base); len(products) != 0 {
+				t.Fatalf("被拒的封块不得产生任何 part-*.jsonl.zst，实际：%v", products)
+			}
+			// spool 是正文的唯一副本（规格 §7.3）：被拒的调用不得动它。
+			if _, statErr := os.Stat(spool); statErr != nil {
+				t.Fatalf("被拒的封块不得删除或移动 spool: %v", statErr)
+			}
+		})
+	}
+
+	// 反向断言：合法 DT/Inst 必须仍能封块成功——否则「一律拒绝」也会让上面的断言全绿。
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	spool := writeSpool(t, root, "2026-09-24", "green", 0, [][]byte{[]byte(`{"a":1}`)})
+	s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin, ExpectedZstdVersion: ver})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Seal(context.Background(), ta.SealTask{
+		DT: "2026-09-24", Inst: "green", Part: 0, SpoolPath: spool, Rows: 1,
+	}); err != nil {
+		t.Fatalf("合法 DT/Inst 必须被接受: %v", err)
+	}
+	want := ta.NewPaths(root).PartFile(ta.Ref{DT: "2026-09-24", Inst: "green", Part: 0})
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("合法封块应产出 %s: %v", want, err)
+	}
+	// 产物必须落在 dt=/inst= 布局内（green 不得落进 blue）。
+	if got := ta.NewPaths(root).PartDir("2026-09-24", "green"); filepath.Dir(want) != got {
+		t.Fatalf("产物目录应为 %s，实际 %s", got, filepath.Dir(want))
+	}
+}

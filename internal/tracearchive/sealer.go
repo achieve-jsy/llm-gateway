@@ -126,10 +126,38 @@ func NewSealer(opts SealerOptions) (*Sealer, error) {
 // Seal 执行一次封块。任何一步失败都保留 spool 并返回错误，绝不留下半个产物。
 //
 // 失败语义（规格 §7.2、§9.2）：
+//   - DT/Inst 非法         → 参数错误（与 Append 同一套校验，见下方入口校验）
 //   - 产物已存在           → ErrPartExists（幂等，拒绝覆盖）
 //   - spool 行数与记录不符  → ErrRowCountMismatch（保留 spool）
 //   - 子进程非零退出/缺失   → ErrSealFailed（保留 spool、删 .tmp）
 func (s *Sealer) Seal(ctx context.Context, task SealTask) error {
+	// 【入口校验：路径分量（终审 A 的实测缺陷 ②，F1 修）】DT/Inst 与 Append 的 dt
+	// 一样，都是【调用方输入】，且都直接拼进目录名，因此必须用【同一套】校验：
+	// validateDT（严格日期）+ validateInst（blue/green 白名单），不另造一套、不复用
+	// 发现路径的判断（那是另一条路径的宽松跳过策略）。
+	//
+	// 实测（修复前）：task.DT="2026-09-24/../.." ⇒ Seal 返回 **nil**，产物落到
+	// <root 之外>/inst=blue/part-000000.jsonl.zst —— 越出 dt=/inst= 目录布局，
+	// 且该路径与 spool 目录塌缩为同一层；task.Inst="../../green" 同理越出 inst= 层。
+	// 原因是 SpoolDir/PartDir 用 filepath.Join 拼接，值里含 "/" 时其中的裸 ".."
+	// 会被 Clean 折叠（只有【裸 ".." 元素】才折叠，"dt=.." 这种字面名不折叠）。
+	//
+	// plan:4031 承认 SealTask 属调用方输入——这正是必须校验的理由，而不是免于
+	// 校验的理由：Append 的 dt 同样是调用方输入，且它就在入口校验。
+	//
+	// 位置：先于下面 ⓪ 的路径一致性判定，也先于任何 I/O。两者都是纯内存判定，
+	// 顺序上先判「值本身是否合法」再判「SpoolPath 是否与 Ref 一致」——畸形调用
+	// 不该先去看世界状态。
+	//
+	// 错误沿用本包风格：与 Append 一样直接返回参数错误（无哨兵），见 validateDT /
+	// validateInst 的文档说明。
+	if err := validateDT(task.DT); err != nil {
+		return err
+	}
+	if err := validateInst(task.Inst); err != nil {
+		return err
+	}
+
 	// ⓪ 路径一致性（评审第 ⑤ 条）：task.SpoolPath 必须就是 (DT,Inst,Part) 对应的
 	// 那个 spool 文件。Seal 是【导出 API】，task 由调用方构造；若两者不匹配，产物
 	// 会以 Ref 寻址、却装进另一个文件的内容 —— 点读会【静默返回错正文】，这是本项目
@@ -317,7 +345,14 @@ func zstdLongArg(windowBytes int) (string, error) {
 func (s *Sealer) verifyZstdVersion() error {
 	out, err := exec.Command(s.opts.ZstdBinary, "--version").Output()
 	if err != nil {
-		// 与 runZstd 同一分类：二进制缺失是部署事故，必须保留 exec.ErrNotFound 身份
+		// 【注释按实测收敛（终审 A 第 5 条）】这一分支【只有 ZstdBinary 含 "/" 时可达】：
+		//   - 裸名（默认 "zstd"）：exec.Command 会先 LookPath，失败生成 *exec.Error，
+		//     实测 errors.Is(err, os.ErrNotExist) == false，但 errors.Is(err, exec.ErrNotFound) == true
+		//     ⇒ 身份由 *exec.Error 自带，根本走不到这里；
+		//   - 含 "/" 的路径：不做 LookPath，由 Start 报 *fs.PathError(ENOENT)，
+		//     实测 errors.Is(err, os.ErrNotExist) == true ⇒ 只有这种情况进本分支。
+		// 因此这里不是「保留 ErrNotFound 身份的唯一防线」，只是把含路径写法的缺失也
+		// 归到同一身份（部署事故，规格 §11.1）。分类不变，仍用 ErrSealFailed。
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("%w: 探测 zstd 版本失败，找不到可执行文件 %q（部署事故，规格 §11.1）: %w: %w",
 				ErrSealFailed, s.opts.ZstdBinary, exec.ErrNotFound, err)

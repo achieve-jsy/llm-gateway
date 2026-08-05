@@ -59,6 +59,25 @@ func validateDT(dt string) error {
 	return nil
 }
 
+// validateInst 校验实例标识（与 validateDT 同属「路径分量校验」，两者必须成对看待）。
+//
+// inst 同样直接拼进目录名（"inst=" + inst），因此必须是枚举内的固定取值而不是
+// 「非空即可」。空串也被白名单涵盖，故不单列「非空」分支：一个永远无法被测试
+// 区分的分支就是零覆盖的守卫。
+//
+// 【白名单只有这一份】NewWriter（构造期）与 (*Sealer).Seal（入口期）都调用它。
+// SealTask 同样由调用方构造，因此封块侧不能因为「发现路径 ListPendingSeals 已校验」
+// 就免于校验——那是另一条路径（见 Seal 入口校验的说明）。
+//
+// 不设哨兵错误：与 dt 同理——这是调用方无从分支处理的参数错误，
+// 加进本包的错误集合只会扩冻结接口。
+func validateInst(inst string) error {
+	if inst != instBlue && inst != instGreen {
+		return fmt.Errorf("tracearchive: Inst 必须是 %q 或 %q，实际 %q", instBlue, instGreen, inst)
+	}
+	return nil
+}
+
 // validateLine 校验一行正文能否安全落盘（与 validateDT 同属写入前置校验：
 // 都在公开入口 Append 里、都先于任何文件系统副作用）。
 //
@@ -188,10 +207,9 @@ func NewWriter(opts WriterOptions) (*Writer, error) {
 		return nil, fmt.Errorf("tracearchive: Root 不能为空")
 	}
 	// inst 是路径分量，与 dt 的校验成对（见文件头的「路径分量校验」与 validateDT）。
-	// 空值也被这条白名单涵盖（"" 不在枚举里），因此不再单列「非空」分支：
-	// 一个永远无法被测试区分的分支就是零覆盖的守卫。
-	if opts.Inst != instBlue && opts.Inst != instGreen {
-		return nil, fmt.Errorf("tracearchive: Inst 必须是 %q 或 %q，实际 %q", instBlue, instGreen, opts.Inst)
+	// 判定在 validateInst：封块侧 (*Sealer).Seal 用同一份白名单（同一套校验，不重复实现）。
+	if err := validateInst(opts.Inst); err != nil {
+		return nil, err
 	}
 	if opts.BlockBytes <= 0 {
 		opts.BlockBytes = defaultBlockBytes
@@ -374,14 +392,31 @@ func (w *Writer) PendingSeals() ([]SealTask, error) {
 	}}, nil
 }
 
-// MarkSealed 在封块成功后清空当前块状态。由封块者在 rename 完成后调用
-// （任务 8 的端到端流程即如此）。
+// MarkSealed 在封块前滚动时清空当前块状态（换新 part）。
+//
+// 【契约（终审 A 实测，F1 只改文档、不加守卫）】本方法【只可用于「封块前的滚动」】：
+// 调用者必须先让它把当前块滚动掉（关掉旧句柄、换新 part），再去封那一块。
+// 若在 sealer 【删除 spool 之后】才调用，closeCurLocked 的 Flush 会把 bufio 缓冲写进
+// 【已被 unlink 的 inode】：write(2) 对已删除但仍有 fd 的文件【成功返回】，于是缓冲
+// 里的正文静默丢失，而 Append 早在更早的调用里就成功返回并给出了一个 Ref
+// （实测：返回 part-000000#row=1，去读它才得到 ErrNotArchived「块内共 1 行」）
+// ⇒ 写入路径零报错、读到才爆炸。
+//
+// 【为什么文档原先写的是假前提】旧注释称「此时 spool 已被封块器完整读取，未落盘的
+// 缓冲不再可能有读者」——封块器读到的是【flush 之后】的内容，而本方法自身那次 Flush
+// 恰恰是「封块后新写进去、无人会再读」的那一批；前提看似成立，结论（丢缓冲无害）却是错的。
+//
+// 【为什么不在这里加「stat spool 是否存在」的守卫】正常流程里 sealer 【确实】已经删掉
+// spool（见 Seal：rename 成功后才删），那种守卫会在正常路径上误报。真正的修法是次序保证，
+// 落在计划 2：**先滚动、后封块**（调用方在把块交给 sealer 之前先调 MarkSealed 滚动，
+// 封块期间不再往该 part 追加）。
 //
 // 这里必须连同旧句柄一起关掉：只把 cur 置 nil 会让该块的 *os.File 泄漏
 // （每封一块泄漏一个 fd，长跑进程最终 EMFILE）。调用点已冻结为无返回值，
-// 因此 close 错误只能丢弃；但此时 spool 已被封块器完整读取，未落盘的缓冲
-// 不再可能有读者 —— 这与 PendingSeals 必须上抛 flush 错误并不矛盾：
-// 那里是为了不把不完整的块交给 sealer，这里已经晚于 sealer 读文件。
+// 因此 close/Flush 错误只能丢弃 —— 注意这与「上面的静默丢正文」是两件事：
+// 丢弃的是【错误】，而次序错误丢的是【正文】。这也是 PendingSeals 必须上抛 flush
+// 错误、而本方法不能上抛的原因：PendingSeals 是把块交给 sealer 的入口（漏 flush
+// 会让 sealer 少读行），本方法只负责滚动。
 func (w *Writer) MarkSealed(dt string, part int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -454,7 +489,16 @@ func (w *Writer) ensureBlockLocked(dt string) (*curBlock, error) {
 	if err := os.MkdirAll(filepath.Dir(spoolPath), 0o755); err != nil {
 		return nil, fmt.Errorf("tracearchive: 建 spool 目录失败: %w", err)
 	}
-	// O_APPEND：进程重启后继续往同一个 spool 追加，不覆盖已写内容
+	// O_APPEND 在这里【不是】常规路径的一部分：上面 nextSeqLocked 恒取 max+1，
+	// 因此打开的几乎总是一个【新】文件——进程重启后也一样（writer_test.go 的
+	// TestWriterNextSeqResumesFromDirectory 断言重启后取 part=8）。
+	// 它只在「算出的序号对应的文件名已存在」时兜底，可达情形是：
+	//   - seq 越过 999999：partName 产出 7 位文件名，而 parsePartSeq 只认恰好 6 位
+	//     （ref.go 的 partName/parsePartSeq 文档），于是该文件不会被计入 maxSeq，
+	//     同一个序号可能被再次算出；
+	//   - 目录里存在 parsePartSeq 不认可的畸形文件名（同上，不计入 maxSeq）。
+	// 这些情形下若不带 O_APPEND，O_CREATE|O_WRONLY 会把已有内容【截断】——
+	// 而 spool 是正文的唯一副本（规格 §7.3），截断即静默丢正文。
 	f, err := os.OpenFile(spoolPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("tracearchive: 打开 spool 失败: %w", err)

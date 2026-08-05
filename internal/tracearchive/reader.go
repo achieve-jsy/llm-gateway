@@ -13,16 +13,46 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// maxTrailerBytes 是 trailer 大小的合理性上界。
+// maxTrailerBytes 是 trailer 字节数的合理性上界（读侧内存预算的一半）。
 //
 // 真实 trailer 是「每行一个差分 varint」：1.5 GiB 的块按每行约 400 KB 估算只有
 // 约 4000 行，编码后约 12 KB；即便每行只有 1 字节，也需要上千万行才能撑到这个量级。
 //
-// 不设上界时，一个损坏的 footer 可以让 trailer_len 接近文件大小，
-// 进而让 decodeTrailer 试图分配其 8 倍的 int64 容量，在 control-plane 的
-// 2 GiB 限额内 OOM。这是「把产物损坏挡成错误」的最后一道闸，
-// 与规格 §8.1 的意图一致（损坏必须报成损坏，不能伪装成「数据不存在」）。
+// 不设上界时，一个损坏的 footer 可以让 trailer_len 接近文件大小，进而让 decodeTrailer
+// 试图分配其 8 倍的 int64 容量，在 control-plane 的 2 GiB 限额内 OOM。这是「把产物
+// 损坏挡成错误」的字节侧闸门，与规格 §8.1 的意图一致（损坏必须报成损坏，不能伪装成
+// 「数据不存在」）。
+//
+// 字节侧上界【单独不够】：它压的是字节，而 decodeTrailer 的分配是 8 × 条目数，
+// 最坏情况下 trailer 的每个字节都编码出一个条目 —— 见 maxTrailerEntries。
 const maxTrailerBytes = 64 << 20
+
+// maxTrailerEntries 是 trailer 条目数（= 块内行数）的合理性上界，
+// 与 maxTrailerBytes 一起构成读侧内存预算的两半。
+//
+// 【为什么字节侧上界不够（终审 F1 的实测，原始数字）】decodeTrailer 的分配是
+// 8 × n 字节，而 trailer_len 只压字节数：一个 64 MiB 的 trailer 里每个字节都可以
+// 是恰好 1 字节的 varint（全 0x00 ⇒ 差分 0、偏移单调不减），于是 n 能取到
+// n = len(b) = 67,108,864 条，实测 decodeTrailer 【成功返回】（err=nil，不是报错）
+// 并分配 512.0 MiB（536,876,232 字节，耗时 213 ms）；把这份 trailer 装进产物后
+// 单次点读实测峰值堆 = 1090 MiB（= 索引 512 + tb 64 + 解码窗口 512）；再叠加
+// MaxConcurrent 默认 2（稳态 2 并发实测 1666 MiB；连续多轮不做 GC 时实测 3268 MiB）
+// ⇒ 超过规格 §8.4 C5 按 600 MB/并发做的 2 GiB 估算。
+//
+// 【取值与推导】条目数 × 8 字节 ≤ maxTrailerBytes ⇒ n ≤ 8 Mi = 8,388,608 条。
+// 于是「trailer 字节 + 解码索引」对一次并发点读的贡献 ≤ 128 MiB，叠加解码窗口
+// 512 MiB ⇒ ≈640 MiB/并发，回到 C5 的 600 MB 量级。
+//
+// 【为什么不用块大小推】defaultBlockBytes(1536 MiB) ÷ 最小合法行（正文 1 字节 +
+// 换行 = 2 字节）= 768 Mi 行，比 trailer 字节数给出的界【更宽】，推不出更紧的
+// 上界；真正绑定的是读侧内存预算，故本上界由预算推出，而不是由块大小推出。
+//
+// 【据实登记的代价（误报边界）】块越大、行越短，本上界越可能先触发：只有
+// 「块达到 1.5 GiB 且平均每行 < 192 字节（1536 MiB / 8 Mi）」的块才会被判为损坏。
+// 2026-09-24 标定的真实样本是每行约 400 KB、每块约 4000 行（余量约 2000 倍）。
+// 触发时返回明确错误（见 decodeTrailer），【绝不截断】——截断会把「损坏」伪装成
+// 「读到了正确的行首偏移」，正是本包最不可接受的一类失效。
+const maxTrailerEntries = maxTrailerBytes / 8
 
 // ReaderOptions 是点读器配置。
 type ReaderOptions struct {
@@ -145,11 +175,14 @@ func (r *Reader) readFromPart(ctx context.Context, ref Ref, partPath string) ([]
 	if ref.Row < 0 || ref.Row >= int(ft.RowCount) {
 		return nil, fmt.Errorf("%w: %s（块内共 %d 行）", ErrNotArchived, ref, ft.RowCount)
 	}
-	// trailer 大小的合理性上界。decodeTrailer 的容量上限是 trailer 字节数的 8 倍
-	//（这是格式固有的：len(b) 字节的 varint 流可能编码出 len(b) 个 int64 条目），
-	// 而 trailer_len 只被「紧邻 footer」这一条绑在文件大小上 ⇒ 一个 1.5 GiB 的块
-	// 仍可给出接近 1.5 GiB 的 trailer，让 control-plane（2 GiB 限额）尝试分配数 GB。
-	// 归入「产物损坏」，与 §8.1 的意图一致。
+	// trailer 大小的合理性上界（读侧内存预算的字节侧）。decodeTrailer 的分配是
+	// 8 × 条目数（格式固有的：len(b) 字节的 varint 流可能编码出 len(b) 个 int64
+	// 条目），而 trailer_len 只被「紧邻 footer」这一条绑在文件大小上 ⇒ 一个 1.5 GiB
+	// 的块仍可给出接近 1.5 GiB 的 trailer，让 control-plane（2 GiB 限额）尝试分配
+	// 数 GB。归入「产物损坏」，与 §8.1 的意图一致。
+	//
+	// 条目数一侧由 maxTrailerEntries 单独封住（decodeTrailer 内）——两个上界缺一不可：
+	// 只看字节数时，64 MiB 的 trailer 仍能合法地编码出 64 Mi 条 ⇒ 512 MiB 索引（实测）。
 	if int64(ft.TrailerLen) > maxTrailerBytes {
 		return nil, fmt.Errorf("%w: trailer_len=%d 超过上界 %d", ErrFooterCorrupt, ft.TrailerLen, maxTrailerBytes)
 	}

@@ -57,6 +57,18 @@ task-5 的变异证据此前**只存在于报告散文里**（`task-5-report.md`
 集合里每条变异 = 一个「删掉/放宽某道防线」的操作序列：
   ("sub", a, b)  把 a 精确替换成 b（a 必须在目标文件里恰好出现一次）
   ("cut", a, b)  删除 a 到 b（含）之间的内容（a 必须在目标文件里恰好出现一次）
+
+## F2a 的一处**重新定点**（唯一改动，必须可见）
+
+F1（终审 A 缺陷 ②，`cb3253f5`）把 Inst 白名单抽成 `writer.go:74-79` 的唯一一份
+`validateInst`，`NewWriter` 改为调用它。于是 m03 的原模式
+`if opts.Inst != instBlue && opts.Inst != instGreen {` 在 HEAD 上 count=0 ⇒
+`--check` 报 PATTERN-MISS ⇒ **task-5 整轮无法产出权威表**。F2a 把 m03 的定点
+改到 NewWriter 的**调用点**（`if err := validateInst(opts.Inst); err != nil {`），
+**语义与 blast radius 逐字不变**（仍只停用 NewWriter 这一处；不动 `validateInst`
+本身，那会连带停用 `Seal` 的入口校验 = 另一个更大范围的变异，由 task-6 的 m55 承担）。
+这是「守卫被搬家后重新定点」，**不是**「为了让表好看而放宽变异」：条目的数量、
+名称、判别力与 EXPECTED_GREEN 均未变。详见 m03 条目内的注释。
 """
 
 NAME = "task-5"
@@ -138,7 +150,19 @@ MUTATIONS["m03_停用Inst白名单"] = [
     # [散文] M3：Inst 直接拼进目录名（<root>/dt=D/inst=I），只查非空挡不住
     # "../../green" 这类含斜杠的值。杀死 TestNewWriterRejectsIllegalInst
     # （末尾的反向断言保证「一律拒绝」不算通过）。
-    ("sub", 'if opts.Inst != instBlue && opts.Inst != instGreen {', 'if false {'),
+    #
+    # 【F2a 重新定点：守卫被搬家，不是被删除】F1（终审 A 缺陷 ②，提交 cb3253f5）
+    # 把 Inst 白名单抽成 writer.go:74-79 的唯一一份 `validateInst`，NewWriter 改为
+    # **调用**它（writer.go:211 `if err := validateInst(opts.Inst); err != nil`）。
+    # 于是原位模式 `if opts.Inst != instBlue && opts.Inst != instGreen {` 在 HEAD 上
+    # count=0 ⇒ PATTERN-MISS（F2a 的 `--check` 实测）⇒ task-5 **整轮无法运行**。
+    # 本条目因此**只换定点、不换语义**：仍然只停用 **NewWriter 这一处**的判定
+    #（把分支条件与 false 相与），blast radius 与 F1 之前逐字一致 —— 刻意**不**改
+    # `validateInst` 本身，那会连带停用 (*Sealer).Seal 的入口校验（更大范围的变异，
+    # 已由 task-6 的 m55 单独承担）。判别力不变：仍只有
+    # TestNewWriterRejectsIllegalInst 被杀死。
+    ("sub", 'if err := validateInst(opts.Inst); err != nil {',
+            'if err := validateInst(opts.Inst); err != nil && false {'),
 ]
 MUTATIONS["m14_停用Root非空校验"] = [
     # [散文] M14：Root 为空时 paths 全是相对路径，会把正文写进进程 cwd。

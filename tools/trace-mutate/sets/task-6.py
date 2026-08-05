@@ -342,6 +342,33 @@ MUTATIONS["m53_守卫搬到产物存在检查之后"] = [
     ("sub", _PARTEXISTS_BLOCK, _PARTEXISTS_BLOCK + "\n" + _GUARD_BLOCK),
 ]
 
+# ---- F2a 补入：修复轮 F1 新增的 Seal 入口路径分量校验（终审 A 缺陷 ②）----
+# 【出处】终审 A 缺陷 ②（progress.md:3716-3719）：`Seal` **不校验 DT/Inst**
+#（`Append` 有 `validateDT` + 白名单、`ListPendingSeals` 也校验），实测
+# `Seal(DT="2026-09-24/../..")` 返回 **nil** 且产物落到 `<root>/inst=blue/…`：
+# 越出 `dt=`/`inst=` 布局。控制者裁定 ②（progress.md:3770）：本轮修（复用 `Append`
+# 那套校验 + 明确错误 + 测试断言「返回错误**且未产生产物**」）+ F2 补变异条目。
+# F1 落成 sealer.go:154-159 的两处调用（提交 cb3253f5）。
+#
+# 【两条**分开**的条目，不合并】F1 的变异自检（progress.md:3796）给出的判别力是
+# **逐守卫**的：只 cut `validateDT` ⇒ 6 个 dt 子例红；只 cut `validateInst` ⇒
+# 4 个 inst 子例红。合并成一条（整体 cut）只会得到「10/10 红」，无法分别证明
+# 两处调用各自承重 —— 那正是「两个守卫」这个事实要被证据支持的地方。
+#
+# 【杀手用例】tests/tracearchive/sealer_test.go:1439
+# `TestSealRejectsIllegalDTAndInst`（10 子例 = 6 dt + 4 inst）。它刻意把 spool 建在
+# `SpoolFile(Ref{坏值})` 算出的路径上，因此路径一致性判定（m48）也会放行；判据是
+# 错误**文案**（"dt 必须是" / "Inst 必须是"）——删掉校验后 Seal 会一路走完并返回 nil，
+# 用例在 `err == nil` 上转红（只断言 `err != nil` 不够：那时「打开 spool 失败」
+# 也会给出一个错误）。该用例是本轮**新增**的，所以它同时是本集合清单的第 35 条
+#（推导命令 `grep '^func Test'` 已自动含它）。
+MUTATIONS["m54_删除DT入参校验"] = [
+    ("cut", '\tif err := validateDT(task.DT); err != nil {', '\t\treturn err\n\t}\n'),
+]
+MUTATIONS["m55_删除Inst入参校验"] = [
+    ("cut", '\tif err := validateInst(task.Inst); err != nil {', '\t\treturn err\n\t}\n'),
+]
+
 # ---------------------------------------------------------------------------
 # 允许的绿：预期**不转红**的条目。每条都必须带**分类标签**并写明依据；
 # 未登记的绿 ⇒ 整轮失败。分类必须显式，因为「绿」有两种性质完全不同的来源，
@@ -477,6 +504,25 @@ REQUIREMENTS = [
         "note": (
             "relocA ⇒ (a)(b) 两条用例各死在自己的判别断言；relocB ⇒ **只有 (b) 红、(a) 绿**。"
             "「两次搬家验证不是两次独立验证」由此可复核（旧用例两处都红在同一行）。"
+        ),
+    },
+    {
+        "plan": (
+            "【如实登记：**不是** task-6-brief.md 里的要求，简报写作时该守卫尚不存在】"
+            "终审 A 缺陷 ② ⇒ 控制者裁定 ②（progress.md:3716-3719 / :3770）⇒ "
+            "F1 落成 sealer.go:154-159 的 `validateDT(task.DT)` / `validateInst(task.Inst)`"
+        ),
+        "mutations": ["m54_删除DT入参校验", "m55_删除Inst入参校验"],
+        "checks": [],
+        "note": (
+            "**依据不在本任务的简报里**：task-6-brief.md 只在 :85 给出 `Seal` 的签名，"
+            "没有任何「Seal 必须校验 DT/Inst」的条目（该守卫是修复轮 F1 才新增的，"
+            "提交 cb3253f5）。因此这里**不编造要求编号**，把真实出处写进 plan 字段。"
+            "**两个守卫两条条目**，因为 F1 的实测判别力是逐守卫的（只 cut validateDT ⇒ "
+            "6 个 dt 子例红；只 cut validateInst ⇒ 4 个 inst 子例红）；合并成「整体 cut ⇒ "
+            "10/10 红」无法分别证明两处调用各自承重。杀手用例 "
+            "`TestSealRejectsIllegalDTAndInst`（tests/tracearchive/sealer_test.go:1439，"
+            "本轮新增，已由 `grep '^func Test'` 自动进入清单，34 ⇒ 35 条）。"
         ),
     },
 ]

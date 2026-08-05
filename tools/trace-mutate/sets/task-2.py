@@ -10,7 +10,7 @@ gitignored 的证据目录（`.superpowers/sdd/` 被 `.gitignore` 的 `*` 整体
   ("sub", a, b)  把 a 精确替换成 b（a 必须在目标文件里恰好出现一次）
   ("cut", a, b)  删除 a 到 b（含）之间的内容（a 必须在目标文件里恰好出现一次）
 
-本集合的 5 条变异：m01/m03/m04 逐一对应 task-2-brief.md:255-259 的计划要求，m05 是
+本集合的 6 条变异：m01/m03/m04 逐一对应 task-2-brief.md:255-259 的计划要求，m05 是
 简报第 4 条「任意一处 `%w` 改 `%v`」的**全量**形态（见 m05 说明），m02 则来自作者
 报告里的一处**失实主张** —— task-2-report.md:130-133 称「把 `if delta < 0` 改成
 `if false && delta < 0` ⇒ TestDecodeTrailerRejectsNonMonotonic 应 FAIL」，
@@ -18,6 +18,12 @@ gitignored 的证据目录（`.superpowers/sdd/` 被 `.gitignore` 的 `*` 整体
 `out[i] < 0` 接住）。**这是真实的测试缺口，不是等价变异**：守卫承重、只是没有
 用例约束它。本轮已按裁决在 `index_test.go` 的既有表驱动用例里补入
 「差分为负但偏移仍非负」子用例，m02 因此是**普通变异**（不再是允许的绿）。
+
+m06 是 F2a 补入的条目（终审 A 缺陷 ③ ⇒ 控制者裁定 ③「上界施加在 n 上」⇒ F1 落成
+`index.go:66-69` 的 `if n > maxTrailerEntries`）。它的杀手用例在**另一个测试文件**
+（`internal/tracearchive/reader_internal_test.go`），因此本集合的清单与推导命令都
+多了一条 —— 理由见下方 ⚠️ 与 MANIFEST_DERIVATION 的说明（同 task-4 对
+`TestParsePartSeqUsedBySealer` 的先例）。
 
 ⚠️ **PACKAGES 只列 B 层包 `./internal/tracearchive/`，不列 `./tests/tracearchive/`**：
 名字清单只覆盖 `internal/tracearchive/index_test.go` 的 7 条顶层用例，而工具的
@@ -41,9 +47,19 @@ m01 由 `RejectsOversizedCount`、m03 由 `RejectsNegativeOrWrappedOffset`、
 m04 由 `RejectsTrailingGarbage`、m05 由 6 条拒绝断言各自的 errors.Is 杀死，
 四者都在 `./internal/tracearchive/` 内；m02 由本轮补进
 `TestDecodeTrailerRejectsNonMonotonic` 的子用例杀死 —— 同样在 `internal/` 内）。
-即 5/5 条变异都不需要 `tests/` 包；反过来，把 `tests/` 包列上**只会**让运行判无效
+即 6/6 条变异都不需要 `tests/` 包；反过来，把 `tests/` 包列上**只会**让运行判无效
 （它在这个 `-run` 清单下一条用例也匹配不到）。删掉或弱化上述任一用例前，
 请先重跑本判据，不要假定「收窄无代价」。
+
+⚠️ **m06 的杀手也在 A 层（`internal/tracearchive/reader_internal_test.go`），因此不
+改变上面「只列 B 层包」的结论** —— 该文件与 `index_test.go` 同属
+`./internal/tracearchive/`，只是**不同测试文件**。工具的 `TARGET` 是**单文件**
+（`trace_mutate.py:472`，本集合 = `index.go`），而 `-run` 是**用例名**过滤、
+与文件无关 ⇒ 守卫在 `index.go`、杀手在 `reader_internal_test.go` 时，唯一正确的
+归属是**把杀手名字并进本集合的清单**，而不是新建一个 TARGET 相同的集合
+（那会把同一个被变异文件切成两份证据面）。清单因此由「index_test.go 的全部顶层
+用例」+「reader_internal_test.go 里被点名的这一条」构成，推导命令照此写成可执行
+形式（先例：`task-4.py` 对 `TestParsePartSeqUsedBySealer` 的同一手法）。
 """
 
 NAME = "task-2"
@@ -52,11 +68,24 @@ TARGET = "internal/tracearchive/index.go"
 # 跑变异时涉及的 Go 包 —— 只列 B 层包，理由见文件头 ⚠️
 PACKAGES = ["./internal/tracearchive/"]
 # 名字清单的来源（可被第三方独立重推的文件）
-MANIFEST_FILES = ["internal/tracearchive/index_test.go"]
+MANIFEST_FILES = [
+    "internal/tracearchive/index_test.go",
+    "internal/tracearchive/reader_internal_test.go",
+]
 # 推导命令：工具会在 pristine 树里实际执行它，并与 --manifest 逐条比对（不一致 ⇒ 证据无效）
+#
+# 【为什么是「一个文件全量 + 另一个文件点名一条」】m06 的守卫在 index.go，杀手用例
+# `TestReaderRejectsTrailerEntryCountOverBound` 却住在 reader_internal_test.go
+#（A 层，因为要用未导出的 maxTrailerEntries 常量）。推导因此分两段：前者取
+# index_test.go 的全部顶层用例，后者只在 reader_internal_test.go 里点出这一条。
+# 不整段 grep reader_internal_test.go 的理由：那会把 15 条与 index.go 无关的用例
+# 一并拉进 `-run`，清单越界即「多=[…]」判证据无效 —— 且它们对 index.go 的变异
+# 没有判别力（同 task-4.py 的 `TestParsePartSeqUsedBySealer` 先例）。
 MANIFEST_DERIVATION = (
-    "grep -h '^func Test' internal/tracearchive/index_test.go "
-    "| sed -E 's/^func (Test[A-Za-z0-9_]*).*/\\1/' | sort"
+    "{ grep -h '^func Test' internal/tracearchive/index_test.go; "
+    "grep -h '^func TestReaderRejectsTrailerEntryCountOverBound(' "
+    "internal/tracearchive/reader_internal_test.go; "
+    "} | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\\1/' | sort"
 )
 # SKIP 白名单：本任务为**空** —— 这 7 条用例不依赖 zstd/外部二进制，没有可 SKIP 的理由。
 SKIP_WHITELIST = []
@@ -133,11 +162,30 @@ MUTATIONS["m05_错误身份改v"] = [
     ("sub", 'fmt.Errorf("%w: 解码后有 %d 字节多余', 'fmt.Errorf("%v: 解码后有 %d 字节多余'),
 ]
 
+# ---- index.go:66-69 的 `n > maxTrailerEntries` 条目数硬上限（F2a 补，守卫由 F1 新增）----
+# 【出处】终审 A 缺陷 ③（progress.md:3721-3723）：`maxTrailerBytes` 只压 trailer 的
+# **字节数**，而 `decodeTrailer` 的分配量是 8 × **条目数**；每个字节都可以是合法的
+# 1 字节 varint（0x00），于是 64 MiB 的 trailer 能合法地声称 67,108,864 条
+# ⇒ `make([]int64, n)` 分配 512 MiB。控制者裁定 ③（progress.md:3771）：
+# **上界施加在 n 上、超限返回明确错误、绝不截断**；F1 落成
+# `index.go:66-69`（常量 `reader.go:55` `maxTrailerEntries = maxTrailerBytes/8`）。
+#
+# 【变异形态 = cut 整块】F1 实测（progress.md:3797）：cut 掉这一处守卫后，
+# `TestReaderRejectsTrailerEntryCountOverBound` 的产物（真封块帧 + trailer 与 footer
+# 自洽、唯独条目数 = 长度 = max+1）会被**完整解码**（全 0 偏移 ⇒ 目标偏移 0 ⇒ 真实帧
+# 正常解压），`GetBody` **成功返回第一行正文且 err == nil**（`err=<nil> line="{\"a\":1}"`）
+# —— 不是「换个错误」而是**静默成功读出**，破坏规格 §8.4 C5 的内存预算。
+# 用例断言的是**错误身份**（`errors.Is(err, ErrTrailerCorrupt)`），因此专门锁住它。
+MUTATIONS["m06_删除条目数上界守卫"] = [
+    ("cut", '\tif n > maxTrailerEntries {',
+            'ErrTrailerCorrupt, n, maxTrailerEntries, float64(8*n)/(1<<20))\n\t}\n'),
+]
+
 # ---------------------------------------------------------------------------
 # 静态检查（追加 G）：**变异测不到**的要求必须有静态检查行。
-# 本任务的 4 条计划要求全部由上面的变异覆盖（都能被 7 条用例杀死或已登记绿），
-# 因此没有静态检查行 —— 这是「为空」，不是「漏写」：`--mapping` 会核对每条
-# requirement 都有 mutation 或 check。
+# 本任务的计划要求（简报 4 条 + F2a 补入的 F1 守卫 1 条）全部由上面的变异覆盖
+# （6 条变异都能被清单里的用例杀死），因此没有静态检查行 —— 这是「为空」，
+# 不是「漏写」：`--mapping` 会核对每条 requirement 都有 mutation 或 check。
 # ---------------------------------------------------------------------------
 CHECKS = []
 
@@ -161,8 +209,7 @@ EXPECTED_GREEN = {}
 #             ② 引用的名字必须真实存在；③ 列出「没有被任何 requirement 引用」的变异。
 # 「悄悄丢掉一个变异」在这里会表现为一行 GAP。
 # ---------------------------------------------------------------------------
-REQUIREMENTS = [
-    {
+REQUIREMENTS = [    {
         "plan": "task-2-brief.md:256 删掉 `n > len(b)` 守卫 → 转红（且可能 panic/OOM）",
         "mutations": ["m01_删除上界守卫"],
         "checks": [],
@@ -223,6 +270,29 @@ REQUIREMENTS = [
             "时它仍 PASS ⇒ 两守卫语义独立，已实测）⇒ m02 现为**普通变异**，"
             "EXPECTED_GREEN 已清空。报告 :130-133 的正式更正由 R11 阶段③统一处理，"
             "本集合不改报告。"
+        ),
+    },
+    {
+        "plan": (
+            "【如实登记：**不是** task-2-brief.md 里的要求】终审 A 缺陷 ③ ⇒ "
+            "控制者裁定 ③（progress.md:3721-3723 / :3771）⇒ F1 落成 "
+            "index.go:66-69 的 `if n > maxTrailerEntries`"
+        ),
+        "mutations": ["m06_删除条目数上界守卫"],
+        "checks": [],
+        "note": (
+            "**依据不在本任务的简报里**：`grep -n 'maxTrailerEntries\\|条目数上界' "
+            "task-2-brief.md` **零命中** —— 这条守卫是修复轮 F1 才新增的"
+            "（提交 cb3253f5），task-2 的简报写于它存在之前。因此这里**不编造要求编号**，"
+            "而是把真实出处写在 plan 字段里：终审 A 缺陷 ③（`maxTrailerBytes` 只压字节数、"
+            "未压条目数 ⇒ 64 MiB 全 0x00 的 trailer 合法声称 67,108,864 条 ⇒ `make` 分配 "
+            "512 MiB，叠加解码窗口 ≈1.09 GiB/请求，2 并发超规格 §8.4 C5 的 2 GiB 预算）"
+            "⇒ 控制者裁定「上界施加在 n 上、超限返回明确错误、不截断」⇒ F1 实现。"
+            "F1 自测形态（progress.md:3797）与本条目一致：cut 守卫 ⇒ "
+            "`err=<nil> line=\"{\\\"a\\\":1}\"`（静默成功读出）⇒ 红。"
+            "杀手用例 `TestReaderRejectsTrailerEntryCountOverBound` 在 "
+            "reader_internal_test.go（A 层），已由本集合的 MANIFEST_DERIVATION "
+            "定点并入清单。"
         ),
     },
 ]

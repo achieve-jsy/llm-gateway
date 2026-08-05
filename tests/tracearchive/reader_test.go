@@ -8,7 +8,8 @@ package tracearchive_test
 //
 // 只有两条断言语义上无法用公开 API 表达，按全局约束放在 A 层
 //（internal/tracearchive/reader_internal_test.go）并在那里写明理由：
-//   - trailer_len 上界用的未导出常量 maxTrailerBytes（边界值就是它本身，不能内联字面量）；
+//   - trailer 的两条上界用的未导出常量 maxTrailerBytes（字节）与 maxTrailerEntries
+//     （条目数）——边界值就是常量本身，不能内联字面量；
 //   - 「并发槽位完全释放」要读未导出的 r.inFlight()。
 //
 // 辅助函数（sealLines/writeSpool/requireZstd）在 helpers_test.go。

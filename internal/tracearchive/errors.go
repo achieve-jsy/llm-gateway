@@ -15,8 +15,15 @@ var (
 	// ErrBodyMissing 正文在写入时即失败，从未落盘。对应 HTTP 404。
 	ErrBodyMissing = errors.New("tracearchive: 正文从未落盘")
 
-	// ErrNotArchived 产物与 spool 都不存在，且无 body_missing 标记。
-	// 说明元数据与存储不一致，属异常，对应 HTTP 500。
+	// ErrNotArchived「无法按 (dt, inst, part, row) 定位到正文，且没有任何更精确的
+	// 成因可归」。对应 HTTP 500。实际覆盖（不止「文件都不存在」）：
+	//   - 产物与 spool 都不存在（reader.go 的 GetBody 兜底分支）；
+	//   - 产物【存在】但行号越界（row ≥ footer 的 row_count）；
+	//   - 产物【存在】且解压成功，但目标偏移未命中任何行首（残行/索引错位）；
+	//   - spool【存在】但第 row 行是未以换行结尾的残行，或压根没有第 row 行。
+	// 读数分支必须区分「没有这一行」与「存储坏了」——把后三者报成「不存在」会把
+	// 存储故障伪装成业务事实（v3 方案的教训），所以它们都用这个哨兵而不是 404 类。
+	// 真正的「正文写入时即失败」是 ErrBodyMissing（标记行，404）。
 	ErrNotArchived = errors.New("tracearchive: 产物与暂存均不存在")
 )
 

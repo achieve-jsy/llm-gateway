@@ -18,7 +18,16 @@ const (
 	formatVersion uint16 = 1
 )
 
-// ErrFooterCorrupt 表示 footer 缺失、长度不符、magic 不符或版本未知。
+// ErrFooterCorrupt 表示产物的定长 footer 与其内容不相容。实际覆盖：
+//   - footer 缺失（文件短于 FooterSize）、长度不符、magic 不符、版本未知；
+//   - footer 字段自相矛盾：负的 trailer_offset/trailer_len、负 row_count；
+//   - trailer 未紧邻 footer（trailer_offset + trailer_len ≠ size - FooterSize）；
+//   - trailer_len 超过合理性上界 maxTrailerBytes；
+//   - frame_sha256[:8] 与帧区实算不符（半写/位腐，规格 §8.2 第 3 步）；
+//   - 行号越界之外的「footer 与 trailer 不相容」由 ErrTrailerCorrupt 承担
+//     （条目数不符、条目数超过 maxTrailerEntries、偏移非单调等，见 index.go）。
+//
+// 全是「产物损坏」，对应 HTTP 500 + 诊断，绝不能静默返回「不存在」。
 var ErrFooterCorrupt = errors.New("tracearchive: footer 损坏")
 
 // footer 是产物文件末尾的定长元信息。

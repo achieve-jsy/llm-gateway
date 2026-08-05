@@ -47,11 +47,13 @@ const (
 	defaultZstdLevel = 19
 
 	// defaultZstdWindowBytes zstd 窗口。
-	// ⚠️ 对本包当前使用的 Go 库几乎无效（见文件头结论 2）。保留 512 MiB 的理由：
-	//  1) 若改用 C 版 CLI（--long=29），512 MiB 是实测最优档，降幅 49%；
-	//  2) 读取端 WithDecoderMaxWindow 必须与写入侧一致（解码器内存 ≈ 窗口）。
-	// 若最终确定继续用 Go 库，应评估下调到 128 MiB：省下约 770 MB 常驻内存，
-	// 代价是压缩比再降 9.2%（384.0 → 423.0 MB）。
+	// ⚠️ 方案 C 之后，写侧已【没有 Go 编码器】：封块由独立的 sealer 进程调 C 版
+	// zstd CLI 完成，本值只用于换算 CLI 的 --long=<log2>=29（换算在 sealer.go 的
+	// zstdLongArg），因此上面「对 Go 库几乎无效」那条实测结论只解释【为什么当初
+	// 没靠调窗口打赢】，不代表当前写侧还在用 Go 库。保留 512 MiB 的理由：
+	//  1) C 版 CLI --long=29 是实测最优档（比 128 MiB 档降 49%）；
+	//  2) 读取端仍在网关内用 Go 库解码，WithDecoderMaxWindow 必须与写入侧一致
+	//     （解码器内存 ≈ 窗口）。
 	defaultZstdWindowBytes = 512 << 20
 
 	// defaultBlockBytes 未压缩块大小阈值（1.5 GiB）。

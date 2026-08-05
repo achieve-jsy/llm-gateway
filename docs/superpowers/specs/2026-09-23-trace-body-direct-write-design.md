@@ -165,17 +165,28 @@
 │ footer：32 字节定长                                   │
 │   magic(4)="TBA4" | format_version(2)               │
 │   | trailer_offset(8) | trailer_len(4)              │
-│   | frame_sha256[:8](8) | reserved(6)               │
+│   | row_count(4) | frame_sha256[:8](8) | reserved(2)│
 └─────────────────────────────────────────────────────┘
 ```
+
+> **本处曾与实现不一致，由终审 A（代码↔规格一致性轴）发现，本轮更正。** 原图写作
+> `frame_sha256[:8](8) | reserved(6)`、**没有 `row_count`**，与本规格 §7.1（「32 字节
+> footer 里的 `row_count` 是**产物内行数**」）、§8.2 以及计划 `2026-09-24-tracearchive-storage-primitives.md`
+> 的 footer 布局（`magic(4)|format_version(2)|trailer_offset(8)|trailer_len(4)|row_count(4)|frame_sha256[:8](8)|reserved(2)`）
+> 自相矛盾。实现（`internal/tracearchive/footer.go` 的 `[18:22)` row_count + `[30:32)` reserved(2)）
+> 站在 §7.1/§8.2/计划一侧；`reserved` 由 6 字节改为 2 字节，footer 总长仍为 32 字节。
+> 缺 `row_count` 的后果不是风格问题：读取端正是用它给 `decodeTrailer` 传期望条目数，
+> 否则被截断的 trailer 会被静默解码成更少的条目，行号越界也无从判断。
 
 **字段精确定义：**
 
 | 字段 | 含义 |
 |---|---|
 | `row 起始字节偏移` | 该行第一个字节在**未压缩** JSONL 流中的位置（行首，不含前一行换行符） |
+| `row_count` | **产物内行数**（含 `AppendFailed` 的标记行）；读取端据此校验 trailer 完整性、判断 `ref.Row` 越界，并给 `decodeTrailer` 传期望条目数 |
 | `frame_sha256[:8]` | 对 **zstd 帧字节**（不含 trailer/footer）计算的 SHA-256 前 8 字节 |
 | `format_version` | 当前为 1；冷层合并若扩展索引键为 `(dt, part, row)`，由此字段区分 |
+| `reserved(2)` | 保留，恒为 0 |
 
 **设计要点：**
 

@@ -1436,6 +1436,16 @@ func TestSealRejectsFailedVersionProbe(t *testing.T) {
 //
 // 断言同时覆盖「未产生任何产物」：Ref 路径、其 .tmp、以及 base 下任何
 // part-*.jsonl.zst 都不得存在（越界产物落在 root 之外，所以必须在 base 上找）。
+//
+// 【F3 补：还必须断言「未创建任何目录」（聚焦复审缺陷 C）】越界产物落在
+// <root> 之外，它出现的第一个可见痕迹就是【目录】：MkdirAll(Dir(partPath))
+// 会把 <base>/inst=blue（或 <base>/root/green）这类越出布局的目录建出来，
+// 而那正是 `plan:1292` 对 Append 明令禁止的「留下目录」。
+// 修前实测（聚焦复审的变体）：把两个入口守卫搬到 MkdirAll（sealer.go 的
+// 「落地修正 1」）【之后】，本用例仍然全绿（当时只断言无 .jsonl.zst/.tmp），
+// 而越界目录已经被创建。因此这里断言「调用前后的目录集合逐字相同」——
+// 比对集合而不是断言某个具体目录不存在：writeSpool 自己会建 spool 侧的目录，
+// 且不同坏值的越界落点不同。
 func TestSealRejectsIllegalDTAndInst(t *testing.T) {
 	bin, ver := requireZstd(t)
 
@@ -1447,6 +1457,19 @@ func TestSealRejectsIllegalDTAndInst(t *testing.T) {
 			}
 			return nil
 		})
+		return out
+	}
+
+	// 目录清单（含 base 自身）：用于「未创建任何目录」的前后比对。
+	listDirs := func(base string) []string {
+		var out []string
+		_ = filepath.WalkDir(base, func(p string, d os.DirEntry, err error) error {
+			if err == nil && d.IsDir() {
+				out = append(out, p)
+			}
+			return nil
+		})
+		slices.Sort(out)
 		return out
 	}
 
@@ -1473,6 +1496,9 @@ func TestSealRejectsIllegalDTAndInst(t *testing.T) {
 			// root 下再嵌一层：越界产物落在 base 内（可断言、可清理），但已在 root 之外。
 			root := filepath.Join(base, "root")
 			spool := writeSpool(t, root, c.dt, c.inst, 0, [][]byte{[]byte(`{"a":1}`)})
+			// 目录快照必须在【调用之前】取：writeSpool 已经建出了 spool 侧目录，
+			// 我们要断言的是「Seal 没有新建任何目录」。
+			dirsBefore := listDirs(base)
 			s, err := ta.NewSealer(ta.SealerOptions{Root: root, ZstdBinary: bin, ExpectedZstdVersion: ver})
 			if err != nil {
 				t.Fatal(err)
@@ -1498,6 +1524,13 @@ func TestSealRejectsIllegalDTAndInst(t *testing.T) {
 			}
 			if products := listProducts(base); len(products) != 0 {
 				t.Fatalf("被拒的封块不得产生任何 part-*.jsonl.zst，实际：%v", products)
+			}
+			// 「未产生任何产物」也包含「未创建任何目录」：入口校验必须早于
+			// MkdirAll（sealer.go 的「落地修正 1」），否则越出 dt=/inst= 布局的
+			// 目录会被建出来（标准同 plan:1292 对 Append 的要求）。
+			if dirsAfter := listDirs(base); !slices.Equal(dirsBefore, dirsAfter) {
+				t.Fatalf("被拒的封块不得创建任何目录（入口校验必须早于 MkdirAll）：\n调用前 %v\n调用后 %v",
+					dirsBefore, dirsAfter)
 			}
 			// spool 是正文的唯一副本（规格 §7.3）：被拒的调用不得动它。
 			if _, statErr := os.Stat(spool); statErr != nil {

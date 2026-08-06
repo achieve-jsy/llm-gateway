@@ -41,6 +41,19 @@ var (
 	//（spool 被截断，或写入侧与封块侧对不上）。此时拒绝封块、保留 spool。
 	ErrRowCountMismatch = errors.New("tracearchive: 行数不符")
 
+	// ErrTooManyRows 封块时 spool 的行数超过 trailer 条目数上界 maxTrailerEntries
+	//（写侧与读侧共用同一个上界；常量与取值推导在 reader.go）。
+	//
+	// 【为什么必须与 ErrRowCountMismatch 分开（F3 缺陷 A 的裁定）】超限时调用方
+	// 记录的行数可能与实测【完全相同】——「行数不符」在那时是【错误诊断】。
+	// 读侧对同一形态报的是 ErrTrailerCorrupt（产物损坏），写侧若也报「损坏」，
+	// 运维会去查产物损坏，而真实成因是「块内行太密，超出读侧内存预算」。
+	//
+	// 语义固定为「拒绝封块、保留 spool、不产生任何产物（含 .tmp 与目录）、
+	// 需人工介入」：与前两者不同，单纯重试【永远不会】成功——
+	// 同一个 spool 重扫多少次行数都一样，必须有人拆分块或重新标定预算。
+	ErrTooManyRows = errors.New("tracearchive: spool 行数超过 trailer 条目数上界")
+
 	// ErrSealFailed 封块失败：含 zstd 子进程非零退出、子进程无法启动（二进制缺失）、
 	// 或压缩 I/O 失败。语义固定为「保留 spool、删除 .tmp、不产生产物、下轮重试」。
 	ErrSealFailed = errors.New("tracearchive: 封块失败")

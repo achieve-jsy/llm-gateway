@@ -68,7 +68,7 @@ func TestRefString(t *testing.T) {
 	}
 }
 
-// TestSentinelErrorsAreDistinct 锁定 6 个哨兵两两互异。
+// TestSentinelErrorsAreDistinct 锁定 7 个哨兵两两互异。
 //
 // 判据不是「哨兵非空」，而是「分类不会静默合并」：若 ErrBodyMissing 与
 // ErrNotArchived 被复制粘贴成同一个值，读取侧就再也分不清
@@ -85,6 +85,10 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 		{"ErrNotArchived", ta.ErrNotArchived},
 		{"ErrPartExists", ta.ErrPartExists},
 		{"ErrRowCountMismatch", ta.ErrRowCountMismatch},
+		// F3 新增：写侧的「行数超过 trailer 条目数上界」必须能与「行数不符」区分，
+		// 否则 ErrTooManyRows 退化成 ErrRowCountMismatch 时本表是唯一的拦截点
+		//（用例里的 errors.Is(err, ErrRowCountMismatch)==false 断言也会同时失效）。
+		{"ErrTooManyRows", ta.ErrTooManyRows},
 		{"ErrSealFailed", ta.ErrSealFailed},
 	}
 	for i := range sentinels {

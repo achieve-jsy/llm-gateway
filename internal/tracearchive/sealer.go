@@ -129,6 +129,7 @@ func NewSealer(opts SealerOptions) (*Sealer, error) {
 //   - DT/Inst 非法         → 参数错误（与 Append 同一套校验，见下方入口校验）
 //   - 产物已存在           → ErrPartExists（幂等，拒绝覆盖）
 //   - spool 行数与记录不符  → ErrRowCountMismatch（保留 spool）
+//   - spool 行数超条目数上界 → ErrTooManyRows（保留 spool、不产生产物；需人工介入）
 //   - 子进程非零退出/缺失   → ErrSealFailed（保留 spool、删 .tmp）
 func (s *Sealer) Seal(ctx context.Context, task SealTask) error {
 	// 【入口校验：路径分量（终审 A 的实测缺陷 ②，F1 修）】DT/Inst 与 Append 的 dt
@@ -200,6 +201,31 @@ func (s *Sealer) Seal(ctx context.Context, task SealTask) error {
 	if task.Rows > 0 && len(offsets) != task.Rows {
 		return fmt.Errorf("%w: 扫描=%d 调用方=%d（拒绝封块，保留 spool）",
 			ErrRowCountMismatch, len(offsets), task.Rows)
+	}
+
+	// ②.5 【行数上界守卫（聚焦复审缺陷 A，F3 修）——只在读侧设界是不够的】
+	//
+	// 修前实测（复现输入 8,388,609 行 × `{"a":1}`，块仅 64 MiB）：Seal 返回 nil、
+	// 删掉唯一的 spool、产物照常落地；随后 GetBody 在 decodeTrailer 里判
+	// 「期望 8,388,609 条超过条目数上界 8,388,608」⇒ ErrTrailerCorrupt
+	// ⇒ 正文【永久不可达】（spool 已删、产物读不出来），违反规格 §7.3
+	//「宁可留下 spool」。诊断方向也错：把「合法但超预算的块」说成「产物损坏」。
+	//
+	// 【触发条件与块的字节大小无关】decodeTrailer 只看得到条目数 n 与 trailer
+	// 字节数 len(b)：64 MiB 的块就能触发（8,388,609 行 × 8 字节 = 64 MiB），
+	// 不必等到 1.5 GiB ⇒ 真触发条件是「块内行数 > maxTrailerEntries」。
+	//
+	// 【位置】与 ② 的行数交叉校验并列：同样只是「对 spool 的纯判定 + 顺序读」，
+	// 因此必须在【第一次触碰编码器之前】（编码器配错不该掩盖它），也在
+	// MkdirAll / 写 .tmp 之前（被拒时连产物目录都不该出现）。scanSpoolOffsets
+	// 已经给出精确行数，这里只是常数级比较。
+	//
+	// 【错误身份】新增哨兵 ErrTooManyRows，理由见 errors.go 该哨兵处：
+	// 读侧的 ErrTrailerCorrupt 对写侧是错误诊断，而 ErrRowCountMismatch 在
+	// task.Rows == len(offsets) 时（正是本守卫要拦的形态）会说成「不符」。
+	if len(offsets) > maxTrailerEntries {
+		return fmt.Errorf("%w: spool 行数=%d 超过 trailer 条目数上界 %d（8 字节/条 ⇒ 索引约 %.0f MiB，超出读侧内存预算）——拒绝封块并保留 spool",
+			ErrTooManyRows, len(offsets), maxTrailerEntries, float64(8*len(offsets))/(1<<20))
 	}
 
 	// 【版本守卫的位置（评审裁决 3a）】放在【所有不依赖编码器的判定之后、

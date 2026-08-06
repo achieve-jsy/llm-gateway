@@ -635,6 +635,16 @@ func decodeTrailer(b []byte, n int) ([]int64, error) {
 	if n > len(b) {
 		return nil, fmt.Errorf("%w: 期望 %d 条但仅 %d 字节", ErrTrailerCorrupt, n, len(b))
 	}
+	// 条目数上界（读侧内存预算的另一半，见 reader.go 的 maxTrailerEntries）。
+	// 【修复轮 F1 补入】n > len(b) 只挡「结构上不可能」，挡不住「结构上可能但超出预算」：
+	// len(b) 被 maxTrailerBytes 限制在 64 MiB，而最坏情形（每个字节都是一个 1 字节
+	// varint）给出 n = len(b) = 64 Mi 条 ⇒ make 分配 8n = 512 MiB。实测该输入会
+	// 【成功解码】（err=nil，不是报错），故必须在此硬拦，且同样在 make 之前。
+	// 超限一律 ErrTrailerCorrupt，【绝不截断】到上界条数 —— 截断会让「损坏」伪装成
+	// 一次正常读取（D30；实测数字见 r11-report.md §7.9）。
+	if n > maxTrailerEntries {
+		return nil, fmt.Errorf("%w: 期望 %d 条超过条目数上界 %d", ErrTrailerCorrupt, n, maxTrailerEntries)
+	}
 
 	out := make([]int64, 0, n)
 	pos := 0
@@ -676,6 +686,7 @@ func decodeTrailer(b []byte, n int) ([]int64, error) {
 
 **变异自检（必须逐条做，这是「每道防线都要有测试」的判据）：**
 - 删掉 `n > len(b)` 守卫 → `TestDecodeTrailerRejectsHugeCount` 必须转红（且可能 panic/OOM）；
+- **删掉 `n > maxTrailerEntries` 守卫（修复轮 F1 补入的条目数上界）→ `TestReaderRejectsTrailerEntryCountOverBound` 必须转红**（该用例在 A 层 `internal/tracearchive/reader_internal_test.go`：真封块帧 + 条目数 = 长度 = max+1 的自洽 trailer/footer；实测 cut 守卫 ⇒ `err=<nil> line="{\"a\":1}"` **静默成功读出**）。**这是 task-2 的 `m06` 变异条目**；
 - 删掉 `off < 0` 检查 → `TestDecodeTrailerRejectsNegativeOffset` 必须转红；
 - 删掉 `pos != len(b)` 检查 → `TestDecodeTrailerRejectsTrailingBytes` 必须转红；
 - 把任意一处 `%w` 改成 `%v` → 对应用例（`errors.Is`）必须转红。
@@ -3108,6 +3119,7 @@ git commit -m "feat(tracearchive): 封块器改用 C 版 zstd CLI（方案 C）
     **⚠️ 遇到标记行必须返回 `ErrBodyMissing`（规格 §8.2）**：产物路径与 spool 路径**都要**识别 Task 5 的 `null` 标记行，不得把字符串 `"null"` 当正文递出去。读取侧是逐字返回行内容、不做 JSON 校验的，少了这道识别就会把「正文从未落盘」伪装成「正文就是 `null`」——与 `body_missing` 的 404 语义直接冲突。标记行的判据直接复用 Task 5 的未导出变量 `failedRowMarker`（同一个包，两边共用一份定义，不可能不同步）。
   - `func (r *Reader) Close() error`
   - `const maxTrailerBytes = 64 << 20`——trailer 大小的合理性上界；`TrailerLen` 超过它一律按 `ErrFooterCorrupt` 处理（防止损坏的 footer 让读取端分配数 GB 并 OOM）
+  - **`const maxTrailerEntries = maxTrailerBytes / 8`（= 8,388,608）——trailer **条目数**（= 块内行数）的上界，`n` 超过它一律按 `ErrTrailerCorrupt` 处理。**字节侧上界不够**：`decodeTrailer` 的分配是 `8 × n`，而最坏情况下 trailer 的**每个字节**都编码出一个条目 ⇒ `n` 可达 `len(b)` = 64 Mi 条。**这是修复轮 F1 补入的一半**（实测：64 MiB 全 `0x00` 的 trailer ⇒ `n = 67,108,864`、`make` 分配 512 MiB、`decodeTrailer` **`err=nil` 成功返回**）；判定在 `decodeTrailer` 内、**在 `make` 之前**、**绝不截断**（D30、`r11-report.md` §7.9）
 
 > **⚠️ R10：本任务必须额外实现的三项读取侧要求（`internal/tracearchive/reader.go` 尚未落地，以下是「要求 / 待落地」，**不是已完成的现状**；规格 §8.2）**
 >
@@ -3494,6 +3506,23 @@ import (
 // 与规格 §8.1 的意图一致（损坏必须报成损坏，不能伪装成「数据不存在」）。
 const maxTrailerBytes = 64 << 20
 
+// maxTrailerEntries 是 trailer 条目数（= 块内行数）的合理性上界，
+// 与 maxTrailerBytes 一起构成读侧内存预算的两半。【修复轮 F1 补入】
+//
+// 【为什么字节侧上界不够（实测，原始数字）】decodeTrailer 的分配是 8 × 条目数，
+// 最坏情况下 trailer 的每个字节都编码出一个条目（单字节 varint）：64 MiB 全
+// 0x00 的 trailer ⇒ n = 67,108,864 条，实测 decodeTrailer 【成功返回】
+// （err=nil，不是报错）、make 分配 +512.0 MiB；装进真封块帧后单请求峰值堆
+// 1090.0 MiB、稳态 2 并发 1666.0 MiB（见 r11-report.md §7.9）。
+//
+// 【取值与推导】条目数 × 8 字节 ≤ maxTrailerBytes ⇒ n ≤ 8 Mi = 8,388,608 条。
+// 判定在 decodeTrailer 内、【在 make 之前】、超限返回明确错误、【绝不截断】。
+//
+// 【据实登记的代价（误报边界，D35）】只有「块达到 1.5 GiB 且平均每行 < 192 字节」
+// 时合法产物才会超限 ⇒ GetBody 响亮误报 ErrTrailerCorrupt。这是预算取舍
+// （用块大小推上界会更宽 ⇒ 更弱的内存界），登记为计划 4 的验证项（N4）。
+const maxTrailerEntries = maxTrailerBytes / 8
+
 // ReaderOptions 是点读器配置。
 type ReaderOptions struct {
 	Root            string
@@ -3608,11 +3637,14 @@ func (r *Reader) readFromPart(ctx context.Context, ref Ref, partPath string) ([]
 	if ref.Row < 0 || ref.Row >= int(ft.RowCount) {
 		return nil, fmt.Errorf("%w: %s（块内共 %d 行）", ErrNotArchived, ref, ft.RowCount)
 	}
-	// trailer 大小的合理性上界。decodeTrailer 的容量上限是 trailer 字节数的 8 倍
-	//（这是格式固有的：len(b) 字节的 varint 流可能编码出 len(b) 个 int64 条目），
-	// 而 trailer_len 只被「紧邻 footer」这一条绑在文件大小上 ⇒ 一个 1.5 GiB 的块
-	// 仍可给出接近 1.5 GiB 的 trailer，让 control-plane（2 GiB 限额）尝试分配数 GB。
+	// trailer 大小的合理性上界（读侧内存预算的**字节侧**）。decodeTrailer 的容量上限是
+	// trailer 字节数的 8 倍（这是格式固有的：len(b) 字节的 varint 流可能编码出 len(b) 个
+	// int64 条目），而 trailer_len 只被「紧邻 footer」这一条绑在文件大小上 ⇒ 一个 1.5 GiB
+	// 的块仍可给出接近 1.5 GiB 的 trailer，让 control-plane（2 GiB 限额）尝试分配数 GB。
 	// 归入「产物损坏」，与 §8.1 的意图一致。
+	// 【修复轮 F1 补入】字节侧上界【单独不够】：它压的是字节，而分配是 8 × 条目数。
+	// **条目数一侧由 maxTrailerEntries 单独封住（判定在 decodeTrailer 内、make 之前）**
+	// —— 两个上界缺一不可（D30、r11-report.md §7.9）。
 	if int64(ft.TrailerLen) > maxTrailerBytes {
 		return nil, fmt.Errorf("%w: trailer_len=%d 超过上界 %d", ErrFooterCorrupt, ft.TrailerLen, maxTrailerBytes)
 	}
@@ -4033,11 +4065,13 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 
 > **说明（本节的时效）**：Task 5 的报告（`.superpowers/sdd/2026-09-24-tracearchive-storage-primitives/task-5-report.md`）§7.B/§7.C 把 `ListParts` 记为「保留并补了用例」、把 `dt` 校验记为「建议，未实现」；那是提交 `8cd873e7` 时点的状态，已被评审修正 `52ccc9b2` 取代。**以代码为准**：截至 `52ccc9b2`，两条修正都已落地。
 
-### 追加缺陷登记（本轮：D7~D17；R11 收尾追加：D18~D27）
+### 追加缺陷登记（本轮：D7~D17；R11 收尾追加：D18~D27；终审 A 修复轮追加：D28~D36）
 
 编号续 D6。**发现者**逐条注明。D8~D12 由 **Task 6 实现者**在实现与自检中报备；D13、D14 由 **Task 5 评审者**报备；D7 由 **Task 5 评审者**在范围外观察时发现；**D15 由 Task 6 实现者在执行控制者裁决 (a) 的核实过程中自查发现**（非被要求）；**D16、D17 由修复轮 3 的实现者报备**（分别在开工前的前置检查中、与「要求 → 变异条目」映射表的成本核算过程中发现）。
 
 **D18~D25 由 R11 收尾（阶段② 的独立 runner 与阶段③ 汇总，2026-09-24）登记**：D18、D19 由 **Task 2 / Task 3 实现者各自独立发现**（R11 阶段③ 复核确认）；**D20 由 R11 控制者**在「原遗留项 11」的映射表成本核算中裁定，由 Task 3 实现者拆分落地；**D21 由 R11 阶段② runner `5f7e23fe`** 在跑 task-2 权威表时发现；**D22 由 runner `25dd2809`**（task-5）、**D23 由 runner `12499504`**（task-7）在权威表工作中发现；**D24、D25 由 R11 控制者**在处置 `PENDING` / `COVERAGE_GAPS` 时发现。**D26、D27 由终审 B（证据链审计轴）** 在逐格复核 `r11-report.md` 时发现（分别是「报告出处指错」与「强推断被写成直接证据」）。全部发现及其证据出处汇总于 `.superpowers/sdd/2026-09-24-tracearchive-storage-primitives/r11-report.md` §5。
+
+**D28~D35 由终审 A（代码↔规格一致性轴）** 在独立评审 `c602e71d` 时发现，由**修复轮 F1**（`cb3253f5` + `221f8815`）与**修复轮 F2**（F2a 重跑、F2b 文档）处置；**D34、D35 属「登记不修」**（规格级残余 / 调用方义务 / 预算取舍）。**D36 由修复轮 F2a 在实测 `m54`/`m55` 的子例级归因时发现**（工具「杀死用例」列只到顶层用例名）。终审 A 报告原文 + 控制者逐条裁定见 `.superpowers/sdd/2026-09-24-tracearchive-storage-primitives/final-review-A-code-spec.md`；R11 v2 重跑结果见同目录 `r11-report.md` §7。
 
 | 编号 | 缺陷 | 承重性 | 处置 |
 |---|---|---|---|
@@ -4062,6 +4096,15 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 | **D25** | **未审阅的推论被当作结论**：上述 `PENDING` 的 `decision` 括号里写「但它既然是冗余的，一个断言返回顺序的用例会让它不再冗余」——该推论**未实测且不成立**：删掉 `sort.Slice` 后 `os.ReadDir` 的顺序**仍然是对的**，那种用例**照样通过** ⇒ 冗余并未被消除（要杀死 `m34` 必须 mock 掉 `os.ReadDir`） | **方法论缺陷（推理未经核实）** | 裁定：加该用例只是**可选文档，不是修复**；并**更正**原推论。**规则**：处置一条登记时**必须审阅它的推论**，推论同样需要证据（本报告 §5#11，出处 `progress.md:3173-3181`） |
 | **D26** | **报告出处指错（数字对、引用错）**：R11 `r11-report.md` 初稿有三类 —— (a) §4.3 引用 `task-{5,6,7}-evidence/r11-table.txt`，**该文件名不存在**（真名为 `r11-task-N-table.txt`，如 `task-5-evidence/r11-task-5-table.txt`）；(b) §3.2 把 counterproof 的「仅第 10/28 行不同」误记为 **task-6** 归档，实为 **task-7** 归档；(c) §1.0 把 task-7 的归档 sha256 说成「抄自片段」，而 **task-7 片段并无该值**（8/9 抄录成立，该值是 `shasum` 复算） | **方法论缺陷（可复核性：读者按错引用无法解析）** | 已用**一个路径限定**的更正提交逐处改正；更正时对 4 处引用逐一 `ls` / `sed -n '<行号>p'` 自检可解析（含新写的文件名），并**全文 grep 同类错名**（零命中）。**规则**：报告里每一处引用都必须能被读者解析（文件名存在、行号内容对得上）；「**抄录**」与「**复算**」必须分别标注（本报告 §0.2/§1.0 已改）。**发现者：终审 B（证据链审计轴）** |
 | **D27** | **强推断被写成直接证据**：`r11-report.md` §0 把「**9/9 退出码 0**」列为与 HEAD / 工作树同级的**直接事实**；而**原始归档不含工具退出码**（task-6 归档末行的 `[status: completed, exit code: 0]` 是**作业框架追加的页脚**，不是工具 stdout），该信息只来自各 `r11-section.md` 的**自述** | **方法论缺陷（证据分级：推断不得冒充记录）** | 已在 §0 标注为「**强推断，非机器记录**」并写明推断依据（9/9 归档完整 + 9/9 无 `!!!` + stderr 0 字节）。**规则**：凡不是原始归档字节可直接读出的事实，**必须标注证据等级**（记录 / 强推断 / 推论）。**发现者：终审 B（证据链审计轴）** |
+| **D28** | **`Seal` 不校验 DT/Inst**：`Append` 有 `validateDT` + Inst 白名单、`ListPendingSeals` 也校验，而**导出 API `Seal` 没有**。实测 `Seal(DT="2026-09-24/../..")` 返回 **nil**，产物落到 `<root>/inst=blue/part-000000.jsonl.zst` ⇒ **越出 `dt=`/`inst=` 布局**，且与 spool 目录**塌缩为同一目录** | **承重**（越出根目录 / 静默错路径） | **已修**（`cb3253f5`）：`sealer.go:154-159` 复用 `validateDT`/`validateInst`（错误沿用 `Append` 风格、无哨兵），新增用例 `TestSealRejectsIllegalDTAndInst`（10 子例：断言错误**文案** + **未产生任何产物** + spool 未动 + 反向断言合法值仍可封块）；F2a 补变异 `m54`/`m55`（均断言红；子例级归因 = 6 个 `dt_*` / 4 个 `inst_*`）。**发现者：终审 A §3②** |
+| **D29** | **`MarkSealed` 的次序陷阱 + 文档假前提**：若在 sealer **删掉 spool 之后**调用，`closeCurLocked` 会把 bufio 缓冲 Flush 进**已 unlink 的 inode** ⇒ **静默丢正文**（实测 `Append` 返回成功并给出 `part-000000#row=1`，读它才得 `ErrNotArchived`）；原文档的「未落盘的缓冲不再可能有读者」是**假前提** | **承重**（静默丢正文） | **本轮只改契约文档**（`cb3253f5` + `221f8815`）：`writer.go:395-419` 写明「**只可用于封块前的滚动**」，并写明**不加**「stat spool 是否存在」守卫的理由（正常流程里 sealer 确实已删 spool ⇒ 该守卫会在正常路径误报）；**真实修法 = 计划 2「先滚动、后封块」**（见下方 **N1**）。`MarkSealed` 的次序目前**无用例覆盖**（构造需在 `Append` 前删 spool）。**发现者：终审 A §3①** |
+| **D30** | **trailer 条目数无硬上限**：`maxTrailerBytes` 只压 trailer **字节数**，而 `decodeTrailer` 的 `make(..., n)` 上限是 **`n = len(b)` = 64 Mi 条** ⇒ 最坏输入（64 MiB 全 `0x00`，每字节都是合法单字节 varint）给出 `n = 67,108,864`、`make` 分配 **512 MiB**，叠加 `tb`（64 MiB）与解码窗口（512 MiB）≈ **1.09 GiB/请求**；`MaxConcurrent=2` ⇒ ≈2.2 GiB，**超规格 §8.4 C5 的 2 GiB 预算**。实测该输入 `decodeTrailer` **`err=nil` 成功返回**（不是报错） | **承重**（资源预算 / 可达的堆放大） | **已修**（`cb3253f5`）：上界施加在 **`n`** 上 —— `index.go:66-69` `if n > maxTrailerEntries`（常量 `reader.go:55` `= maxTrailerBytes/8` = 8,388,608），超限返回明确 `ErrTrailerCorrupt`、**绝不截断**；新增用例 `TestReaderRejectsTrailerEntryCountOverBound`；F2a 补变异 `m06`（断言红）。**测量数字见 `r11-report.md` §7.9**。**发现者：终审 A §3③** |
+| **D31** | **规格 §5.2 自相矛盾**：`spec:154-170`（尤其 `:168`）写 `reserved(6)` 且**无 `row_count`**，实现是 `[18:22)` row_count + `reserved(2)`，而 `spec:459`（§7.1）与 §8.2 **又引用** footer 的 `row_count` ⇒ 规格三处互斥 | 规格缺陷（文档自相矛盾） | **本轮更正规格**（`221f8815`；**不改代码**，实现站在 §7.1/§8.2 与 `plan:715-722` 一侧）：图 `:168` 改为 `row_count(4) \| frame_sha256[:8](8) \| reserved(2)`，补字段定义，并保留「本处曾与实现不一致、**由终审 A 发现**」的说明。**发现者：终审 A §2** |
+| **D32** | **5 处注释/说明与实现不符**：① `writer.go`（`O_APPEND` 注释失实 —— `nextSeqLocked` 恒取 `max+1` ⇒ 打开的几乎总是**新**文件，`O_APPEND` 只在 seq > 999999 溢出时兜底）② `errors.go`（`ErrNotArchived` 描述为「产物与 spool 都不存在」，但 `reader.go` 在文件**存在**时也用：行号越界 / 残行 / 未命中行首）③ `footer.go`（字段说明**漏列** frame_sha 不符与 trailer 非邻接）④ `defaults.go`（仍以「本包当前使用的 **Go 库**」讨论窗口 —— 方案 C 后写侧**已无 Go 编码器**）⑤ `sealer.go`（`ErrNotFound` 分支只对含 `/` 的 `ZstdBinary` 可达 ⇒ **非唯一防线**，注释过强） | 文档保真度（各自非承重） | **本轮只改文字、不改行为、不拆 API**，**跨两笔提交**：**`cb3253f5`**（与同文件的代码修复一并落地）① `writer.go:492-501` ⑤ `sealer.go:348-355`；**`221f8815`** ② `errors.go:18-26` ③ `footer.go:21-30` ④ `defaults.go:49-57`。**发现者：终审 A §5** |
+| **D33** | **R11 报告两处失实**：(a) §5#4 说 `tests/tracearchive/reader_test.go:597` 的 `TestReaderRejectsTrailerRowCountMismatch`「红在**它自己的前置断言**上」；(b) §4 漏了三处（逐行零覆盖守卫只列 `writer.go:196-201`、未列 `scanSpoolOffsets`→`runZstd` 窗口、未提多个集合 `EXPECTED_GREEN` 为空） | 方法论缺陷（报告结论未经实测 / 遗漏） | **已更正**（F2b；**不改集合、不改代码**）：(a) 实测两法（删 `index.go` 的 `pos != len(b)` 守卫；按注册的 `m17` 换 lenient 解码）都让它在 **`:625` 的真断言**上红（`实际 <nil>`），**不在** `:607`/`:608`；`m03_C` 下它死于 `reader.go:140`「trailer 未紧邻 footer」（**另一守卫**）⇒ **告警项保留、理由更正**（`r11-report.md` §5#4）。(b) 补进 `r11-report.md` §4.11（`reader.go:90/:97/:277` 三处 IO 包装分支零覆盖）/ §4.12（`scanSpoolOffsets`→`runZstd` 窗口静默丢正文）/ §4.13（`EXPECTED_GREEN` 空缺的阅读提示）。(a) 的行号是终审 A 的评审 HEAD `c602e71d`；**当前 `21ffec3f` 上为 `reader_test.go:626` 与 `reader.go:170`**（F1 的行插入使行号平移）。**发现者：终审 A §4、§6** |
+| **D34** | **`stat` → `os.Rename` 非原子** ⇒ I4「拒绝覆盖」存在 **TOCTOU**（§7.2 只要求 rename **前**检查）；且 `Seal` **无进程内 `(dt,inst)` 互斥**（§7.2 的「进程内互斥」被降级为**调用方义务**） | **规格级残余**（不修） | **不修**：§7.2 只要求 rename **前**检查 ⇒ 属规格允许的残余；互斥已由 `sealer.go:91-94` **自述为调用方义务**。登记为对**计划 2/4** 的约束（见下方 **N2**）。**发现者：终审 A §3④** |
+| **D35** | **`maxTrailerEntries` 的误报边界**：只有「块达到 1.5 GiB **且平均每行 < 192 字节**」（1536 MiB / 8 Mi）时，**合法**产物的条目数才会超过上限 ⇒ `GetBody` **响亮误报** `ErrTrailerCorrupt`（**非静默**）。2026-09-24 标定的真实样本约 400 KB/行、每块约 4000 行 ⇒ 余量约 **2000 倍** | **预算取舍**（不修） | **不为它在规格层临时改预算或块大小**（用块大小推上限会更宽 ⇒ **更弱的内存界**，F1 的选择是对的）。登记为**计划 4 的验证项**：在生产/样本上量**真实的行数分布**，若确有 <192 B 的行再回规格层（见下方 **N4**）。**发现者：F1（实测）+ 终审 A §3③ 的推理** |
+| **D36** | **工具「杀死用例」列只到顶层用例名**（`-run` 是**顶层**）：`TestSealRejectsIllegalDTAndInst` 是 10 子例的表驱动用例，工具只写整个顶层名 ⇒ **表里读不出是 `dt_*` 还是 `inst_*` 子例承重**；且该用例断言错误**文案** ⇒ 凡改变失败原因的变异都会踩它（task-6 `m11` FAIL 12→13、`m40` FAIL 5→6），**「杀死该用例」不等于「是该用例的目标守卫」** | **方法论缺陷（证据粒度：子例级归因不可从表读出）** | **规则**：子例级归因**只能靠隔离探针**（F2a 实测：只 cut `validateDT` ⇒ 6 个 `dt_*` 子例红；只 cut `validateInst` ⇒ 4 个 `inst_*` 子例红 ⇒ `m54`/`m55` 的**判别力互相独立**）。已写进 `r11-report.md` §7.6。**发现者：修复轮 F2a** |
 
 > **D7 的时效说明**：Task 6 报告 §7.1/§8.1 把「网关 part 滚动」记为待办、把 `minAge` 记为「默认等于 `defaultSealInterval`」；那是 `76042bcd` 时点的状态，已被裁决落实 `e0b0084f`（`minAge` = 3h）与随后的计划 2 要求（R8）取代。**以代码为准。**
 
@@ -4078,6 +4121,20 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 | 可选优化（非要求） | `PendingSeals` 持锁做最多 1 MiB 的 `Flush`，与请求路径的 `Append` 争**同一把锁**（`w.mu`） | 慢盘 / ENOSPC 时会把这 1 MiB flush 的延迟加到请求路径上。要彻底消除需把 flush 与请求路径解耦（独立 flush 协程或双缓冲）。**不在本计划内**，登记备查 |
 
 > 与 R8 配套的部署事实：sealer 的 `minAge` 为 3h、块目标 1536 MiB ⇒ 满流量下网关每约 1 小时就该因**大小阈值**滚动一次（这也正是「滚动间隔 ≤ 1h」的来源）；滚动间隔上限同时决定了未封块 spool 的驻留量（约 4.6 GiB，规格 §7.1）。
+
+### 对计划 2 / 3 / 4 的追加约束（终审 A 修复轮 F1/F2 登记，2026-09-24）
+
+> **为什么要写进本文件**：这些约束来自终审 A 的发现（D28~D36），而**评审报告与台账不在一个可长期存活的位置**（`progress.md` 是 gitignored 的，会随会话消失）。**约束必须留在 tracked 的计划里**，否则下一个计划看不到它们。
+
+| # | 目标计划 | 约束 | 依据 / 后果 |
+|---|---|---|---|
+| **N1** | **计划 2** | **`MarkSealed` 必须先滚动、后封块**：调用方在把块交给 sealer **之前**先调 `MarkSealed` 滚动，**封块期间不再往该 part 追加**。**`MarkSealed` 目前无用例覆盖该次序**（构造需在 `Append` 前删 spool ⇒ 写入侧的 `Append` 会返回成功、正文却进了已 unlink 的 inode） | `writer.go:395-419` 的契约 + `sealer.go` 的 `scanSpoolOffsets`→`runZstd`→`os.Remove(spool)` 流水线（`sealer.go:195/225/256`）。**不满足 ⇒ 静默丢正文**（D29、`r11-report.md` §4.12） |
+| **N2** | **计划 2 / 4** | `Seal` 的**进程内 `(dt,inst)` 互斥**是**调用方义务**（`sealer.go:91-94` 自述）；`stat` → `os.Rename` **非原子** ⇒ I4「拒绝覆盖」有 **TOCTOU**（§7.2 只要求 rename **前**检查） | D34；终审 A §3④。**本计划不修**（规格级残余 + 调用方义务） |
+| **N3** | **计划 3** | `GetBody` / `Seal` 的**输入校验缺口要一并收口**：`Seal` 的缺口已由 F1 修（D28）；**`GetBody` 的同类缺口**已登记在 `progress.md:1882`，**仍未修** | D28；`plan:4031` 承认 `SealTask` 属调用方输入；终审 A §3② |
+| **N4** | **计划 4** | ① **生产 zstd v1.4.8 的压缩比**与 **512 MiB 解码侧内存** ⇒ 验收 §16 第 7 项与 **U1 块大小定稿未闭合**（本机 zstd 是 v1.5.7，测的不是生产版本）② **真 ENOSPC** 与**跨进程并发封块**未构造 ③ **`maxTrailerEntries` 的行数分布核实**：在生产/样本上量**真实行数分布**，确认「块满 1.5 GiB 时平均每行 ≥ 192 B」；若确有 <192 B 的行再回规格层（D35） | 终审 A §7；F1 的建议登记 2；`r11-report.md` §7.9 的误报边界 |
+
+> **与 R8/R9 的关系**：N1 是 R8 在**代码契约层**的具体化（R8 要求网关周期滚动；N1 要求**滚动与封块的先后次序**）；
+> N2 是 R8 所述「没有信号通道」的另一面（互斥与 TOCTOU）。**R8/R9 仍然有效**，N1~N4 不替代它们。
 
 ---
 
@@ -4105,6 +4162,19 @@ git commit -m "test(tracearchive): 端到端逐字节往返与空间零增量约
 - **Task 1 豁免**：按设计无变异证据（产物仅几个常量；唯一候选是对 GC/噪声敏感的 `runtime.MemStats.HeapInuse` 标定断言且**未实测**；工具拒绝「只有 `CHECKS` 没有 `MUTATIONS`」的集合）。
 - **阶段③ 产出清单**：`r11-report.md`（六节：逐集合权威表 / 总计与算术闭合 / 并发漂移核对 / 已知限制与阅读陷阱 / R11 发现汇总 **15 条**（13 条本体 + 终审 B 发现的 2 条出处/证据分级缺陷） / Task 1 豁免登记）＋ 本缺陷登记表的 **D18~D27** ＋ Task 1–6 报告入库与 `task-2-report.md:130-133` 的显式更正 ＋ 本节执行结果。
 - **仍然成立的外部风险**：CI 依旧**不跑 `go test`** ⇒ 上述 9 张表仍无任何独立复算；`r11-report.md` 的 §4 已逐条列出读表时必须注意的陷阱（含 `CHECKS = []` 时「静态检查: 全部 PASS」是**空真**、`names.txt` **未由提交内容锚定**）。
+
+### R11 v2（修复轮后重跑，2026-09-24，冻结 HEAD `21ffec3f42eb22981f67ba2cf4de90d54ee4ba64`）
+
+> **完整汇总见 `r11-report.md` §7**（新增一节，与 §0–§6 的 v1 并列）。**v1 的九张表仍保留在 `c13b64bc` 上，未被覆盖**。
+
+- **为什么重跑**：F1（`cb3253f5`）改了 `sealer.go` / `writer.go` / `index.go` / `reader.go` 与两个测试文件 ⇒ 按本项目**证据绑定文件哈希**的原则（D16）**全部 v1 证据失效**；**注释类改动也重跑**（**F1 两笔提交都含纯文字改动**：`221f8815` 全篇只改文字；`cb3253f5` 因同文件**内联**了 `writer.go` 的两处注释更正与 `sealer.go` 的注释收敛 —— **文本变了哈希绑定就断了**，task-3 / task-4-errors / task-8-reader 就是「行为零漂移、绑定层确实变了」的直接样本）。
+- **新冻结点**：`21ffec3f…` = `221f8815` + `62de2d22`（补 `sets/task-2.py` 的 `m06`、`sets/task-6.py` 的 `m54`/`m55`）+ `21ffec3f`（`sets/task-5.py` 的 `m03` 重新定点）。工具 sha256 与 v1 相同（`10dea750…`）。
+- **v2 九表**：task-2 **6** / task-3 7 / task-4 6 / task-4-errors 1 / task-5 **22+2+1=25** / task-6 **48+3+2=53** / task-7 28+4=32 / task-8 3 / task-8-reader 6 ⇒ **127 断言红 + 9 崩溃·超时 + 3 允许绿 + 0 未登记绿 + 0 无效 = 139 = 136（v1）+ 3 条新变异**。
+- **零漂移**：全 9 表 **0 编译失败、0 子集横幅、0 `!!!`、0 未登记绿、0 证据无效**；`EXPECTED_GREEN` 逐键核对全部落在允许的绿（task-5 `m13`；task-6 `m15`/`m34`）；崩溃/超时成员与 v1 **同名同数**；其余集合**逐条零判定漂移**。
+- **三个新条目**（全为**断言支撑红**）：task-2 `m06_删除条目数上界守卫`（杀 `TestReaderRejectsTrailerEntryCountOverBound`）、task-6 `m54_删除DT入参校验` 与 `m55_删除Inst入参校验`（均杀 `TestSealRejectsIllegalDTAndInst`）。**子例级归因靠隔离探针**：`m54` ⇒ 6 个 `dt_*` 子例红、`m55` ⇒ 4 个 `inst_*` 子例红（⇒ 两处调用各自承重，故不合并成一条）。
+- **`m03` 重新定点规则**（F2a 唯一超出「补三条」的改动，单独提交 `21ffec3f`）：F1 把 Inst 白名单抽成 `validateInst` 并让 `NewWriter` 调用 ⇒ `m03` 原模式在 HEAD 上 count=0 ⇒ `--check` **PATTERN-MISS** ⇒ **task-5 整轮无法出表**。改定点到 `NewWriter` 的**调用点**（`… && false {`），**刻意不动 `validateInst` 本身**（动它会连带停用 `Seal` 入口校验 = task-6 `m55` 的范围 ⇒ **跨集合证据串味**）。**控制者固化规则 —— 五个条件全部成立才可重定点**：①守卫**被重构/搬家**（不是「跑不通就改到能跑通」）②新定点**保持语义与 blast radius**（并说明为何不能改别处）③`--check` 在 HEAD 上**唯一定位** ④**v1↔v2 的判定/杀死用例/自证三列逐字相同** ⑤**写进集合文件头 + 条目注释 + 单独提交**；**任一不成立（尤其 ②④）⇒ 停下报告，不要重定点**。
+- **两条方法学规则**（本轮形成）：①表的「杀死用例」列是**顶层用例名**（工具的 `-run` 是顶层）⇒ **子例级归因只能靠隔离探针**；②`m54`/`m55` **不互斥于** `m11`/`m40`（新用例断言错误**文案** ⇒ 凡改变失败原因的变异都会踩它），但**判别力互相独立**（6 dt / 4 inst 子例）。
+- **仍成立的外部风险**：CI 依旧**不跑 `go test`** ⇒ 两套表（v1 与 v2）都**没有独立复算**。
 
 ---
 

@@ -369,6 +369,53 @@ MUTATIONS["m55_删除Inst入参校验"] = [
     ("cut", '\tif err := validateInst(task.Inst); err != nil {', '\t\treturn err\n\t}\n'),
 ]
 
+# ---- F3 补入：缺陷 A 的**写侧行数上界守卫**（聚焦复审发现的缺陷 A）----
+# 【出处】聚焦复审（终审 A 第二轮，只读）的**缺陷 A**（progress.md 末尾的相关条目）：
+# 条目数上界此前**只在读侧**（index.go 的 `n > maxTrailerEntries`）。实测
+# 8,388,609 行 × `{"a":1}`（块仅 64 MiB）⇒ `Seal` 返回 **nil**、删掉唯一的 spool，
+# 随后 `GetBody` 得 `ErrTrailerCorrupt` ⇒ **正文永久不可达**，违反规格 §7.3
+# 「宁可留下 spool」；诊断也把「合法但超预算」说成「产物损坏」。
+# F3 在 sealer.go 的 ②.5 落成 `if len(offsets) > maxTrailerEntries`（提交 949c3a27，
+# 位置在「版本探测」与 `MkdirAll` 之前，与 ② 的行数交叉校验并列）。
+#
+# 【m56】删掉整条守卫 ⇒ 用例回到「err == nil 且 spool 已被删除」的形态而转红
+#（判据是 err 本身，不是错误**文案**：删掉守卫后 Seal 会一路走完并返回 nil）。
+MUTATIONS["m56_删除Seal行数上界守卫"] = [
+    ("cut", '\tif len(offsets) > maxTrailerEntries {',
+            'ErrTooManyRows, len(offsets), maxTrailerEntries, float64(8*len(offsets))/(1<<20))\n\t}'),
+]
+
+# 【m57】守卫保留、只把哨兵换成 `ErrRowCountMismatch` —— 这是**诊断身份**的变异，
+# 与 m05/m08/m12（%w 改 %v）同族。F3 特意**新增**哨兵 `ErrTooManyRows`（而不是复用它）
+# 的理由是：超限时调用方记录的 `Rows` 与实测可能**完全一致**，「行数不符」在那时是
+# 错误诊断。本条目让这个选择被证据约束——杀手是新增用例里的
+# `errors.Is(err, ErrTooManyRows)` 与 `errors.Is(err, ErrRowCountMismatch) == false`
+# 两条断言（`TestSealRefusesSpoolOverTrailerEntryBound`，A 层）。
+MUTATIONS["m57_行数上界改用行数不符哨兵"] = [
+    ("sub", 'ErrTooManyRows, len(offsets), maxTrailerEntries,',
+            'ErrRowCountMismatch, len(offsets), maxTrailerEntries,'),
+]
+
+# ---- F3 补入：缺陷 C 的「不得留下目录」断言（聚焦复审发现的缺陷 C）----
+# 【m58】把 Seal 入口的两处路径分量校验**搬到 `MkdirAll` 之后** —— 等价于
+# 「校验晚于建目录」这一放宽，也是聚焦复审用来证伪旧用例的那个变体。
+# 它**不改变错误文案**（用例的文案断言仍通过），只是让 `<base>/inst=blue`、
+# `<base>/root/green` 这类越出 `dt=`/`inst=` 布局的目录被建出来。
+# 因此唯一的杀手是 F3 新增的「调用前后目录集合必须逐字相同」断言
+#（tests/tracearchive/sealer_test.go:1531-1534）：**修前该用例全绿** ⇒ 本变异判绿
+#（正是缺陷 C 的形态）；补断言后转红。
+_DTINST_GUARD_BLOCK = (
+    '\tif err := validateDT(task.DT); err != nil {\n\t\treturn err\n\t}\n'
+    '\tif err := validateInst(task.Inst); err != nil {\n\t\treturn err\n\t}\n'
+)
+_MKDIRALL_BLOCK = ('\tif err := os.MkdirAll(filepath.Dir(partPath), 0o755); err != nil {\n'
+                   '\t\treturn fmt.Errorf("tracearchive: 建产物目录失败: %w", err)\n\t}\n')
+MUTATIONS["m58_入口守卫搬到MkdirAll之后"] = [
+    ("cut", '\tif err := validateDT(task.DT); err != nil {',
+            '\tif err := validateInst(task.Inst); err != nil {\n\t\treturn err\n\t}\n'),
+    ("sub", _MKDIRALL_BLOCK, _MKDIRALL_BLOCK + "\n" + _DTINST_GUARD_BLOCK),
+]
+
 # ---------------------------------------------------------------------------
 # 允许的绿：预期**不转红**的条目。每条都必须带**分类标签**并写明依据；
 # 未登记的绿 ⇒ 整轮失败。分类必须显式，因为「绿」有两种性质完全不同的来源，
@@ -523,6 +570,39 @@ REQUIREMENTS = [
             "10/10 红」无法分别证明两处调用各自承重。杀手用例 "
             "`TestSealRejectsIllegalDTAndInst`（tests/tracearchive/sealer_test.go:1439，"
             "本轮新增，已由 `grep '^func Test'` 自动进入清单，34 ⇒ 35 条）。"
+        ),
+    },
+    {
+        "plan": (
+            "【如实登记：**不是** task-6-brief.md 里的要求，简报写作时该守卫尚不存在】"
+            "**聚焦复审（终审 A 第二轮，只读）发现的缺陷 A**（progress.md 末尾的相关条目）⇒ "
+            "F3 落成 sealer.go:206-229 的 `if len(offsets) > maxTrailerEntries`（提交 949c3a27）"
+        ),
+        "mutations": ["m56_删除Seal行数上界守卫", "m57_行数上界改用行数不符哨兵"],
+        "checks": [],
+        "note": (
+            "**依据不在本任务的简报里**（同 m54/m55 的情形：守卫是修复轮新增的）。"
+            "缺陷 A = 条目数上界只在读侧 ⇒ Seal 封出「读不回」的产物并删掉唯一的 spool。"
+            "m56 删整条守卫（判据是 err：删掉后 Seal 返回 nil 且 spool 已被删）；"
+            "m57 只换诊断哨兵（约束 F3「新哨兵而非复用 ErrRowCountMismatch」的选择）。"
+            "杀手用例 `TestSealRefusesSpoolOverTrailerEntryBound`"
+            "（internal/tracearchive/sealer_internal_test.go:77，A 层：反向断言需要未导出的"
+            "maxTrailerEntries），已由本集合的整文件 `grep '^func Test'` 自动进入清单，35 ⇒ 36 条。"
+        ),
+    },
+    {
+        "plan": (
+            "【如实登记：**不是** task-6-brief.md 里的要求】"
+            "**聚焦复审发现的缺陷 C**（progress.md 末尾的相关条目）+ plan:1292 对 Append 的"
+            "「不得留下任何目录」标准 ⇒ F3 在 TestSealRejectsIllegalDTAndInst 里补目录集合断言"
+        ),
+        "mutations": ["m58_入口守卫搬到MkdirAll之后"],
+        "checks": [],
+        "note": (
+            "m58 把入口两处守卫搬到 MkdirAll 之后（正是聚焦复审证伪旧用例的变体）："
+            "错误文案不变、越界目录被建出 ⇒ 唯一杀手是新增的「调用前后目录集合逐字相同」断言。"
+            "修前该变异会**判绿**（旧用例只断言无 .jsonl.zst/.tmp），补断言后转红 ⇒ "
+            "「不得留下目录」这条与被删守卫**互不替代**（m54/m55 判在 `err == nil`，m58 判在目录集合）。"
         ),
     },
 ]

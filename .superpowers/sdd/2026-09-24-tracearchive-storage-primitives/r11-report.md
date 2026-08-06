@@ -337,6 +337,27 @@
 
 `r11-task-7-table.txt`（干净跑）仍是 task-7 的权威表；`r11-task-7-goflags-counterproof.txt` 是在父进程刻意注入被测变量的**附加测量**。出处：`task-7-evidence/r11-section.md` 异常 6；`progress.md:3492`。
 
+### 4.11 🔴 逐行零覆盖守卫**不止一处**：除 `writer.go:196-201` 外还有三处
+
+- **事实**：§5#2 只登记了 `NewWriter` 两个阈值默认值分支（`internal/tracearchive/writer.go:196-201`）零变异覆盖。实测**还有三处 IO 包装分支同样零覆盖**：把它们的 `%w` 换成 `%v`（即退掉错误身份）之后**22 条全绿 ⇒ 没有任何用例承重**。
+- **三处位置**（台账实测时的 HEAD `f7033774`，本报告用 `git show` 复算）：`internal/tracearchive/reader.go:90`（`检查产物失败`）、`:97`（`检查 spool 失败`）、`:277`（`打开 spool 失败`）。在**当前 R11 v2 冻结点 `21ffec3f`** 上，同样三处因 F1 在文件前段插入了 `maxTrailerEntries` 的注释与常量而**行号平移**到 `reader.go:120` / `:127` / `:310`。
+- **为什么容易被漏掉**：它们是**错误包装**分支而非判定分支 —— 删/改不改变控制流，只有断言「错误身份（`errors.Is`）」的用例才会红，而这类用例只覆盖了其中一部分分支。
+- 出处：`progress.md:2282`、`progress.md:2313`（上一版 `task-7-report.md` §4.2 只报了两处；此处按实测更正为三处）。R11 的两份文本（v1 与 v2）此前**都未提**。
+
+### 4.12 🔴 `scanSpoolOffsets` → `runZstd` 之间的窗口会**静默丢正文**（§7.2 只用 `minAge` 兜）
+
+- **流水线顺序是实测的**（`21ffec3f` 的 `internal/tracearchive/sealer.go`）：① `scanSpoolOffsets` 采集每行首字节的未压缩偏移（`:195`）→ ② 行数交叉校验（`:197-201`，`task.Rows > 0` 时与 `len(offsets)` 比对）→ ③ `runZstd` 把**整个 spool** 压成帧（`:225`）→ ④ `appendTrailerAndFooter` 写入 trailer/footer → ⑤ `os.Rename` → ⑥ `os.Remove(spool)`（`:256`）。
+- **窗口与后果**：**①与③之间新追加的字节会进帧，却没有对应的 trailer 偏移条目** —— 偏移采集与行数交叉校验都在压缩**之前**，它们看不见窗口内的追加。随后 ⑥ 删掉 spool ⇒ 这些字节**永久留在帧里但不可寻址**：`row_count` 只等于 `len(offsets)`，故后续点读会在 `ref.Row` 越界分支上**响亮报 `ErrNotArchived`**，但**正文已经丢了**，且不留「丢了多少」的痕迹。
+- **为什么算静默**：写入侧 `Append` 全程返回成功；`task.Rows` 也是**扫描时点**的值，窗口内的追加不在任何判据的视野里。⇒ 这是「**静默丢正文** + 后续点读响亮越界」的组合。
+- **§7.2 的兜底只有 `minAge`**：要求「spool 的 mtime 早于 `now - minAge`（3h）才可封块」，也就是把「封块期间不再追加」**委托给调用方**（计划 2 的滚动逻辑）。本报告 §4.6 只谈 `-timeout 30s` 的超时风险，**未提这个窗口**。
+- 出处：本节在 `21ffec3f` 上对 `sealer.go:195/197-201/225/256` 的实测复算；终审 A §6.2（`final-review-A-code-spec.md:108-110`）；`progress.md:3741-3743`。
+
+### 4.13 ⚠️ 多个集合 `EXPECTED_GREEN` **为空** ⇒ 读者无从得知哪些守卫行**完全没有变异证据**
+
+- **事实**：9 个集合里 **7 个**的 `EXPECTED_GREEN` 是**空字典**（task-2、task-3、task-4、task-4-errors、task-7、task-8、task-8-reader）；只有 task-5（1 键 `m13`）与 task-6（2 键 `m15`/`m34`）非空。
+- **阅读陷阱**：空字典**不等于**「本集合没有零覆盖守卫」，只等于「本集合**没有登记**零覆盖 / 等价理由」。真正的零覆盖守卫会以两种形态**不在表里**：(a) 落在别的集合的 `COVERAGE_GAPS`（task-5 的 `NewWriter` 两个阈值默认值分支，见 §5#2）；(b) 压根没人登记（见 §4.11 的三处）。⇒ **只看 `EXPECTED_GREEN` 列无法回答「哪个守卫没有变异证据」**，必须结合 §4.11、§5#2 与集合文件里**工具读不到**的登记（D24）。
+- 出处：9 份 `r11-section.md` / `r11v2-section.md` 的「EXPECTED_GREEN 一致性」条；终审 A §6.3（`final-review-A-code-spec.md:111-112`）；`progress.md:3744`。
+
 ---
 
 ## 5. R11 产生的发现汇总
@@ -346,7 +367,7 @@
 | 1 | **Task 5 旧 30 条变异对 `brief:253-254` 覆盖为零**（旧 M10 删的是 `closeCurLocked` 的 nil 守卫，不是 `PendingSeals` 的）⇒ **旧证据强度被高估** | `task-5-evidence/r11-task-5-table.txt:37`（映射表说明栏）；`progress.md:3033` | **已由新增 `m33` 关闭**（权威表 `m33` = 红(崩溃/中止)，杀死 `TestWriterPendingSealsNilBeforeAnyAppend`，正是简报预测的 panic 杀法） |
 | 2 | `NewWriter` 两个阈值默认值分支**零变异覆盖**（`internal/tracearchive/writer.go:196-198` 与 `:199-201`）：**可达**、已被 `TestWriterPendingSealsAppliesDefaultThresholds` 约束 ⇒ **缺的是变异证据而非覆盖** | `tools/trace-mutate/sets/task-5.py:390-431`（`COVERAGE_GAPS`，含 `where`/`reachable`/`how_to_close`/`aux_verified`）；`progress.md:3058-3074` | **本轮按裁决只登记、不扩范围**。`how_to_close` 的两条 `("cut", …)` pattern **已预实测**：各自唯一定位、编译通过、判定红、杀死用例恰为该用例。**这是计划缺陷/工具登记，不是本报告的变异数** |
 | 3 | Task 2 的 `m01` 红靠**分配量阈值**（`alloc > 1<<20`，`index_test.go:66`）而非错误身份 | `task-2-evidence/r11-task-2-table.txt` 映射表 m01 说明（「简报里的用例名是旧名…它断言的是分配量而非错误身份，缺守卫时 varint 耗尽仍报同一个 `ErrTrailerCorrupt`」） | **登记，供终审考虑是否加强**（未在本轮改集合） |
-| 4 | Task 3 的 `m03_C` **只在清单范围内成立**：清单内仅 `TestFooterGoldenBytes` 红；清单外另有一条 `tests/tracearchive/reader_test.go:597 TestReaderRejectsTrailerRowCountMismatch` 红在**它自己的前置断言**上 | `task-3-evidence/r11-section.md` 异常 4；`progress.md:2895-2901` | **已如实登记**，措辞被限制为「只在 task-3 清单范围内成立」，不许升级为「全仓唯一探针」 |
+| 4 | Task 3 的 `m03_C` **只在清单范围内成立**：清单内仅 `TestFooterGoldenBytes` 红；清单外另有一条 `tests/tracearchive/reader_test.go:597 TestReaderRejectsTrailerRowCountMismatch` 也红 —— **但理由不是它的前置断言**：实测两法（删 `index.go` 的 `pos != len(b)` 守卫；按注册的 `m17` 换 lenient 解码）都让它在 **`:625` 的真断言**上红（`实际 <nil>`），**不在** `:607`/`:608`；`:607` 的前置（`row_count == 3`）只是被夹具（3 行 `"rc-N"` ⇒ `TrailerLen == RowCount == 3`）**恰巧遮蔽**而未失败。⇒ `m03_C` 下它红在 `:625`，死于 `reader.go:140`「trailer 未紧邻 footer」（**另一守卫**） | `task-3-evidence/r11-section.md` 异常 4；**终审 A §4**（`final-review-A-code-spec.md:79-86`）；`progress.md:3730-3734` | **已如实登记**：措辞仍限制为「只在 task-3 清单范围内成立」，不许升级为「全仓唯一探针」；**理由按终审 A 的实测更正**（**告警项本身保留** —— 实质对，理由错）。行号是终审 A 的评审 HEAD `c602e71d`：该 HEAD 上真断言在 `reader_test.go:625`、`reader.go` 的 `if` 守卫在 `:140`（错误串在 `:141`）；在**当前 R11 v2 冻结点 `21ffec3f`** 上同样两处分别位于 `reader_test.go:626` 与 `reader.go:170`（本报告用 `git show` 在 `c602e71d`、`git grep -n` 在 `21ffec3f` 各自复算，F1 的行插入使行号平移） |
 | 5 | **简报缺陷**：`task-3-brief.md:267` 写的 `TestFooterGoldenLayout` **在本树不存在**（真实名 `TestFooterGoldenBytes`，`internal/tracearchive/footer_test.go:35`） | `progress.md:2888-2891`；本报告实测 `grep -rn 'func TestFooterGolden'` 只命中 `TestFooterGoldenBytes` | **记入计划缺陷登记表（D18）** |
 | 6 | **派发缺陷**：给 Task 2/3 的 `PACKAGES` 含 `./tests/tracearchive/` ⇒ 该包 `[no tests to run]` ⇒ 会判「证据无效」 | `progress.md:2881-2886`；`trace_mutate.py:188-189`/`:226-227` | 两作者各自收窄到 `./internal/tracearchive/` 并把实测输出抄进集合文件头；**记入计划缺陷登记表（D19）** |
 | 7 | **映射缺陷**：Task 3 的 `m02_B` 并集变异（五处 `%w` 一次性全改 `%v`）= **虚假的要求满足**（映射表声称有对应条目，而「任意一处」要求实际未被验证，与 D17 同类） | `task-3-evidence/r11-task-3-table.txt:43`；`progress.md:2903-2915` | **已拆为 `m02_B1..m02_B5`**，5/5 断言红、互不代偿（提交 `580fe5d9`）；**记入计划缺陷登记表（D20）** |
@@ -373,8 +394,149 @@
 
 ---
 
+## 7. R11 v2（修复轮后重跑）
+
+> **性质**：本节是**修复轮 F1 + F2a 之后**在同一分支上的**第二次全量重跑**，与 §0–§6（v1，冻结 `c13b64bc`）**并列，不替代**。
+> **数据来源**：9 份 `task-N-evidence/r11v2-section.md` 与 9 份 `task-N-evidence/r11v2-*-table.txt`；本节对 9 份 v2 归档的 sha256 **全部用 `shasum -a 256` 复算**，与各片段自报值逐位一致；`!!!` 与子集横幅由本节对 9 份归档逐份 `grep` 复算。
+
+### 7.1 为什么必须重跑
+
+1. **代码变了 ⇒ 全部 v1 证据失效**。本项目的原则是**证据绑定文件哈希**（见 D16 与 §0 的绑定头部口径）：一张权威表绑定「HEAD + 工具哈希 + 集合哈希 + 清单哈希 + 被测/测试文件哈希」。F1（`cb3253f5`）改动了 `sealer.go`、`writer.go`、`index.go`、`reader.go`、`internal/tracearchive/reader_internal_test.go`、`tests/tracearchive/sealer_test.go` ⇒ **旧表对新树不再成立**。
+2. **注释类改动同样重跑**。F1 的两笔提交里**都有纯文字改动**：`cb3253f5`（`fix`）**因同文件一并落地**了 `writer.go` 的两处注释更正（`O_APPEND` 失实、`MarkSealed` 假前提）与 `sealer.go` 的 `ErrNotFound` 注释收敛（该提交自述「未做跨提交的部分暂存」）；`221f8815`（`docs`）**只改文字** —— `errors.go` / `footer.go` / `defaults.go` / `tests/tracearchive/reader_test.go` 的注释 + **规格 §5.2**。⇒ **文本变了，哈希绑定就断了**，与行为是否改变无关。§7.3 的 task-3 / task-4-errors / task-8-reader 正是这条原则的直接样本：**行为证据零漂移，但绑定层确实变了**。
+3. ⇒ **9 个集合全部重跑**，而不是只跑被 F1 触及的那几个。
+
+### 7.2 新冻结点 `21ffec3f…`；**v1 的表未被覆盖**
+
+| 项 | v1 | v2 |
+|---|---|---|
+| 冻结 HEAD（跑前 / 跑后） | `c13b64bcc2a344193f854063adbf5a94c0e86760` | **`21ffec3f42eb22981f67ba2cf4de90d54ee4ba64`** |
+| 该冻结点由什么组成 | — | `221f8815`（F1 第二笔）＋ `62de2d22`（补 `sets/task-2.py` 的 `m06`、`sets/task-6.py` 的 `m54`/`m55`）＋ `21ffec3f`（`sets/task-5.py` 的 `m03` 重新定点） |
+| 归档文件名 | `task-N-evidence/r11-*-table.txt` | `task-N-evidence/r11v2-*-table.txt`（**新文件名**） |
+| 工具 sha256 | `10dea750…` | `10dea750…`（**与 v1 相同**；`trace_mutate.py` 零改动） |
+
+- **v1 的九张表原样保留在 `c13b64bc` 上**：本节**不改写 §1/§2 的任何一行**，也不移动其归档；两套表各说各的冻结点（§0.3 关于「v1 跑在 `c13b64bc`、报告归档在其后」的说明，对 §7 同样成立 —— v2 跑在 `21ffec3f`，本节归档在其后的文档树上）。
+- 任务书模板把冻结点写作 `(v2 @ 221f8815)`；但**补条目的两笔集合提交必须先于重跑**（否则新增条目不在锚定范围内），故实际冻结点前移到 `21ffec3f`。9/9 表的 `git rev-parse HEAD` 行自报的也是它。
+
+### 7.3 v2 九表（计数 + 与 v1 差异 + 归档 sha256）
+
+| 集合 | 断言红 | 崩溃/超时 | 允许绿 | 未登记绿 | 无效 | 与 v1（冻结 `c13b64bc`）差异 | 归档 sha256 |
+|---|---|---|---|---|---|---|---|
+| task-2 | 6 | 0 | 0 | 0 | 0 | 5→6：新增 `m06_删除条目数上界守卫`（红）；`m01`–`m05` 判定/杀手逐条不变；清单 7→8 | `3bdf3c3e…` |
+| task-3 | 7 | 0 | 0 | 0 | 0 | 逐条零漂移（`footer.go` 是 F1 的注释改动） | `f1249632…` |
+| task-4 | 6 | 0 | 0 | 0 | 0 | 零漂移（`ref.go` sha **未变**，但测试文件哈希被 F1 改动 ⇒ 仍须重跑） | `cbf8a320…` |
+| task-4-errors | 1 | 0 | 0 | 0 | 0 | 零漂移（`errors.go` 注释改动） | `95899de9…` |
+| task-5 | 22 | 2 | 1 | 0 | 0 | 25 条判定/杀手/自证与 v1 **逐字零漂移**（含重定点的 `m03`） | `74689753…` |
+| task-6 | 48 | 3 | 2 | 0 | 0 | 51→53：新增 `m54`/`m55`（均红）；三桶成员逐条相同；`m11`/`m40` 各多一个杀手 | `68de1e19…` |
+| task-7 | 28 | 4 | 0 | 0 | 0 | 清单 22→23（**推导驱动**）；桶成员不变；`m03`/`m17` 各多一个杀手 | `ca297f09…` |
+| task-8 | 3 | 0 | 0 | 0 | 0 | 零漂移 | `6a641df9…` |
+| task-8-reader | 6 | 0 | 0 | 0 | 0 | 零漂移 | `723fcfc2…` |
+| **合计** | **127** | **9** | **3** | **0** | **0** | **139 = 136 + 3 条新变异** | — |
+
+> 上表 sha256 为前 8 位；完整值（本节 `shasum -a 256` 复算，与各 `r11v2-section.md` 自报值逐位一致）：
+> `3bdf3c3ebfc15141be804c12352443910c52e1544b0329812038d46d1b70b90d`（task-2）、
+> `f12496329d1789af97b0185bdae8cf0fac2c11c624a691bc0c07baaae325bfbf`（task-3）、
+> `cbf8a3201e620c9e6c0afca3d1eb03f1812b59c7b4b7bf7e9123dad1652b336a`（task-4）、
+> `95899de994b87c6b15dae3c78bba12b0fbdd6606cfdfc8e639d758192b76f9ce`（task-4-errors）、
+> `746897531862bec0bf16494699abb0fa8c285a02c1f2c271e20a11675fc185db`（task-5）、
+> `68de1e19388fd5354b927a0f380c37b8dac8d204e69748a08968be7870b0c160`（task-6）、
+> `ca297f097f771b2827fe57506752811d4ed90e5ef8b8f885122c7fa91a92a7ea`（task-7）、
+> `6a641df9ffd0bd557e778ed8e43dc46b278afb4041278a2c3992ef2e1adb6853`（task-8）、
+> `723fcfc22cd9f3b81ad75d650857063569a04ed4eb98328764821c9974e13c80`（task-8-reader）。
+
+**算术闭合（v2，逐格与 9 份归档的 `合计:` 行一致）**：
+
+```
+断言支撑红     6 + 7 + 6 + 1 + 22 + 48 + 28 + 3 + 6 = 127
+崩溃·超时红    0 + 0 + 0 + 0 +  2 +  3 +  4 + 0 + 0 =   9
+允许的绿       0 + 0 + 0 + 0 +  1 +  2 +  0 + 0 + 0 =   3
+未登记的绿     0 + 0 + 0 + 0 +  0 +  0 +  0 + 0 + 0 =   0
+证据无效       0 + 0 + 0 + 0 +  0 +  0 +  0 + 0 + 0 =   0
+----------------------------------------------------------
+127 + 9 + 3 = 139 = 136（v1） + 3 条新变异
+```
+
+- 139 也等于 9 个集合各自 `集合里的变异总数` 之和：`6+7+6+1+25+53+32+3+6 = 139`。
+- **与 v1 的 136 之差 = 新增 3 条变异**：task-2 `m06`、task-6 `m54`、task-6 `m55`；清单条数同步 7→8、34→35、22→23。注意 **task-7 的清单 +1 不产生新变异条目**（只是被推导多带进一条测试名）⇒ 是 136 + 3 = 139，**不是** 140。
+
+### 7.4 零异常（9/9）
+
+| 项 | v2 结果 |
+|---|---|
+| 编译失败行（`红(编译失败)`） | **0** —— 9 份归档全文 grep 零命中 |
+| 子集横幅（「这是子集，不能作为权威表」） | **0** —— 9 份归档零命中；9/9 带 `集合里的变异总数 = N（本次运行 == 全集 ✓）` |
+| `!!!` 行 | **0** —— 9 份归档逐份 `grep -c '!!!'` 均为 0 |
+| 未登记的绿 | **0** |
+| 证据无效 | **0** |
+| stderr | 9/9 `.stderr` 均为 **0 字节** |
+| HEAD 跑前 / 跑后 | 9/9 一致（`21ffec3f42eb22981f67ba2cf4de90d54ee4ba64`） |
+| 工作树 | 9 个集合**串行**跑完后统一核对，跑前跑后均空 |
+
+- **`EXPECTED_GREEN` 逐键核对**：全部落在允许的绿 —— task-5 `m13`（1 键 ⇒ 允许绿 1 条）、task-6 `m15`/`m34`（2 键 ⇒ 允许绿 2 条）；其余 7 个集合为**空字典**（见 §4.13 的阅读提示）。与 v1 相同，工具对「已登记却转红」**不报错**（§4.5），故这一步是**人工逐键核对**，不是工具自报。
+- 崩溃/超时红的成员与 v1 **同名同数**：task-5 `{m10, m33}`、task-6 `{m16, m17, m21}`、task-7 `{m10, m11, m27, m28}` —— 无任何条目从断言红降级为超时红（9 个集合**串行**运行，无并发 CPU 竞争）。
+
+### 7.5 三个新条目：全为**断言支撑红**（非崩溃 / 超时 / 编译）
+
+| 条目 | 变异位置（`21ffec3f`） | 判定 | 自证串 | 杀死的用例（顶层） |
+|---|---|---|---|---|
+| task-2 `m06_删除条目数上界守卫` | cut `index.go:66-69` 的 `if n > maxTrailerEntries` | **红** | `names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1` | `TestReaderRejectsTrailerEntryCountOverBound` |
+| task-6 `m54_删除DT入参校验` | cut `sealer.go:154-156` 的 `validateDT(task.DT)` | **红** | `names=35 ran=35 diff=0 PASS=34 SKIP=0 FAIL=1` | `TestSealRejectsIllegalDTAndInst` |
+| task-6 `m55_删除Inst入参校验` | cut `sealer.go:157-159` 的 `validateInst(task.Inst)` | **红** | `names=35 ran=35 diff=0 PASS=34 SKIP=0 FAIL=1` | `TestSealRejectsIllegalDTAndInst` |
+
+- **子例级归因只能靠隔离探针**：F2a 在提交前实测 —— 只 cut `validateDT` ⇒ 顶层 FAIL=1 且 **6 个 `dt_*` 子例红**（子例 PASS=4）；只 cut `validateInst` ⇒ 顶层 FAIL=1 且 **4 个 `inst_*` 子例红**（子例 PASS=6）。两处调用**各自承重**，故 `m54`/`m55` **分开成两条**：合并成「整体 cut ⇒ 10/10 红」无法分别证明两处。
+- `m06` 的守卫在 `index.go`（task-2 的 `TARGET`），杀手用例在 `reader_internal_test.go`（**同一 Go 包**）。工具按**单文件 TARGET** 施加变异、按**用例名**拼 `-run`，故正确归属是**把杀手名字并进 task-2 的清单**（定点 grep 只并那一条，避免整段 grep 多选 15 条而判「证据无效 多=[…]」）—— 同 `task-4` 对 `TestParsePartSeqUsedBySealer` 的先例。清单 7→8、推导比对「一致」。
+- **要求出处不在简报里**（如实登记，**不编造要求编号**）：`task-2-brief.md` 与 `task-6-brief.md` 都写于这两道守卫存在之前；`REQUIREMENTS` 的 plan 字段直接引用终审 A 的缺陷 ②/③、控制者裁定与 F1 落成处。
+
+### 7.6 本轮形成的两条方法学规则
+
+1. **表的「杀死用例」列是顶层用例名**（工具的 `-run` 是**顶层**）⇒ **子例级归因只能靠隔离探针**。`TestSealRejectsIllegalDTAndInst` 是一条 **10 子例**的表驱动用例，工具只会把整个顶层名写进「杀死的用例」列 —— 它**不区分**是 `dt_*` 还是 `inst_*` 子例红。要知道「哪几个子例承重」，必须像 §7.5 那样**单独构造隔离探针**（`m54` ⇒ 6 个 dt 子例、`m55` ⇒ 4 个 inst 子例）。
+2. **`m54`/`m55` 与 `m11`/`m40` 并不互斥**：新用例断言的是错误**文案**（「dt 必须是…」/「Inst 必须是…」）⇒ **凡改变失败原因的变异都会踩它**：task-6 `m11_删除建目录` 的 FAIL 由 12 → 13、`m40_期望版本写死默认值` 的 FAIL 由 5 → 6，正是同一条新用例。所以「某变异杀死了该用例」**不等于**「该变异是该用例的目标守卫」。但两条变异对**子例**的判别力仍然**互相独立**（`m54` 只红 6 个 dt 子例、`m55` 只红 4 个 inst 子例）⇒ **判别力成立**。
+
+### 7.7 `m03` 的重新定点及其规则（F2a 唯一超出「补三条」的改动，单独提交 `21ffec3f`）
+
+- **为什么必须改**：F1 把 Inst 白名单抽成 `writer.go:74-79` 的**唯一一份** `validateInst`，`NewWriter` 改为调用它（`writer.go:211`）。于是 `m03` 的原模式 `if opts.Inst != instBlue && opts.Inst != instGreen {` 在 HEAD 上 **count=0** ⇒ 工具的 `--check` 报 **PATTERN-MISS** ⇒ **task-5 整个集合无法产出权威表**（比重新定点严重得多）。
+- **怎么改**：定点改到 `NewWriter` 的**调用点** —— `if err := validateInst(opts.Inst); err != nil {` → `… && false {`。**刻意不动 `validateInst` 本身**：动它会连带停用 `Seal` 的入口校验，那是 **task-6 `m55` 的范围** ⇒ 会造成**跨集合证据串味**。
+- **未改变任何判定（旁证）**：v1↔v2 的 `m03` 三列**逐字相同** —— `红 / names=26 ran=26 diff=0 PASS=24 SKIP=0 FAIL=2 / TestNewWriterRejectsEmptyRootAndInst, TestNewWriterRejectsIllegalInst`。这是「守卫搬家后重新定点」**而非**「为了让表好看而放宽变异」的证据。
+- **控制者固化规则：五个条件全部成立才可重定点**
+  1. 守卫**被重构/搬家**（不是「跑不通就改到能跑通」）；
+  2. 新定点**保持语义与 blast radius**（并说明为什么不能改别处）；
+  3. `--check` 在 HEAD 上**唯一定位**；
+  4. **v1↔v2 的判定 / 杀死用例 / 自证三列逐字相同**；
+  5. **写进集合文件头 + 条目注释 + 单独提交**。
+
+  ⇒ **任一不成立（尤其 ②④）⇒ 停下报告，不要重定点。**
+
+### 7.8 本轮修了什么（指向提交）
+
+| # | 内容 | 提交 |
+|---|---|---|
+| 1 | `Seal` 入口补 `validateDT` / `validateInst`（`sealer.go:154-159`），新增用例 `TestSealRejectsIllegalDTAndInst`（10 子例：断言错误**文案** + **未产生任何产物** + spool 未动 + 反向断言合法值仍可封块且落在 `dt=`/`inst=` 内） | `cb3253f5` |
+| 2 | trailer 条目数**硬上限**：`index.go:66-69` `if n > maxTrailerEntries`（常量 `reader.go:55` `= maxTrailerBytes / 8`），超限返回明确 `ErrTrailerCorrupt`、**绝不截断**；新增用例 `TestReaderRejectsTrailerEntryCountOverBound` | `cb3253f5` |
+| 3 | `MarkSealed` 的次序陷阱 —— **只改契约文档**（`writer.go:395-419`，写明「**只可用于封块前**的滚动」+ 说明为何**不加** stat spool 守卫），**零行为改动**；真实修法属**计划 2** | `cb3253f5`（文档，与同文件的代码修复一并落地） |
+| 4 | **6 处**文档/注释更正（含规格 §5.2），**跨两笔提交**：**`cb3253f5`**（因同文件一并落地）—— ① `writer.go`（`O_APPEND` 注释失实）⑤ `sealer.go`（`ErrNotFound` 分支按实测收敛）；**`221f8815`**（只改文字）—— ② `errors.go`（`ErrNotArchived` 实际用法）③ `footer.go`（补 frame_sha / 非邻接 / 越界）④ `defaults.go`（方案 C 后写侧无 Go 编码器）⑥ **规格 §5.2**（原写 `reserved(6)` 且**无 `row_count`** ⇒ 与实现 + §7.1/§8.2 自相矛盾；改为 `row_count(4) \| frame_sha256[:8](8) \| reserved(2)`，附「由终审 A 发现」说明） | `cb3253f5`（①⑤）+ `221f8815`（②③④⑥） |
+| 5 | 为新增守卫补变异条目 `m06` / `m54` / `m55`，并在新冻结点 `21ffec3f` **重跑全部 9 个集合** | `62de2d22`（补条目）+ 本节（重跑归档） |
+
+### 7.9 F1 **测量过的**原始数字（可引用）
+
+| 项 | 值 |
+|---|---|
+| `maxTrailerBytes` | **67,108,864 B**（= 64 MiB，`reader.go:28`） |
+| 最坏输入 | 64 MiB **全 `0x00`** 的 trailer（每字节都是合法单字节 varint） |
+| 该输入的条目数 | **`n = 67,108,864`** 条 |
+| 修复前的行为 | `decodeTrailer` **`err=nil` 成功返回**（不是报错）；`make` 分配 **+512.0 MiB**（536,876,232 B / 213 ms） |
+| 装进真封块帧（`--long=29`）后 | 单请求 `GetBody` **成功**，峰值堆 **1090.0 MiB** |
+| 稳态 2 并发 | **1666.0 MiB** |
+| 连续 4 轮 | **3268.0 MiB** |
+| 新上限 | **`maxTrailerEntries = 8,388,608`**（`reader.go:55`，`= maxTrailerBytes / 8`）；⇒ 索引分配的**上限** = 8,388,608 × 8 B = **64 MiB**；叠加 `tb`（≤ 64 MiB）与解码窗口（512 MiB）≈ **640 MiB/并发**（该项为**三项算术组合**，非单点实测） |
+| 变异自检 | cut 守卫 ⇒ `err=<nil> line="{\"a\":1}"`（**静默成功读出**）⇒ 红 |
+
+- 出处：`progress.md:3797`（F1 报告）。
+- **未做真实 cgroup / OOM 观测**：2.2 GiB 是 `1090 × 2` 的**算术最坏值**，**不是**实测崩溃；实测稳态是 1666 MiB。
+- **据实登记的代价（误报边界）**：块达到 1.5 GiB **且平均每行 < 192 字节**时，合法产物的条目数会超过 `maxTrailerEntries` ⇒ `GetBody` **响亮误报** `ErrTrailerCorrupt`（**非静默**）。这是**预算取舍**（用块大小推上限会更宽 ⇒ 更弱的内存界），登记为**计划 4 的验证项**，**不为它临时改预算或块大小**。
+
+---
+
 ## 附：本报告的自证边界（如实声明）
 
-1. 本报告**没有重新运行**任何变异集合；所有计数、判定、sha256 均逐条来自 §0 列出的 9 份片段与 9 份原始表（唯一例外：§0.2 与 §1.0 中标注为「本报告复算」的 sha256，由本报告执行 `shasum -a 256` 得出）。
+1. 本报告**没有重新运行**任何变异集合。§0–§6（**v1**）的所有计数、判定、sha256 均逐条来自 §0 列出的 9 份 v1 片段与 9 份 v1 原始表（唯一例外：§0.2 与 §1.0 中标注为「本报告复算」的 sha256，由本报告执行 `shasum -a 256` 得出）；**§7（v2）**的计数与判定逐条来自 9 份 `r11v2-section.md` 与 9 份 `r11v2-*-table.txt`，其中 **9 份 v2 归档的 sha256 由本报告全部复算**（与片段自报值逐位一致），`!!!` / 子集横幅 / 编译失败行也由本报告对 9 份 v2 归档逐份 `grep` 复算。
 2. 本报告**无法独立复核**每条变异的逐行 `go test` 输出（工具正常模式不归档，见 §4.4）；它能保证的上限是「证据文件之间、证据文件与台账最终账之间**逐格一致**」。
 3. 「无漂移」是**对各集合原有旁证的一致性核对**，不是一次独立的抗竞争实验；task-8 的 9.632s 探针是其中唯一带量化余量的测量（§3.1）。

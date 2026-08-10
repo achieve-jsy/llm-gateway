@@ -22,6 +22,7 @@
 - **新行不再写入正文（规格 §6、目标 G1）**：`request_headers` / `request_body` / `response_body` 对新行**恒为 NULL**；改为写 `body_ref_dt` / `body_ref_inst` / `body_ref_part` / `body_ref_row` / `body_missing` / `body_bytes`。
 - **`body_bytes` 口径（规格 §6 自相矛盾，本计划裁定，登记 D42）**：取 **`len(RequestBodyRaw) + len(ResponseBodyRaw)`**，**不含 headers**（即复用既有的 `traceEventBodyBytes`）。理由：① 与既有字节闸门（`maxQueueBytes` / `maxBatchBytes`）同口径，避免「同名两个数」；② 请求头经 `scrub` 过滤且体积为 KB 级，对「压缩比核算」影响可忽略；③ 只保留**一个**计数器，不会漂移。规格 §6 的字面公式含 headers，**以本计划为准**（规格待订正）。
 - **`dt` 口径（规格未定义，本计划定死）**：`dt` = 事件 `TS` 在 **UTC+8** 下的日期（`2006-01-02`）。理由：① 归档行里的 `ts` 惯例是 `+08:00`（与 `/datalog/emergency-archive` 的存量格式一致），二者必须指向同一天，否则「元数据说这天、目录在那天」；② 运维与保留期讨论全部按北京时间；③ 与存量归档脚本的口径一致。实现用**固定偏移** `time.FixedZone("CST", 8*60*60)`，**不用** `time.LoadLocation`——容器里没有 tzdata，`LoadLocation` 会失败；中国自 1991 年起无夏令时，固定 +08:00 与真实时区等价。**`dt` 选错会让正文落进错误的 `dt=` 目录 ⇒ 按 `dt` 查不到**，因此必须有边界测试（见任务 2）。
+- **日期计算的单一事实源（本轮新增，与上一条配套）**：`DayStart(ts time.Time) time.Time` 是**唯一**的日期计算入口，`DayOf(ts)` **必须**实现为 `DayStart(ts).Format("2006-01-02")`（不得各算各的）。写 `body_ref_dt` 用 `DayStart`，归档目录名用 `DayOf` ⇒ **列与目录在构造上不可能不一致**。`DayStart` 返回「该 UTC+8 日历日的 **UTC 零点**」，**不是** +08:00 的零点：`body_ref_dt` 是 PG `date` 列，驱动按**会话时区**（生产 = UTC）折算 `time.Time`，传 `2026-09-24T00:00:00+08:00` 会落成 `2026-09-23`（差一天）。
 - **`inst` 来源（规格 §5.1 目录布局）**：新增环境变量 `TRACE_BODY_INST`，取值必须 ∈ {`blue`, `green`}。**非法值在启动时响亮失败**（返回 error，网关不启动）；未设置时：若功能开启 ⇒ 启动失败（没有实例标识就无法隔离写入）；若功能关闭 ⇒ 允许。
 - **功能的开关语义（本计划的安全前提，必须实现）**：`TRACE_BODY_ROOT` **为空 ⇒ 功能关闭**，网关走**既有路径**（正文仍写进 PG 的 jsonb 列），行为与本计划之前**逐字节相同**。默认值为空。理由：`/datalog` 的 bind mount 属**计划 4**，而本计划的代码会随 `main` 进入部署流水线；若默认开启，在挂载到位前部署会让网关把**所有**正文标成 `body_missing` 且不再写 PG ⇒ 静默丢失全部正文。计划 4 的部署动作是「加挂载 + 设 `TRACE_BODY_ROOT`」**同时**发生。**本计划的目标状态是开启**，关闭路径只是过渡期的安全网，不得被当作验收目标。
 - **`TRACE_BODY_ROOT` 取值约束（本计划新增，方案 C 下的必要收窄）**：取值先 `TrimSpace`；**trim 后为空 ⇒ 功能关闭**（与「未设置」同义，写明）；非空则必须同时满足 `filepath.IsAbs(root)` **且** `filepath.Clean(root) != "/"`，否则**启动响亮失败**（返回 error）。理由：① 相对路径的含义取决于进程工作目录（容器里是 `/app` 还是 `/` 由镜像决定），而 `/datalog` 是要被 bind mount 的绝对路径 —— 相对路径会让正文落到谁也无法预测的地方；② `Clean(root) == "/"` 能通过「是个目录」的检查，于是 spool 会建在**宿主根文件系统**上（`/spool/dt=…`），这与 2026-09-24 `/` 被写满是同一类事故。`NewTraceSpooler` 再做一次 `Clean(root) != "/"` 作为第二道防线（同一判据两处：先挡在配置层，再挡在构造层）。
@@ -36,7 +37,7 @@
 - **不碰的东西**：`AGENTS.md` 的「gateway 不要直连数据库」与现状矛盾（`main.go:260` 的 `NewTraceWriterWithLimits(traceDB, …)` + `main.go:263` 自报 `"usage tracking enabled (direct-DB mode)"`）⇒ **本计划延续现状**（只改写入的字段），**不修** `AGENTS.md`，只登记为 D46。
 - **测试分层（规格 §14.1；与计划 1 同一判据）**：需要触达**未导出**标识符的测试放包内（`internal/gateway/observability/`，`package observability`）；否则一律放 `tests/gateway/observability/`（`package observability_test`，仅公开 API）。**优先后者**（`docs/guardrails.md` Q3）。因此本计划新增的网关侧类型**一律导出**（`TraceSpooler` / `SpoolGate` / `TraceBodySink` …）——它们在 `internal/` 下，导出不扩大对外 API，却让 B 层测试可构造。每个包内测试函数必须在注释里说明为何必须触达未导出符号。
 - **配置读取惯例（`internal/gateway/config/config.go`）**：`v.SetDefault("<key>", <值>)` + `v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))` + `v.AutomaticEnv()`（`:140-141`）⇒ Viper key `trace_body.root` 对应的环境变量就是 **`TRACE_BODY_ROOT`**（与规格 §11.1 的名字逐字一致）。**不要**把新键放进 `observability.*`（那会得到 `OBSERVABILITY_TRACE_BODY_ROOT`，与规格不符）。
-- **Atlas 迁移铁律**：迁移**不许手写时间戳**，必须 `make atlas-diff name=add_trace_body_ref` 由 GORM model 生成；`atlas.sum` 必须一并提交；`atlas migrate hash --env local` + `atlas migrate validate --env local` 必须通过。具体流程见 `atlas-db-migration` skill §0.3。
+- **Atlas 迁移铁律（本仓库当前状态下必须换 dev 库 + 裁剪产物，登记 D52）**：迁移**不许手写时间戳**、**不许手写 SQL**，必须由工具生成；`atlas.sum` 必须一并提交；`atlas migrate hash --env local` + `atlas migrate validate --env local` 必须通过；流程见 `atlas-db-migration` skill §0.3。**但在当前仓库状态下**：① `atlas.hcl` 的 `dev = "docker://postgres/16/dev"` 在本机不可用（Docker/Colima 起得来，该 dev URL 仍报 `Error: postgres: querying system variables: EOF`）⇒ 用 `--dev-url "postgres://$(whoami)@127.0.0.1:5432/atlas_dev_scratch?sslmode=disable"` 覆盖（**必须 `127.0.0.1`**：`localhost` 解析到 `::1`，该 PG 不监听 IPv6，同样报那个 EOF；`atlas.hcl` 本身不得修改）；② `atlas-migrations/` 与 GORM model 已漂移 ⇒ **任何** `atlas migrate diff` 都会产出 15 `DROP INDEX` / 81 `ALTER COLUMN` / 多处 `DROP CONSTRAINT` / 6 `CREATE TABLE` 的破坏性产物，而本任务要的 6 个 `ADD COLUMN` 只占其中 2 行 ⇒ **迁移文件只保留工具产物中作用在 `call_traces` 上的语句**，其余一律丢弃且**绝不 apply**（skill §4 问题 1 的「重新生成」处置在此无效：根因是迁移历史与 model 不一致，不是漏了 tag）。步骤 3/4 给出可复核的溯源命令。
 - **证据制度（本仓库 CI **完全不跑** `go test`，`.gitlab-ci.yml` 里只有三处 `CGO_ENABLED=0 go build` ⇒ 变异证据是唯一验证手段）**：本计划沿用计划 1 的工具与判据（`tools/trace-mutate/README.md`、`tools/trace-mutate/trace_mutate.py`）。要点：
   1. 变异集合**必须 git-tracked**，本计划的集合命名 `tools/trace-mutate/sets/p2-task-<N>.py`（**不能用 `task-<N>.py`**：那个命名空间已被计划 1 的 `task-2..task-8` 占用）。集合必须声明 `NAME` / `TARGET` / `PACKAGES` / `MANIFEST_FILES` / `MANIFEST_DERIVATION` / `SKIP_WHITELIST` / `MUTATIONS` / `CHECKS` / `REQUIREMENTS` / `EXPECTED_GREEN`。
   2. 每条变异跑完必须核**三断言**：顶层 `=== RUN` 名字集合 == 清单（去掉所有空白后 diff 为空）；顶层 `PASS+FAIL+SKIP` 计数 == 清单条数；**全层级** SKIP == 0。**计数不等即为无效；计数为 0 即为无效**；`[no tests to run]` 绝不能算绿。
@@ -53,7 +54,7 @@
 | 文件 | 职责 | 规模估计 |
 |---|---|---|
 | `internal/observability/model/call_trace.go` | **修改**：`CallTrace` 增加 6 个新列（4 个定位键 + `body_missing` + `body_bytes`） | +18 行 |
-| `atlas-migrations/<timestamp>_add_trace_body_ref.sql` | **新建**（由 `make atlas-diff` 生成，不许手写）：`ALTER TABLE call_traces ADD COLUMN` × 6 | ~10 行 |
+| `atlas-migrations/<timestamp>_add_trace_body_ref.sql` | **新建**（由 `make atlas-diff` 生成后**裁剪为只含 `call_traces` 的语句**；SQL 仍必须来自工具，不许手写，见 D52）：`ALTER TABLE call_traces ADD COLUMN` × 6 | ~10 行 |
 | `atlas-migrations/atlas.sum` | **修改**：`atlas migrate hash` 产出 | — |
 | `internal/gateway/config/trace_body.go` | **新建**：`TraceBodyConfig` + `LoadTraceBodyConfig` + `TraceBodyZone` + `DayOf` + 全部校验 | ~150 行 |
 | `internal/gateway/config/config.go` | **修改**：新增 `trace_body.*` 默认值 + `Config.TraceBody` 字段 | +25 行 |
@@ -80,7 +81,7 @@
 
 **文件：**
 - 修改：`internal/observability/model/call_trace.go`（现有 33 行，`TableName()` 在 `:33`）
-- 新建（**由工具生成，不许手写**）：`atlas-migrations/<timestamp>_add_trace_body_ref.sql`
+- 新建（**由工具生成后裁剪，不许手写**，裁剪依据见步骤 3/4 与 D52）：`atlas-migrations/<timestamp>_add_trace_body_ref.sql`
 - 修改：`atlas-migrations/atlas.sum`（`atlas migrate hash` 产出）
 - 测试：`tests/gateway/observability/trace_body_columns_test.go`（B 层，sqlite 往返）
 
@@ -88,7 +89,7 @@
 - 依赖输入：无（本计划第一个任务）
 - 对外产出：`obsmodel.CallTrace` 的 6 个新字段（**后续任务的 `traceEventToModel` 直接按这些字段名赋值**）：
   ```go
-  BodyRefDT     *string `gorm:"column:body_ref_dt;type:date"          json:"body_ref_dt,omitempty"`
+  BodyRefDT     *time.Time `gorm:"column:body_ref_dt;type:date"        json:"body_ref_dt,omitempty"`
   BodyRefInst   *string `gorm:"column:body_ref_inst;type:text"        json:"body_ref_inst,omitempty"`
   BodyRefPart   *int    `gorm:"column:body_ref_part;type:integer"     json:"body_ref_part,omitempty"`
   BodyRefRow    *int    `gorm:"column:body_ref_row;type:integer"      json:"body_ref_row,omitempty"`
@@ -96,6 +97,8 @@
   BodyBytes     *int    `gorm:"column:body_bytes;type:integer"        json:"body_bytes,omitempty"`
   ```
   **全部用指针（`BodyMissing` 除外）**：NULL 与零值必须可区分——`body_ref_part = 0` 是**合法**的 part 序号，若用 `int` 则「没有定位键」与「part 0」无法区分。
+
+  **`BodyRefDT` 的类型必须是 `*time.Time`，不是 `*string`**（Task 1 执行者实测）：`type:date` 的列用 `*string` 往返**有损** —— 写 `"2026-09-24"`，读回 `"2026-09-24T00:00:00Z"`（sqlite 与真实 PG 都如此；存储本身正确，`CAST AS TEXT` 得 `2026-09-24`，是**驱动按 `date` 声明类型解码成 `time.Time`**）。计划 3 的读侧要拿这个值拼归档目录路径，一个「形如日期、实为时间戳」的字符串极易拼出**错误路径**。因此：列类型保持 `date`（规格 §6），Go 侧用 `*time.Time`，并由下面的 `DayStart`/`DayOf` 单一事实源保证「列值」与「目录名」一致。
 
 - [ ] **步骤 1：改 GORM model**
 
@@ -107,7 +110,11 @@
 	//
 	// 【为什么全用指针】NULL 与零值必须可区分：part 0 是合法序号，
 	// 若 BodyRefPart 用 int，则「正文缺失（无定位键）」与「part 0 的第 0 行」同名。
-	BodyRefDT   *string `gorm:"column:body_ref_dt;type:date" json:"body_ref_dt,omitempty"`
+	// 【类型必须是 *time.Time，不能是 *string】`type:date` 的列用 string 往返有损：
+	// 写 "2026-09-24" 会读回 "2026-09-24T00:00:00Z"（sqlite 与真实 PG 均如此；存储正确，
+	// 是驱动按 date 解码成 time.Time）⇒ 计划 3 拿它拼归档目录路径会拼错。
+	// 用 *time.Time 后，列值与目录名都由 config 的 DayStart/DayOf 派生，构造上一致。
+	BodyRefDT   *time.Time `gorm:"column:body_ref_dt;type:date" json:"body_ref_dt,omitempty"`
 	BodyRefInst *string `gorm:"column:body_ref_inst;type:text" json:"body_ref_inst,omitempty"`
 	BodyRefPart *int    `gorm:"column:body_ref_part;type:integer" json:"body_ref_part,omitempty"`
 	BodyRefRow  *int    `gorm:"column:body_ref_row;type:integer" json:"body_ref_row,omitempty"`
@@ -126,37 +133,92 @@
 运行：`go build ./internal/observability/...`
 预期：无输出、退出码 0
 
-- [ ] **步骤 3：生成迁移（先读 skill §0.3，禁止手写 SQL）**
+- [ ] **步骤 3：生成迁移（先读 skill §0.3；本仓库当前状态**必须换 dev 库**，见 D52）**
 
-运行：`make atlas-diff name=add_trace_body_ref`
-预期：`atlas-migrations/` 下出现一个新的 `<timestamp>_add_trace_body_ref.sql`，内容形如：
+**为什么不能照 skill §0.3 直接 `make atlas-diff`**：`atlas.hcl` 的 `dev = "docker://postgres/16/dev"` 在本机不可用——Docker/Colima 能起来，但该 dev URL 仍报 `Error: postgres: querying system variables: EOF`。更关键的是：`atlas-migrations/` 与 GORM model **已经漂移**（D52），所以在**纯净 HEAD** 上跑 diff 也会产出 15 处 `DROP INDEX`、81 处 `ALTER COLUMN`、多处 `DROP CONSTRAINT`、6 处 `CREATE TABLE`。**本计划不修漂移**，按下面的「换 dev 库 + 裁剪」处置。
 
-```sql
--- Add column "body_ref_dt" to table: "call_traces"
-ALTER TABLE "call_traces" ADD COLUMN "body_ref_dt" date NULL;
--- Add column "body_ref_inst" to table: "call_traces"
-ALTER TABLE "call_traces" ADD COLUMN "body_ref_inst" text NULL;
--- Add column "body_ref_part" to table: "call_traces"
-ALTER TABLE "call_traces" ADD COLUMN "body_ref_part" integer NULL;
--- Add column "body_ref_row" to table: "call_traces"
-ALTER TABLE "call_traces" ADD COLUMN "body_ref_row" integer NULL;
--- Add column "body_missing" to table: "call_traces"
-ALTER TABLE "call_traces" ADD COLUMN "body_missing" boolean DEFAULT false NOT NULL;
--- Add column "body_bytes" to table: "call_traces"
-ALTER TABLE "call_traces" ADD COLUMN "body_bytes" integer NULL;
+**前置 1：用本机 scratch 库覆盖 dev URL（`--dev-url` 覆盖，不得修改 `atlas.hcl`）**
+
+```bash
+createdb atlas_dev_scratch 2>/dev/null || true     # 幂等：已存在则忽略
+export ATLAS_DEV_URL="postgres://$(whoami)@127.0.0.1:5432/atlas_dev_scratch?sslmode=disable"
+psql "$ATLAS_DEV_URL" -c 'select 1'                # 先确认连得上，再动 diff
 ```
 
-**若生成结果里出现任何 `DROP COLUMN` / `DROP INDEX` / 与上述 6 行无关的语句 ⇒ 立刻停止，不要提交**，回到步骤 1 检查是否误删了既有字段或 tag（`atlas-db-migration` skill §4 问题 1）。
+**必须写 `127.0.0.1`，不能写 `localhost`**：本机 `localhost` 解析到 `::1`，而这个 PG 不监听 IPv6，会报同一个 `querying system variables: EOF`。
 
-- [ ] **步骤 4：人工审查 + 重算校验和 + 校验**
+**前置 2：先做一次「无改动」的 A/B 对照，把漂移量留证（D52 的证据，写进报告）**
 
-运行：
 ```bash
-cat atlas-migrations/*_add_trace_body_ref.sql
+git stash -u      # 或另开纯净 worktree；目的是拿到未改 model 的树
+atlas migrate diff p2_baseline_probe --env local \
+  --dev-url "$ATLAS_DEV_URL" --dir "file://atlas-migrations" || true
+ls -l atlas-migrations/*p2_baseline_probe* 2>/dev/null
+git stash pop
+```
+（执行者实测：纯净树产物 **16237 B**，加本任务 model 改动后 **16553 B**，`diff -u` **只差 `call_traces` 的 2 行** ⇒ 漂移与本任务改动无关。本计划**不修漂移**，此步只为溯源；`p2_baseline_probe` 产物**不要提交**，用完删掉。）
+
+**生成迁移**：
+
+```bash
+# 优先用 Makefile 目标；若该目标不暴露 dev-url 覆盖，先看它到底跑什么，再等价手跑：
+grep -n 'atlas-diff' -A3 Makefile
+make atlas-diff name=add_trace_body_ref
+# 等价手跑（Makefile 不能覆盖 dev-url 时用这条）：
+# atlas migrate diff add_trace_body_ref --env local \
+#   --dev-url "$ATLAS_DEV_URL" --dir "file://atlas-migrations"
+```
+
+预期：`atlas-migrations/` 下出现一个新的 `<timestamp>_add_trace_body_ref.sql`。**它的绝大部分内容与本任务无关**（D52 的漂移：15 `DROP INDEX` / 81 `ALTER COLUMN` / 多处 `DROP CONSTRAINT` / 6 `CREATE TABLE`），其中属于本任务的是作用在 `call_traces` 上的 6 个 `ADD COLUMN`。
+
+**执行者实测的真实形态（务必照此核对，不要按想象写 6 条独立语句）**：工具把 6 个列合并进**一条** `ALTER TABLE`，并且表名是 **schema 限定**的。裁剪后的提交文件共 **2 行 / 316 B**：
+
+```sql
+-- Modify "call_traces" table
+ALTER TABLE "public"."call_traces" ADD COLUMN "body_ref_dt" date NULL, ADD COLUMN "body_ref_inst" text NULL, ADD COLUMN "body_ref_part" integer NULL, ADD COLUMN "body_ref_row" integer NULL, ADD COLUMN "body_missing" boolean NOT NULL DEFAULT false, ADD COLUMN "body_bytes" integer NULL;
+```
+
+（未裁剪的工具产物实测 **16553 B**；纯净树 **16237 B**。因为该语句里表名写作 `"public"."call_traces"`，步骤 4 的 `grep 'call_traces'` 同时命中上面两行 ⇒ 保留 2 行，与执行者实测一致。）
+
+**闸门已按 D52 改写**：skill §4 问题 1 的原文处置是「出现意外 DROP ⇒ 检查 model、重新 diff、绝对不要提交这样的迁移文件」。在本仓库当前状态下，**「出现 DROP」是必然的**（漂移来自迁移历史与 model 不一致，不是漏了 tag），照原文执行只能永远 BLOCKED。正确处置见步骤 4：**保留属于本任务的语句、丢弃其余、绝不 apply 被丢弃部分**（这也是「不提交含意外 DROP 的文件」这条铁律的满足方式）。
+
+- [ ] **步骤 4：裁剪产物（只留 `call_traces` 的语句）+ 重算校验和 + 校验**
+
+```bash
+f=$(ls -t atlas-migrations/*_add_trace_body_ref.sql | head -1)
+cp "$f" /tmp/p2-tool-product.sql        # 裁剪前留证
+
+# ① 留证：工具产物规模与破坏性语句计数（原样抄进交付报告）
+wc -l /tmp/p2-tool-product.sql; wc -c /tmp/p2-tool-product.sql
+grep -c 'DROP INDEX'     /tmp/p2-tool-product.sql
+grep -c 'ALTER COLUMN'   /tmp/p2-tool-product.sql
+grep -c 'DROP CONSTRAINT' /tmp/p2-tool-product.sql
+grep -c 'CREATE TABLE'   /tmp/p2-tool-product.sql
+grep -n 'call_traces'    /tmp/p2-tool-product.sql   # 本任务只允许这些行留下
+
+# ② 裁剪：只保留作用在 call_traces 上的语句（**SQL 仍来自工具，不得手写**）
+{ printf '%s\n' \
+    '-- 本文件是 atlas migrate diff 产物中只与 call_traces 相关的语句（裁剪依据见计划 D52：' \
+    '-- 迁移历史与 GORM model 已漂移，原产物含大量无关破坏性语句；本计划不对账，且绝不 apply 被丢弃部分）。';
+  grep 'call_traces' /tmp/p2-tool-product.sql; } > "$f"
+
+# ②.5 安全检查：保留下来的行里不得出现破坏性语句
+#（若 `grep 'call_traces'` 也捞到了 DROP / ALTER COLUMN 之类的行，说明漂移波及本表：
+#  必须在报告里列出来，并**只保留 6 个 ADD COLUMN 那一条语句**，其余同样丢弃）
+grep -nE 'DROP|ALTER COLUMN|CREATE TABLE' "$f" && { echo "裁剪不干净：逐行复核后再决定保留哪些行"; exit 1; } || echo "OK：只剩 ADD COLUMN"
+
+# ③ 子集证明（可复核）：提交文件里的非注释语句必须全部出现在工具产物中
+grep -v '^--' "$f" | sed '/^$/d' | sort -u > /tmp/p2-submitted.sql
+grep -v '^--' /tmp/p2-tool-product.sql | sed '/^$/d' | sort -u > /tmp/p2-tool.txt
+comm -23 /tmp/p2-submitted.sql /tmp/p2-tool.txt    # 必须为空（= 没有任何手写语句）
+
+# ④ 重算校验和 + 校验
 atlas migrate hash --env local
 atlas migrate validate --env local
 ```
-预期：SQL 恰为上述 6 个 `ADD COLUMN`（`atlas.sum` 被更新）；`validate` 无输出、退出码 0。
+预期：迁移文件只剩 `call_traces` 的语句（无 `DROP`、无 `ALTER COLUMN`、无 `CREATE TABLE`）；`atlas.sum` 被更新；`validate` 无输出、退出码 0；`comm -23` 输出为空。
+
+**溯源要求（必须写进交付报告，不得只写结论）**：① 工具产物的行数/字节数，以及 `DROP INDEX` / `ALTER COLUMN` / `DROP CONSTRAINT` / `CREATE TABLE` 四个计数命令的**真实输出**；② 裁剪前后 `comm -23` 为空的输出（证明提交文件是工具产物的子集、无手写 SQL）；③ 步骤 3 前置 2 的 A/B `diff -u` 输出（证明漂移与本次改动无关）。
 
 - [ ] **步骤 5：写失败的测试（列存在且可往返）**
 
@@ -186,11 +248,13 @@ func TestCallTraceBodyRefColumnsRoundTrip(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&obsmodel.CallTrace{}))
 
 	part, row, bytes := 0, 0, 4096
-	dt, inst := "2026-09-24", "blue"
+	inst := "blue"
+	// date 列必须是 *time.Time（不是 *string）：见本任务字段说明。
+	day := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
 	in := obsmodel.CallTrace{
 		RequestID:   "req-1",
 		TS:          time.Now(),
-		BodyRefDT:   &dt,
+		BodyRefDT:   &day,
 		BodyRefInst: &inst,
 		BodyRefPart: &part,
 		BodyRefRow:  &row,
@@ -204,7 +268,8 @@ func TestCallTraceBodyRefColumnsRoundTrip(t *testing.T) {
 	require.NotNil(t, out.BodyRefPart)
 	require.Equal(t, 0, *out.BodyRefPart, "part 0 必须读出 0，而不是 NULL")
 	require.NotNil(t, out.BodyRefDT)
-	require.Equal(t, dt, *out.BodyRefDT)
+	require.Equal(t, "2026-09-24", out.BodyRefDT.Format("2006-01-02"),
+		"date 列必须按日期口径读回；若用 *string 会读成 2026-09-24T00:00:00Z")
 
 	// 没有定位键的行：四个指针全 nil，body_missing 为 false（默认值）
 	require.NoError(t, db.Create(&obsmodel.CallTrace{RequestID: "req-2", TS: time.Now()}).Error)
@@ -228,8 +293,8 @@ func TestCallTraceBodyRefColumnsRoundTrip(t *testing.T) {
 
 ```go
 // TestAddTraceBodyRefMigrationContent 固定迁移文件的**内容**：
-// 恰好 6 个 ADD COLUMN，且**不含任何 DROP**（规格 §6 要求「保留列、不删」，
-// 破坏性语句一旦混进来就是数据丢失）。
+// 恰好 6 个 ADD COLUMN（实测合并在**一条** ALTER TABLE 里），且**不含任何 DROP**
+//（规格 §6 要求「保留列、不删」，破坏性语句一旦混进来就是数据丢失）。
 func TestAddTraceBodyRefMigrationContent(t *testing.T) {
 	matches, err := filepath.Glob("../../../atlas-migrations/*_add_trace_body_ref.sql")
 	require.NoError(t, err)
@@ -251,7 +316,10 @@ func TestAddTraceBodyRefMigrationContent(t *testing.T) {
 		require.Contains(t, sql, w)
 	}
 	require.NotContains(t, sql, "DROP", "迁移里不得出现任何 DROP（规格 §6：保留既有列）")
-	require.Equal(t, 6, strings.Count(sql, "ALTER TABLE"), "只应有 6 条 ALTER TABLE")
+	require.Equal(t, 6, strings.Count(sql, "ADD COLUMN"), "必须恰好 6 个 ADD COLUMN")
+	// 实测：工具把 6 列合并进**一条** ALTER TABLE（表名 schema 限定为 "public"."call_traces"）。
+	// 若这里变成多条，说明工具产物形态变了 ⇒ 必须重新核对裁剪结果，而不是改这个数字。
+	require.Equal(t, 1, strings.Count(sql, "ALTER TABLE"), "实测只应有 1 条 ALTER TABLE（内联 6 个 ADD COLUMN）")
 }
 ```
 
@@ -266,13 +334,20 @@ func TestAddTraceBodyRefMigrationContent(t *testing.T) {
 - [ ] **步骤 9：提交**
 
 ```bash
+# 提交前确认目录里没有 A/B 探针产物（p2_baseline_probe），且迁移文件已裁剪
+ls atlas-migrations/
 git add internal/observability/model/call_trace.go atlas-migrations/ tests/gateway/observability/trace_body_columns_test.go
 git commit -m "feat(db): call_traces 增加正文定位键 6 列（计划 2/4 任务 1）
 
-body_ref_dt/inst/part/row + body_missing + body_bytes，走 atlas migrate diff 生成。
+body_ref_dt/inst/part/row + body_missing + body_bytes，走 atlas migrate diff 生成后裁剪
+（只保留工具产物中 call_traces 的语句；迁移历史与 model 已漂移，见计划 D52）。
 规格 §6：保留既有三个 jsonb 列不删，新行恒为 NULL；不加新索引。
-body_bytes 口径取 len(request_body)+len(response_body)（不含 headers，见计划 D42）。"
+body_ref_dt 用 *time.Time（type:date 用 *string 往返有损，读回会是时间戳）。
+body_bytes 口径取 len(request_body)+len(response_body)（不含 headers，见计划 D42）。
+--dev-url 用本机 scratch 库覆盖 atlas.hcl 的 docker dev URL（127.0.0.1，非 localhost）。"
 ```
+
+**提交时必须一并交付的溯源材料**（写进任务报告，见步骤 4）：工具产物的语句计数输出、`comm -23` 为空的证据、A/B 漂移对照的 `diff -u` 输出。
 
 ---
 
@@ -298,7 +373,8 @@ body_bytes 口径取 len(request_body)+len(response_body)（不含 headers，见
       DiskWatermarkPercent int           // TRACE_BODY_DISK_WATERMARK_PERCENT，默认 90
   }
   func LoadTraceBodyConfig(v *viper.Viper) (TraceBodyConfig, error)
-  func (c TraceBodyConfig) DayOf(ts time.Time) string   // dt 口径：UTC+8 的日期
+  func (c TraceBodyConfig) DayStart(ts time.Time) time.Time // 唯一日期入口：UTC+8 日历日的 UTC 零点
+  func (c TraceBodyConfig) DayOf(ts time.Time) string       // = DayStart(ts).Format("2006-01-02")
   var TraceBodyZone = time.FixedZone("CST", 8*60*60)
   ```
 
@@ -412,6 +488,23 @@ func TestTraceBodyConfigWhitespaceRootIsDisabled(t *testing.T) {
 
 // TestDayOfUsesUTCPlus8 pin 死 dt 口径。生产库 TimeZone=UTC、容器无 TZ，
 // 因此时区**不能**依赖 time.Local；固定 +08:00 且跨日边界必须正确。
+// TestDayStartIsUTCMidnightOfTheCSTDay 固定「唯一日期入口」的两个性质：
+// ① DayOf(ts) 必须等于 DayStart(ts) 的日期（同源，不得各算各的）；
+// ② DayStart 必须是**该日历日的 UTC 零点**，不是 +08:00 的零点
+//    —— 后者写进 PG date 列会在 UTC 会话下差一天。
+func TestDayStartIsUTCMidnightOfTheCSTDay(t *testing.T) {
+	cfg := config.TraceBodyConfig{Root: "/x", Inst: "blue"}
+	// 北京 2026-09-25 00:30 = UTC 2026-09-24 16:30（跨日边界，最易暴露口径不一致）
+	ts := time.Date(2026, 9, 24, 16, 30, 0, 0, time.UTC)
+
+	start := cfg.DayStart(ts)
+	require.Equal(t, "2026-09-25", start.Format("2006-01-02"), "DayStart 必须是北京 9-25 那一日")
+	require.Equal(t, time.UTC, start.Location(), "必须是 UTC 零点（+08:00 零点会在 UTC 会话下差一天）")
+	require.Equal(t, 0, start.Hour())
+	require.Equal(t, 0, start.Minute())
+	require.Equal(t, "2026-09-25", cfg.DayOf(ts), "DayOf 必须与 DayStart 同源")
+}
+
 func TestDayOfUsesUTCPlus8(t *testing.T) {
 	cfg := config.TraceBodyConfig{Root: "/x", Inst: "blue"}
 	cases := []struct {
@@ -434,8 +527,8 @@ func TestDayOfUsesUTCPlus8(t *testing.T) {
 
 - [ ] **步骤 2：运行测试并确认它失败**
 
-运行：`go test ./tests/gateway/config/ -run 'TestTraceBodyConfig|TestDayOfUsesUTCPlus8' -v`
-预期：**编译失败**，`undefined: config.LoadTraceBodyConfig`、`undefined: config.TraceBodyZone`。
+运行：`go test ./tests/gateway/config/ -run 'TestTraceBodyConfig|TestDayOfUsesUTCPlus8|TestDayStartIsUTCMidnightOfTheCSTDay' -v`
+预期：**编译失败**，`undefined: config.LoadTraceBodyConfig`、`undefined: config.TraceBodyZone`、`undefined: config.TraceBodyConfig.DayStart`。
 
 - [ ] **步骤 3：写最小实现**
 
@@ -561,19 +654,34 @@ func LoadTraceBodyConfig(v *viper.Viper) (TraceBodyConfig, error) {
 	return cfg, nil
 }
 
-// DayOf 返回事件归属的 dt（目录名分量）。
+// DayStart 是**唯一**的日期计算入口：返回该事件归属的那一天（UTC+8 的日历日）
+// 在 **UTC 零点** 的 time.Time，供 `body_ref_dt`（PG `date` 列）使用。
 //
 // 口径固定为「TS 在 UTC+8 下的日期」，理由见 TraceBodyZone 与规格 §5.1：
 // 归档行里的 ts 惯例是 +08:00，dt 必须与它指向同一天。
+//
+// 【为什么归一到 UTC 零点，而不是 +08:00 的零点】`body_ref_dt` 是 PG `date` 列，
+// 驱动按**会话时区**（生产 = UTC）把 time.Time 折算成日期：若传
+// `2026-09-24T00:00:00+08:00`，UTC 会话下会落成 `2026-09-23`（差一天）。
+// 用「该日历日的 UTC 零点」表达日期，与 DayOf 的字符串形式严格一致。
+func (c TraceBodyConfig) DayStart(ts time.Time) time.Time {
+	t := ts.In(TraceBodyZone)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// DayOf 返回事件归属的 dt（目录名分量）。
+//
+// **必须由 DayStart 派生**（单一事实源，见全局约束）：写入 body_ref_dt 用 DayStart、
+// 拼接 `dt=` 目录名用 DayOf，二者同源 ⇒ 列与目录不可能指向不同的日子。
 func (c TraceBodyConfig) DayOf(ts time.Time) string {
-	return ts.In(TraceBodyZone).Format("2006-01-02")
+	return c.DayStart(ts).Format("2006-01-02")
 }
 ```
 
 - [ ] **步骤 4：运行测试并确认它通过**
 
-运行：`go test ./tests/gateway/config/ -run 'TestTraceBodyConfig|TestDayOfUsesUTCPlus8' -v`
-预期：PASS（7 个顶层用例：`DisabledByDefault` / `RollIntervalMustBeUnderOneHour` / `InstIsWhitelisted` / `RootMustBeAbsolute` / `RootRejectsFilesystemRoot` / `WhitespaceRootIsDisabled` / `DayOfUsesUTCPlus8`，其中最后一个含 4 个子用例）。
+运行：`go test ./tests/gateway/config/ -run 'TestTraceBodyConfig|TestDayOfUsesUTCPlus8|TestDayStartIsUTCMidnightOfTheCSTDay' -v`
+预期：PASS（8 个顶层用例：`DisabledByDefault` / `RollIntervalMustBeUnderOneHour` / `InstIsWhitelisted` / `RootMustBeAbsolute` / `RootRejectsFilesystemRoot` / `WhitespaceRootIsDisabled` / `DayStartIsUTCMidnightOfTheCSTDay` / `DayOfUsesUTCPlus8`，其中最后一个含 4 个子用例）。
 
 - [ ] **步骤 5：接进 `config.go`（默认值 + 结构体字段）**
 
@@ -704,6 +812,13 @@ MUTATIONS["m08_root允许文件系统根"] = [
     ("sub", 'if cfg.Enabled && filepath.Clean(cfg.Root) == "/" {', "if false {"),
 ]
 
+# DayStart 必须是该日历日的 UTC 零点（不是 +08:00 零点）
+# ⇒ TestDayStartIsUTCMidnightOfTheCSTDay 必须红
+MUTATIONS["m10_DayStart用本地零点"] = [
+    ("sub", "\treturn time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)",
+            "\treturn t"),
+]
+
 # trim 后为空必须等同于未设置 ⇒ TestTraceBodyConfigWhitespaceRootIsDisabled 必须红
 MUTATIONS["m09_root不做TrimSpace"] = [
     ("sub", 'Root:                 strings.TrimSpace(v.GetString("trace_body.root")),',
@@ -734,6 +849,8 @@ REQUIREMENTS = [
      "mutations": ["m05_删除水位范围校验"], "checks": []},
     {"plan": "计划 2 任务 2 步骤 1 + 全局约束：dt = TS 在 UTC+8 下的日期",
      "mutations": ["m06_dt口径改用time.Local"], "checks": []},
+    {"plan": "计划 2 全局约束：DayStart 是唯一日期入口（UTC 零点），DayOf 由它派生",
+     "mutations": ["m10_DayStart用本地零点"], "checks": []},
     {"plan": "计划 2 全局约束：root 必须绝对路径且 Clean != \"/\"，trim 后为空 = 关闭",
      "mutations": ["m07_root允许相对路径", "m08_root允许文件系统根", "m09_root不做TrimSpace"], "checks": []},
     {"plan": "计划 2 全局约束：TRACE_BODY_ROOT 留空 = 功能关闭（默认值）",
@@ -759,7 +876,7 @@ python3 tools/trace-mutate/trace_mutate.py --repo . \
   --mutation-set tools/trace-mutate/sets/p2-task-2.py --check
 ```
 （`/tmp/p2-task-2-names.txt` 由 `MANIFEST_DERIVATION` 那条 grep 命令产出）
-预期：`--check` 对 9 条变异全部报「唯一定位」。**若某条报定位到 0 处或多处 ⇒ 修正变异字符串（不要改测试）**。
+预期：`--check` 对 10 条变异全部报「唯一定位」。**若某条报定位到 0 处或多处 ⇒ 修正变异字符串（不要改测试）**。
 
 再跑权威表：
 ```bash
@@ -2507,14 +2624,15 @@ MarkSealed 无返回值、只关句柄；空块上不滚动（由 PendingSeals �
 - 测试：`tests/gateway/observability/trace_event_spool_test.go`（B 层）
 
 **接口：**
-- 依赖输入：任务 2 的 `config.TraceBodyConfig`（`Enabled` / `Inst` / `BlockMB` / `FlushInterval` / `RollInterval` / `DiskWatermarkPercent` / `DayOf`）、任务 3 的 `traceEventLine`、任务 5 的 `*TraceSpooler`
+- 依赖输入：任务 2 的 `config.TraceBodyConfig`（`Enabled` / `Inst` / `BlockMB` / `FlushInterval` / `RollInterval` / `DiskWatermarkPercent` / `DayStart` / `DayOf`）、任务 3 的 `traceEventLine`、任务 5 的 `*TraceSpooler`
 - 对外产出：
   ```go
   // TraceBodySink 是正文落盘目标（生产实现 *TraceSpooler）。
   // 用接口是为了让「先 spool 后 PG」这条次序能被测试替身观测到。
   type TraceBodySink interface {
       AppendLine(dt string, line []byte) (ta.Ref, error)
-      DayOf(ts time.Time) string
+      DayStart(ts time.Time) time.Time // 写 body_ref_dt 用（唯一日期入口）
+      DayOf(ts time.Time) string       // 拼 dt= 目录名；实现必须由 DayStart 派生
   }
   // 新增构造器（保留既有 NewTraceWriter / NewTraceWriterWithLimits 不变）
   func NewTraceWriterWithSink(db *gorm.DB, bufSize, flushN int, interval time.Duration,
@@ -2576,13 +2694,16 @@ func (s *fakeSink) AppendLine(dt string, line []byte) (ta.Ref, error) {
 	return ta.Ref{DT: dt, Inst: "blue", Part: 0, Row: len(s.appendI) - 1}, nil
 }
 
-func (s *fakeSink) DayOf(ts time.Time) string {
+func (s *fakeSink) DayStart(ts time.Time) time.Time {
 	loc := s.zone
 	if loc == nil {
 		loc = time.FixedZone("CST", 8*60*60)
 	}
-	return ts.In(loc).Format("2006-01-02")
+	t := ts.In(loc)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 }
+
+func (s *fakeSink) DayOf(ts time.Time) string { return s.DayStart(ts).Format("2006-01-02") }
 
 // newSpoolTestDB 建内存 sqlite + 记录每次 INSERT 的序号。
 func newSpoolTestDB(t *testing.T, rec *orderRecorder) (*gorm.DB, *[]int64) {
@@ -2641,7 +2762,8 @@ func TestTraceWriterAppendsSpoolBeforeMetadataRow(t *testing.T) {
 		require.NotNil(t, row.BodyRefPart)
 		require.NotNil(t, row.BodyRefRow)
 		require.NotNil(t, row.BodyBytes)
-		require.Equal(t, "2026-09-24", *row.BodyRefDT, "dt 必须按 UTC+8 口径")
+		require.Equal(t, "2026-09-24", row.BodyRefDT.Format("2006-01-02"),
+			"dt 必须按 UTC+8 口径（date 列用 *time.Time，不能用 *string）")
 		require.Equal(t, "blue", *row.BodyRefInst)
 	}
 }
@@ -2826,6 +2948,13 @@ func TestTraceWriterRetryAfterFailureStartsAtRowZero(t *testing.T) {
 // 而不必依赖真实磁盘的时序。
 type TraceBodySink interface {
 	AppendLine(dt string, line []byte) (ta.Ref, error)
+
+	// DayStart 是唯一的日期计算入口，返回该事件归属日历日的 **UTC 零点**，
+	// 供 body_ref_dt（PG date 列）使用（理由见 config.TraceBodyConfig.DayStart）。
+	DayStart(ts time.Time) time.Time
+
+	// DayOf 拼 dt= 目录名，**必须**实现为 DayStart(ts).Format("2006-01-02")
+	// —— 同源才能保证「列里的日期」与「目录名里的日期」永远一致。
 	DayOf(ts time.Time) string
 }
 
@@ -2853,12 +2982,15 @@ func traceEventToModelMeta(e TraceEvent) obsmodel.CallTrace { /* 原样搬移，
 // traceEventToModelWithRef 组装「正文在 spool 里」的元数据行（规格 §6）：
 // 三个 jsonb 列恒为 NULL，定位键与 body_bytes 由本函数写入。
 //
+// day 由调用方（flush 循环）从 `sink.DayStart(e.TS)` 取得，与定位 spool 用的
+// `dt := sink.DayOf(e.TS)` 同源 ⇒ 列里的日期与目录名里的日期不可能不一致。
+//
 // BodyRefPart/BodyRefRow/BodyRefDT/BodyRefInst 取指针：part 0 与 row 0 都是
 // 合法值，用值类型会让「定位键缺失」与「第 0 块第 0 行」不可区分。
-func traceEventToModelWithRef(e TraceEvent, ref ta.Ref, bodyBytes int) obsmodel.CallTrace {
+func traceEventToModelWithRef(e TraceEvent, day time.Time, ref ta.Ref, bodyBytes int) obsmodel.CallTrace {
 	m := traceEventToModelMeta(e)
-	dt, inst, part, row := ref.DT, ref.Inst, ref.Part, ref.Row
-	m.BodyRefDT, m.BodyRefInst, m.BodyRefPart, m.BodyRefRow = &dt, &inst, &part, &row
+	inst, part, row := ref.Inst, ref.Part, ref.Row
+	m.BodyRefDT, m.BodyRefInst, m.BodyRefPart, m.BodyRefRow = &day, &inst, &part, &row
 	m.BodyBytes = &bodyBytes
 	return m
 }
@@ -2891,6 +3023,9 @@ func traceEventToModelMissing(e TraceEvent, bodyBytes int) obsmodel.CallTrace {
 			//    而那个地方什么都没有」的行 —— 读侧会报 ErrNotArchived（500），
 			//    把一个正常降级伪装成存储故障。
 			line := traceEventLine(e)
+			// day 与 dt 同源：DayOf 必须由 DayStart 派生（全局约束的单一事实源）。
+			// day 进 body_ref_dt 列（*time.Time，date），dt 进 spool 路径与 ta.Ref。
+			day := tw.sink.DayStart(e.TS)
 			dt := tw.sink.DayOf(e.TS)
 			ref, err := tw.sink.AppendLine(dt, line)
 			if err != nil {
@@ -2899,7 +3034,7 @@ func traceEventToModelMissing(e TraceEvent, bodyBytes int) obsmodel.CallTrace {
 				continue
 			}
 			// ③ 成功之后才组装带定位键的元数据行。
-			models = append(models, traceEventToModelWithRef(e, ref, bodyBytes))
+			models = append(models, traceEventToModelWithRef(e, day, ref, bodyBytes))
 		}
 ```
 
@@ -3010,7 +3145,7 @@ MUTATIONS["m01_先写PG后落spool"] = [
 # 降级列 ⇒ TestTraceWriterMarksBodyMissingWhenSpoolFails 必须红
 MUTATIONS["m02_落盘失败不标body_missing"] = [
     ("sub", "models = append(models, traceEventToModelMissing(e, bodyBytes))",
-            "models = append(models, traceEventToModelWithRef(e, ta.Ref{DT: dt, Inst: \"blue\"}, bodyBytes))"),
+            "models = append(models, traceEventToModelWithRef(e, day, ta.Ref{DT: dt, Inst: \"blue\"}, bodyBytes))"),
 ]
 
 # 新行不得写正文列 ⇒ TestTraceWriter(Appends|Marks) 必须红
@@ -3060,7 +3195,8 @@ REQUIREMENTS = [
      "mutations": ["m03_新行仍然写正文列"], "checks": []},
     {"plan": "计划 2 全局约束：TRACE_BODY_ROOT 为空 ⇒ 功能关闭、走既有路径",
      "mutations": ["m04_关闭时也走新路径"], "checks": []},
-    {"plan": "计划 2 全局约束：dt = TS 在 UTC+8 下的日期（不能是 UTC 日期）",
+    {"plan": "计划 2 全局约束：dt = TS 在 UTC+8 下的日期（不能是 UTC 日期）；"
+             "body_ref_dt 与 dt 同源（DayStart 的 UTC 零点性质由 p2-task-2 的 m10 覆盖）",
      "mutations": ["m05_dt改用UTC"], "checks": []},
     {"plan": "规格 §7.1 的 AppendFailed 被有意偏离（D51）",
      "mutations": [], "checks": ["写入侧不调用 AppendFailed（D51 的偏离声明）"]},
@@ -3505,13 +3641,14 @@ func TestAcceptanceA1WriteHalf(t *testing.T) {
 		require.NotNil(t, row.BodyRefInst)
 		require.NotNil(t, row.BodyRefPart)
 		require.NotNil(t, row.BodyRefRow)
-		require.Equal(t, "2026-09-24", *row.BodyRefDT, "第 %d 行的 dt 必须是 UTC+8 的日期", i)
+		require.Equal(t, "2026-09-24", row.BodyRefDT.Format("2006-01-02"),
+			"第 %d 行的 dt 必须是 UTC+8 的日期", i)
 	}
 
 	// ② 定位键必须能落回真实存在的 spool 行，且字节与事件一致（逐字节）
 	for i, row := range rows {
 		spoolPath := filepath.Join(root, "spool",
-			"dt="+*row.BodyRefDT, "inst="+*row.BodyRefInst,
+			"dt="+row.BodyRefDT.Format("2006-01-02"), "inst="+*row.BodyRefInst,
 			fmt.Sprintf("part-%06d.jsonl", *row.BodyRefPart))
 		lines := splitLines(t, spoolPath)
 		require.Greater(t, len(lines), *row.BodyRefRow, "第 %d 行：row=%d 越界（块内共 %d 行）",
@@ -3539,7 +3676,13 @@ func (s *sinkWithDayOf) AppendLine(dt string, line []byte) (ta.Ref, error) {
 	return s.spooler.AppendLine(dt, line)
 }
 
-func (s *sinkWithDayOf) DayOf(ts time.Time) string { return ts.In(s.zone).Format("2006-01-02") }
+// DayStart 与 DayOf 同源：DayOf 由 DayStart 派生（全局约束的单一事实源）。
+func (s *sinkWithDayOf) DayStart(ts time.Time) time.Time {
+	t := ts.In(s.zone)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func (s *sinkWithDayOf) DayOf(ts time.Time) string { return s.DayStart(ts).Format("2006-01-02") }
 
 func splitLines(t *testing.T, p string) []string {
 	t.Helper()
@@ -3643,8 +3786,8 @@ MUTATIONS = {}
 
 # 定位键必须真的写进元数据行 ⇒ A1 必须红
 MUTATIONS["m01_不写定位键"] = [
-    ("sub", "m.BodyRefDT, m.BodyRefInst, m.BodyRefPart, m.BodyRefRow = &dt, &inst, &part, &row",
-            "_ = dt; _ = inst; _ = part; _ = row"),
+    ("sub", "m.BodyRefDT, m.BodyRefInst, m.BodyRefPart, m.BodyRefRow = &day, &inst, &part, &row",
+            "_ = day; _ = inst; _ = part; _ = row"),
 ]
 # body_bytes 口径 ⇒ A1 ③ 必须红
 MUTATIONS["m02_body_bytes含headers"] = [
@@ -3653,7 +3796,7 @@ MUTATIONS["m02_body_bytes含headers"] = [
 ]
 # 降级行不得带定位键 ⇒ A3 必须红
 MUTATIONS["m03_降级行也带定位键"] = [
-    ("sub", "m.BodyMissing = true", "m.BodyMissing = true\n\tdt0, inst0, p0, r0 := \"x\", \"blue\", 0, 0\n\tm.BodyRefDT, m.BodyRefInst, m.BodyRefPart, m.BodyRefRow = &dt0, &inst0, &p0, &r0"),
+    ("sub", "m.BodyMissing = true", "m.BodyMissing = true\n\tday0, inst0, p0, r0 := time.Unix(0, 0), \"blue\", 0, 0\n\tm.BodyRefDT, m.BodyRefInst, m.BodyRefPart, m.BodyRefRow = &day0, &inst0, &p0, &r0"),
 ]
 # 闩锁期间不得落盘（R9）⇒ A3 ② 必须红
 MUTATIONS["m04_闩锁期间仍写盘"] = [
@@ -3758,7 +3901,7 @@ git log --oneline 3a2301ad..HEAD
 | **D49** | 计划 1 冻结包 `internal/tracearchive/writer.go:489`（`ensureBlockLocked`） vs 本计划的「不隐式建目录」前提 | `ensureBlockLocked` 在**每次建块**时执行 `os.MkdirAll(filepath.Dir(spoolPath), 0o755)`（`:471-521`）。因此网关侧「根目录必须已存在」的检查**只能覆盖启动时**：运行中挂载消失后，下一次 `Append` 会在**容器可写层**重建 `/datalog`，正文写进容器层、随容器重建丢失。**后果是响亮的** —— 读侧按 `(dt,inst,part,row)` 定位不到 ⇒ `ErrNotArchived`（500 类、需人工介入），**不是**静默读到错误行，**不得**说成静默丢数据。 | **不改冻结包**（R11 v3 的 142 条变异证据绑定在它上面，R11 是约束）。网关侧缓解：周期 tick（≤1m）、滚动前、**以及任何 `Append` 失败**都复检根目录，失败即闩锁（`body_missing=true` + 停写 + 响亮 ERROR）。**残余窗口 = 一个 tick**。**探针不得建目录**（`os.CreateTemp(Root, …)`，不得 MkdirAll）：否则探针会先把 root 建回来、把本项检测掩盖掉；由集合 `p2-task-4` 的 `CHECKS`（`MkdirAll` 必须 absent）静态固定。测试见 `TestSpoolerLatchesWhenRootDisappears` / `TestSpoolerChecksRootAfterAppendFailure` / `TestSpoolerDoesNotRollWhileRootUnavailable`。计划 4 交接见 **H1/H2**。 |
 | **D50** | §11.1（环境变量清单） | §11.1 列了 `TRACE_BODY_SEAL_INTERVAL: "15m"` 并把它描述为**封块的时间阈值（15 分钟）**。方案 C 下**封块不在网关**（网关只做滚动，封块是计划 4 的 sealer），所以该键在网关侧**没有消费者**；若照字面把它当网关的滚动间隔用，就会把一个「15m 的封块阈值」和一个「1h 的滚动间隔」压成同一个键，默认值与语义都不同。 | 网关的滚动间隔改用**新键 `TRACE_BODY_ROLL_INTERVAL`（默认 1h）**，内部仍用它设置 `tracearchive.WriterOptions.SealInterval`（冻结 API 不变，**不改 `internal/tracearchive/`**）。§11.1 的 `TRACE_BODY_SEAL_INTERVAL` 在方案 C 下**无消费者**，待规格订正或明确留给 sealer 进程。计划 4 交接见 **H3/H4**。 |
 | **D51** | §7.1（`AppendFailed` 标记行） | §7.1 要求写入侧在「本行正文落盘失败」时调用 `AppendFailed(dt)` 写一行 `null` 标记，以维持「物理行序 == row_seq」。 | **有意不使用**（全计划对 `AppendFailed` 零引用）：失败行的四个定位键写 NULL + `body_missing=true`，读侧永远不会按行号去取该请求的正文 ⇒ 不需要占位；而 `Append` 失败时行号本就不推进（`writer.go:275-286` 只在两次写入都成功后 `cur.rows++`，失败返回**空 `Ref`**）⇒ 不写标记行也不会产生行号空洞。由 `TestTraceWriterRetryAfterFailureStartsAtRowZero`（真实 spool）实证。**残余风险**：若未来读路径改为「按 `body_ref_row` 顺序遍历并与 PG 行一一对应」，必须以 `body_missing=true` 跳过 NULL 行，不得假定行号连续。计划 4 交接见 **H5**。 |
-
+| **D52** | `atlas-migrations/` vs `internal/**/model`（GORM） | **迁移历史与 model 已漂移**：legacy `migrations/` 里的 `quota_rpm` / `quota_max_concurrency` / 5 张 `channel_monitor*` 表**从未移植进 `atlas-migrations/`**（仓库内 0 命中）；`atlas-migrations/20260615044045_v0.7_quota_permission.sql:118` 删掉了 `model_status_logs` 表但 GORM model 仍在。后果：在**纯净 HEAD** 上跑 `atlas migrate diff` 产出 **16237 B**（15 `DROP INDEX` / 81 `ALTER COLUMN` / 多处 `DROP CONSTRAINT` / 6 `CREATE TABLE`），加本任务 model 改动后 **16553 B**，`diff -u` **只差 `call_traces` 的 2 行** ⇒ 漂移与本任务无关。 | **本计划不对账**（属独立任务）。迁移文件只保留工具产物中属于 `call_traces` 的语句，其余丢弃且绝不 apply；交付报告必须给出语句计数与「提交文件 ⊂ 工具产物」的 `comm -23` 证据（步骤 4）。**计划 3/4 若有新迁移必须沿用同一处置，或先做全库对账**（交接 H7）。 |
 ---
 
 ## 计划 4 交接清单（本计划**不实现**，但必须被下游看到）
@@ -3771,6 +3914,7 @@ git log --oneline 3a2301ad..HEAD
 | **H4** | sealer 进程自己的封块时间阈值（§11.1 里 15m 的那个语义）需在 sealer 侧**另起一个键**（建议 `TRACE_SEAL_INTERVAL`），与网关滚动间隔解耦 | D50 |
 | **H5** | 若计划 4 新增「按 `body_ref_row` 顺序遍历某个 part」的校验工具，必须跳过 `body_missing=true` 的行，**不得**假定行号连续 | D51 |
 | **H6** | 部署文档写明 `TRACE_BODY_DISK_WATERMARK_PERCENT`（默认 90，单位 = `TRACE_BODY_ROOT` 所在文件系统的已用百分比）与 `TRACE_BODY_BLOCK_MB`（1536）的换算关系 | D45 |
+| **H7** | `atlas-migrations/` 与 GORM model 的漂移**必须先对账**（独立任务），否则计划 3/4 的任何新迁移都会带出 15 `DROP INDEX` / 81 `ALTER COLUMN` / 6 `CREATE TABLE` 的破坏性产物；在完成对账前，新迁移只能沿用本计划的「只取 `call_traces` 子集 + 绝不 apply 其余」处置，并同样留 `comm -23` 证据 | D52 |
 
 ---
 
@@ -3786,6 +3930,13 @@ git log --oneline 3a2301ad..HEAD
 | 必改 4 | 注释点名具体测试；探针周期必须有专用用例 | 任务 2 集合 `m03` 注释点名 `TestTraceBodyConfigRollIntervalMustBeUnderOneHour`；任务 4 新增 `TestGateProbeRespectsInterval` 并映射到 `m04` |
 | 必改 5 | 网关键改名 `TRACE_BODY_ROLL_INTERVAL`，登记 D50，计划 4 交接用新名 | 全文改名（0 处 `SEAL_INTERVAL` 残留，除 D44/D50/H3/H4 里**引用规格原名**处）；D50；H3/H4 |
 | 小项 | 「闩锁」错别字（原为「闰锁」）；滚动上界的精确值；任务 9 集合数 = 8 | 全文；任务 5 `Run` 注释（≤ `1h + 1m` ≪ minAge 3h）；任务 9 步骤 2（硬门 + `MISSING SET` 不得静默跳过） |
+
+**第三次修订（由 Task 1 执行者的真实环境实测驱动）**：
+
+| 项 | 内容 | 落点 |
+|---|---|---|
+| 必改 A | `atlas migrate diff` 在当前仓库必然产出破坏性迁移 ⇒ 换 dev 库（`--dev-url` 覆盖、必须 `127.0.0.1`、不改 `atlas.hcl`）+ 只保留 `call_traces` 子集 + 绝不 apply 其余 + 可复核溯源；原「出现 DROP 就停止」闸门改写；登记 D52 与交接 H7 | 全局约束「Atlas 迁移铁律」；任务 1 步骤 3/4；D52；H7 |
+| 必改 B | `BodyRefDT` 由 `*string` 改 `*time.Time`（`type:date` 用 string 往返有损）；引入单一事实源 `DayStart`/`DayOf`；往返断言改为按日期口径比较 | 任务 1 字段说明 + model + 往返测试；全局约束「日期计算的单一事实源」；任务 2 接口/实现 + `TestDayStartIsUTCMidnightOfTheCSTDay` + 集合 m10；任务 6 `TraceBodySink.DayStart` + `traceEventToModelWithRef(e, day, …)` + fakeSink/sinkWithDayOf；任务 6/8 的断言与变异目标串 |
 
 **本轮自查另修的两处**：① 任务 4 的变异集合原本缺 `CHECKS` / `REQUIREMENTS`（集合规范要求 10 个字段），已补齐；② 恢复探针原本用 `os.MkdirAll(root/spool)` 建目录 —— 它会把消失的挂载点在**容器可写层**重新建回来，从而掩盖 D49 要检测的运行期挂载消失，已改为 `os.CreateTemp(Root, …)` 并用静态检查（`MkdirAll` 必须 absent）钉死。
 
@@ -3812,7 +3963,7 @@ git log --oneline 3a2301ad..HEAD
 
 **占位符扫描**：全文无「待定」「TODO」「类似任务 N」「参照上文」「按需补充」。每处引用都是**具体文件 + 行号 + 真实符号**（`PendingSeals` `writer.go:353-393`、`MarkSealed` `writer.go:420-426`、`ensureBlockLocked` `writer.go:471-521`、`nextSeqLocked` `writer.go:527-544`、`traceEventBodyBytes` `trace_event.go:97`、`flush` 闭包 `trace_event.go:144-162`、`traceEventToModel` `trace_event.go:196-235`、`ObservabilityConfig` `config.go:103-104`/`:182-183`、接线点 `main.go:253-264`、迁移基线 `atlas-migrations/20260609082623_baseline.sql:113-131`）。所有变异集合都给了可据以编写的确切目标串或明确的目标语句。
 
-**类型一致性**：`TraceBodySink.AppendLine` 返回 `(ta.Ref, error)`，与 `(*TraceSpooler).AppendLine` 一致；`DayOf(ts time.Time) string` 与 `config.TraceBodyConfig.DayOf` 一致；`ta.WriterOptions{Root, Inst, BlockBytes, SealInterval}` 与 `spooler.go` 的传入一致（字段名逐个核对过计划 1 的 `writer.go:113-120`）；`ta.Ref{DT, Inst, Part, Row}` 四个分量在任务 1 的四个指针列里一一对应；`PendingSeals()` 返回 `[]SealTask{DT, Inst, Part, SpoolPath, Rows, UncompressedBytes}`，任务 5 只读 `DT`/`Part`；`MarkSealed(dt string, part int)` **无返回值**——全文没有任何 `err := MarkSealed(...)` 的写法；`TraceSpoolerOptions.RootCheck func(string) error` 与 `TraceSpooler.checkRoot()` 的注入点在任务 5 内部自洽（nil ⇒ `defaultRootCheck`），且它是**唯一**用于测试「运行中挂载消失」的注入点（等价的是状态、不是成因）。
+**类型一致性**：`TraceBodySink.AppendLine` 返回 `(ta.Ref, error)`，与 `(*TraceSpooler).AppendLine` 一致；`DayStart(ts time.Time) time.Time` + `DayOf(ts time.Time) string` 与 `config.TraceBodyConfig` 的同名方法一致，且 `DayOf` 在**所有**实现里都由 `DayStart` 派生（单一事实源）；`BodyRefDT` 在 model / 写入侧 / 测试断言三处统一为 `*time.Time`（`type:date`），全文没有 `*string` 的 `body_ref_dt`；`ta.WriterOptions{Root, Inst, BlockBytes, SealInterval}` 与 `spooler.go` 的传入一致（字段名逐个核对过计划 1 的 `writer.go:113-120`）；`ta.Ref{DT, Inst, Part, Row}` 四个分量在任务 1 的四个指针列里一一对应；`PendingSeals()` 返回 `[]SealTask{DT, Inst, Part, SpoolPath, Rows, UncompressedBytes}`，任务 5 只读 `DT`/`Part`；`MarkSealed(dt string, part int)` **无返回值**——全文没有任何 `err := MarkSealed(...)` 的写法；`TraceSpoolerOptions.RootCheck func(string) error` 与 `TraceSpooler.checkRoot()` 的注入点在任务 5 内部自洽（nil ⇒ `defaultRootCheck`），且它是**唯一**用于测试「运行中挂载消失」的注入点（等价的是状态、不是成因）。
 
 **范围自检**：本计划**不修改** `internal/tracearchive/` 任何文件（任务 9 步骤 3 用 `git diff --stat` 作为证据），不改 compose、不改 `AGENTS.md`、不新增 `call_traces` 保留策略、不动任何 HTTP 路由与 `tests/contract/contracts.json`；`.env.example` 与 compose 的**挂载/unit 改动属计划 4**（本计划只在交接清单 H1–H6 里写明）。
 

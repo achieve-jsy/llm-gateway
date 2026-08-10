@@ -141,35 +141,41 @@ CHECKS = [
     {
         "name": "键序-与归档格式一致",
         "file": "internal/gateway/observability/trace_line.go",
-        "pattern": (r'json:"request_id"[\s\S]*json:"ts"[\s\S]*json:"request_headers"'
-                    r'[\s\S]*json:"request_body"[\s\S]*json:"response_body"'
+        "pattern": (r'json:"request_id"[\s\S]*json:"ts"[\s\S]*json:"request_headers,omitempty"'
+                    r'[\s\S]*json:"request_body,omitempty"[\s\S]*json:"response_body,omitempty"'
                     r'[\s\S]*json:"error_code"[\s\S]*json:"error_message"'),
         "expect": "present",
         "why": (
             "规格 §4.1 步骤① 的「字段与顺序对齐现有归档格式」是**源码结构**要求；"
             "变异 m10 已证明该结构在行为上被 A 层用例断言（交换即红），"
             "本静态行是第二道：它不依赖任何运行时输入，直接钉住声明顺序。"
+            "【注意】正则必须写成 `json:\"request_body,omitempty\"` 这样的完整 tag —— "
+            "简报给的 `json:\"request_body\"`（不带 omitempty）在本实现上定位到 0 处："
+            "省略语义要求 tag 里带 omitempty，两者不同形。此条为实测修正。"
         ),
     },
     {
         "name": "impl-不依赖config包",
         "file": "internal/gateway/observability/trace_line.go",
-        "pattern": r"internal/gateway/config",
+        "pattern": r'(?m)^[\t ]*"github\.com/example/llm-gateway/internal/gateway/config"$',
         "expect": "absent",
         "why": (
             "简报明写：observability 不该依赖 internal/gateway/config（依赖方向），"
             "时区由调用方注入。把 traceLineZone 换成 config.TraceBodyZone 后行为完全一致"
             "（都是固定 +08:00）⇒ 任何行为用例都无法区分 ⇒ 只能静态钉住 import 形态。"
+            "【正则为何钉「整行 import」而不是裸包路径】裸路径会命中注释里的说明文字"
+            "（本文件注释里正当地提到了该包名），那样这条检查就变成了「禁止写注释」。"
         ),
     },
     {
         "name": "test-不依赖config包",
         "file": "internal/gateway/observability/trace_line_internal_test.go",
-        "pattern": r"internal/gateway/config",
+        "pattern": r'(?m)^[\t ]*"github\.com/example/llm-gateway/internal/gateway/config"$',
         "expect": "absent",
         "why": (
             "同上：测试若 import config 就等于把该依赖引进包内（config 是装配层，"
             "本包是纯序列化逻辑）。测试自带的 TraceBodyZoneForTest 是固定 +08:00。"
+            "正则同样钉整行 import，避免命中注释。"
         ),
     },
 ]

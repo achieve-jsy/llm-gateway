@@ -23,6 +23,14 @@ var TraceBodyZone = time.FixedZone("CST", 8*60*60)
 // traceBodyMaxRollInterval 是滚动间隔的硬上界（规格 §15.1 R8：≤ 1h）。
 const traceBodyMaxRollInterval = time.Hour
 
+// traceBodyMaxFlushInterval 是 flush 周期的硬上界（规格 §7.1 / 计划全局约束：≤ 1m）。
+//
+// 【为什么必须**强制**、而不只是写进文档】周期 flush 是 sealer 的前置条件：
+// sealer 只看得见已 write(2) 的字节，flush 周期一旦被放宽（例如 5m），
+// 「块已停止追加、但字节还在用户态缓冲」的窗口就被拉长 —— 声明的不变量变成空的，
+// 而配置看上去完全合法。因此超额必须**启动失败**，不得静默接受。
+const traceBodyMaxFlushInterval = time.Minute
+
 // traceBodyMinAge 是 sealer 侧 minAge 的镜像（规格 §7.2：3h）。
 // 滚动间隔必须**严格小于**它：sealer 只靠 mtime + minAge 判断「已停止追加」，
 // 网关若在 sealer 已封块并删除 spool 之后仍持有同一 part 的 fd，
@@ -55,7 +63,7 @@ type TraceBodyConfig struct {
 // 那会得到 OBSERVABILITY_TRACE_BODY_ROOT，与部署文档不符。
 //
 // 校验策略分三类（这个区分是刻意的）：
-//   - 「字段本身非法」（inst 不在白名单、间隔为负、位数为 0、水位越界）⇒ **一律报错**，
+//   - 「字段本身非法」（inst 不在白名单、间隔非正或超上界、位数为 0、水位越界）⇒ **一律报错**，
 //     无论功能是否开启。因为这类值一定是配置错误，静默接受只会掩盖问题。
 //   - 「功能开启所必需但可以缺省」（inst 为空）⇒ 关闭时允许、开启时必须报错。
 //   - 「root 的形态」⇒ 非空时必须绝对路径且不得是文件系统根（见下）。
@@ -96,6 +104,12 @@ func LoadTraceBodyConfig(v *viper.Viper) (TraceBodyConfig, error) {
 	}
 	if cfg.FlushInterval <= 0 {
 		return TraceBodyConfig{}, fmt.Errorf("trace_body.flush_interval 必须为正，实际 %s", cfg.FlushInterval)
+	}
+	if cfg.FlushInterval > traceBodyMaxFlushInterval {
+		return TraceBodyConfig{}, fmt.Errorf(
+			"trace_body.flush_interval=%s 超过 1m 上界（规格 §7.1 / 全局约束：周期 flush ≤ 1m 且必须无条件执行）；"+
+				"flush 过慢会让「块已停止追加但字节仍在缓冲」的窗口拉长，而 sealer 只看得到已 write(2) 的字节",
+			cfg.FlushInterval)
 	}
 	// 【已知的冗余守卫，不要当成证据】在 flush > 0 的前提下，`RollInterval <= 0`
 	// 必然同时命中紧随其后的 `FlushInterval >= RollInterval`（flush < roll <= 0

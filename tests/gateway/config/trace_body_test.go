@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -117,13 +118,37 @@ func TestTraceBodyConfigWhitespaceRootIsDisabled(t *testing.T) {
 }
 
 // TestTraceBodyConfigFlushMustBeFarBelowRoll 是「flush 必须远小于滚动间隔」的**隔离探针**：
-// 输入只违反这一条（roll=1h 正好在上界内，其余字段全合法）⇒ 它转红只可能来自这条校验。
+// 输入只违反这一条，其余字段全合法。
+//
+// ⚠️ flush 取 **1m**（而不是 1h）是刻意的：`flush ≤ 1m` 的上界现在也是承重守卫，
+// 若探针写 flush=1h，那条上界会**先**报错 ⇒ 删掉 `flush >= roll` 守卫后探针照样红，
+// 于是 m04 的变异会被遮蔽成假绿（全局约束的证据制度第 3 条的同型问题：
+// 遮蔽方是另一条更早的守卫）。取 1m 正好落在上界内，只有 `flush >= roll` 能拦它。
 func TestTraceBodyConfigFlushMustBeFarBelowRoll(t *testing.T) {
 	v := traceViperEnabled()
-	v.Set("trace_body.flush_interval", "1h")
-	v.Set("trace_body.roll_interval", "1h")
+	v.Set("trace_body.flush_interval", "1m")
+	v.Set("trace_body.roll_interval", "1m")
 	_, err := config.LoadTraceBodyConfig(v)
 	require.Error(t, err, "flush 周期等于滚动间隔必须被拒绝（规格 §7.1：sealer 只能看到已 write(2) 的字节）")
+}
+
+// TestTraceBodyConfigFlushIntervalMustBeAtMostOneMinute 固定 flush 周期的**上界 ≤ 1m**
+// （规格 §7.1 与计划全局约束：周期 flush 不设前置条件、必须无条件执行）。
+// 只写进文档而不强制时，`TRACE_BODY_FLUSH_INTERVAL=5m` 是完全合法的配置，
+// 而「块已停止追加但字节仍在缓冲」的窗口被拉长到 5 分钟 ⇒ 声明的不变量是空的。
+func TestTraceBodyConfigFlushIntervalMustBeAtMostOneMinute(t *testing.T) {
+	for _, bad := range []string{"61s", "5m"} {
+		v := traceViperEnabled()
+		v.Set("trace_body.flush_interval", bad)
+		_, err := config.LoadTraceBodyConfig(v)
+		require.Error(t, err, "flush_interval=%s 超过 1m 上界必须被拒绝（roll=1h 本身合法）", bad)
+	}
+	// 边界值本身必须被接受，否则上界会被"收紧"成 < 1m 而无人察觉
+	v := traceViperEnabled()
+	v.Set("trace_body.flush_interval", "1m")
+	v.Set("trace_body.roll_interval", "1h")
+	_, err := config.LoadTraceBodyConfig(v)
+	require.NoError(t, err, "flush_interval=1m 必须被接受（规格 §7.1 的上界是 ≤ 1m）")
 }
 
 // TestTraceBodyConfigWatermarkRange 是水位范围的**隔离探针**：0/100 的后果极端
@@ -225,19 +250,53 @@ func mustLoadTraceBody(t *testing.T) config.TraceBodyConfig {
 	return tb
 }
 
+// clearTraceBodyEnv 把 6 个 TRACE_BODY_* 环境变量**真正移除**（不是设为空串），
+// 并在用例结束后还原。理由：
+//   - 本用例要断言的是**产品侧默认值**，只有「环境里没有这个变量」才会走 SetDefault；
+//   - `t.Setenv(k, "")` 对字符串键与缺省同义，但对 GetInt64/GetDuration 这类键，
+//     空串会被 viper 的 AutomaticEnv 取到并 cast 成 0 ⇒ 变成「配置错误」而非默认值，
+//     所以数值键必须用 Unsetenv；
+//   - 开发机可能为本地试跑 export 过这些变量，不清干净就会误红/误绿。
+func clearTraceBodyEnv(t *testing.T) {
+	t.Helper()
+	keys := []string{
+		"TRACE_BODY_ROOT", "TRACE_BODY_INST", "TRACE_BODY_BLOCK_MB",
+		"TRACE_BODY_FLUSH_INTERVAL", "TRACE_BODY_ROLL_INTERVAL",
+		"TRACE_BODY_DISK_WATERMARK_PERCENT",
+	}
+	for _, k := range keys {
+		if old, ok := os.LookupEnv(k); ok {
+			t.Cleanup(func() { _ = os.Setenv(k, old) })
+			require.NoError(t, os.Unsetenv(k))
+		}
+	}
+}
+
 // TestLoadWiresTraceBodyFromEnvVerbatim 钉住「环境变量名与规格 §11.1 逐字一致」这条
 // **无法由 trace_body.go 的变异覆盖**的要求（Viper 键名住在 config.go 里）：
 // 键必须是顶层 `trace_body.*`（放进 observability.* 会得到 OBSERVABILITY_TRACE_BODY_ROOT），
 // 且 config.Load() 必须把解析结果装配进 Config.TraceBody；非法 root 必须在
 // 启动路径上响亮失败（Load 的签名不返回 error，故以 panic 表达）。
+//
+// 它同时是**唯一**走真实 Load() 的用例，因此也是唯一能约束 `config.go` 里
+// `SetDefault` 的地方：newTraceViper() 里那套默认值是测试自己的 helper，
+// 对「产品默认值漂移」没有约束力（例如把 block_mb 默认改成 1024、水位改成 80，
+// 套件仍会全绿）⇒ 下面 4 条 require.Equal 必须打在 Load() 的结果上。
 func TestLoadWiresTraceBodyFromEnvVerbatim(t *testing.T) {
 	t.Setenv("APP_ENV", "nonexistent-trace-body-config-test")
-	// 显式清空而不是「假定宿主没设」：本用例依赖的正是「未设置」这一状态，
-	// 而开发机完全可能为了本地试跑而 export TRACE_BODY_ROOT（空串 ⇒ viper 落回默认值 ""）。
-	t.Setenv("TRACE_BODY_ROOT", "")
-	t.Setenv("TRACE_BODY_INST", "")
-	require.False(t, mustLoadTraceBody(t).Enabled, "未设 TRACE_BODY_ROOT ⇒ 默认关闭")
+	clearTraceBodyEnv(t)
 
+	// 阶段一：产品默认值（环境里没有 TRACE_BODY_* ⇒ 只能来自 config.go 的 SetDefault）
+	tbDefault := mustLoadTraceBody(t)
+	require.False(t, tbDefault.Enabled, "未设 TRACE_BODY_ROOT ⇒ 默认关闭")
+	require.Empty(t, tbDefault.Root)
+	require.Empty(t, tbDefault.Inst)
+	require.Equal(t, int64(1536), tbDefault.BlockMB, "block_mb 的产品默认值必须是 1536")
+	require.Equal(t, time.Minute, tbDefault.FlushInterval, "flush_interval 的产品默认值必须是 1m")
+	require.Equal(t, time.Hour, tbDefault.RollInterval, "roll_interval 的产品默认值必须是 1h")
+	require.Equal(t, 90, tbDefault.DiskWatermarkPercent, "disk_watermark_percent 的产品默认值必须是 90")
+
+	// 阶段二：环境变量逐字生效
 	t.Setenv("TRACE_BODY_ROOT", "/datalog/trace-archive-v4")
 	t.Setenv("TRACE_BODY_INST", "blue")
 	t.Setenv("TRACE_BODY_BLOCK_MB", "64")
@@ -253,7 +312,7 @@ func TestLoadWiresTraceBodyFromEnvVerbatim(t *testing.T) {
 	require.Equal(t, 30*time.Minute, tb.RollInterval)
 	require.Equal(t, 85, tb.DiskWatermarkPercent)
 
-	// 非法 root ⇒ 启动失败（响亮，不是静默退化）
+	// 阶段三：非法 root ⇒ 启动失败（响亮，不是静默退化）
 	t.Setenv("TRACE_BODY_ROOT", "datalog/trace-archive-v4")
 	require.Panics(t, func() { config.Load() }, "非法 TRACE_BODY_ROOT 必须在启动路径上失败")
 }

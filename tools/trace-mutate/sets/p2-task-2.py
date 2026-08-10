@@ -31,6 +31,15 @@
    而简报的 10 条漏掉了 `block_mb <= 0` / `flush_interval <= 0` / `roll_interval <= 0`
    三条守卫。前两条可被隔离探针杀死（承重），第三条不可达（见 m16）。
 
+5. **m17/m18 是评审 F2 补入的条目（同时改了实现与用例）**：评审指出规格 §7.1 与全局约束
+   声明了「周期 flush ≤ 1m」，而修复前的实现只校验 `flush > 0` 与 `flush < roll` ⇒
+   `TRACE_BODY_FLUSH_INTERVAL=5m` + `roll=1h` 被接受，**声明的不变量是空的**。
+   修复在 `trace_body.go` 新增 `traceBodyMaxFlushInterval = time.Minute` 与对应检查，
+   并补用例 `TestTraceBodyConfigFlushIntervalMustBeAtMostOneMinute`。
+   m17 = 删检查；m18 = 把阈值从 1m 放宽到 1h（两条并存：只测一条时另一条可以静默失效）。
+   ⚠️ **连带改动**：`flush ≤ 1m` 上界是**更早**的守卫 ⇒ 原 m04 探针（flush=1h）会被它遮蔽成假绿，
+   已把该探针的输入改成 flush=1m（见 m04 注释）。
+
 ## 变异测不到、但有静态检查行（CHECKS）
 
 - 「`TRACE_BODY_ROOT` 留空 = 关闭」是**默认值**，变异测不到默认值 ⇒ 静态检查 `.env.example`。
@@ -76,7 +85,12 @@ MUTATIONS["m03_删除minAge严格小于校验"] = [
 
 # ---- flush 必须远小于滚动间隔（规格 §7.1）----
 # 杀手用例 = **隔离探针** TestTraceBodyConfigFlushMustBeFarBelowRoll
-#（flush=1h、roll=1h，其余字段全合法 ⇒ 只有这条校验会报错）。
+#（flush=1m、roll=1m，其余字段全合法 ⇒ 只有这条校验会报错）。
+#
+# ⚠️ 探针的 flush 必须取 **1m**（评审 F2 后改，原为 1h）：`flush ≤ 1m` 的上界
+# （m17/m18 守的那条）现在是承重的，若探针写 flush=1h，上界会**先**报错 ⇒
+# 删掉本守卫后探针照样红，m04 被遮蔽成假绿（同「更早的守卫遮蔽」现象）。
+# 1m 正好落在上界内，只有 `flush >= roll` 能拦它。
 MUTATIONS["m04_删除flush与滚动间隔的关系校验"] = [
     ("sub", "if cfg.FlushInterval >= cfg.RollInterval {", "if false {"),
 ]
@@ -168,6 +182,24 @@ MUTATIONS["m16_删除roll_interval正数校验"] = [
     ("sub", "if cfg.RollInterval <= 0 {", "if false {"),
 ]
 
+# ---- flush 周期 ≤ 1m 的上界（评审 F2 补入：声明过、原先没强制）----
+# 规格 §7.1 与全局约束都写「周期 flush ≤ 1m 且必须无条件执行」，而修复前实现只校验
+# `flush > 0` 与 `flush < roll` ⇒ `TRACE_BODY_FLUSH_INTERVAL=5m` + `roll=1h` 会被接受，
+# 声明的不变量是空的。修复后由上界强制。
+# 杀手用例 = TestTraceBodyConfigFlushIntervalMustBeAtMostOneMinute（61s/5m 须报错，1m 须接受）。
+MUTATIONS["m17_删除flush1m上界"] = [
+    ("sub", "if cfg.FlushInterval > traceBodyMaxFlushInterval {", "if false {"),
+]
+
+# ---- 同一个上界的**常量**被放宽（删检查之外的另一条路：改大阈值）----
+# 杀手用例同上：上界从 1m 放宽到 1h 后，flush=61s/5m + roll=1h 会被接受 ⇒ 转红。
+# 两条并存是有意的：m17 证明「检查在位」，m18 证明「阈值确实是 1m」，
+# 只测其中一条时另一条可以静默失效（例如把检查留着但把常量改成 2h）。
+MUTATIONS["m18_flush1m上界放宽为1h"] = [
+    ("sub", "const traceBodyMaxFlushInterval = time.Minute",
+            "const traceBodyMaxFlushInterval = time.Hour"),
+]
+
 # ---------------------------------------------------------------------------
 # 静态检查：**变异测不到**的要求必须有静态检查行（全局约束的证据制度第 4 条）。
 # ---------------------------------------------------------------------------
@@ -212,6 +244,25 @@ CHECKS = [
             "「唯一日期入口」是**结构**不变量：DayOf 若不是由 DayStart 派生，"
             "只要它自己算对了，行为与用例都看不出差别（两者恒等）⇒ 变异必然假绿。"
             "因此只能静态钉住实现形态。"
+        ),
+    },
+    {
+        "name": "test-产品默认值被真实Load断言",
+        "file": "tests/gateway/config/trace_body_test.go",
+        "pattern": (
+            r"(?s)tbDefault := mustLoadTraceBody\(t\)"
+            r".*require\.Equal\(t, int64\(1536\), tbDefault\.BlockMB"
+            r".*require\.Equal\(t, time\.Minute, tbDefault\.FlushInterval"
+            r".*require\.Equal\(t, time\.Hour, tbDefault\.RollInterval"
+            r".*require\.Equal\(t, 90, tbDefault\.DiskWatermarkPercent"
+        ),
+        "expect": "present",
+        "why": (
+            "评审 F1：产品默认值住在 config.go 的 SetDefault（**不在本集合的单文件 TARGET 里**）"
+            "⇒ 变异覆盖不到；而 TestTraceBodyConfigDisabledByDefault 断言的默认值取自测试自己的 "
+            "helper newTraceViper()，对「产品默认值漂移」没有约束力（block_mb 改成 1024、"
+            "水位改成 80 都仍全绿）。因此必须有**打在真实 Load() 结果上**的四条断言；"
+            "本行静态钉住它们的存在与位置，行为侧的红由修复报告的 F1 临时漂移探针给出。"
         ),
     },
 ]
@@ -268,10 +319,20 @@ REQUIREMENTS = [
         ),
     },
     {
-        "plan": "简报步骤 1：flush 周期必须远小于滚动间隔（规格 §7.1）",
-        "mutations": ["m04_删除flush与滚动间隔的关系校验", "m15_删除flush_interval正数校验"],
+        "plan": "简报步骤 1 + 规格 §7.1 + 全局约束：flush 周期 ≤ 1m 且远小于滚动间隔",
+        "mutations": [
+            "m04_删除flush与滚动间隔的关系校验",
+            "m15_删除flush_interval正数校验",
+            "m17_删除flush1m上界",
+            "m18_flush1m上界放宽为1h",
+        ],
         "checks": [],
-        "note": "两条各由一条**隔离探针**杀死（TestTraceBodyConfigFlushMustBeFarBelowRoll / …MustBePositive）。",
+        "note": (
+            "四条各由一条**隔离探针**杀死：m04→TestTraceBodyConfigFlushMustBeFarBelowRoll（探针 flush 必须是 1m，"
+            "否则会被 m17/m18 守的上界遮蔽）；m15→…MustBePositive；m17/m18→"
+            "TestTraceBodyConfigFlushIntervalMustBeAtMostOneMinute（61s/5m 须报错、1m 须接受）。"
+            "**评审 F2 的修复**：`≤1m` 原先只写在文档与 .env.example 里、实现没强制，已补上检查+常量+用例。"
+        ),
     },
     {
         "plan": "简报步骤 1：水位 1..99（登记 D45）",
@@ -321,10 +382,13 @@ REQUIREMENTS = [
     {
         "plan": "全局约束：配置读取惯例 —— Viper 键放顶层 trace_body.*（env 名逐字 TRACE_BODY_*），不得进 observability.*",
         "mutations": [],
-        "checks": ["cfg-键在顶层trace_body", "cfg-没有observability-trace_body"],
+        "checks": ["cfg-键在顶层trace_body", "cfg-没有observability-trace_body", "test-产品默认值被真实Load断言"],
         "note": (
-            "键名住在 config.go（不是本集合的单文件 TARGET）⇒ 变异覆盖不到；"
+            "键名与默认值都住在 config.go（不是本集合的单文件 TARGET）⇒ 变异覆盖不到；"
             "行为侧由 TestLoadWiresTraceBodyFromEnvVerbatim 用真实 env 覆盖。"
+            "**评审 F1 的修复**：该用例原先只断言「默认关闭」，读不到产品默认值 ⇒"
+            "已补 4 条打在 Load() 结果上的默认值断言（block_mb/flush/roll/watermark），"
+            "并由本表的静态检查行钉住它们的存在与位置。"
         ),
     },
 ]

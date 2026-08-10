@@ -16,7 +16,7 @@
 - **计划 1 的包已冻结**：`internal/tracearchive` 已附 142 条变异证据（R11 v3，冻结提交 `ea962a70`）。**本计划不得修改其中任何文件的行为**，也不得新增/改名其中的文件；只在网关侧以公开 API 复用。若确需新增类型，必须写进交付报告而不是直接改。
 - **压缩参数终值（逐字，规格 §5.3.3 / §5.3.1.1）**：编码器 = C 版 zstd CLI、参数 **`-19 --long=29`**（窗口 512 MiB）、编码器并发 `1`（CLI 侧 `-T1`）、块大小 **1536 MB**、时间阈值 **15 分钟**（`defaultSealInterval`）。**这些参数在本计划里只作为「网关传给 `WriterOptions` 的阈值」出现**：`BlockBytes = TRACE_BODY_BLOCK_MB × 1 MiB`、滚动间隔见下条。网关侧**不读** `TRACE_BODY_ZSTD_LEVEL` / `TRACE_BODY_ZSTD_WINDOW_MB`（方案 C 下编码不在网关，见 D43）。
 - **滚动与 flush（规格 §15.1 R8 / §7.1；数值与推导逐字）**：
-  - **滚动间隔 ≤ 1 小时，且严格小于 sealer 的 `minAge` = 3 小时**。本计划默认 `TRACE_BODY_SEAL_INTERVAL = "1h"`，理由：`minAge = 3 × 1h = 3h` 的推导链要求「网关滚动间隔取 ~1 小时，让**大小**阈值（1536 MB）先触发，从而保住已标定的 **10.26×** 压缩比（滚动过短会把块截成 ~400 MB，压缩比退到未标定的区间）」。**15m 也满足「≤1h」，但会让块只有 ~400 MB、加密约 10.26× 的标定失效 ⇒ 不采用**（规格 §11.1 的 `"15m"` 与之冲突，登记为 D44）。
+  - **滚动间隔 ≤ 1 小时，且严格小于 sealer 的 `minAge` = 3 小时**。本计划默认 `TRACE_BODY_ROLL_INTERVAL = "1h"`，理由：`minAge = 3 × 1h = 3h` 的推导链要求「网关滚动间隔取 ~1 小时，让**大小**阈值（1536 MB）先触发，从而保住已标定的 **10.26×** 压缩比（滚动过短会把块截成 ~400 MB，压缩比退到未标定的区间）」。**15m 也满足「≤1h」，但会让块只有 ~400 MB、加密约 10.26× 的标定失效 ⇒ 不采用**（规格 §11.1 的 `"15m"` 与之冲突，登记为 D44）。
   - **flush 周期 ≤ 1 分钟**，默认 `TRACE_BODY_FLUSH_INTERVAL = "1m"`，且**必须无条件执行**（不设「本轮是否要封块」的前置条件），入口是 `(*tracearchive.Writer).PendingSeals()`——它的 `Flush` 在空块提前返回（`writer.go:377`）与阈值提前返回（`writer.go:380-384`）**之前**执行；只有 `cur == nil`（`:358`）与 `poisoned`（`:365`，故意不 flush）两条路径不 flush。
 - **数据流与次序（规格 §4.1、§10.1 I1）**：一条事件在网关内依次是 ① `Emit`（非阻塞，不变）→ ② 唯一写入协程里序列化成一行 JSON → ③ **追加 spool** → ④ **写 PG 元数据行**。**③ 必须早于 ④**。失败次序：③ 失败 ⇒ 该行 `body_missing=true`、定位键全 NULL、不写 spool、**不重试**；④ 沿用现有降级（批量失败逐条重试，坏记录跳过）。
 - **新行不再写入正文（规格 §6、目标 G1）**：`request_headers` / `request_body` / `response_body` 对新行**恒为 NULL**；改为写 `body_ref_dt` / `body_ref_inst` / `body_ref_part` / `body_ref_row` / `body_missing` / `body_bytes`。
@@ -24,6 +24,12 @@
 - **`dt` 口径（规格未定义，本计划定死）**：`dt` = 事件 `TS` 在 **UTC+8** 下的日期（`2006-01-02`）。理由：① 归档行里的 `ts` 惯例是 `+08:00`（与 `/datalog/emergency-archive` 的存量格式一致），二者必须指向同一天，否则「元数据说这天、目录在那天」；② 运维与保留期讨论全部按北京时间；③ 与存量归档脚本的口径一致。实现用**固定偏移** `time.FixedZone("CST", 8*60*60)`，**不用** `time.LoadLocation`——容器里没有 tzdata，`LoadLocation` 会失败；中国自 1991 年起无夏令时，固定 +08:00 与真实时区等价。**`dt` 选错会让正文落进错误的 `dt=` 目录 ⇒ 按 `dt` 查不到**，因此必须有边界测试（见任务 2）。
 - **`inst` 来源（规格 §5.1 目录布局）**：新增环境变量 `TRACE_BODY_INST`，取值必须 ∈ {`blue`, `green`}。**非法值在启动时响亮失败**（返回 error，网关不启动）；未设置时：若功能开启 ⇒ 启动失败（没有实例标识就无法隔离写入）；若功能关闭 ⇒ 允许。
 - **功能的开关语义（本计划的安全前提，必须实现）**：`TRACE_BODY_ROOT` **为空 ⇒ 功能关闭**，网关走**既有路径**（正文仍写进 PG 的 jsonb 列），行为与本计划之前**逐字节相同**。默认值为空。理由：`/datalog` 的 bind mount 属**计划 4**，而本计划的代码会随 `main` 进入部署流水线；若默认开启，在挂载到位前部署会让网关把**所有**正文标成 `body_missing` 且不再写 PG ⇒ 静默丢失全部正文。计划 4 的部署动作是「加挂载 + 设 `TRACE_BODY_ROOT`」**同时**发生。**本计划的目标状态是开启**，关闭路径只是过渡期的安全网，不得被当作验收目标。
+- **`TRACE_BODY_ROOT` 取值约束（本计划新增，方案 C 下的必要收窄）**：取值先 `TrimSpace`；**trim 后为空 ⇒ 功能关闭**（与「未设置」同义，写明）；非空则必须同时满足 `filepath.IsAbs(root)` **且** `filepath.Clean(root) != "/"`，否则**启动响亮失败**（返回 error）。理由：① 相对路径的含义取决于进程工作目录（容器里是 `/app` 还是 `/` 由镜像决定），而 `/datalog` 是要被 bind mount 的绝对路径 —— 相对路径会让正文落到谁也无法预测的地方；② `Clean(root) == "/"` 能通过「是个目录」的检查，于是 spool 会建在**宿主根文件系统**上（`/spool/dt=…`），这与 2026-09-24 `/` 被写满是同一类事故。`NewTraceSpooler` 再做一次 `Clean(root) != "/"` 作为第二道防线（同一判据两处：先挡在配置层，再挡在构造层）。
+- **根目录可用性（R8 的残余缺口，登记 D49）**：网关自身**不调用** `os.MkdirAll`（**探针也不例外** —— 用 `os.CreateTemp(Root, …)`，理由见 `defaultProbeWrite`：MkdirAll 会先把 root 建回来，掩盖本项检测），但它依赖的**冻结包会**：`internal/tracearchive/writer.go:471-521` 的 `ensureBlockLocked` 在**每次建块**时执行 `os.MkdirAll(filepath.Dir(spoolPath), 0o755)`（`:489`）。因此：
+  - 构造期的 `os.Stat(Root)` 只能挡「**启动时**未挂载」；
+  - **运行中挂载消失**后，下一次 `Append` 会在**容器可写层**重建 `/datalog` ⇒ 正文写进容器层、随容器重建丢失。**后果是响亮的**（读取按 `(dt, inst, part, row)` 定位不到 ⇒ `ErrNotArchived`，500 类、需人工介入），**不是**静默读到错误行 —— 不得把它说成静默丢数据；
+  - 缓解（网关侧，**不改冻结包**）：**周期 tick（≤1min）与滚动时**复检根目录，**任何 `Append` 失败**也复检；复检失败 ⇒ 进入闩锁（`body_missing=true`、停止写盘、响亮 ERROR）。**残余窗口 = 一个 tick**，且该窗口内的后果如上所述是响亮的；
+  - **计划 4 的交接**：compose 的 bind mount 必须在场，且部署验收要新增「挂载消失」检查项（撤掉挂载后，网关必须在 ≤1 个 tick 内进入闩锁、不再写盘）。
 - **降级可观测性（规格 §9.3）**：磁盘水位超限或写盘失败时，必须有明确可观测信号——闩锁跳变时**恰好一条** `ERROR` 级日志，闩锁期间按周期输出一条汇总日志，并暴露计数器（`body_missing` 行数 / 闩锁次数 / 闩锁累计秒数）。现有 `flush` 失败只有 `log.Printf`、**无重试、无告警、无指标**（`trace_event.go:151-160`），本计划一并补上。
 - **协议/接口零变更**：不改任何 HTTP 路由、不改 `TraceEvent` 的字段、不改 `Emit` 的签名与语义。`tests/contract/contracts.json` 无需更新。
 - **保留期**：本计划**不新增**任何 `call_traces` 淘汰逻辑（全仓 `DELETE FROM call_traces` 0 命中，规格 D1「不删除」）。
@@ -284,11 +290,11 @@ body_bytes 口径取 len(request_body)+len(response_body)（不含 headers，见
   ```go
   type TraceBodyConfig struct {
       Enabled              bool          // 由 Root != "" 推导，**不单独配置**
-      Root                 string        // TRACE_BODY_ROOT，如 /datalog/trace-archive-v4
+      Root                 string        // TRACE_BODY_ROOT（TrimSpace 后非空才开启）；必须绝对路径且 Clean != "/"
       Inst                 string        // TRACE_BODY_INST，只能是 "blue" / "green"
       BlockMB              int64         // TRACE_BODY_BLOCK_MB，默认 1536
       FlushInterval        time.Duration // TRACE_BODY_FLUSH_INTERVAL，默认 1m
-      RollInterval         time.Duration // TRACE_BODY_SEAL_INTERVAL，默认 1h（= 滚动间隔）
+      RollInterval         time.Duration // TRACE_BODY_ROLL_INTERVAL，默认 1h（= 滚动间隔）
       DiskWatermarkPercent int           // TRACE_BODY_DISK_WATERMARK_PERCENT，默认 90
   }
   func LoadTraceBodyConfig(v *viper.Viper) (TraceBodyConfig, error)
@@ -316,7 +322,7 @@ func newTraceViper() *viper.Viper {
 	v := viper.New()
 	v.SetDefault("trace_body.block_mb", int64(1536))
 	v.SetDefault("trace_body.flush_interval", "1m")
-	v.SetDefault("trace_body.seal_interval", "1h")
+	v.SetDefault("trace_body.roll_interval", "1h")
 	v.SetDefault("trace_body.disk_watermark_percent", 90)
 	return v
 }
@@ -341,11 +347,11 @@ func TestTraceBodyConfigRollIntervalMustBeUnderOneHour(t *testing.T) {
 	v := newTraceViper()
 	v.Set("trace_body.root", "/datalog/trace-archive-v4")
 	v.Set("trace_body.inst", "blue")
-	v.Set("trace_body.seal_interval", "2h")
+	v.Set("trace_body.roll_interval", "2h")
 	_, err := config.LoadTraceBodyConfig(v)
 	require.Error(t, err, "滚动间隔 > 1h 必须被拒绝（规格 §15.1 R8）")
 
-	v.Set("trace_body.seal_interval", "3h")
+	v.Set("trace_body.roll_interval", "3h")
 	_, err = config.LoadTraceBodyConfig(v)
 	require.Error(t, err, "滚动间隔 >= minAge(3h) 必须被拒绝")
 }
@@ -364,6 +370,44 @@ func TestTraceBodyConfigInstIsWhitelisted(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cfg.Enabled)
 	require.Equal(t, "green", cfg.Inst)
+}
+
+// TestTraceBodyConfigRootMustBeAbsolute 固定 root 的形态校验：
+// 相对路径的含义取决于进程工作目录（容器里是 /app 还是 / 由镜像决定），
+// 而 /datalog 是要被 bind mount 的绝对路径 ⇒ 静默接受会让正文落到无法预测的位置。
+func TestTraceBodyConfigRootMustBeAbsolute(t *testing.T) {
+	for _, bad := range []string{"datalog/trace-archive-v4", "./datalog", "../datalog", "datalog/"} {
+		v := newTraceViper()
+		v.Set("trace_body.root", bad)
+		v.Set("trace_body.inst", "blue")
+		_, err := config.LoadTraceBodyConfig(v)
+		require.Error(t, err, "相对路径 root=%q 必须被拒绝", bad)
+	}
+}
+
+// TestTraceBodyConfigRootRejectsFilesystemRoot 固定「不得是 /」：
+// "/" 能通过「是个目录」的检查，于是 spool 会建在宿主根文件系统上（/spool/dt=…）。
+// 四条输入在 filepath.Clean 之后都等于 "/"（或 "//" 归一后仍是根）。
+func TestTraceBodyConfigRootRejectsFilesystemRoot(t *testing.T) {
+	for _, bad := range []string{"/", "//", "/./", "/tmp/.."} {
+		v := newTraceViper()
+		v.Set("trace_body.root", bad)
+		v.Set("trace_body.inst", "blue")
+		_, err := config.LoadTraceBodyConfig(v)
+		require.Error(t, err, "root=%q（Clean 后为 /）必须被拒绝", bad)
+	}
+}
+
+// TestTraceBodyConfigWhitespaceRootIsDisabled 固定「trim 后为空 = 关闭」：
+// TRACE_BODY_ROOT=" " 不能被当成开启（否则会走一条 root 为空白字符的路径，
+// 失败方式难以诊断），且 Root 必须是 trim 之后的值。
+func TestTraceBodyConfigWhitespaceRootIsDisabled(t *testing.T) {
+	v := newTraceViper()
+	v.Set("trace_body.root", "   ")
+	cfg, err := config.LoadTraceBodyConfig(v)
+	require.NoError(t, err)
+	require.False(t, cfg.Enabled, "trim 后为空必须等同于未设置")
+	require.Empty(t, cfg.Root, "Root 必须是 TrimSpace 之后的值")
 }
 
 // TestDayOfUsesUTCPlus8 pin 死 dt 口径。生产库 TimeZone=UTC、容器无 TZ，
@@ -402,6 +446,8 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -447,22 +493,35 @@ type TraceBodyConfig struct {
 // trace_body.root → TRACE_BODY_ROOT）：不要把这些键放进 observability.*，
 // 那会得到 OBSERVABILITY_TRACE_BODY_ROOT，与部署文档不符。
 //
-// 校验策略分两类（这个区分是刻意的）：
-//   - 「字段本身非法」（inst 不在白名单、间隔为负、位数为 0）⇒ **一律报错**，
+// 校验策略分三类（这个区分是刻意的）：
+//   - 「字段本身非法」（inst 不在白名单、间隔为负、位数为 0、水位越界）⇒ **一律报错**，
 //     无论功能是否开启。因为这类值一定是配置错误，静默接受只会掩盖问题。
-//   - 「功能开启所必需但可以缺省」（inst 为空、root 为空）⇒ 关闭时允许、
-//     开启时必须报错。root 为空是**关闭**的表达方式，不是错误。
+//   - 「功能开启所必需但可以缺省」（inst 为空）⇒ 关闭时允许、开启时必须报错。
+//   - 「root 的形态」⇒ 非空时必须绝对路径且不得是文件系统根（见下）。
+//     root 为空或 trim 后为空是**关闭**的表达方式，不是错误。
 func LoadTraceBodyConfig(v *viper.Viper) (TraceBodyConfig, error) {
 	cfg := TraceBodyConfig{
-		Root:                 v.GetString("trace_body.root"),
-		Inst:                 v.GetString("trace_body.inst"),
+		// TrimSpace 之后再判空：TRACE_BODY_ROOT=" " 这类「看起来设了、其实没设」
+		// 的值若被当成开启，会走一条 root 为空白字符的路径，失败方式难以诊断。
+		Root:                 strings.TrimSpace(v.GetString("trace_body.root")),
+		Inst:                 strings.TrimSpace(v.GetString("trace_body.inst")),
 		BlockMB:              v.GetInt64("trace_body.block_mb"),
 		FlushInterval:        v.GetDuration("trace_body.flush_interval"),
-		RollInterval:         v.GetDuration("trace_body.seal_interval"),
+		RollInterval:         v.GetDuration("trace_body.roll_interval"),
 		DiskWatermarkPercent: v.GetInt("trace_body.disk_watermark_percent"),
 	}
 	cfg.Enabled = cfg.Root != ""
 
+	if cfg.Enabled && !filepath.IsAbs(cfg.Root) {
+		return TraceBodyConfig{}, fmt.Errorf(
+			"trace_body.root 必须是绝对路径，实际 %q：相对路径的含义取决于进程工作目录，"+
+				"而 /datalog 是要被 bind mount 的绝对路径 —— 相对路径会让正文落到无法预测的位置", cfg.Root)
+	}
+	if cfg.Enabled && filepath.Clean(cfg.Root) == "/" {
+		return TraceBodyConfig{}, fmt.Errorf(
+			"trace_body.root 不得是文件系统根 %q：spool 会被建在宿主根文件系统上（/spool/dt=…），"+
+				"这正是 2026-09-24 `/` 被写满的同一类事故", cfg.Root)
+	}
 	if cfg.Inst != "" && cfg.Inst != "blue" && cfg.Inst != "green" {
 		return TraceBodyConfig{}, fmt.Errorf(
 			"trace_body.inst 只能是 blue 或 green，实际 %q（规格 §5.1 的目录布局要求实例隔离）", cfg.Inst)
@@ -478,16 +537,16 @@ func LoadTraceBodyConfig(v *viper.Viper) (TraceBodyConfig, error) {
 		return TraceBodyConfig{}, fmt.Errorf("trace_body.flush_interval 必须为正，实际 %s", cfg.FlushInterval)
 	}
 	if cfg.RollInterval <= 0 {
-		return TraceBodyConfig{}, fmt.Errorf("trace_body.seal_interval 必须为正，实际 %s", cfg.RollInterval)
+		return TraceBodyConfig{}, fmt.Errorf("trace_body.roll_interval 必须为正，实际 %s", cfg.RollInterval)
 	}
 	if cfg.RollInterval > traceBodyMaxRollInterval {
 		return TraceBodyConfig{}, fmt.Errorf(
-			"trace_body.seal_interval=%s 超过 1h 上界（规格 §15.1 R8：滚动间隔 ≤ 1h）；"+
+			"trace_body.roll_interval=%s 超过 1h 上界（规格 §15.1 R8：滚动间隔 ≤ 1h）；"+
 				"滚动过慢会让 sealer 在网关仍持有 fd 时封块并删除 spool", cfg.RollInterval)
 	}
 	if cfg.RollInterval >= traceBodyMinAge {
 		return TraceBodyConfig{}, fmt.Errorf(
-			"trace_body.seal_interval=%s 必须严格小于 sealer 的 minAge=%s（规格 §7.2）", cfg.RollInterval, traceBodyMinAge)
+			"trace_body.roll_interval=%s 必须严格小于 sealer 的 minAge=%s（规格 §7.2）", cfg.RollInterval, traceBodyMinAge)
 	}
 	if cfg.FlushInterval >= cfg.RollInterval {
 		return TraceBodyConfig{}, fmt.Errorf(
@@ -514,7 +573,7 @@ func (c TraceBodyConfig) DayOf(ts time.Time) string {
 - [ ] **步骤 4：运行测试并确认它通过**
 
 运行：`go test ./tests/gateway/config/ -run 'TestTraceBodyConfig|TestDayOfUsesUTCPlus8' -v`
-预期：PASS（4 个顶层用例，`TestDayOfUsesUTCPlus8` 下 4 个子用例）。
+预期：PASS（7 个顶层用例：`DisabledByDefault` / `RollIntervalMustBeUnderOneHour` / `InstIsWhitelisted` / `RootMustBeAbsolute` / `RootRejectsFilesystemRoot` / `WhitespaceRootIsDisabled` / `DayOfUsesUTCPlus8`，其中最后一个含 4 个子用例）。
 
 - [ ] **步骤 5：接进 `config.go`（默认值 + 结构体字段）**
 
@@ -528,7 +587,7 @@ func (c TraceBodyConfig) DayOf(ts time.Time) string {
 	v.SetDefault("trace_body.inst", "")
 	v.SetDefault("trace_body.block_mb", int64(1536))
 	v.SetDefault("trace_body.flush_interval", "1m")
-	v.SetDefault("trace_body.seal_interval", "1h")
+	v.SetDefault("trace_body.roll_interval", "1h")
 	v.SetDefault("trace_body.disk_watermark_percent", 90)
 ```
 
@@ -571,11 +630,12 @@ go test ./tests/gateway/config/ -count=1
 # ── 调用链正文直写 /datalog（计划 2/4；规格 docs/superpowers/specs/2026-09-23-trace-body-direct-write-design.md）──
 # 留空 = 功能关闭，正文仍写进 call_traces 的 jsonb 列（默认值，安全）。
 # 开启必须与 /datalog 的 bind mount 同时生效，否则所有正文会退化为 body_missing。
-# TRACE_BODY_ROOT=/datalog/trace-archive-v4
+# TRACE_BODY_ROOT=/datalog/trace-archive-v4   # 必须绝对路径、不得是 /；留空或全空白 = 功能关闭
 # TRACE_BODY_INST=blue                 # 只能是 blue / green，由部署脚本按当前环境注入
 # TRACE_BODY_BLOCK_MB=1536             # 块大小阈值（规格 §5.3.3）
 # TRACE_BODY_FLUSH_INTERVAL=1m         # 周期 flush（规格 §7.1：必须 ≤1m 且远小于滚动间隔）
-# TRACE_BODY_SEAL_INTERVAL=1h          # 滚动间隔（规格 §15.1 R8：≤1h 且严格小于 minAge 3h）
+# TRACE_BODY_ROLL_INTERVAL=1h          # 滚动间隔（规格 §15.1 R8：≤1h 且严格小于 minAge 3h）
+#                                      # 键名注意：**不是**规格 §11.1 的 TRACE_BODY_SEAL_INTERVAL（登记 D50 / 交接 H3）
 # TRACE_BODY_DISK_WATERMARK_PERCENT=90 # 磁盘水位（本计划新增，登记 D45）
 ```
 
@@ -613,7 +673,7 @@ MUTATIONS["m02_删除滚动间隔1h上界"] = [
     ("sub", "if cfg.RollInterval > traceBodyMaxRollInterval {", "if false {"),
 ]
 
-# 「滚动间隔必须严格小于 minAge」⇒ 同上用例必须红
+# 「滚动间隔必须严格小于 minAge」⇒ TestTraceBodyConfigRollIntervalMustBeUnderOneHour 必须红
 MUTATIONS["m03_删除minAge严格小于校验"] = [
     ("sub", "if cfg.RollInterval >= traceBodyMinAge {", "if false {"),
 ]
@@ -632,6 +692,22 @@ MUTATIONS["m05_删除水位范围校验"] = [
 MUTATIONS["m06_dt口径改用time.Local"] = [
     ("sub", 'return ts.In(TraceBodyZone).Format("2006-01-02")',
             'return ts.In(time.Local).Format("2006-01-02")'),
+]
+
+# root 必须是绝对路径 ⇒ TestTraceBodyConfigRootMustBeAbsolute 必须红
+MUTATIONS["m07_root允许相对路径"] = [
+    ("sub", "if cfg.Enabled && !filepath.IsAbs(cfg.Root) {", "if false {"),
+]
+
+# root 不得是文件系统根 ⇒ TestTraceBodyConfigRootRejectsFilesystemRoot 必须红
+MUTATIONS["m08_root允许文件系统根"] = [
+    ("sub", 'if cfg.Enabled && filepath.Clean(cfg.Root) == "/" {', "if false {"),
+]
+
+# trim 后为空必须等同于未设置 ⇒ TestTraceBodyConfigWhitespaceRootIsDisabled 必须红
+MUTATIONS["m09_root不做TrimSpace"] = [
+    ("sub", 'Root:                 strings.TrimSpace(v.GetString("trace_body.root")),',
+            'Root:                 v.GetString("trace_body.root"),'),
 ]
 
 CHECKS = [
@@ -658,6 +734,8 @@ REQUIREMENTS = [
      "mutations": ["m05_删除水位范围校验"], "checks": []},
     {"plan": "计划 2 任务 2 步骤 1 + 全局约束：dt = TS 在 UTC+8 下的日期",
      "mutations": ["m06_dt口径改用time.Local"], "checks": []},
+    {"plan": "计划 2 全局约束：root 必须绝对路径且 Clean != \"/\"，trim 后为空 = 关闭",
+     "mutations": ["m07_root允许相对路径", "m08_root允许文件系统根", "m09_root不做TrimSpace"], "checks": []},
     {"plan": "计划 2 全局约束：TRACE_BODY_ROOT 留空 = 功能关闭（默认值）",
      "mutations": [], "checks": ["doc-默认关闭"]},
 ]
@@ -681,7 +759,7 @@ python3 tools/trace-mutate/trace_mutate.py --repo . \
   --mutation-set tools/trace-mutate/sets/p2-task-2.py --check
 ```
 （`/tmp/p2-task-2-names.txt` 由 `MANIFEST_DERIVATION` 那条 grep 命令产出）
-预期：`--check` 对 6 条变异全部报「唯一定位」。**若某条报定位到 0 处或多处 ⇒ 修正变异字符串（不要改测试）**。
+预期：`--check` 对 9 条变异全部报「唯一定位」。**若某条报定位到 0 处或多处 ⇒ 修正变异字符串（不要改测试）**。
 
 再跑权威表：
 ```bash
@@ -719,6 +797,7 @@ git commit -m "feat(gateway): TRACE_BODY_* 配置解析与 dt 口径（计划 2/
   func traceEventLine(e TraceEvent) []byte   // 一整行 JSON，**不含**结尾换行
   ```
   **不导出**：它是包内实现细节，B 层测试通过 `TraceWriter` 的落盘结果间接观察（见任务 6）；本任务若要直接测它，用**包内**测试文件 `internal/gateway/observability/trace_line_internal_test.go`（`package observability`），并在每个测试函数注释里写明「为什么必须触达未导出的 `traceEventLine`」。
+  **这是一处刻意违反 `docs/guardrails.md` Q3 的例外**（Q3 要求测试放 `tests/`）：`traceEventLine` 未导出，B 层只能间接观察；计划 1 已有同类先例（`internal/tracearchive/testhelpers_test.go`）。该例外**不得静默扩大** —— 只在「必须触达未导出符号」时使用，且必须在交付报告里点名；一旦能改为 `tests/` 下的 B 层用例，就应改。
 
   **键序与既有归档格式一致（规格 §4.1 步骤①）**：`request_id`, `ts`, `request_headers`, `request_body`, `response_body`, `error_code`, `error_message`。
 
@@ -1185,16 +1264,16 @@ git commit -m "feat(gateway): traceEventLine 序列化一整行 JSON（计划 2/
   type SpoolGateOptions struct {
       Root                 string
       DiskWatermarkPercent int
-      ProbeInterval        time.Duration                    // 闰锁中的探针周期（默认 1m）
+      ProbeInterval        time.Duration                    // 闩锁中的探针周期（默认 1m）
       Now                  func() time.Time                 // 可注入（默认 time.Now）
       UsagePercent         func(root string) (float64, error) // 可注入（默认 statfs）
       ProbeWrite           func(root string) error          // 可注入（默认写 .probe 文件）
   }
   type SpoolGate struct{ /* 私有字段 */ }
   func NewSpoolGate(opts SpoolGateOptions) *SpoolGate
-  func (g *SpoolGate) Allow() bool                  // 未闰锁 ⇒ true
+  func (g *SpoolGate) Allow() bool                  // 未闩锁 ⇒ true
   func (g *SpoolGate) Trip(reason string, cause error) bool  // 返回是否**本次**跳变（调用方据此只打印一条日志）
-  func (g *SpoolGate) Tick(now time.Time)           // 未闰锁：查水位；已闰锁：到点探针、成功则解锁
+  func (g *SpoolGate) Tick(now time.Time)           // 未闩锁：查水位；已闩锁：到点探针、成功则解锁
   func (g *SpoolGate) Latched() bool
   func (g *SpoolGate) Reason() string
   func (g *SpoolGate) Stats() GateStats             // Trips / ProbeFailures / LatchedSeconds / UsagePercent
@@ -1216,13 +1295,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeClock 让闰锁的时间语义（探针周期、累计秒数）可确定性断言。
+// fakeClock 让闩锁的时间语义（探针周期、累计秒数）可确定性断言。
 type fakeClock struct{ t time.Time }
 
 func (c *fakeClock) now() time.Time      { return c.t }
 func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
-// countingUsage 记录 statfs 被调用的次数：闰锁期间**不得**再有文件系统调用。
+// countingUsage 记录 statfs 被调用的次数：闩锁期间**不得**再有文件系统调用。
 type countingUsage struct {
 	calls int
 	pct   float64
@@ -1256,7 +1335,7 @@ func newGate(t *testing.T, pct float64, u *countingUsage, p *countingProbe, clk 
 	})
 }
 
-// TestGateTripsOnDiskWatermark 水位超限 ⇒ 闰锁。
+// TestGateTripsOnDiskWatermark 水位超限 ⇒ 闩锁。
 func TestGateTripsOnDiskWatermark(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(0, 0)}
 	u := &countingUsage{pct: 91}
@@ -1264,7 +1343,7 @@ func TestGateTripsOnDiskWatermark(t *testing.T) {
 	g := newGate(t, 0, u, p, clk)
 	require.True(t, g.Allow())
 	g.Tick(clk.now())
-	require.False(t, g.Allow(), "水位 91%% > 90%% ⇒ 必须闰锁")
+	require.False(t, g.Allow(), "水位 91%% > 90%% ⇒ 必须闩锁")
 	require.Contains(t, g.Reason(), "watermark")
 	require.Equal(t, int64(1), g.Stats().Trips)
 }
@@ -1279,7 +1358,7 @@ func TestGateTripIsIdempotentAndReportedOnce(t *testing.T) {
 	require.Equal(t, int64(1), g.Stats().Trips)
 }
 
-// TestGateLatchedDoesNoFilesystemWork 闰锁期间：Allow() 为假、statfs 与探针
+// TestGateLatchedDoesNoFilesystemWork 闩锁期间：Allow() 为假、statfs 与探针
 // 都**只在到点那一刻**调用一次。这一条就是 R9：「不要每个请求都重试」。
 func TestGateLatchedDoesNoFilesystemWork(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(0, 0)}
@@ -1290,7 +1369,7 @@ func TestGateLatchedDoesNoFilesystemWork(t *testing.T) {
 	require.False(t, g.Allow())
 	usageAfterTrip, probeAfterTrip := u.calls, p.calls
 
-	// 闰锁期间大量请求：只读 Allow()，不得触发任何文件系统调用
+	// 闩锁期间大量请求：只读 Allow()，不得触发任何文件系统调用
 	for i := 0; i < 1000; i++ {
 		require.False(t, g.Allow())
 	}
@@ -1303,7 +1382,35 @@ func TestGateLatchedDoesNoFilesystemWork(t *testing.T) {
 	require.Equal(t, probeAfterTrip, p.calls, "未到探针周期不得探针")
 }
 
-// TestGateProbeFailureKeepsLatched 探针失败 ⇒ 保持闰锁，并计入 ProbeFailures。
+// TestGateProbeRespectsInterval 是本任务**唯一**专门盯探针周期的用例
+//（集合里的 m04「探针周期改为 0」必须杀死它）。
+// 它与 TestGateLatchedDoesNoFilesystemWork 的区别：后者断言的主语是「Allow() 不做 IO」，
+// 周期只是顺带检查；这条把「未到周期不得探针 / 到周期恰好探一次 / 距上次不足周期不得重复」
+// 做成显式三段，使「摘掉周期判断」这一类变异有唯一归属的用例，
+// 而不是靠一条复合用例转红来推断（复合用例的遮蔽效应见全局约束的证据制度第 3 条）。
+func TestGateProbeRespectsInterval(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	u := &countingUsage{pct: 95}
+	p := &countingProbe{}
+	g := newGate(t, 0, u, p, clk)
+	g.Tick(clk.now()) // 未闩锁 → 水位超限 ⇒ 闩锁，并记下 lastProbe
+	require.False(t, g.Allow())
+	afterTrip := p.calls
+
+	clk.advance(59 * time.Second)
+	g.Tick(clk.now())
+	require.Equal(t, afterTrip, p.calls, "未到 ProbeInterval（59s < 60s）不得探针")
+
+	clk.advance(2 * time.Second) // 累计 61s > 60s
+	g.Tick(clk.now())
+	require.Equal(t, afterTrip+1, p.calls, "到 ProbeInterval 必须恰好探针一次")
+
+	clk.advance(1 * time.Second) // 距上次探针仅 1s
+	g.Tick(clk.now())
+	require.Equal(t, afterTrip+1, p.calls, "距上次探针不足周期不得重复探针")
+}
+
+// TestGateProbeFailureKeepsLatched 探针失败 ⇒ 保持闩锁，并计入 ProbeFailures。
 func TestGateProbeFailureKeepsLatched(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(0, 0)}
 	p := &countingProbe{fail: errors.New("read-only file system")}
@@ -1333,7 +1440,7 @@ func TestGateProbeSuccessUnlatches(t *testing.T) {
 	require.Empty(t, g.Reason())
 }
 
-// TestGateWatermarkAloneDoesNotUnlatch：水位落回但探针仍失败 ⇒ 保持闰锁。
+// TestGateWatermarkAloneDoesNotUnlatch：水位落回但探针仍失败 ⇒ 保持闩锁。
 // 「水位」与「可写」是两件事：水位可能因别的进程写入而回落，但本进程仍无权限。
 func TestGateWatermarkAloneDoesNotUnlatch(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(0, 0)}
@@ -1364,27 +1471,31 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 )
 
-// ErrSpoolLatched 表示正文落盘已被闰锁关闭：调用方**不得**再尝试写 spool，
-// 而应把该行标为 body_missing=true（规格 §15.1 R9 的降级约定）。
-var ErrSpoolLatched = errors.New("observability: 正文落盘已闰锁")
+// 【本文件的硬约束：不得出现 os.MkdirAll】网关侧唯一的建目录动作在冻结包里
+//（`internal/tracearchive/writer.go:489`），网关自己**一个目录都不建**。
+// 一旦这里出现 MkdirAll（例如早期的探针实现），它会把消失的挂载点在容器可写层
+// 重新建回来，从而掩盖 D49 要检测的「运行中挂载消失」。见 defaultProbeWrite。
 
-// GateStats 是闰锁状态的可观测快照（规格 §9.3：降级必须有明确可观测信号）。
+// ErrSpoolLatched 表示正文落盘已被闩锁关闭：调用方**不得**再尝试写 spool，
+// 而应把该行标为 body_missing=true（规格 §15.1 R9 的降级约定）。
+var ErrSpoolLatched = errors.New("observability: 正文落盘已闩锁")
+
+// GateStats 是闩锁状态的可观测快照（规格 §9.3：降级必须有明确可观测信号）。
 type GateStats struct {
 	Latched        bool
 	Reason         string
 	Trips          int64   // 累计跳变次数（不是行数）
 	ProbeFailures  int64
-	LatchedSeconds int64   // 累计闰锁秒数
+	LatchedSeconds int64   // 累计闩锁秒数
 	UsagePercent   float64 // 最近一次观测到的水位
 }
 
-// SpoolGateOptions 描述水位与闰锁行为。三个函数型字段都可注入，
+// SpoolGateOptions 描述水位与闩锁行为。三个函数型字段都可注入，
 // 这是「测试不得依赖真实盘满」的实现方式（注入水位/探针，而非 mock 文件系统）。
 type SpoolGateOptions struct {
 	Root                 string
@@ -1439,8 +1550,8 @@ func (g *SpoolGate) Allow() bool {
 	return !g.latched
 }
 
-// Trip 进入闰锁。返回值表示「本次是否发生了跳变」——调用方据此恰好打印一条
-// ERROR 日志；闰锁期间的每一行都打日志会淹没日志（规格 §9.3 要的是信号，不是噪音）。
+// Trip 进入闩锁。返回值表示「本次是否发生了跳变」——调用方据此恰好打印一条
+// ERROR 日志；闩锁期间的每一行都打日志会淹没日志（规格 §9.3 要的是信号，不是噪音）。
 func (g *SpoolGate) Trip(reason string, cause error) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -1460,8 +1571,8 @@ func (g *SpoolGate) Trip(reason string, cause error) bool {
 
 // Tick 是周期评估入口（由 spooler 的 flush 循环调用，**不在请求路径上**）。
 //
-//   - 未闰锁：查一次水位，超限则闰锁；
-//   - 已闰锁：到点做一次探针；**水位回落**与**探针成功**必须同时成立才解锁。
+//   - 未闩锁：查一次水位，超限则闩锁；
+//   - 已闩锁：到点做一次探针；**水位回落**与**探针成功**必须同时成立才解锁。
 //
 // 【为什么解锁要两个条件】水位回落只说明盘上有空间了，不说明本进程能写
 // （权限、只读挂载、目录被删都可能）。反之探针成功也可能只是写进了别的文件系统。
@@ -1482,9 +1593,9 @@ func (g *SpoolGate) Tick(now time.Time) {
 				g.trips++
 			}
 		}
-		// statfs 失败（例如根目录不存在）本身不闰锁：真正的判据是「能不能写」，
+		// statfs 失败（例如根目录不存在）本身不闩锁：真正的判据是「能不能写」，
 		// 由第一次 Append 失败或探针来定。这里保持沉默是**故意**的——
-		// 把「statfs 失败」也当闰锁会让一个权限问题伪装成磁盘问题。
+		// 把「statfs 失败」也当闩锁会让一个权限问题伪装成磁盘问题。
 		return
 	}
 
@@ -1543,20 +1654,24 @@ func defaultUsagePercent(root string) (float64, error) {
 	return float64(total-avail) / float64(total) * 100, nil
 }
 
-// defaultProbeWrite 是恢复探针：在 spool 目录下建一个临时文件、写一个字节、删掉。
+// defaultProbeWrite 是恢复探针：在正文根目录下建一个临时文件、写一个字节、删掉。
 //
-// 【为什么探针不放在 <root> 根目录】根目录可能是个只读挂载点而 spool 子目录可写，
-// 反之亦然；探针必须落在**真正要写的那棵树**里。目录用 MkdirAll 创建：
-// 与 Writer.ensureBlockLocked 的行为一致（writer.go:489）。
+// 【探针绝不得创建根目录（登记 D49 的一部分）】这里**必须**用
+// `os.CreateTemp(root, …)` 这种「父目录必须已存在」的写法，**不得**先
+// `os.MkdirAll(root/spool)` 再建文件：MkdirAll 会把缺失的**父目录链**一路建出来，
+// 也就是把消失的挂载点在**容器可写层**重新建回来 —— 探针会因此「成功」，
+// 把 D49 要检测的「运行中挂载消失」掩盖掉（更糟：它自己制造了那个容器层目录）。
+// 用 CreateTemp 时根目录不存在 ⇒ 直接 ENOENT ⇒ 探针失败 ⇒ 保持闩锁，这才是要的语义。
+//
+// 【为什么探针就放在 <root> 而不是 spool 子目录】根目录可能是个只读挂载点而
+// spool 子目录可写，反之亦然；但 spool 与 dt/inst 子目录都不可能各自是独立挂载点
+//（`/datalog` 才是挂载点，其余都是它上面的普通目录），因此在同一文件系统上探测即可，
+// 而放在 <root> 恰好满足「不创建目录」这一条硬约束。
 //
 // 【为什么探针只写 1 字节】恢复判定要的是「写权限 + 空间」这两件事，
 // 不需要复现真实写入量；写多了会在接近满盘时把水位推得更高，形成抖动。
 func defaultProbeWrite(root string) error {
-	dir := filepath.Join(root, "spool")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("建 spool 目录失败: %w", err)
-	}
-	f, err := os.CreateTemp(dir, ".probe-*")
+	f, err := os.CreateTemp(root, ".probe-*")
 	if err != nil {
 		return fmt.Errorf("建探针文件失败: %w", err)
 	}
@@ -1574,12 +1689,13 @@ func defaultProbeWrite(root string) error {
 }
 ```
 
-（`.probe-*` 不会被 sealer 当成待封块：计划 1 的 `ListPendingSeals` 只收 `part-NNNNNN.jsonl` 形式的文件名，`.probe-` 前缀不合 `parsePartSeq` 的六位数字要求。）
+（探针文件是 `<root>/.probe-*`，不在 `spool/dt=*/inst=*` 之下，因此 `ListPendingSeals` 连看都不会看到它；
+文件名前缀 `.probe-` 也不合 `parsePartSeq` 的六位数字要求，双重保证不会被当成待封块。）
 
 - [ ] **步骤 4：运行测试并确认它通过**
 
 运行：`go test ./tests/gateway/observability/ -run 'TestGate' -v`
-预期：PASS（6 个顶层用例）。
+预期：PASS（7 个顶层用例）。
 
 - [ ] **步骤 5：写本任务的变异集合**
 
@@ -1600,7 +1716,7 @@ MUTATIONS["m02_Trip不再幂等"] = [
 MUTATIONS["m03_Allow每次查水位"] = [
     ("sub", "return !g.latched", "_, _ = g.opts.UsagePercent(g.opts.Root); return !g.latched"),
 ]
-# 探针周期 ⇒ 同上用例必须红
+# 探针周期 ⇒ TestGateProbeRespectsInterval 必须红
 MUTATIONS["m04_探针周期改为0"] = [
     ("sub", "if now.Sub(g.lastProbe) < g.opts.ProbeInterval {", "if false {"),
 ]
@@ -1611,9 +1727,41 @@ MUTATIONS["m05_解锁只看探针"] = [
 MUTATIONS["m06_解锁只看水位"] = [
     ("sub", "if probeErr != nil {\n\t\tg.probeFailures++\n\t\treturn\n\t}", "if false {\n\t\tg.probeFailures++\n\t\treturn\n\t}"),
 ]
+
+CHECKS = [
+    {
+        "name": "网关侧不出现 MkdirAll",
+        "file": "internal/gateway/observability/spool_gate.go",
+        "pattern": r"os\.MkdirAll",
+        "expect": "absent",
+        "why": (
+            "网关自己一个目录都不建：唯一的 MkdirAll 在冻结包里（writer.go:489，见 D49）。"
+            "网关侧若出现 MkdirAll（最可能出现在恢复探针里），会把消失的挂载点在容器可写层"
+            "重新建回来，使运行中挂载消失**无法被检测**。"
+        ),
+    },
+]
+
+# 计划要求 → 集合条目的映射表：有缺口（有要求无条目）整轮失败。
+REQUIREMENTS = [
+    {"plan": "规格 §15.1 R9：水位超限必须放弃正文（本计划用注入水位表达）",
+     "mutations": ["m01_水位比较改为永不触发"], "checks": []},
+    {"plan": "计划 2 任务 4：闩锁跳变必须幂等（日志只打一条的前提）",
+     "mutations": ["m02_Trip不再幂等"], "checks": []},
+    {"plan": "规格 §15.1 R9：闩锁期间不得有任何文件系统调用（Allow 零 IO）",
+     "mutations": ["m03_Allow每次查水位"], "checks": []},
+    {"plan": "计划 2 任务 4：探针周期（未到不探、到点探一次、不足周期不重复）",
+     "mutations": ["m04_探针周期改为0"], "checks": []},
+    {"plan": "计划 2 任务 4：恢复必须是「探针成功 且 水位回落」两个条件",
+     "mutations": ["m05_解锁只看探针", "m06_解锁只看水位"], "checks": []},
+    {"plan": "计划 2 全局约束 / D49：网关侧（含探针）绝不得创建目录",
+     "mutations": [], "checks": ["网关侧不出现 MkdirAll"]},
+]
+
+EXPECTED_GREEN = {}
 ```
 
-`EXPECTED_GREEN = {}`。**注意**：`m02` / `m03` / `m06` 的 `sub` 目标串含缩进与换行，必须与实现逐字一致；`--check` 报「定位到 0/多处」时就地修正**变异字符串**（不要改实现去迁就）。
+`EXPECTED_GREEN = {}`（零覆盖必须登记理由；本集合预期没有条目转绿）。**注意**：`m02` / `m03` / `m06` 的 `sub` 目标串含缩进与换行，必须与实现逐字一致；`--check` 报「定位到 0/多处」时就地修正**变异字符串**（不要改实现去迁就）。
 
 - [ ] **步骤 6：跑变异集合**
 
@@ -1626,7 +1774,7 @@ MUTATIONS["m06_解锁只看水位"] = [
 git add internal/gateway/observability/spool_gate.go \
         tests/gateway/observability/spool_gate_test.go \
         tools/trace-mutate/sets/p2-task-4.py
-git commit -m "feat(gateway): SpoolGate 磁盘水位与写失败闰锁（计划 2/4 任务 4）
+git commit -m "feat(gateway): SpoolGate 磁盘水位与写失败闩锁（计划 2/4 任务 4）
 
 规格 §15.1 R9：盘满后必须放弃正文并置 body_missing=true，而不是每请求重试
 （每次重试都会付出一次 O(n) 目录扫描，part 序号与 dentry 无界增长）。
@@ -1654,10 +1802,11 @@ git commit -m "feat(gateway): SpoolGate 磁盘水位与写失败闰锁（计划 
       FlushInterval time.Duration // ≤1m
       Gate          *SpoolGate    // nil ⇒ 内部建一个默认的
       Now           func() time.Time
+      RootCheck     func(root string) error // nil ⇒ stat + IsDir；测试注入「根目录消失」
   }
   type TraceSpooler struct{ /* 私有 */ }
   func NewTraceSpooler(opts TraceSpoolerOptions) (*TraceSpooler, error)
-  func (s *TraceSpooler) AppendLine(dt string, line []byte) (ta.Ref, error) // 闰锁中返回 ErrSpoolLatched
+  func (s *TraceSpooler) AppendLine(dt string, line []byte) (ta.Ref, error) // 闩锁中返回 ErrSpoolLatched
   func (s *TraceSpooler) FlushAndRoll() error   // 无条件 flush + 对达阈值块滚动
   func (s *TraceSpooler) Run(ctx context.Context) // 周期循环，退出时 Close
   func (s *TraceSpooler) Close() error
@@ -1667,7 +1816,7 @@ git commit -m "feat(gateway): SpoolGate 磁盘水位与写失败闰锁（计划 
 
 - [ ] **步骤 1：写失败的测试**
 
-新建 `tests/gateway/observability/spooler_test.go`。**七个用例，其中「空块不滚动」与「滚动前必须先落盘」是承重的**：
+新建 `tests/gateway/observability/spooler_test.go`。**十一个用例，其中「空块不滚动」、「滚动前必须先落盘」、「运行中挂载消失即闩锁」是承重的**：
 
 ```go
 package observability_test
@@ -1803,9 +1952,12 @@ func TestSpoolerRollsOnDTChange(t *testing.T) {
 }
 
 // TestSpoolerRefusesMissingRoot 是**安全**用例：Root 不存在时构造失败，
-// 绝不隐式创建。理由见全局约束：容器里以 root 跑，MkdirAll 会在容器可写层
-// 建出一个不在挂载点上的 /datalog，把正文写到宿主根文件系统上 ——
-// 这正是 2026-09-24 `/` 盘被写满的同一类事故。
+// 构造期不做任何隐式创建（require.NoDirExists 盯的就是这一点）。
+//
+// 【本用例**不能**证明什么 —— 必须说清（登记 D49）】它只覆盖「**启动时**未挂载」。
+// 网关依赖的冻结包在**每次建块**时都会自己 MkdirAll（`writer.go:489`），
+// 因此「**运行中**挂载消失」由 TestSpoolerLatchesWhenRootDisappears 覆盖；
+// 两条用例合起来才是完整的边界。
 func TestSpoolerRefusesMissingRoot(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "nope")
 	_, err := gwobs.NewTraceSpooler(gwobs.TraceSpoolerOptions{
@@ -1814,6 +1966,143 @@ func TestSpoolerRefusesMissingRoot(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.NoDirExists(t, root, "构造失败不得留下自建的目录")
+}
+
+// TestSpoolerRefusesFilesystemRoot 固定第二道防线：root 不得是文件系统根
+//（第一道在 config.LoadTraceBodyConfig）。"/" 能通过「是个目录」的检查，
+// 于是 spool 会建在宿主根文件系统上（/spool/dt=…）。
+func TestSpoolerRefusesFilesystemRoot(t *testing.T) {
+	for _, bad := range []string{"/", "//", "/./"} {
+		_, err := gwobs.NewTraceSpooler(gwobs.TraceSpoolerOptions{
+			Root: bad, Inst: "blue", BlockBytes: 1 << 20,
+			RollInterval: time.Hour, FlushInterval: time.Minute,
+		})
+		require.Error(t, err, "root=%q（Clean 后为 /）必须被拒绝", bad)
+	}
+}
+
+// TestSpoolerLatchesWhenRootDisappears 覆盖**运行中挂载消失**（登记 D49）：
+// 复检（周期 tick / 滚动前 / Append 失败后）必须让网关进入闩锁并停止写盘，
+// 之后所有行由上层标成 body_missing=true。
+//
+// 【为什么不依赖真实挂载】用可注入的 RootCheck 表达「根目录消失」，
+// 与 SpoolGate 用可注入的水位表达「盘满」是同一手法：等价的是**状态**、
+// 不是成因 —— 报告里必须这样写，不得宣称已验证真实 umount。
+func TestSpoolerLatchesWhenRootDisappears(t *testing.T) {
+	root := t.TempDir()
+	gone := false
+	s, err := gwobs.NewTraceSpooler(gwobs.TraceSpoolerOptions{
+		Root: root, Inst: "blue", BlockBytes: 1 << 20,
+		RollInterval: time.Hour, FlushInterval: time.Minute,
+		RootCheck: func(string) error {
+			if gone {
+				return os.ErrNotExist // 等价于挂载点消失后 stat 失败
+			}
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	_, err = s.AppendLine("2026-09-24", []byte(`{"a":1}`))
+	require.NoError(t, err)
+	require.True(t, s.Gate().Allow())
+
+	gone = true
+	// 周期 tick（即 FlushAndRoll）必须复检并闩锁
+	require.NoError(t, s.FlushAndRoll())
+	require.False(t, s.Gate().Allow(), "根目录消失后必须闩锁")
+	require.Contains(t, s.Gate().Reason(), "root_unavailable")
+
+	// 闩锁之后不得再写盘：第二行被拒绝，文件仍是 flush 后的内容
+	_, err = s.AppendLine("2026-09-24", []byte(`{"a":2}`))
+	require.ErrorIs(t, err, gwobs.ErrSpoolLatched)
+	require.Equal(t, "{\"a\":1}\n",
+		mustRead(t, filepath.Join(root, "spool", "dt=2026-09-24", "inst=blue", "part-000000.jsonl")))
+}
+
+// TestSpoolerChecksRootAfterAppendFailure 固定「**任何 Append 失败**都要复检根目录」：
+// 这一条把「盘满」与「挂载消失」在闩锁原因上分开 —— 两者都要闩锁，
+// 但运维动作完全不同（清空间 vs 重新挂载）。
+//
+// 【怎么确定性地让 Append 失败】在 `<root>/spool/` 下放一个**普通文件**占住 dt 目录名：
+// ensureBlockLocked 的 os.MkdirAll(filepath.Dir(spoolPath)) 会以 ENOTDIR 失败
+//（writer.go:489），于是 Append 返回错误、且**不会**毒化任何已有块。
+// 这不依赖真实盘满，也不依赖真实 umount（等价的是状态，不是成因）。
+func TestSpoolerChecksRootAfterAppendFailure(t *testing.T) {
+	root := t.TempDir()
+	gone := false
+	s, err := gwobs.NewTraceSpooler(gwobs.TraceSpoolerOptions{
+		Root: root, Inst: "blue", BlockBytes: 1 << 20,
+		RollInterval: time.Hour, FlushInterval: time.Minute,
+		RootCheck: func(string) error {
+			if gone {
+				return os.ErrNotExist
+			}
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	_, err = s.AppendLine("2026-09-24", []byte(`{"a":1}`))
+	require.NoError(t, err)
+
+	// 用普通文件占住下一个 dt 的目录名 ⇒ 下一次 Append 必然失败
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "spool"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "spool", "dt=2026-09-25"), []byte("x"), 0o644))
+
+	gone = true
+	_, err = s.AppendLine("2026-09-25", []byte(`{"a":2}`))
+	require.Error(t, err)
+	require.False(t, s.Gate().Allow(), "Append 失败后必须闩锁")
+	require.Contains(t, s.Gate().Reason(), "root_unavailable",
+		"根目录复检失败时必须报 root_unavailable，而不是笼统的 append_failed")
+}
+
+// TestSpoolerDoesNotRollWhileRootUnavailable 固定「根目录不可用时不做结构性写入」：
+// 滚动本身只关句柄，但紧接着的 Append 会建块 ⇒ 触发冻结包的 MkdirAll，
+// 在容器可写层重建 root。所以根目录不可用的那一轮**不滚动**。
+//
+// 【可观测量是 part 序号】根目录与闸门恢复后，如果那一轮滚过，新行会落在
+// part-000001；没滚则仍落在 part-000000。这是该分支唯一的可观测差异，故用它判定
+//（否则这条守卫在测试里不可见，会变成一条无法证明承重的分支）。
+func TestSpoolerDoesNotRollWhileRootUnavailable(t *testing.T) {
+	root := t.TempDir()
+	gone := false
+	s, err := gwobs.NewTraceSpooler(gwobs.TraceSpoolerOptions{
+		Root: root, Inst: "blue", BlockBytes: 1 << 30,
+		RollInterval:  time.Nanosecond, // 任何时刻都已达滚动阈值
+		FlushInterval: time.Minute,
+		RootCheck: func(string) error {
+			if gone {
+				return os.ErrNotExist
+			}
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	_, err = s.AppendLine("2026-09-24", []byte(`{"a":1}`))
+	require.NoError(t, err)
+
+	gone = true
+	require.NoError(t, s.FlushAndRoll()) // 已达阈值，但根目录不可用 ⇒ 不滚动
+	require.False(t, s.Gate().Allow())
+
+	// 根目录与闸门都恢复：此时若那一轮滚过，新行会进 part-000001
+	gone = false
+	s.Gate().Tick(time.Now().Add(2 * time.Minute)) // 越过 ProbeInterval，真实探针会成功
+	require.True(t, s.Gate().Allow(), "前置条件：闸门必须已恢复")
+
+	_, err = s.AppendLine("2026-09-24", []byte(`{"a":2}`))
+	require.NoError(t, err)
+
+	p0 := filepath.Join(root, "spool", "dt=2026-09-24", "inst=blue", "part-000000.jsonl")
+	require.FileExists(t, p0)
+	require.NoFileExists(t, filepath.Join(root, "spool", "dt=2026-09-24", "inst=blue", "part-000001.jsonl"),
+		"根目录不可用的那一轮不得滚动")
 }
 
 func mustRead(t *testing.T, p string) string {
@@ -1841,6 +2130,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -1856,6 +2146,7 @@ type TraceSpoolerOptions struct {
 	FlushInterval time.Duration
 	Gate          *SpoolGate
 	Now           func() time.Time
+	RootCheck     func(root string) error
 }
 
 // SpoolerStats 是 spool 侧的可观测快照。
@@ -1873,6 +2164,8 @@ type SpoolerStats struct {
 type TraceSpooler struct {
 	w             *ta.Writer
 	gate          *SpoolGate
+	root          string
+	rootCheck     func(root string) error
 	flushInterval time.Duration
 	now           func() time.Time
 
@@ -1883,17 +2176,27 @@ type TraceSpooler struct {
 
 // NewTraceSpooler 构造 spool 写入器。
 //
-// 【为什么这里必须 os.Stat 而不是直接开工】网关容器以 root 运行，
-// os.MkdirAll 会在**容器可写层**建出一个不在挂载点上的 /datalog ——
-// 正文会写到宿主根文件系统上，把 `/` 写满。R8/D7 的修复目标是「不再丢正文」，
-// 而写错文件系统是把事故换个方向重演。因此：根目录必须**已经存在**且是目录，
-// 否则构造失败，由 main 记录 ERROR 并退回既有路径（正文仍写 PG，不丢数据）。
+// 【这里的 os.Stat 能挡什么、挡不住什么 —— 必须说准】网关容器以 root 运行，
+// `os.MkdirAll` 会在**容器可写层**建出一个不在挂载点上的 /datalog ——
+// 正文会写到宿主根文件系统上，把 `/` 写满。但构造期的检查**只能挡「启动时未挂载」**：
+// 网关依赖的**冻结包自己每次建块都会 MkdirAll**（`internal/tracearchive/writer.go:489`，
+// 见 checkRoot 的注释），所以「**运行中**挂载消失」挡不住，由周期复检 + 闩锁兜底
+// （残余窗口 = 一个 tick）。构造失败时由 main 记录 ERROR 并退回既有路径
+// （正文仍写 PG，不丢数据）。
 func NewTraceSpooler(opts TraceSpoolerOptions) (*TraceSpooler, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
 	if opts.Gate == nil {
 		opts.Gate = NewSpoolGate(SpoolGateOptions{Root: opts.Root, DiskWatermarkPercent: 90})
+	}
+	if opts.RootCheck == nil {
+		opts.RootCheck = defaultRootCheck
+	}
+	// 第二道防线（第一道在 config.LoadTraceBodyConfig）：文件系统根绝不可作 root。
+	// "/" 能通过下面「是个目录」的检查，于是 spool 会建在宿主根文件系统上。
+	if filepath.Clean(opts.Root) == "/" {
+		return nil, fmt.Errorf("正文根目录不得是文件系统根 %q：spool 会被建在宿主根文件系统上", opts.Root)
 	}
 	w, err := ta.NewWriter(ta.WriterOptions{
 		Root:         opts.Root,
@@ -1904,12 +2207,8 @@ func NewTraceSpooler(opts TraceSpoolerOptions) (*TraceSpooler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("构造 tracearchive.Writer 失败: %w", err)
 	}
-	info, err := os.Stat(opts.Root)
-	if err != nil {
+	if err := opts.RootCheck(opts.Root); err != nil {
 		return nil, fmt.Errorf("正文根目录 %s 不可用（未挂载？）: %w", opts.Root, err)
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("正文根目录 %s 不是目录", opts.Root)
 	}
 	if opts.FlushInterval <= 0 {
 		opts.FlushInterval = time.Minute
@@ -1917,16 +2216,53 @@ func NewTraceSpooler(opts TraceSpoolerOptions) (*TraceSpooler, error) {
 	return &TraceSpooler{
 		w:             w,
 		gate:          opts.Gate,
+		root:          opts.Root,
+		rootCheck:     opts.RootCheck,
 		flushInterval: opts.FlushInterval,
 		now:           opts.Now,
 	}, nil
+}
+
+// defaultRootCheck 复检根目录：必须存在且是目录。
+func defaultRootCheck(root string) error {
+	info, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", root, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s 不是目录", root)
+	}
+	return nil
+}
+
+// checkRoot 在**周期 tick、滚动前、以及任何 Append 失败**时复检根目录，失败即闩锁
+// （`body_missing=true`、停止写盘、响亮 ERROR）。返回根目录是否可用。
+//
+// 【为什么必须有周期复检（登记 D49）】网关自身不调用 MkdirAll，但它依赖的**冻结包会**：
+// `internal/tracearchive/writer.go:471-521` 的 ensureBlockLocked 在**每次建块**时执行
+// `os.MkdirAll(filepath.Dir(spoolPath), 0o755)`（`:489`）。于是运行中挂载消失后，
+// 下一次 Append 会在**容器可写层**重建 /datalog，正文写进容器层、随容器重建丢失。
+// 后果是**响亮的**：读取按 `(dt, inst, part, row)` 定位不到 ⇒ `ErrNotArchived`（500 类、
+// 需人工介入），**不是**静默读到错误行 —— 不要把它说成静默丢数据。
+// 残余窗口 = 一个 tick（复检周期即 FlushInterval，≤1m）：窗口内最多写坏一个 tick 的量，
+// 且这些行读回来是响亮的 500。
+//
+// 【为什么不改冻结包】那个 MkdirAll 是它「目录即写指针」契约（`nextSeqLocked`）的一部分，
+// 且 `internal/tracearchive` 已附 142 条变异证据（R11 v3）⇒ 不在本计划内改动。
+func (s *TraceSpooler) checkRoot() bool {
+	err := s.rootCheck(s.root)
+	if err == nil {
+		return true
+	}
+	s.gate.Trip("root_unavailable", err)
+	return false
 }
 
 func (s *TraceSpooler) Gate() *SpoolGate { return s.gate }
 
 // AppendLine 追加一行正文，返回定位键。
 //
-// 闰锁中直接返回 ErrSpoolLatched，**不触碰文件系统**：调用方据此把该行标成
+// 闩锁中直接返回 ErrSpoolLatched，**不触碰文件系统**：调用方据此把该行标成
 // body_missing=true（规格 §15.1 R9）。
 func (s *TraceSpooler) AppendLine(dt string, line []byte) (ta.Ref, error) {
 	if !s.gate.Allow() {
@@ -1934,7 +2270,13 @@ func (s *TraceSpooler) AppendLine(dt string, line []byte) (ta.Ref, error) {
 	}
 	ref, err := s.w.Append(dt, line)
 	if err != nil {
-		// 写失败 ⇒ 立即闰锁。下一个事件不会再试（R9），
+		// 任何 Append 失败都复检根目录：把「盘满」与「挂载消失」分开。
+		// 两者都要闩锁，但运维动作完全不同（清空间 vs 重新挂载），
+		// 而闩锁原因会进 ERROR 日志。
+		if !s.checkRoot() {
+			return ta.Ref{}, fmt.Errorf("%w（原因：%s）", ErrSpoolLatched, s.gate.Reason())
+		}
+		// 写失败 ⇒ 立即闩锁。下一个事件不会再试（R9），
 		// 直到探针确认可写为止；这段时间里所有行都走 body_missing。
 		s.gate.Trip("append_failed", err)
 		return ta.Ref{}, err
@@ -1969,6 +2311,15 @@ func (s *TraceSpooler) AppendLine(dt string, line []byte) (ta.Ref, error) {
 // 因此本函数的实现次序（先 flush、再 MarkSealed）是承重的，
 // 且由 TestSpoolerRollLeavesCompleteSpoolAndNeverAppendsAgain 固定。
 func (s *TraceSpooler) FlushAndRoll() error {
+	// ① 先复检根目录（每个 tick 一次；一次 stat 在写协程上，开销可忽略）。
+	//    失败 ⇒ 闩锁，并且**本轮不滚动**：滚动本身只关句柄，但紧接着的 Append
+	//    会建块 ⇒ 触发冻结包的 MkdirAll，在容器可写层重建 root。
+	//    闩锁已经挡住了 Append，这里再挡一次滚动，让「根目录不可用时不做任何
+	//    结构性写入」这条边界更清楚。
+	rootOK := s.checkRoot()
+
+	// ② flush 无条件执行（规格 §7.1）：即使根目录不可用也要把已接收的行交给
+	//    fd，写入现有句柄不会新建任何目录。
 	tasks, err := s.w.PendingSeals()
 	if err != nil {
 		// flush 失败必须上抛：sealer 直接读 spool，缓冲没落盘它会把
@@ -1979,6 +2330,9 @@ func (s *TraceSpooler) FlushAndRoll() error {
 	s.flushes++
 	s.mu.Unlock()
 
+	if !rootOK {
+		return nil
+	}
 	for _, task := range tasks {
 		// 无返回值：签名是 func (w *Writer) MarkSealed(dt string, part int)。
 		// close/Flush 的错误只能丢弃（writer.go:395-419 的契约注释已登记这一点，
@@ -1991,10 +2345,16 @@ func (s *TraceSpooler) FlushAndRoll() error {
 	return nil
 }
 
-// Run 是周期循环：每个 FlushInterval 做一次「探针评估 + 无条件 flush + 滚动判定」。
+// Run 是周期循环：每个 FlushInterval 做一次「根目录复检 + 探针评估 + 无条件 flush + 滚动判定」。
 //
-// 这两个动作合并在同一个 tick 里是刻意的：滚动必须发生在 flush 之后
+// 这三个动作合并在同一个 tick 里是刻意的：滚动必须发生在 flush 之后
 //（先落盘、再让 sealer 可能看见），而 flush 本身由 PendingSeals 完成。
+//
+// 【滚动的精确上界】判定在 tick 上做，而 tick 粒度是 FlushInterval ⇒
+// **实际滚动间隔 ≤ RollInterval + FlushInterval = 1h + 1m**。
+// R8 要求的是「滚动间隔 ≤1h 且**严格小于** minAge(3h)」；1h1m 仍远小于 3h，
+// 因此这个上界是安全的 —— 但必须写明，因为它决定了 D7 的残余窗口：
+// 网关持有某个 part 的 fd 的最长时间是 1h1m，而 sealer 要等 mtime + 3h 才会碰它。
 func (s *TraceSpooler) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.flushInterval)
 	defer ticker.Stop()
@@ -2025,7 +2385,7 @@ func (s *TraceSpooler) Stats() SpoolerStats {
 - [ ] **步骤 4：运行测试并确认它通过**
 
 运行：`go test ./tests/gateway/observability/ -run 'TestSpooler' -v`
-预期：PASS（7 个顶层用例）。
+预期：PASS（11 个顶层用例）。
 
 - [ ] **步骤 5：写本任务的变异集合**
 
@@ -2034,30 +2394,48 @@ func (s *TraceSpooler) Stats() SpoolerStats {
 ```python
 MUTATIONS = {}
 
-# 根目录必须存在 ⇒ TestSpoolerRefusesMissingRoot 必须红
-MUTATIONS["m01_删除根目录存在性检查"] = [
-    ("cut", "\tinfo, err := os.Stat(opts.Root)", "\treturn &TraceSpooler{w: w, gate: opts.Gate, flushInterval: opts.FlushInterval, now: opts.Now}, nil\n\tinfo, err := os.Stat(opts.Root)"),
+# ① 启动期的根目录检查 ⇒ TestSpoolerRefusesMissingRoot 必须红
+#（注意：它只覆盖「启动时未挂载」；运行中消失由 ③④ 覆盖，见 D49）
+MUTATIONS["m01_删除启动期根目录检查"] = [
+    ("sub", "if err := opts.RootCheck(opts.Root); err != nil {", "if false {"),
 ]
-# 闰锁时不得触碰文件系统 ⇒
-# TestSpoolerLatchedAppendDoesNotTouchDisk 必须红
-MUTATIONS["m02_闰锁时仍然尝试写入"] = [
+# ② root 不得是文件系统根（第二道防线）⇒ TestSpoolerRefusesFilesystemRoot 必须红
+MUTATIONS["m02_允许文件系统根"] = [
+    ("sub", 'if filepath.Clean(opts.Root) == "/" {', "if false {"),
+]
+# ③ 周期 tick 与滚动前必须复检根目录（D49）⇒ TestSpoolerLatchesWhenRootDisappears 必须红
+MUTATIONS["m03_滚动前不复检根目录"] = [
+    ("sub", "rootOK := s.checkRoot()", "rootOK := true"),
+]
+# ④ 根目录不可用的那一轮不得滚动（避免随后的 Append 触发 MkdirAll 重建 root）
+#    ⇒ TestSpoolerDoesNotRollWhileRootUnavailable 必须红（可观测量 = part 序号）
+MUTATIONS["m04_根目录不可用时仍然滚动"] = [
+    ("sub", "if !rootOK {\n\t\treturn nil\n\t}", "if false {\n\t\treturn nil\n\t}"),
+]
+# ⑤ 任何 Append 失败都要复检根目录（把「盘满」与「挂载消失」分开）
+#    ⇒ TestSpoolerChecksRootAfterAppendFailure 必须红
+MUTATIONS["m05_Append失败后不复检根目录"] = [
+    ("sub", "if !s.checkRoot() {", "if false {"),
+]
+# ⑥ 闩锁时不得触碰文件系统 ⇒ TestSpoolerLatchedAppendDoesNotTouchDisk 必须红
+MUTATIONS["m06_闩锁时仍然尝试写入"] = [
     ("sub", "if !s.gate.Allow() {", "if false {"),
 ]
-# 写失败必须闰锁 ⇒ 同用例必须红
-MUTATIONS["m03_写失败不闰锁"] = [
+# ⑦ 写失败必须闩锁 ⇒ 同上用例必须红
+MUTATIONS["m07_写失败不闩锁"] = [
     ("sub", "s.gate.Trip(\"append_failed\", err)", "_ = err"),
 ]
-# 周期 flush 必须真的调 PendingSeals ⇒ TestSpoolerFlushMakesBufferedLinesVisible 必须红
-MUTATIONS["m04_FlushAndRoll不再flush"] = [
+# ⑧ 周期 flush 必须真的调 PendingSeals ⇒ TestSpoolerFlushMakesBufferedLinesVisible 必须红
+MUTATIONS["m08_FlushAndRoll不再flush"] = [
     ("sub", "tasks, err := s.w.PendingSeals()", "var tasks []ta.SealTask; var err error"),
 ]
-# 滚动（MarkSealed）⇒ TestSpoolerRollsOnBlockBytes / OnRollInterval / DTChange 必须红
-MUTATIONS["m05_不再滚动"] = [
+# ⑨ 滚动（MarkSealed）⇒ TestSpoolerRollsOnBlockBytes / OnRollInterval / DTChange 必须红
+MUTATIONS["m09_不再滚动"] = [
     ("sub", "s.w.MarkSealed(task.DT, task.Part)", "_ = task"),
 ]
 ```
 
-**注意 `m05` 与「空块不滚动」的关系**：`m05` 摘掉滚动之后，`TestSpoolerDoesNotRollEmptyBlock` 仍会**绿**（它断言的是「不滚动」）—— 这是正常的：该用例由 `PendingSeals` 自身的行为（计划 1 已冻结）保证，本集合不为它登记变异，但**必须在 `REQUIREMENTS` 里登记为 `checks`**：
+**注意 `m09`（不再滚动）与「空块不滚动」的关系**：摘掉滚动之后，`TestSpoolerDoesNotRollEmptyBlock` 仍会**绿**（它断言的是「不滚动」）—— 这是正常的：该用例由 `PendingSeals` 自身的行为（计划 1 已冻结）保证，本集合不为它登记变异，但**必须在 `REQUIREMENTS` 里登记为 `checks`**：
 
 ```python
 CHECKS = [
@@ -2076,10 +2454,33 @@ CHECKS = [
 
 （该 `pattern` 需按 `writer.go:375-380` 的实际文本核定后填写；`--check` 不校验 `CHECKS`，但权威表会跑它们。）
 
+```python
+# 计划要求 → 集合条目的映射表：有缺口（有要求无条目）整轮失败。
+REQUIREMENTS = [
+    {"plan": "计划 2 任务 5：启动期根目录必须存在（只覆盖启动时）＋ root 不得是 /",
+     "mutations": ["m01_删除启动期根目录检查", "m02_允许文件系统根"], "checks": []},
+    {"plan": "计划 2 全局约束 / D49：运行中挂载消失必须在一个 tick 内闩锁并停止写盘",
+     "mutations": ["m03_滚动前不复检根目录", "m05_Append失败后不复检根目录"], "checks": []},
+    {"plan": "计划 2 任务 5：根目录不可用的那一轮不得滚动（不做结构性写入）",
+     "mutations": ["m04_根目录不可用时仍然滚动"], "checks": []},
+    {"plan": "规格 §15.1 R9：闩锁期间不得触碰文件系统；写失败必须闩锁",
+     "mutations": ["m06_闩锁时仍然尝试写入", "m07_写失败不闩锁"], "checks": []},
+    {"plan": "规格 §7.1：周期 flush 必须无条件执行（入口 PendingSeals）",
+     "mutations": ["m08_FlushAndRoll不再flush"], "checks": []},
+    {"plan": "规格 §15.1 R8：达阈值必须滚动（MarkSealed），且滚动前必须已 flush",
+     "mutations": ["m09_不再滚动"], "checks": []},
+    {"plan": "计划 2 任务 5：空块不滚动（守卫来自计划 1 冻结的 PendingSeals）",
+     "mutations": [], "checks": ["空块不滚动的守卫来自 PendingSeals（计划 1 冻结行为）"]},
+]
+
+EXPECTED_GREEN = {}
+```
+
 - [ ] **步骤 6：跑变异集合**
 
-预期：5 条变异全部断言红；`CHECKS` 通过；三断言过；无未登记绿。
-**`m01` 若 `--check` 报「定位到 0 处」**：改用更稳的写法——把 `info, err := os.Stat(opts.Root)` 这一整段用 `("cut", …)` 删掉并在前面插入一条 `if false { … }`，或直接把 `if !info.IsDir() {` 改为 `if false {`（后者更简单，但只覆盖「不是目录」那一半）。**两种都必须让 `TestSpoolerRefusesMissingRoot` 转红**；若其中一种不转红，说明用例只覆盖了一半，需要拆成两个用例。
+预期：9 条变异全部**断言红**；`CHECKS` 通过；三断言过；无未登记绿。
+**注意 `m03`/`m04` 的目标串含 `\t` 与 `\n`**（集合文件里按 Python 字面量写成 `\t`/`\n`），必须与实现逐字一致；`--check` 报「定位到 0/多处」时就地修正**变异字符串**，不要改实现去迁就。
+**`m02` 与 `m01` 的分工**：`m01` 只覆盖「启动时未挂载」，`m02` 只覆盖「root 是 /」；两者都必须转红，否则说明用例合并在一条里、遮蔽了另一条（证据制度第 3 条）。
 
 - [ ] **步骤 7：提交**
 
@@ -2091,7 +2492,8 @@ git commit -m "feat(gateway): TraceSpooler 周期 flush 与 part 滚动（计划
 
 规格 §7.1 周期 flush（≤1m，无条件）+ §15.1 R8 滚动（≤1h 且严格小于 minAge 3h）。
 MarkSealed 无返回值、只关句柄；空块上不滚动（由 PendingSeals 的空块守卫保证），
-避免留下 0 字节 spool 被封成 0 行产物。根目录必须已存在，绝不隐式 MkdirAll
+避免留下 0 字节 spool 被封成 0 行产物。启动期校验根目录存在、非 / 且绝对路径；
+运行中挂载消失由每 tick 复检 + 闩锁兜底（冻结包 writer.go:489 自己会 MkdirAll，见 D49）
 （否则 root 进程会在容器可写层建出不在挂载点上的 /datalog，把 / 写满）。"
 ```
 
@@ -2306,11 +2708,97 @@ func TestTraceWriterLegacyPathKeepsBodiesInPG(t *testing.T) {
 	require.False(t, row.BodyMissing)
 	require.Nil(t, row.BodyRefDT)
 }
+
+// TestTraceWriterRetryAfterFailureStartsAtRowZero 是**偏离登记（规格 §7.1）**所依赖前提的实证：
+// **失败的请求不占用行号**。
+//
+// 规格 §7.1 要求网关用 AppendFailed 写一行 `null` 标记行，以维持「物理行序 == row_seq」。
+// 本计划**不写标记行**（理由见步骤 3 的偏离登记）：失败行的四个定位键写成 NULL，
+// 读侧永远不会按行号去取它的正文，因此不需要占位。本用例把那个推理变成可判定的事实：
+//
+//   ① 第一条事件（dt=A）成功 ⇒ part 0 / row 0；
+//   ② 在 spool 目录下用**普通文件**占住 dt=B 的目录名 ⇒ 第二条（dt=B）追加失败：
+//      nextSeqLocked 的 os.ReadDir 以 ENOTDIR 失败（writer.go:527-544）⇒
+//      元数据行 body_missing=true、定位键全 NULL；
+//   ③ 解除闩锁、移除障碍 ⇒ 第三条（dt=B）成功，必须是 part 0 / **row 0**：
+//      第二步没有消耗任何行号（否则会看到 row=1）。
+//
+// 【为什么用普通文件占位】真实 ENOSPC 不可复现；ENOTDIR 是**确定性**地让 Append 失败、
+// 且不毒化任何已存在块的唯一办法（若块被毒化则会走 plan 1 的隔离+换 part 契约，
+// 那是冻结行为、由计划 1 的证据覆盖）。等价的是状态，不是成因。
+func TestTraceWriterRetryAfterFailureStartsAtRowZero(t *testing.T) {
+	root := t.TempDir()
+	spooler, err := gwobs.NewTraceSpooler(gwobs.TraceSpoolerOptions{
+		Root: root, Inst: "blue", BlockBytes: 1 << 20,
+		RollInterval: time.Hour, FlushInterval: time.Minute,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = spooler.Close() })
+
+	rec := &orderRecorder{}
+	db, _ := newSpoolTestDB(t, rec)
+	sink := &sinkWithDayOf{spooler: spooler, zone: time.FixedZone("CST", 8*60*60)}
+	w := gwobs.NewTraceWriterWithSink(db, 1024, 1, 50*time.Millisecond, gwobs.TraceWriterLimits{}, sink)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	cst := time.FixedZone("CST", 8*60*60)
+	dayA := time.Date(2026, 9, 24, 10, 0, 0, 0, cst)
+	dayB := dayA.Add(24 * time.Hour)
+
+	// ① 第一条成功：part 0 / row 0
+	w.Emit(gwobs.TraceEvent{RequestID: "req-1", TS: dayA, RequestBodyRaw: []byte(`{"i":1}`)})
+	require.Eventually(t, func() bool {
+		var n int64
+		db.Model(&obsmodel.CallTrace{}).Count(&n)
+		return n == 1
+	}, 5*time.Second, 10*time.Millisecond)
+
+	// ② 占住 dt=B 的目录名 ⇒ 第二条必然追加失败
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "spool"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "spool", "dt=2026-09-25"), []byte("x"), 0o644))
+	w.Emit(gwobs.TraceEvent{RequestID: "req-2", TS: dayB, RequestBodyRaw: []byte(`{"i":2}`)})
+	require.Eventually(t, func() bool {
+		var n int64
+		db.Model(&obsmodel.CallTrace{}).Count(&n)
+		return n == 2
+	}, 5*time.Second, 10*time.Millisecond)
+
+	var failed obsmodel.CallTrace
+	require.NoError(t, db.First(&failed, "request_id = ?", "req-2").Error)
+	require.True(t, failed.BodyMissing, "追加失败必须标 body_missing=true")
+	require.Nil(t, failed.BodyRefDT)
+	require.Nil(t, failed.BodyRefInst)
+	require.Nil(t, failed.BodyRefPart)
+	require.Nil(t, failed.BodyRefRow)
+
+	// 写失败会让闸门闩锁（R9），必须显式恢复才能验证重试（真实探针会成功）
+	spooler.Gate().Tick(time.Now().Add(2 * time.Minute))
+	require.True(t, spooler.Gate().Allow(), "前置条件：闸门必须已恢复")
+
+	// ③ 移除障碍 ⇒ 第三条成功，且必须是 part 0 / row 0
+	require.NoError(t, os.Remove(filepath.Join(root, "spool", "dt=2026-09-25")))
+	w.Emit(gwobs.TraceEvent{RequestID: "req-3", TS: dayB, RequestBodyRaw: []byte(`{"i":3}`)})
+	require.Eventually(t, func() bool {
+		var n int64
+		db.Model(&obsmodel.CallTrace{}).Count(&n)
+		return n == 3
+	}, 5*time.Second, 10*time.Millisecond)
+
+	var retried obsmodel.CallTrace
+	require.NoError(t, db.First(&retried, "request_id = ?", "req-3").Error)
+	require.False(t, retried.BodyMissing)
+	require.NotNil(t, retried.BodyRefPart)
+	require.NotNil(t, retried.BodyRefRow)
+	require.Equal(t, 0, *retried.BodyRefPart, "dt=B 是全新的一天，必须是 part 0")
+	require.Equal(t, 0, *retried.BodyRefRow, "失败的请求不得占用行号：重试必须落在 row 0")
+}
 ```
 
 - [ ] **步骤 2：运行测试并确认它失败**
 
-运行：`go test ./tests/gateway/observability/ -run 'TestTraceWriter(Appends|Marks|Legacy)' -v`
+运行：`go test ./tests/gateway/observability/ -run 'TestTraceWriter(Appends|Marks|Legacy|Retry)' -v`
 预期：**编译失败**，`undefined: gwobs.TraceWriter` 的 `NewTraceWriterWithSink`。
 
 - [ ] **步骤 3：实现 `TraceWriter` 侧改动**
@@ -2415,10 +2903,31 @@ func traceEventToModelMissing(e TraceEvent, bodyBytes int) obsmodel.CallTrace {
 		}
 ```
 
+**偏离登记：本计划不使用 `AppendFailed`（规格 §7.1），理由如下（登记为 D51）**
+
+规格 §7.1 要求写入侧在「本行正文落盘失败」时调用 `(*tracearchive.Writer).AppendFailed(dt)`，
+写下一行 `null` 标记，使该块的行号照常推进。**本计划有意不调用它**（全计划对 `AppendFailed`
+零引用），理由是：
+
+1. **标记行的作用是维持「物理行序 == row_seq」**：它占一个行位，让失败行之后的 `row`
+   仍与物理行对齐。而本计划把失败行的四个定位键写成 **NULL** —— 读侧永远不会按行号去取
+   这个请求的正文（它拿到的是 `body_missing=true`），因此**不需要占位**。
+2. **前提已由计划 1 固定**：`Append` 失败时行号不推进 —— `appendLineLocked` 只在两次写入
+   都成功后才 `cur.rows++`（`writer.go:275-286`），失败返回**空 `Ref`**。所以「不写标记」
+   不会产生行号空洞；这一点由本任务的
+   `TestTraceWriterRetryAfterFailureStartsAtRowZero` 用真实 spool 实证
+   （失败后重试落在 part 0 / row 0）。
+3. **代价对比**：写标记行需要在失败后再做一次写入并推进状态，而闩锁（R9）已经把
+   「失败后继续写盘」整体关掉；在闩锁语义下写标记行反而是矛盾的（既要停写、又要写入）。
+
+**残余风险（如实记录）**：若未来某条读路径改为「按 `body_ref_row` 顺序遍历某一 part 并与
+PG 行逐一对应」（例如校验工具），NULL 定位键的行会**缺席**该序列 —— 那时必须以
+`body_missing=true` 为判据跳过，而不是假定行号连续。这是 D51 的交接事项，写进规格订正清单。
+
 - [ ] **步骤 4：运行测试并确认它通过**
 
-运行：`go test ./tests/gateway/observability/ -run 'TestTraceWriter(Appends|Marks|Legacy)' -v`
-预期：PASS（3 个顶层用例）。
+运行：`go test ./tests/gateway/observability/ -run 'TestTraceWriter(Appends|Marks|Legacy|Retry)' -v`
+预期：PASS（4 个顶层用例）。
 
 - [ ] **步骤 5：接线 `cmd/gateway/main.go`**
 
@@ -2522,9 +3031,47 @@ MUTATIONS["m05_dt改用UTC"] = [
 ]
 ```
 
+**注意**：规格 §7.1 的 `AppendFailed` 被本计划**有意不调用**（偏离登记见步骤 3 / D51）。
+「不调用」属于**不存在的东西**，变异工具无法用删除来检验 ⇒ 用 `CHECKS` 静态固定它：
+
+```python
+CHECKS = [
+    {
+        "name": "写入侧不调用 AppendFailed（D51 的偏离声明）",
+        "file": "internal/gateway/observability/trace_event.go",
+        "pattern": r"AppendFailed",
+        "expect": "absent",
+        "why": (
+            "本计划把失败行的定位键写成 NULL + body_missing=true，读侧永不按行号取它的正文，"
+            "因此不需要 §7.1 的 null 标记行。若有人加了 AppendFailed 调用，"
+            "要么是回到了标记行方案（需要同步改读侧与 D51），要么是误把两种方案混用 —— "
+            "两种都必须被看见。"
+        ),
+    },
+]
+
+# 计划要求 → 集合条目的映射表：有缺口（有要求无条目）整轮失败。
+REQUIREMENTS = [
+    {"plan": "规格 §10.1 I1：必须先落 spool、再写元数据行（次序承重）",
+     "mutations": ["m01_先写PG后落spool"], "checks": []},
+    {"plan": "规格 §9.1 / §15.1 R9：落盘失败 ⇒ body_missing=true、定位键 NULL",
+     "mutations": ["m02_落盘失败不标body_missing"], "checks": []},
+    {"plan": "规格 §6 / 目标 G1：新行的三个正文列恒为 NULL",
+     "mutations": ["m03_新行仍然写正文列"], "checks": []},
+    {"plan": "计划 2 全局约束：TRACE_BODY_ROOT 为空 ⇒ 功能关闭、走既有路径",
+     "mutations": ["m04_关闭时也走新路径"], "checks": []},
+    {"plan": "计划 2 全局约束：dt = TS 在 UTC+8 下的日期（不能是 UTC 日期）",
+     "mutations": ["m05_dt改用UTC"], "checks": []},
+    {"plan": "规格 §7.1 的 AppendFailed 被有意偏离（D51）",
+     "mutations": [], "checks": ["写入侧不调用 AppendFailed（D51 的偏离声明）"]},
+]
+
+EXPECTED_GREEN = {}
+```
+
 - [ ] **步骤 8：跑变异集合**
 
-预期：5 条断言红；三断言过；无未登记绿。
+预期：5 条变异全部**断言红**；`CHECKS` 通过（含「不调用 AppendFailed」的 absent 检查）；三断言过；无未登记绿。
 **`m01` 的写法风险**：`("sub", …)` 只替换调用点，不搬动语句 ⇒ 变量 `ref`/`err` 会变成零值，后续分支会走「失败」路径。这条变异仍然让次序用例转红（因为 `appendI` 为空 ⇒ `require.Len` 失败），但它同时让另外两个用例也红——**这不是问题**（变异可以杀死多条用例），**但**必须在 `note` 里说明它同时改变了控制流，否则会被误读成「次序守卫承重」。若希望更干净的次序变异，用 `("cut", "ref, err := tw.sink.AppendLine(dt, line)", "")` 并同时用第二条变异搬动插入位置；两种都必须在报告里写清自证串。
 
 - [ ] **步骤 9：提交**
@@ -2556,7 +3103,7 @@ git commit -m "feat(gateway): TraceWriter 接入正文直写（先 spool 后 PG�
   ```go
   type DegradationStats struct {
       MissingRows   int64      // 累计被标 body_missing 的行数
-      SpoolFailures int64      // 累计 spool 写入失败次数（含闰锁期间的每一行）
+      SpoolFailures int64      // 累计 spool 写入失败次数（含闩锁期间的每一行）
       Latched       bool
       LatchedSince  time.Time
   }
@@ -2618,7 +3165,7 @@ func (c *logCapture) countContaining(sub string) int {
 	return n
 }
 
-// TestDegradationLogsLatchExactlyOnce：闰锁跳变必须恰好一条 ERROR，
+// TestDegradationLogsLatchExactlyOnce：闩锁跳变必须恰好一条 ERROR，
 // 而不是每一行一条 —— 否则盘满时日志自己的写入会把盘写得更满
 //（2026-09-24 那次 `/` 盘被写满正是「失败路径打全量日志」造成的，
 // 事后用 log_min_error_statement='panic' 才止住）。
@@ -2644,7 +3191,7 @@ func TestDegradationLogsLatchExactlyOnce(t *testing.T) {
 		return w.DegradationStats().MissingRows == 20
 	}, 5*time.Second, 10*time.Millisecond)
 
-	require.Equal(t, 1, capture.countContaining("闰锁"), "跳变日志必须恰好一条")
+	require.Equal(t, 1, capture.countContaining("闩锁"), "跳变日志必须恰好一条")
 	require.Equal(t, 1, capture.countContaining("降级为 body_missing"), "只允许一条进入降级的 ERROR")
 	st := w.DegradationStats()
 	require.True(t, st.Latched)
@@ -2674,7 +3221,7 @@ func TestDegradationLogsRecovery(t *testing.T) {
 	require.Equal(t, 1, capture.countContaining("恢复"), "恢复必须有且只有一条信号")
 }
 
-// TestDegradationSummaryIsThrottled：闰锁期间按 SummaryInterval 输出汇总，
+// TestDegradationSummaryIsThrottled：闩锁期间按 SummaryInterval 输出汇总，
 // 而不是每个 flush 一条。
 func TestDegradationSummaryIsThrottled(t *testing.T) {
 	rec := &orderRecorder{}
@@ -2713,7 +3260,7 @@ func TestDegradationSummaryIsThrottled(t *testing.T) {
 在 `internal/gateway/observability/trace_event.go` 的 `TraceWriter` 结构体加字段：
 
 ```go
-	// 降级可观测性（规格 §9.3）：跳变/恢复各一条日志，闰锁期间按周期一条汇总。
+	// 降级可观测性（规格 §9.3）：跳变/恢复各一条日志，闩锁期间按周期一条汇总。
 	degLogf      func(format string, args ...any)
 	degNow       func() time.Time
 	degSummary   time.Duration
@@ -2760,9 +3307,9 @@ func (w *TraceWriter) DegradationStats() DegradationStats {
 }
 
 // noteSpoolFailure 记录一次 spool 失败，并按状态机输出日志：
-//   未闰锁 → 闰锁：一条 ERROR（说明原因、影响与恢复条件）
-//   闰锁中      ：按 SummaryInterval 输出汇总
-//   闰锁 → 恢复：一条 INFO
+//   未闩锁 → 闩锁：一条 ERROR（说明原因、影响与恢复条件）
+//   闩锁中      ：按 SummaryInterval 输出汇总
+//   闩锁 → 恢复：一条 INFO
 //
 // 【为什么必须节流】2026-09-24 的事故里，失败路径对每个请求打印完整语句，
 // 一天写了 244 GB —— 日志本身成了把盘写满的原因。降级日志必须与降级同量级：
@@ -2776,13 +3323,13 @@ func (w *TraceWriter) noteSpoolFailure(err error) {
 
 	if !w.degLatched {
 		w.degLatched, w.degSince, w.degLastSum = true, now, now
-		w.logf("[trace-body] ERROR 正文落盘已闰锁，开始降级为 body_missing=true（网关继续服务）：%v；"+
+		w.logf("[trace-body] ERROR 正文落盘已闩锁，开始降级为 body_missing=true（网关继续服务）：%v；"+
 			"恢复条件 = 探针可写 且 磁盘水位回落，按周期自动探测", err)
 		return
 	}
 	if !latched && now.Sub(w.degLastSum) >= w.summary() {
 		w.degLastSum = now
-		w.logf("[trace-body] WARN 正文落盘仍不可用（已闰锁 %s）：累计 body_missing 行=%d，"+
+		w.logf("[trace-body] WARN 正文落盘仍不可用（已闩锁 %s）：累计 body_missing 行=%d，"+
 			"恢复条件 = 探针可写 且 水位回落",
 			now.Sub(w.degSince).Truncate(time.Second), w.missingRows.Load())
 	}
@@ -2795,7 +3342,7 @@ func (w *TraceWriter) noteSpoolSuccess() {
 		return
 	}
 	w.degLatched = false
-	w.logf("[trace-body] INFO 正文落盘已恢复，body_missing 降级结束（闰锁时长 %s，累计缺失 %d 行）",
+	w.logf("[trace-body] INFO 正文落盘已恢复，body_missing 降级结束（闩锁时长 %s，累计缺失 %d 行）",
 		w.now().Sub(w.degSince).Truncate(time.Second), w.missingRows.Load())
 }
 
@@ -2874,8 +3421,8 @@ git add internal/gateway/observability/trace_event.go \
         tools/trace-mutate/sets/p2-task-7.py
 git commit -m "feat(gateway): body_missing 降级信号与节流日志（计划 2/4 任务 7）
 
-规格 §9.3：降级必须有明确可观测信号。闰锁跳变/恢复各一条日志，
-闰锁期间按 SummaryInterval（默认 5m）一条汇总，绝不每行一条 ——
+规格 §9.3：降级必须有明确可观测信号。闩锁跳变/恢复各一条日志，
+闩锁期间按 SummaryInterval（默认 5m）一条汇总，绝不每行一条 ——
 2026-09-24 的 / 盘写满正是失败路径全量打日志造成的（244 GB/天）。"
 ```
 
@@ -3013,7 +3560,7 @@ func splitLines(t *testing.T, p string) []string {
 //
 // 【为什么不真的填满盘】真实盘满不可复现、且会把跑测试的机器写坏；
 // 「填满 /datalog」这一条本身属计划 4 的生产验证。这里用可注入的水位函数
-// 把系统推到与盘满**同一状态**：闸门闰锁 ⇒ 每一行 body_missing。
+// 把系统推到与盘满**同一状态**：闸门闩锁 ⇒ 每一行 body_missing。
 // 等价的是「状态」，不是「成因」——报告里必须这样写，不得宣称已验证真实盘满。
 func TestAcceptanceA3DegradesWithoutDiskPressure(t *testing.T) {
 	root := t.TempDir()
@@ -3024,7 +3571,7 @@ func TestAcceptanceA3DegradesWithoutDiskPressure(t *testing.T) {
 		UsagePercent:         func(string) (float64, error) { return 99, nil }, // 恒超水位
 		ProbeWrite:           func(string) error { return nil },
 	})
-	gate.Tick(time.Now()) // 未闰锁 → 闰锁
+	gate.Tick(time.Now()) // 未闩锁 → 闩锁
 
 	spooler, err := gwobs.NewTraceSpooler(gwobs.TraceSpoolerOptions{
 		Root: root, Inst: "blue", BlockBytes: 1 << 20,
@@ -3067,7 +3614,7 @@ func TestAcceptanceA3DegradesWithoutDiskPressure(t *testing.T) {
 	}
 	require.Len(t, *insertI, n, "每个事件都必须有一条元数据行")
 
-	// ② 闰锁期间不得有任何 spool 落盘（R9：不重试、不目录扫描）
+	// ② 闩锁期间不得有任何 spool 落盘（R9：不重试、不目录扫描）
 	require.NoFileExists(t, filepath.Join(root, "spool", "dt="+time.Now().In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02")))
 
 	// ③ 延迟无劣化：热路径 Emit 是纯内存入队（500 ms 阻塞上限是既有契约），
@@ -3108,8 +3655,8 @@ MUTATIONS["m02_body_bytes含headers"] = [
 MUTATIONS["m03_降级行也带定位键"] = [
     ("sub", "m.BodyMissing = true", "m.BodyMissing = true\n\tdt0, inst0, p0, r0 := \"x\", \"blue\", 0, 0\n\tm.BodyRefDT, m.BodyRefInst, m.BodyRefPart, m.BodyRefRow = &dt0, &inst0, &p0, &r0"),
 ]
-# 闰锁期间不得落盘（R9）⇒ A3 ② 必须红
-MUTATIONS["m04_闰锁期间仍写盘"] = [
+# 闩锁期间不得落盘（R9）⇒ A3 ② 必须红
+MUTATIONS["m04_闩锁期间仍写盘"] = [
     ("sub", "if !s.gate.Allow() {", "if false {"),
 ]
 ```
@@ -3127,7 +3674,7 @@ git commit -m "test(gateway): A1 写入半部与 A3 注入式退化验收（计�
 
 A1：2000 条事件逐条比对定位键与 spool 行字节，body_bytes 口径不含 headers。
 A3：注入水位把系统推到与盘满同一状态（不是真实盘满，报告须写明），
-断言每行 body_missing、闰锁期间零落盘、Emit 仍在毫秒量级。
+断言每行 body_missing、闩锁期间零落盘、Emit 仍在毫秒量级。
 真实盘满的 A3 与 A2/A6/A7/A8/A9 分别属计划 3 / 计划 4。"
 ```
 
@@ -3153,18 +3700,22 @@ git log --oneline -12
 
 - [ ] **步骤 2：逐集合跑权威表**
 
-对 `tools/trace-mutate/sets/p2-task-{2,3,4,5,6,7,8,8-spooler}.py` **各跑一次**（每次都要它自己的名字清单）：
+对 `tools/trace-mutate/sets/p2-task-{2,3,4,5,6,7,8,8-spooler}.py` **各跑一次**（每次都要它自己的名字清单）。**恰好 8 个集合**，少一个就是漏跑：
 
 ```bash
 for s in 2 3 4 5 6 7 8 8-spooler; do
   set=tools/trace-mutate/sets/p2-task-$s.py
-  [ -f "$set" ] || continue
+  [ -f "$set" ] || { echo "MISSING SET: $set"; exit 1; }   # 不得静默跳过
   python3 tools/trace-mutate/trace_mutate.py --repo . \
     --manifest .superpowers/sdd/trace-write-path/p2-task-$s-names.txt \
     --mutation-set "$set" > /tmp/p2-task-$s.out 2>&1
   echo "task-$s exit=$?"
 done
+grep -c '^task-.* exit=0$' /tmp/p2-task-all.out 2>/dev/null || true
 ```
+
+**三个硬门（任一不过即本轮结论无效）**：① 8 个集合全部存在且都被跑过（`MISSING SET` 一次都不许出现）；
+② 每个集合的权威表 `exit=0`；③ 每个集合的三断言全过（见步骤 3 第 3 项）。
 
 - [ ] **步骤 3：写报告 `.superpowers/sdd/trace-write-path/R11-v1.md`**
 
@@ -3191,7 +3742,7 @@ git log --oneline 3a2301ad..HEAD
 
 ---
 
-## 规格缺陷登记（本计划自成一套编号，自 D42 起）
+## 规格缺陷登记（本计划自成一套编号：D42–D51）
 
 > 每条给出：规格原文位置 → 冲突/缺口 → **本计划的裁定**。执行者按裁定实现；若认为裁定有误，写进交付报告，不要改动本计划。
 
@@ -3199,15 +3750,44 @@ git log --oneline 3a2301ad..HEAD
 |---|---|---|---|
 | **D42** | §6（`body_bytes` 定义） | 规格写 `len(request_headers) + len(request_body) + len(response_body)`（**含** headers），而既有 `traceEventBodyBytes`（`trace_event.go:97-99`）是 `len(RequestBodyRaw) + len(ResponseBodyRaw)`（**不含**）。同一名字两个口径。 | 取**不含 headers** 的既有口径，复用 `traceEventBodyBytes`。理由：① 与既有的字节闸门（`maxQueueBytes`/`maxBatchBytes`）同口径，避免同名两个数；② headers 经 scrub 过滤、体积为 KB 级，对压缩比核算影响可忽略；③ 只有一个计数器才不会漂移。**规格待订正为同一公式**（订正属发起者决策，不在本计划内）。 |
 | **D43** | §11.1（网关环境变量清单） | 清单里有 `TRACE_BODY_ZSTD_LEVEL` / `TRACE_BODY_ZSTD_WINDOW_MB`，但方案 C 下**编码不在网关**（§4.2 / §5.3.1.1），网关侧无消费者。 | 网关**不读**这两个变量；它们属于计划 4 的 sealer 进程。计划 2 的实现与测试都不涉及。 |
-| **D44** | §11.1 vs §7.2/§15.1 | §11.1 的示例给 `TRACE_BODY_SEAL_INTERVAL: "15m"`，而 §7.2 的推导要求「网关滚动间隔取 ~1 小时，让**大小**阈值先触发，以保住已标定的 10.26× 压缩比（滚动过短会把块截成 ~400 MB）」。15m 满足 R8 的 ≤1h，但破坏压缩比标定。 | 默认 **`1h`**：`SealInterval` 同时是滚动间隔；大小阈值（1536 MB）在满速下约 1h 触发，二者一致。§11.1 的 `"15m"` 视为示例值错误。 |
+| **D44** | §11.1 vs §7.2/§15.1 | §11.1 的示例给 `TRACE_BODY_SEAL_INTERVAL: "15m"`（键名冲突另记 **D50**），而 §7.2 的推导要求「网关滚动间隔取 ~1 小时，让**大小**阈值先触发，以保住已标定的 10.26× 压缩比（滚动过短会把块截成 ~400 MB）」。15m 满足 R8 的 ≤1h，但破坏压缩比标定。 | 默认 **`1h`**：`SealInterval` 同时是滚动间隔；大小阈值（1536 MB）在满速下约 1h 触发，二者一致。§11.1 的 `"15m"` 视为示例值错误。 |
 | **D45** | §9.2 / §15.1 R9 | 提到 `disk_watermark_percent`，但**全仓不存在**该配置（`.env.example` / `config/*.yaml` / Go 代码 0 命中），规格也没给默认值、单位与生效位置。 | 新增 `TRACE_BODY_DISK_WATERMARK_PERCENT`，**默认 90**，单位 = `TRACE_BODY_ROOT` 所在文件系统的已用百分比（`statfs` 的 `(Blocks-Bavail)/Blocks`），**每 `FlushInterval` 评估一次**（不在请求路径上）。范围校验 1..99：0 会让每个请求都降级，100 等于不设水位。 |
 | **D46** | `AGENTS.md` vs `cmd/gateway/main.go:248-264` | `AGENTS.md` 写「gateway **不要**直连数据库」，而 `main.go:260` 构造 `NewTraceWriterWithLimits(traceDB, …)` 直写 PG，且 `main.go:263` 自报 `"usage tracking enabled (direct-DB mode)"`。 | **记录，不修**。本计划延续现状（只改写入的字段），不改 `AGENTS.md`、不动 `NewTraceWriter` 的既有 DB 依赖。订正文档属发起者决策。 |
 | **D47** | §4.1（数据流 5 步） | 步骤③「PG 元数据行」与步骤④「写 PG」的**相对次序**没有写死；而 §10.1 I1（元数据行存在 ⇒ 产物 XOR spool 存在 或 body_missing=true）**只有在「先落盘、后写元数据」下才成立**。反序会在中间崩溃时留下「元数据指向不存在正文」的行，读侧报 `ErrNotArchived`（500），把降级伪装成存储故障。 | 次序**写死为本计划的任务 6**：先 `AppendLine`、再组装并插入元数据行；由 `TestTraceWriterAppendsSpoolBeforeMetadataRow` 用次序记录器固定。规格建议补一句显式次序要求。 |
 | **D48** | §14.2 A3 / A1 | A3「填满 `/datalog`」与 A1 的 100 万行往返在**本计划范围内不可完全自动化**（真实盘满不可复现；100 万行往返还依赖读侧）。 | A3 在本计划内实现为**注入式等价用例**（断言「与盘满同一状态」下的 `body_missing`、零落盘、延迟不劣化），并在报告与提交信息里**明确不得宣称已验证真实盘满**；真实盘满、A1 读回半部、A2/A6/A7/A8/A9 归计划 3/4。 |
+| **D49** | 计划 1 冻结包 `internal/tracearchive/writer.go:489`（`ensureBlockLocked`） vs 本计划的「不隐式建目录」前提 | `ensureBlockLocked` 在**每次建块**时执行 `os.MkdirAll(filepath.Dir(spoolPath), 0o755)`（`:471-521`）。因此网关侧「根目录必须已存在」的检查**只能覆盖启动时**：运行中挂载消失后，下一次 `Append` 会在**容器可写层**重建 `/datalog`，正文写进容器层、随容器重建丢失。**后果是响亮的** —— 读侧按 `(dt,inst,part,row)` 定位不到 ⇒ `ErrNotArchived`（500 类、需人工介入），**不是**静默读到错误行，**不得**说成静默丢数据。 | **不改冻结包**（R11 v3 的 142 条变异证据绑定在它上面，R11 是约束）。网关侧缓解：周期 tick（≤1m）、滚动前、**以及任何 `Append` 失败**都复检根目录，失败即闩锁（`body_missing=true` + 停写 + 响亮 ERROR）。**残余窗口 = 一个 tick**。**探针不得建目录**（`os.CreateTemp(Root, …)`，不得 MkdirAll）：否则探针会先把 root 建回来、把本项检测掩盖掉；由集合 `p2-task-4` 的 `CHECKS`（`MkdirAll` 必须 absent）静态固定。测试见 `TestSpoolerLatchesWhenRootDisappears` / `TestSpoolerChecksRootAfterAppendFailure` / `TestSpoolerDoesNotRollWhileRootUnavailable`。计划 4 交接见 **H1/H2**。 |
+| **D50** | §11.1（环境变量清单） | §11.1 列了 `TRACE_BODY_SEAL_INTERVAL: "15m"` 并把它描述为**封块的时间阈值（15 分钟）**。方案 C 下**封块不在网关**（网关只做滚动，封块是计划 4 的 sealer），所以该键在网关侧**没有消费者**；若照字面把它当网关的滚动间隔用，就会把一个「15m 的封块阈值」和一个「1h 的滚动间隔」压成同一个键，默认值与语义都不同。 | 网关的滚动间隔改用**新键 `TRACE_BODY_ROLL_INTERVAL`（默认 1h）**，内部仍用它设置 `tracearchive.WriterOptions.SealInterval`（冻结 API 不变，**不改 `internal/tracearchive/`**）。§11.1 的 `TRACE_BODY_SEAL_INTERVAL` 在方案 C 下**无消费者**，待规格订正或明确留给 sealer 进程。计划 4 交接见 **H3/H4**。 |
+| **D51** | §7.1（`AppendFailed` 标记行） | §7.1 要求写入侧在「本行正文落盘失败」时调用 `AppendFailed(dt)` 写一行 `null` 标记，以维持「物理行序 == row_seq」。 | **有意不使用**（全计划对 `AppendFailed` 零引用）：失败行的四个定位键写 NULL + `body_missing=true`，读侧永远不会按行号去取该请求的正文 ⇒ 不需要占位；而 `Append` 失败时行号本就不推进（`writer.go:275-286` 只在两次写入都成功后 `cur.rows++`，失败返回**空 `Ref`**）⇒ 不写标记行也不会产生行号空洞。由 `TestTraceWriterRetryAfterFailureStartsAtRowZero`（真实 spool）实证。**残余风险**：若未来读路径改为「按 `body_ref_row` 顺序遍历并与 PG 行一一对应」，必须以 `body_missing=true` 跳过 NULL 行，不得假定行号连续。计划 4 交接见 **H5**。 |
+
+---
+
+## 计划 4 交接清单（本计划**不实现**，但必须被下游看到）
+
+| # | 交接项 | 依据 |
+|---|---|---|
+| **H1** | compose 的 gateway 服务**必须**挂载正文根目录（例：`volumes: - /datalog:/datalog`）。挂载不在场时 `TRACE_BODY_ROOT` 不得设置（功能关闭 ⇒ 走既有 jsonb 路径） | D49 / 全局约束（开关语义） |
+| **H2** | 部署验收新增「**挂载消失**」检查项：撤掉 `/datalog` 挂载后，网关必须在 **≤1 个 tick（1min）** 内进入闩锁（响亮 ERROR + 停止写盘 + 后续行 `body_missing=true`）；恢复挂载后必须能自动恢复（探针 + 水位双条件） | D49 |
+| **H3** | systemd unit / compose 的环境变量必须用 **`TRACE_BODY_ROLL_INTERVAL`**（默认 1h），**不得**用 §11.1 的 `TRACE_BODY_SEAL_INTERVAL` | D50 |
+| **H4** | sealer 进程自己的封块时间阈值（§11.1 里 15m 的那个语义）需在 sealer 侧**另起一个键**（建议 `TRACE_SEAL_INTERVAL`），与网关滚动间隔解耦 | D50 |
+| **H5** | 若计划 4 新增「按 `body_ref_row` 顺序遍历某个 part」的校验工具，必须跳过 `body_missing=true` 的行，**不得**假定行号连续 | D51 |
+| **H6** | 部署文档写明 `TRACE_BODY_DISK_WATERMARK_PERCENT`（默认 90，单位 = `TRACE_BODY_ROOT` 所在文件系统的已用百分比）与 `TRACE_BODY_BLOCK_MB`（1536）的换算关系 | D45 |
 
 ---
 
 ## 自检结果
+
+**第二次评审（2026-09-24）的增量与落点**：
+
+| 评审项 | 内容 | 落点 |
+|---|---|---|
+| 必改 1 | 修正「绝不隐式 MkdirAll」的错误前提；补根目录运行期复检 + 闩锁 + 测试；登记 D49 与计划 4 交接 | 全局约束「根目录可用性」；任务 4 `defaultProbeWrite`（探针不得建目录）；任务 5 `RootCheck`/`checkRoot`/`AppendLine`/`FlushAndRoll` + 3 个新用例；D49；H1/H2 |
+| 必改 2 | root 取值收窄（`TrimSpace` / `IsAbs` / `Clean != "/"`）并对每条拒绝路径各一个用例 | 全局约束「`TRACE_BODY_ROOT` 取值约束」；任务 2 `LoadTraceBodyConfig` + `TestTraceBodyConfigRootMustBeAbsolute` / `RootRejectsFilesystemRoot` / `WhitespaceRootIsDisabled`；集合 m07/m08/m09 |
+| 必改 3 | 显式声明对 §7.1 `AppendFailed` 的偏离与理由；实证「失败不占行号」 | 任务 6「偏离登记」段；`TestTraceWriterRetryAfterFailureStartsAtRowZero`；集合 `CHECKS`（`AppendFailed` 必须 absent）；D51 |
+| 必改 4 | 注释点名具体测试；探针周期必须有专用用例 | 任务 2 集合 `m03` 注释点名 `TestTraceBodyConfigRollIntervalMustBeUnderOneHour`；任务 4 新增 `TestGateProbeRespectsInterval` 并映射到 `m04` |
+| 必改 5 | 网关键改名 `TRACE_BODY_ROLL_INTERVAL`，登记 D50，计划 4 交接用新名 | 全文改名（0 处 `SEAL_INTERVAL` 残留，除 D44/D50/H3/H4 里**引用规格原名**处）；D50；H3/H4 |
+| 小项 | 「闩锁」错别字（原为「闰锁」）；滚动上界的精确值；任务 9 集合数 = 8 | 全文；任务 5 `Run` 注释（≤ `1h + 1m` ≪ minAge 3h）；任务 9 步骤 2（硬门 + `MISSING SET` 不得静默跳过） |
+
+**本轮自查另修的两处**：① 任务 4 的变异集合原本缺 `CHECKS` / `REQUIREMENTS`（集合规范要求 10 个字段），已补齐；② 恢复探针原本用 `os.MkdirAll(root/spool)` 建目录 —— 它会把消失的挂载点在**容器可写层**重新建回来，从而掩盖 D49 要检测的运行期挂载消失，已改为 `os.CreateTemp(Root, …)` 并用静态检查（`MkdirAll` 必须 absent）钉死。
 
 **规格覆盖**（逐条对照规格 §2/§4/§6/§7/§9/§10/§11/§14/§15/§16）：
 
@@ -3220,21 +3800,21 @@ git log --oneline 3a2301ad..HEAD
 | §5.1 目录布局（`dt`/`inst` 分量） | 任务 2（`inst` 白名单 + `dt` 口径）+ 任务 5（`Paths` 由 tracearchive 提供） |
 | §7.1 周期 flush（≤1m、无条件） | 任务 5（`FlushAndRoll` + `Run`） |
 | §7.3 写指针（目录即指针） | 不实现（计划 1 已冻结，任务 5 只调用） |
-| §9.1/§9.2 失败语义（降级 `body_missing`、恢复） | 任务 4（闰锁与恢复条件）+ 任务 6（列语义）+ 任务 7（信号） |
+| §9.1/§9.2 失败语义（降级 `body_missing`、恢复） | 任务 4（闩锁与恢复条件）+ 任务 6（列语义）+ 任务 7（信号） |
 | §9.3 可观测性 | 任务 7 |
 | §11.1 部署必改项（`/datalog` 挂载、`TRACE_BODY_FLUSH_INTERVAL`） | 本计划实现 env 读取（任务 2）；**挂载与 compose 改动属计划 4**，计划 2 只记录依赖 |
-| §14.1 分层（3 条方案 C 防线） | 任务 4（水位+闰锁）、任务 5（根目录必须存在）、任务 6（次序） |
+| §14.1 分层（3 条方案 C 防线） | 任务 4（水位+闩锁）、任务 5（根目录必须存在）、任务 6（次序） |
 | §14.2 A3 + A1 写入半部 | 任务 8（其余显式排除，见表） |
 | §15.1 R8（滚动 ≤1h < minAge） | 任务 2（校验）+ 任务 5（实现 + 承重用例） |
-| §15.1 R9（闰锁、不按请求重试） | 任务 4 + 任务 6 + 任务 8（A3） |
+| §15.1 R9（闩锁、不按请求重试） | 任务 4 + 任务 6 + 任务 8（A3） |
 | §15.2 P1–P3 生产检查 | 计划 4 |
 | §16 验收 7 项 | 见任务 8 的归属表 |
 
 **占位符扫描**：全文无「待定」「TODO」「类似任务 N」「参照上文」「按需补充」。每处引用都是**具体文件 + 行号 + 真实符号**（`PendingSeals` `writer.go:353-393`、`MarkSealed` `writer.go:420-426`、`ensureBlockLocked` `writer.go:471-521`、`nextSeqLocked` `writer.go:527-544`、`traceEventBodyBytes` `trace_event.go:97`、`flush` 闭包 `trace_event.go:144-162`、`traceEventToModel` `trace_event.go:196-235`、`ObservabilityConfig` `config.go:103-104`/`:182-183`、接线点 `main.go:253-264`、迁移基线 `atlas-migrations/20260609082623_baseline.sql:113-131`）。所有变异集合都给了可据以编写的确切目标串或明确的目标语句。
 
-**类型一致性**：`TraceBodySink.AppendLine` 返回 `(ta.Ref, error)`，与 `(*TraceSpooler).AppendLine` 一致；`DayOf(ts time.Time) string` 与 `config.TraceBodyConfig.DayOf` 一致；`ta.WriterOptions{Root, Inst, BlockBytes, SealInterval}` 与 `spooler.go` 的传入一致（字段名逐个核对过计划 1 的 `writer.go:113-120`）；`ta.Ref{DT, Inst, Part, Row}` 四个分量在任务 1 的四个指针列里一一对应；`PendingSeals()` 返回 `[]SealTask{DT, Inst, Part, SpoolPath, Rows, UncompressedBytes}`，任务 5 只读 `DT`/`Part`；`MarkSealed(dt string, part int)` **无返回值**——全文没有任何 `err := MarkSealed(...)` 的写法。
+**类型一致性**：`TraceBodySink.AppendLine` 返回 `(ta.Ref, error)`，与 `(*TraceSpooler).AppendLine` 一致；`DayOf(ts time.Time) string` 与 `config.TraceBodyConfig.DayOf` 一致；`ta.WriterOptions{Root, Inst, BlockBytes, SealInterval}` 与 `spooler.go` 的传入一致（字段名逐个核对过计划 1 的 `writer.go:113-120`）；`ta.Ref{DT, Inst, Part, Row}` 四个分量在任务 1 的四个指针列里一一对应；`PendingSeals()` 返回 `[]SealTask{DT, Inst, Part, SpoolPath, Rows, UncompressedBytes}`，任务 5 只读 `DT`/`Part`；`MarkSealed(dt string, part int)` **无返回值**——全文没有任何 `err := MarkSealed(...)` 的写法；`TraceSpoolerOptions.RootCheck func(string) error` 与 `TraceSpooler.checkRoot()` 的注入点在任务 5 内部自洽（nil ⇒ `defaultRootCheck`），且它是**唯一**用于测试「运行中挂载消失」的注入点（等价的是状态、不是成因）。
 
-**范围自检**：本计划**不修改** `internal/tracearchive/` 任何文件（任务 9 步骤 3 用 `git diff --stat` 作为证据），不改 compose、不改 `AGENTS.md`、不新增 `call_traces` 保留策略、不动任何 HTTP 路由与 `tests/contract/contracts.json`。
+**范围自检**：本计划**不修改** `internal/tracearchive/` 任何文件（任务 9 步骤 3 用 `git diff --stat` 作为证据），不改 compose、不改 `AGENTS.md`、不新增 `call_traces` 保留策略、不动任何 HTTP 路由与 `tests/contract/contracts.json`；`.env.example` 与 compose 的**挂载/unit 改动属计划 4**（本计划只在交接清单 H1–H6 里写明）。
 
 ---
 

@@ -232,6 +232,10 @@ func mustLoadTraceBody(t *testing.T) config.TraceBodyConfig {
 // 启动路径上响亮失败（Load 的签名不返回 error，故以 panic 表达）。
 func TestLoadWiresTraceBodyFromEnvVerbatim(t *testing.T) {
 	t.Setenv("APP_ENV", "nonexistent-trace-body-config-test")
+	// 显式清空而不是「假定宿主没设」：本用例依赖的正是「未设置」这一状态，
+	// 而开发机完全可能为了本地试跑而 export TRACE_BODY_ROOT（空串 ⇒ viper 落回默认值 ""）。
+	t.Setenv("TRACE_BODY_ROOT", "")
+	t.Setenv("TRACE_BODY_INST", "")
 	require.False(t, mustLoadTraceBody(t).Enabled, "未设 TRACE_BODY_ROOT ⇒ 默认关闭")
 
 	t.Setenv("TRACE_BODY_ROOT", "/datalog/trace-archive-v4")

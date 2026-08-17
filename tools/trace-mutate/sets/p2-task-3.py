@@ -23,17 +23,29 @@
    连带一处：降级/包装的 256 字节截断移入 `rawOrQuoted`（原实现在未校验分支另有截断），
    否则该分支会不再受 256 字节契约约束。
 
-3. **m06 / m07 / m08 / m09 / m10 是补入条目**（简报没有）。简报的 5 条只覆盖了
+3. **m06 / m07 / m08 / m09 / m10 / m11 / m12 是补入条目**（简报没有）。简报的 5 条只覆盖了
    ts/降级/两条 NUL/响应体省略，而它自己列出的规则里还有：
-   「非法请求体最多 256 字节」、承重的「一次 Append == 一条物理行（行内不得有裸换行）」、
-   「请求头仅当 json.Valid 时写入」、「未校验标记决定降级形态」、「键序」。
-   R1/R4/R5/R7 因此各补一条能红的条目（每条都有具体顶层杀手用例）。
+   「非法请求体最多 256 字节」、「包装键名 `_raw_truncated`」、
+   承重的「一次 Append == 一条物理行（行内不得有裸换行）」、
+   「请求头仅当 json.Valid 时写入」、「未校验标记决定降级形态」、「键序」、
+   以及「合法的原始正文必须逐字节嵌入、不得重新编码」。
+   补入的依据是控制者的硬性指令第 1 条：**每一条断言都必须能红** ——
+   补入前 `TestTraceEventLineUntrustedBodyStaysRaw` 与键名断言都是零覆盖。
+
+4. **CHECKS 的两处修正（实测）**：
+   - 「键序」正则：简报写的是 `json:"request_body"`（不带 `,omitempty`），
+     在本实现上**定位到 0 处**（省略语义要求 tag 带 omitempty）⇒ 照抄简报的静态检查
+     永远 [FAIL]。已改为完整 tag 形态。
+   - 两条「不依赖 config 包」检查：裸包路径会命中文件里正当地提到该包名的**注释** ⇒
+     实测 [FAIL]（检查退化成「禁止写注释」）。已改为钉整行 import 语句。
 
 ## 变异测不到、但有静态检查行（CHECKS）
 
 - 「observability 不得依赖 internal/gateway/config」：把 `traceLineZone` 换成
   `config.TraceBodyZone` 后**行为完全一致**（两者都是固定 +08:00）⇒ 任何行为用例都
   无法区分 ⇒ 只能静态钉住 import 形态（简报明写这条约束）。
+- 「NUL 清洗必须复用同源 helper」：用例里「替换为 U+FFFD」那半条断言不可被本集合的
+  变异杀死（替换值住在 trace_event.go，TARGET 是单文件 trace_line.go）⇒ 静态钉住调用形态。
 - 「键序」同时有 A 层用例（m10 可杀）与静态检查：静态行钉住**源码结构**，
   变异行证明该结构在行为上确实被断言。
 """
@@ -134,6 +146,27 @@ MUTATIONS["m10_键序交换"] = [
             "\t\tRequestHeaders json.RawMessage `json:\"request_headers,omitempty\"`"),
 ]
 
+# ---- 合法的原始正文必须**逐字节**嵌入，不得被重新编码 ----
+# 杀手用例 TestTraceEventLineUntrustedBodyStaysRaw：把该分支改成
+# `quotedJSON(scrubNULEscapes(...))`（仍然清洗 NUL、仍然是合法 JSON，只是被**重新编码**
+# 成字符串）后，报文里的引号被转义 ⇒ `bytes.Contains(line, raw)` 为假 ⇒ 转红。
+# 【为什么这条必须补】原集合里这条用例没有任何杀手：m04（不清洗）与 m02/m09 都不改变
+# 「合法正文原样嵌入」这一点 ⇒ 该断言零覆盖。
+# 【为什么用这个形态而不是 rawOrQuoted → always-quoted】这样只有这一条用例转红
+#（NUL 用例仍绿：NUL 已先被清洗）；改 rawOrQuoted 会连坐多条例，掩盖真实杀手。
+MUTATIONS["m11_合法正文改为重新编码"] = [
+    ("sub", "out.RequestBody = rawOrQuoted(scrubNULEscapes(e.RequestBodyRaw))",
+            "out.RequestBody = quotedJSON(scrubNULEscapes(e.RequestBodyRaw))"),
+]
+
+# ---- 包装键名是既有格式契约（与 PG 路径的 trace_event.go:225 同名）----
+# 杀手用例 TestTraceEventLineWrapsInvalidRequestBody（`_raw_truncated` 键的存在性断言；
+# 改名后该键消失 ⇒ 转红）。
+MUTATIONS["m12_包装键名改掉"] = [
+    ("sub", '"_raw_truncated": string(truncateForRaw(e.RequestBodyRaw))',
+            '"raw": string(truncateForRaw(e.RequestBodyRaw))'),
+]
+
 # ---------------------------------------------------------------------------
 # 静态检查：**变异测不到**的要求必须有静态检查行（全局约束的证据制度第 4 条）。
 # ---------------------------------------------------------------------------
@@ -152,6 +185,24 @@ CHECKS = [
             "【注意】正则必须写成 `json:\"request_body,omitempty\"` 这样的完整 tag —— "
             "简报给的 `json:\"request_body\"`（不带 omitempty）在本实现上定位到 0 处："
             "省略语义要求 tag 里带 omitempty，两者不同形。此条为实测修正。"
+        ),
+    },
+    {
+        "name": "NUL清洗复用既有helper",
+        "file": "internal/gateway/observability/trace_line.go",
+        "pattern": (r'out\.RequestHeaders = rawOrQuoted\(scrubNULEscapes\(e\.RequestHeadersRaw\)\)'
+                    r'[\s\S]*out\.RequestBody = rawOrQuoted\(scrubNULEscapes\(e\.RequestBodyRaw\)\)'),
+        "expect": "present",
+        "why": (
+            "「NUL 清洗」这条规则必须与 PG 路径**同源**（同一件事的两种表达，"
+            "否则关闭功能时写 PG、开启时写 spool 会给出两套数据）⇒ 两处都必须直接调用"
+            "冻结包里的 scrubNULEscapes，而不是各写一份。"
+            "【为什么必须有这一行】用例里「替换为 U+FFFD」那半条断言**无法被本集合的变异杀死**："
+            "替换值住在同包的既有文件 trace_event.go:240-245，而本集合的 TARGET 是单文件 "
+            "trace_line.go（本任务只新建该文件，trace_event.go 不属本任务改动范围）。"
+            "m03/m04 只证明「调用是承重的」（摘掉即红，红在「不得残留 \\u0000」那半条），"
+            "本静态行补上「形态是同源 helper」这一半。替换字符本身的正确性由既有用例 "
+            "TestScrubNULEscapes（internal/gateway/observability/trace_event_test.go）覆盖。"
         ),
     },
     {
@@ -209,29 +260,36 @@ REQUIREMENTS = [
     {
         "plan": "简报步骤 3：NUL 清洗规则从写 jsonb 列平移到写 spool 行（PG 拒绝 \\u0000，22P05）",
         "mutations": ["m03_请求头不清洗NUL", "m04_请求体不清洗NUL"],
-        "checks": [],
+        "checks": ["NUL清洗复用既有helper"],
         "note": (
             "两处清洗是两行独立代码 ⇒ 各需一条杀手用例：m03→"
             "TestTraceEventLineScrubsNULInRequestHeaders（**简报没有，为本条新增**："
             "简报指定的 TestTraceEventLineScrubsNUL 只把 NUL 放进请求体，"
             "删掉请求头清洗时它仍全绿）；m04→TestTraceEventLineScrubsNUL。"
+            "静态检查补「两处都调用同源 helper」这一半（替换字符本身在 trace_event.go，"
+            "本集合的单文件 TARGET 覆盖不到 ⇒ 见 CHECKS 的 why）。"
         ),
     },
     {
         "plan": "简报步骤 3：非法请求体包装成 {\"_raw_truncated\": ...} 且最多 256 字节，字段不为 null",
-        "mutations": ["m06_非法请求体不再截断"],
+        "mutations": ["m06_非法请求体不再截断", "m12_包装键名改掉"],
         "checks": [],
-        "note": "杀手用例 TestTraceEventLineWrapsInvalidRequestBody（300 字节 → 必须只剩 256）。",
+        "note": (
+            "杀手用例都是 TestTraceEventLineWrapsInvalidRequestBody：m06 杀 256 字节上界，"
+            "m12 杀键名（与 PG 路径 trace_event.go:225 同名的格式契约）。"
+        ),
     },
     {
         "plan": "简报步骤 3：BodyRawUntrusted 未校验路径 —— 合法原样嵌入、非法降级，绝不让整行失效",
-        "mutations": ["m02_非法字段不再降级为字符串", "m09_未校验标记不再区分降级形态"],
+        "mutations": ["m02_非法字段不再降级为字符串", "m09_未校验标记不再区分降级形态", "m11_合法正文改为重新编码"],
         "checks": [],
         "note": (
-            "两条杀手用例都是 TestTraceEventLineInvalidUntrustedBodyFallsBackToString："
+            "m02/m09 的杀手是 TestTraceEventLineInvalidUntrustedBodyFallsBackToString："
             "m02 让整行退化为 `_line_error` 兜底（request_body 键消失）；"
             "m09 让非法未校验正文被包成 _raw_truncated 对象（不再是字符串）。"
-            "**简报给的实现在此处是零覆盖**：它的全部 rawOrQuoted 调用点都已被 json.Valid 守卫，"
+            "m11 的杀手是 TestTraceEventLineUntrustedBodyStaysRaw（合法正文被重新编码 ⇒ "
+            "引号被转义 ⇒ 逐字节包含断言转红）——**补入条目**：原集合里该用例零覆盖。"
+            "**简报给的实现在 m02 处是零覆盖**：它的全部 rawOrQuoted 调用点都已被 json.Valid 守卫，"
             "降级分支不可达（见文件头第 2 条），故实现侧做了等价重构。"
         ),
     },

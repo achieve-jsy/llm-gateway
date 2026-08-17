@@ -30,6 +30,11 @@ func fixedEvent() TraceEvent {
 		RequestHeadersRaw: []byte(`{"x-a":"1"}`),
 		RequestBodyRaw:    []byte(`{"model":"gpt"}`),
 		ResponseBodyRaw:   []byte(`{"ok":true}`),
+		// 标量字段取**互不相同**的非空值：这样「写反/写错字段」的实现在
+		// TestTraceEventLineKeyOrderAndTSFormat 的透传断言上必然转红
+		//（若都留空，把 ErrorCode 写成 ErrorMessage 会全绿 —— 见变异 m13）。
+		ErrorCode:    "upstream_timeout",
+		ErrorMessage: "upstream request timed out",
 	}
 }
 
@@ -57,10 +62,24 @@ func TestTraceEventLineKeyOrderAndTSFormat(t *testing.T) {
 	}
 
 	var probe struct {
-		TS string `json:"ts"`
+		RequestID    string `json:"request_id"`
+		TS           string `json:"ts"`
+		ErrorCode    string `json:"error_code"`
+		ErrorMessage string `json:"error_message"`
 	}
 	if err := json.Unmarshal(line, &probe); err != nil {
 		t.Fatalf("必须是一行合法 JSON：%v", err)
+	}
+	// 标量字段的**值透传**：不只看键存在。四个字段在 fixedEvent() 里两两不同，
+	// 因此任何「写错字段/互换」的实现都会在这里转红（变异 m13 即 ErrorCode/ErrorMessage 互换）。
+	if probe.RequestID != "req-1" {
+		t.Fatalf("request_id 未透传：%q", probe.RequestID)
+	}
+	if probe.ErrorCode != "upstream_timeout" {
+		t.Fatalf("error_code 未透传：%q", probe.ErrorCode)
+	}
+	if probe.ErrorMessage != "upstream request timed out" {
+		t.Fatalf("error_message 未透传：%q", probe.ErrorMessage)
 	}
 	if !strings.HasSuffix(probe.TS, "+08:00") {
 		t.Fatalf("ts 必须以 +08:00 结尾，实际 %q", probe.TS)
@@ -111,9 +130,13 @@ func TestTraceEventLineScrubsNULInRequestHeaders(t *testing.T) {
 // TestTraceEventLineWrapsInvalidRequestBody 固定「非法请求体包装」规则
 // （trace_event.go:222-229）：sanitize 兜底路径下原始请求体不是合法 JSON，
 // 包成 {"_raw_truncated": "..."} 且最多 256 字节，保证字段不为 null。
+//
+// 输入特意构造成「非法 + 首 256 字节内含 \u0000 转义」：包装后的 JSON 字符串里
+// 这个转义会被 Marshal 转义成 \\u0000，必须再由 scrubNULEscapes 消掉
+// （trace_event.go:227 的同一条规则）⇒ 覆盖包装分支的 NUL 清洗（变异 m15）。
 func TestTraceEventLineWrapsInvalidRequestBody(t *testing.T) {
 	e := fixedEvent()
-	e.RequestBodyRaw = []byte(strings.Repeat("x", 300))
+	e.RequestBodyRaw = []byte(`{"a":"x\u0000y"` + strings.Repeat("z", 400))
 	line := traceEventLine(e)
 	if !bytes.Contains(line, []byte(`_raw_truncated`)) {
 		t.Fatalf("非法请求体必须被包装：%s", line)
@@ -129,6 +152,9 @@ func TestTraceEventLineWrapsInvalidRequestBody(t *testing.T) {
 	if len(probe.RequestBody.Raw) != 256 {
 		t.Fatalf("截断到 256 字节，实际 %d", len(probe.RequestBody.Raw))
 	}
+	if bytes.Contains(line, []byte(`\u0000`)) {
+		t.Fatalf("包装分支也必须清洗 NUL 转义：%s", line)
+	}
 }
 
 // TestTraceEventLineUntrustedBodyStaysRaw 固定 BodyRawUntrusted 的语义
@@ -142,6 +168,24 @@ func TestTraceEventLineUntrustedBodyStaysRaw(t *testing.T) {
 	line := traceEventLine(e)
 	if !bytes.Contains(line, raw) {
 		t.Fatalf("合法的大正文必须逐字节原样嵌入：%s", line)
+	}
+}
+
+// TestTraceEventLineValidBodyStaysRaw 固定**已校验**路径的同一性质
+// （trace_event.go:212-221）：sanitize 后的请求体已是合法 JSON，
+// 必须原样嵌入（经 Marshal 的 compact，不改变无空白的紧凑正文），不得重新编码成字符串。
+//
+// 【为什么必须与上面那条分开】实现里这是**两条独立的分支**（未校验路径走 rawOrQuoted、
+// 已校验路径直接嵌入 json.RawMessage）。两条分支各需一条杀手用例：否则把已校验分支改成
+// quotedJSON（合法正文被转义成字符串）不会有任何用例转红（变异 m14）。
+func TestTraceEventLineValidBodyStaysRaw(t *testing.T) {
+	e := fixedEvent()
+	raw := []byte(`{"messages":[{"role":"user","content":"你好"}],"temperature":0}`)
+	e.RequestBodyRaw = raw
+	// 已校验路径：BodyRawUntrusted 保持 false
+	line := traceEventLine(e)
+	if !bytes.Contains(line, raw) {
+		t.Fatalf("已校验的合法正文必须原样嵌入（不得重新编码）：%s", line)
 	}
 }
 
@@ -172,18 +216,21 @@ func TestTraceEventLineInvalidUntrustedBodyFallsBackToString(t *testing.T) {
 // TestTraceEventLineOmitsInvalidResponseBody 固定响应体的既有规则
 // （trace_event.go:231-233）：响应体从不 sanitize，非法时**整体省略**该字段，
 // 而不是包装 —— 与请求体规则不同，这是既有行为，不得在平移时改变。
+//
+// 【为什么断言「键不存在」而不是「解码成 *json.RawMessage 后为 nil」】
+// 后者无法区分「键省略」与「显式输出 null」：JSON null 解码到指针也是 nil ⇒
+// 把 tag 的 omitempty 去掉（于是输出 "response_body":null）时用例仍全绿。
+// 字段为 null 与省略在归档行里是两种不同的东西，规格要求的是**省略**。
 func TestTraceEventLineOmitsInvalidResponseBody(t *testing.T) {
 	e := fixedEvent()
 	e.ResponseBodyRaw = []byte("{invalid")
 	line := traceEventLine(e)
-	var probe struct {
-		ResponseBody *json.RawMessage `json:"response_body"`
-	}
+	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(line, &probe); err != nil {
 		t.Fatalf("非法响应体不得让整行失效：%v", err)
 	}
-	if probe.ResponseBody != nil {
-		t.Fatalf("非法响应体应省略（nil），实际 %s", string(*probe.ResponseBody))
+	if v, ok := probe["response_body"]; ok {
+		t.Fatalf("非法响应体应整体省略该键（既不是包装也不是 null），实际 %s", v)
 	}
 }
 
@@ -191,18 +238,17 @@ func TestTraceEventLineOmitsInvalidResponseBody(t *testing.T) {
 // （trace_event.go:209-211）：仅当 json.Valid 时写入。
 // 请求头没有「包装兜底」这条规则（那属于请求体），非法时**整体省略**该键；
 // 删掉 json.Valid 守卫后该键会以 JSON 字符串形式出现 ⇒ 本用例转红。
+// 断言形态同上：必须断言「键不存在」，而不是指针为 nil（null 也能骗过后者）。
 func TestTraceEventLineOmitsInvalidRequestHeaders(t *testing.T) {
 	e := fixedEvent()
 	e.RequestHeadersRaw = []byte("{not json")
 	line := traceEventLine(e)
-	var probe struct {
-		RequestHeaders *json.RawMessage `json:"request_headers"`
-	}
+	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(line, &probe); err != nil {
 		t.Fatalf("非法请求头不得让整行失效：%v", err)
 	}
-	if probe.RequestHeaders != nil {
-		t.Fatalf("非法请求头应省略（nil），实际 %s", string(*probe.RequestHeaders))
+	if v, ok := probe["request_headers"]; ok {
+		t.Fatalf("非法请求头应整体省略该键（既不是包装也不是 null），实际 %s", v)
 	}
 }
 

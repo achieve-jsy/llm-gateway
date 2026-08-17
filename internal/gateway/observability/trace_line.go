@@ -37,8 +37,9 @@ const traceRawTruncateLen = 256
 // 字段规则与 traceEventToModel **逐条对应**（这不是巧合：两条路径共用同一件事的
 // 两种表达，规则必须同源，否则「关闭功能时写 PG、开启时写 spool」会给出两套数据）：
 //   - request_headers：仅当 json.Valid 时写入，并做 NUL 清洗；
-//   - request_body：未校验路径（BodyRawUntrusted）或 json.Valid 时进入同一条分支，
-//     由 rawOrQuoted 决定「原样嵌入」还是「降级成字符串」（清洗 NUL）；
+//   - request_body：三条路径，NUL 清洗在 switch **之前**统一做一次（单一应用点）：
+//     未校验路径（BodyRawUntrusted）不做前置 json.Valid，合法性由 rawOrQuoted 内部判一次，
+//     非法则降级成字符串；已校验且合法时直接嵌入（谓词已判过，不再重复校验）；
 //     已校验但非法时包装成 {"_raw_truncated": "前 256 字节"}；
 //     两条降级路径都保证字段不为 null，**绝不让整行失效**；
 //   - response_body：仅当 json.Valid 时写入并清洗 —— 与请求体不同，
@@ -65,12 +66,21 @@ func traceEventLine(e TraceEvent) []byte {
 		out.RequestHeaders = rawOrQuoted(scrubNULEscapes(e.RequestHeadersRaw))
 	}
 	if len(e.RequestBodyRaw) > 0 {
+		// NUL 清洗在这里做**一次**，三条路径共用同一份已清洗字节。
+		// 【为什么必须前置】清洗规则要在唯一应用点完成：若每条分支各写一次
+		// scrubNULEscapes，就多出可被静默漏掉的位置（这与请求头那处共用 helper 同理）。
+		scrubbedBody := scrubNULEscapes(e.RequestBodyRaw)
 		switch {
-		// 两个入口共用同一条分支：BodyRawUntrusted 表示「未校验」（来自大正文直存路径），
-		// 此时该不该原样嵌入由 rawOrQuoted 现场判断 —— 见它的注释：
-		// 未校验 ≠ 一定合法，非法字节必须降级，否则整行 Marshal 失败、整条 trace 丢失。
-		case e.BodyRawUntrusted, json.Valid(e.RequestBodyRaw):
-			out.RequestBody = rawOrQuoted(scrubNULEscapes(e.RequestBodyRaw))
+		// 未校验路径（大正文直存）：不做前置 json.Valid，合法性由 rawOrQuoted 内部判**一次**，
+		// 非法则降级成字符串 —— 未校验 ≠ 一定合法，而非法的 json.RawMessage 会让
+		// 整行 json.Marshal 失败（比丢一个字段严重得多）。
+		case e.BodyRawUntrusted:
+			out.RequestBody = rawOrQuoted(scrubbedBody)
+		// 已校验路径：谓词里已经判过合法性，这里直接嵌入、不再重复校验。
+		// （重复校验 + Marshal 对 RawMessage 的 compact 会让唯一写协程把同一份
+		// 正文字节扫三遍；拆开后两条路径各为「1 次 json.Valid + 1 次 compact」。）
+		case json.Valid(e.RequestBodyRaw):
+			out.RequestBody = json.RawMessage(scrubbedBody)
 		default:
 			// sanitize 兜底路径：原始请求体非合法 JSON（极少发生），
 			// 包装为 {"_raw_truncated": "..."} 写入，确保字段不为 null

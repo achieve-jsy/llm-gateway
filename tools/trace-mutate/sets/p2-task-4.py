@@ -31,6 +31,12 @@ r"""计划 2 / 任务 4 的变异集合（作者编写的产物 ⇒ 必须 git-t
    覆盖 `os.MkdirAll` / `syscall.Mkdir` / `os.MkdirTemp` 与一切别名形态。
    实测：把别名调用临时写进实现副本，简报正则【PASS（漏判）】、本正则【FAIL（命中）】。
 
+5. **m06 的变异串按实测修正**：简报给的 `if probeErr != nil {` → `if false {` 会让
+   `probeErr` 变成「声明未使用」⇒ **编译失败红**（一条用例都不执行；权威表判定
+   「红(编译失败)」），证明不了守卫承重，也不满足简报「6 条断言红」的预期。
+   改为 `if probeErr != nil && false {`（保住对 probeErr 的引用）⇒ 断言红，
+   杀手用例 TestGateWatermarkAloneDoesNotUnlatch。
+
 ## 变异测不到、但有静态检查行（CHECKS）
 
 - 「网关侧不得创建目录」（D49）：行为用例无法表达「本文件里没有建目录调用」
@@ -92,8 +98,12 @@ MUTATIONS["m05_解锁只看探针"] = [
 # ⇒ 若忽略探针失败就会解锁，该用例的 `require.False(Allow())` 转红。
 # （注意 TestGateProbeFailureKeepsLatched **杀不死** m06：它的水位仍是 95%，
 # 于是「水位未回落」那一支照样保持闩锁、ProbeFailures 也照样 +1。）
+# 【相对简报的修正】简报写的是把 `if probeErr != nil {` 换成 `if false {`，
+# 实测那是**编译失败红**（probeErr 变成「声明未使用」）⇒ 一条用例都不执行，
+# 证明不了守卫承重（也不满足「6 条断言红」的预期）。改成 `&& false` 保住了对
+# probeErr 的引用，编译通过 ⇒ 真正的断言红。
 MUTATIONS["m06_解锁只看水位"] = [
-    ("sub", "if probeErr != nil {\n\t\tg.probeFailures++\n\t\treturn\n\t}", "if false {\n\t\tg.probeFailures++\n\t\treturn\n\t}"),
+    ("sub", "if probeErr != nil {", "if probeErr != nil && false {"),
 ]
 
 # ---- §9.3 降级计数器：LatchedSeconds（本次闩锁已持续秒数）----

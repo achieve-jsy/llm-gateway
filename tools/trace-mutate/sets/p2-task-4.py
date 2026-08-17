@@ -41,6 +41,23 @@ r"""计划 2 / 任务 4 的变异集合（作者编写的产物 ⇒ 必须 git-t
    改为 `if probeErr != nil && false {`（保住对 probeErr 的引用）⇒ 断言红，
    杀手用例 TestGateWatermarkAloneDoesNotUnlatch。
 
+## 评审修复轮（F1–F5）对集合的连带改动
+
+- **F1（ProbeFailures 两条出口各自要观察者）**：原 m18 把两条 `g.probeFailures++`
+  一起摘掉，注释说它们「互相遮蔽」——**说反了**：探针写失败那条在前且带 `return`，
+  第二条不可达，所以只摘第一条也照样红。真正缺口是第二条出口（水位未回落）
+  原先**无人观察**。⇒ 拆成 m18（写失败出口，杀手 TestGateProbeFailureKeepsLatched）
+  与 m19（水位未回落出口，杀手 TestGateProbeSuccessWithHighWatermarkKeepsLatched，
+  该用例按 F1 补了 `ProbeFailures == 1` 断言）。
+- **F2（Trip 的探针起点可隔离杀死）** ⇒ 新增 m20，杀手 TestGateTripStartsProbeInterval；
+  报告 §5.7-3 的「不可覆盖」措辞改为「未被现有用例覆盖」。
+- **F4（静态正则的效力边界）** ⇒ 本集合该行注释与 CHECKS 的 why 都改为
+  「直接调用形态的启发式，非结构不变量；承重证据是与行为用例配对的 m16」；
+  **不**为收窄而重新引入别名绕过。
+- **F5（阈值闭区间）** ⇒ 新增 m21（`>=` → `>`）与 m22（阈值下移 1 个百分点），
+  杀手都是新增的 TestGateWatermarkBoundaryIsInclusive（分别钉「等于侧」「低于侧」）。
+- F3 只涉及报告里的 RED 转录与行号，不影响集合。
+
 ## 变异测不到、但有静态检查行（CHECKS）
 
 - 「网关侧不得创建目录」（D49）：行为用例无法表达「本文件里没有建目录调用」
@@ -200,16 +217,43 @@ MUTATIONS["m17_statfs失败也闩锁"] = [
 ]
 
 # ---- §9.3 计数器：ProbeFailures（探针未通过恢复判据的次数）----
-# 杀手用例 TestGateProbeFailureKeepsLatched（断言 == 1）与
-# TestGateDefaultProbeDoesNotCreateRoot（真实探针失败后断言 == 1）。
-# 【为什么必须同时摘掉两处】`g.probeFailures++` 出现在两条互斥出口（探针写失败、
-# 水位未回落）；单独摘掉前者时，后者在同一条用例里照样把它加回 1 ⇒ 断言被遮蔽、
-# 变异假绿。两处一起摘掉才证明「这个计数器确实被断言承重」。
-MUTATIONS["m18_探针失败计数不再累加"] = [
+# 【评审 F1 修正：两条出口是**顺序**关系，不是互相补偿】spool_gate.go 的已闩锁分支里
+# 「探针写失败」在前且带 `return`，所以它一旦命中，「水位未回落」那一支不可达 ——
+# 两条 `g.probeFailures++` **不是**互斥并列/互相遮蔽的关系（原注释把这一点说反了）。
+# 真正的缺口在别处：第二条出口的 `probeFailures++` 原先**没有任何断言观察**
+#（bundle 恰好把它盖住）⇒ 拆成两条变异、各配一个观察者：
+#   m18 = 摘掉「探针写失败」出口的计数 ⇒ 杀手 TestGateProbeFailureKeepsLatched（断言 == 1）；
+#   m19 = 摘掉「水位未回落」出口的计数 ⇒ 杀手 TestGateProbeSuccessWithHighWatermarkKeepsLatched
+#        （F1 为该用例补了 `ProbeFailures == 1` 断言，否则这条出口无人观察）。
+MUTATIONS["m18_探针写失败计数不再累加"] = [
     ("sub", "if probeErr != nil {\n\t\tg.probeFailures++\n\t\treturn\n\t}",
             "if probeErr != nil {\n\t\treturn\n\t}"),
+]
+MUTATIONS["m19_水位未回落计数不再累加"] = [
     ("sub", "if usageErr == nil && pct >= float64(g.opts.DiskWatermarkPercent) {\n\t\tg.probeFailures++\n\t\treturn\n\t}",
             "if usageErr == nil && pct >= float64(g.opts.DiskWatermarkPercent) {\n\t\treturn\n\t}"),
+]
+
+# ---- Trip 进入闩锁时也要起算探针周期 ----
+# 杀手用例 TestGateTripStartsProbeInterval：把 lastProbe 置零（等价于「Trip 不记
+# 探针起点」）后，Trip 之后 30s 的第一次 Tick 就会探针 ⇒ `p.calls == 0` 断言转红。
+# （评审 F2：此前报告称这里「造不出能红的隔离变异」是过度声明。）
+MUTATIONS["m20_Trip不记探针起点"] = [
+    ("sub", "g.lastProbe = g.latchedAt", "g.lastProbe = time.Time{}"),
+]
+
+# ---- 阈值的闭区间语义（规格 R9「达到或超过」）----
+# m21 杀手 = TestGateWatermarkBoundaryIsInclusive：`>=` 改成 `>` 后，
+# 水位恰好 90% 不再闩锁 ⇒ 该用例「恰好等于阈值必须闩锁」转红。
+MUTATIONS["m21_阈值改为严格大于"] = [
+    ("sub", "\t\t\tg.usagePercent = pct\n\t\t\tif pct >= float64(g.opts.DiskWatermarkPercent) {",
+            "\t\t\tg.usagePercent = pct\n\t\t\tif pct > float64(g.opts.DiskWatermarkPercent) {"),
+]
+# m22 杀手同上（另一半）：阈值下移一个百分点后，水位 89.9% 也会闩锁
+# ⇒ 该用例「低于阈值不得闩锁」转红。注入式反向变异，用来让「低于侧」也有归属。
+MUTATIONS["m22_阈值下移一个百分点"] = [
+    ("sub", "\t\t\tg.usagePercent = pct\n\t\t\tif pct >= float64(g.opts.DiskWatermarkPercent) {",
+            "\t\t\tg.usagePercent = pct\n\t\t\tif pct >= float64(g.opts.DiskWatermarkPercent)-1 {"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -220,24 +264,27 @@ CHECKS = [
         "name": "网关侧不出现建目录调用",
         "file": "internal/gateway/observability/spool_gate.go",
         # 【相对简报加严，实测依据见文件头第 4 条】简报的 `os\.MkdirAll` 只钉无别名的
-        # 调用形态（`o "os"` + `o.MkdirAll(...)` 即可绕过 ⇒ 假绿）；本正则钉「任何
-        # Mkdir* 调用」，不依赖包名与别名形态。`\b` + `\s*\(` 排除注释里不带括号的
-        # 提及（本文件注释正当地提到了 MkdirAll）。
+        # 调用形态（`o "os"` + `o.MkdirAll(...)` 即可绕过 ⇒ 假绿）；本正则钉**直接调用
+        # 形态**，不依赖包名与别名。`\b` + `\s*\(` 排除注释里不带括号的提及。
+        # 【评审 F4：效力边界必须写明】它是**启发式，不是结构不变量** —— 把 os.MkdirAll
+        # 取出赋值再调用、或 exec 调 mkdir(1) 都能绕过；反向它也会命中注释里带括号的提及
+        #（本实现的注释因此不写该形态）。**承重证据是行为用例与变异 m16**：
+        # TestGateDefaultProbeDoesNotCreateRoot 用真实默认探针对不存在的 <root> 断言
+        # 「探针失败 + 保持闩锁 + 根目录仍不存在」，注入一次 MkdirAll 即转红。
         "pattern": r"\bMkdir[A-Za-z]*\s*\(",
         "expect": "absent",
         "why": (
             "网关自己一个目录都不建：唯一的 MkdirAll 在冻结包里（writer.go:489，见 D49）。"
             "网关侧若出现建目录调用（最可能出现在恢复探针里），会把消失的挂载点在容器可写层"
             "重新建回来，使运行中挂载消失**无法被检测**。"
-            "【为什么必须静态检查】把探针里本就不存在的 MkdirAll 删掉不改变任何行为，"
-            "没有任何行为用例能表达这条结构不变量；它同时被 defaultProbeWrite 的注释"
-            "（探针用 os.CreateTemp，父目录必须已存在）在实现上约束。"
+            "【效力边界】本行只是源码层面的**启发式辅助信号**，不是结构不变量（见上方注释）；"
+            "承重证据是行为用例 TestGateDefaultProbeDoesNotCreateRoot + 变异 m16。"
         ),
     },
 ]
 
 # ---------------------------------------------------------------------------
-# 允许的绿：本集合预期为空 —— 14 条变异各由一条具体顶层用例杀死。
+# 允许的绿：本集合预期为空 —— 22 条变异各由一条具体顶层用例杀死。
 # ---------------------------------------------------------------------------
 EXPECTED_GREEN = {}
 
@@ -279,13 +326,33 @@ REQUIREMENTS = [
                  "（Trips / ProbeFailures / LatchedSeconds / UsagePercent / Latched / Reason）"),
         "mutations": ["m07_闩锁秒数不再累计", "m09_最近水位不写入快照",
                       "m10_Latched读数取反", "m11_快照Latched恒false",
-                      "m18_探针失败计数不再累加"], "checks": [],
+                      "m18_探针写失败计数不再累加", "m19_水位未回落计数不再累加"], "checks": [],
         "note": (
             "**补入条目（简报没有）**：简报只断言了 Trips 与 ProbeFailures，"
             "`LatchedSeconds` / `UsagePercent` / `Latched` 三个 §9.3 字段可以恒错而全绿。"
             "LatchedSeconds 的口径按本实现登记为「本次闩锁已持续秒数」（解锁归零）。"
-            "m18 另修一处**遮蔽**：`g.probeFailures++` 在两条互斥出口各有一处，"
-            "只摘一处时另一处会把计数补回 ⇒ 断言被遮蔽、变异假绿，故两处一起摘。"
+            "【评审 F1 修正】ProbeFailures 拆成两条变异：两条出口是**顺序**关系"
+            "（探针写失败在前且 return），各自需要自己的观察者 —— m18 由 "
+            "TestGateProbeFailureKeepsLatched 杀死，m19 由 "
+            "TestGateProbeSuccessWithHighWatermarkKeepsLatched 杀死（F1 为该用例补了断言）。"
+        ),
+    },
+    {
+        "plan": "计划 2 任务 4：通过 Trip 进入闩锁时，探针周期同样从 Trip 时刻起算（节流不被绕过）",
+        "mutations": ["m20_Trip不记探针起点"], "checks": [],
+        "note": (
+            "**补入条目（评审 F2）**：杀手 TestGateTripStartsProbeInterval。"
+            "此前报告称此处「造不出能红的隔离变异」是过度声明 —— 与 "
+            "TestGateProbeRespectsInterval 同一手法即可隔离杀死。"
+        ),
+    },
+    {
+        "plan": "规格 §15.1 R9：水位阈值是闭区间（「达到或超过」⇒ 恰好等于必须闩锁，低于必须不闩锁）",
+        "mutations": ["m21_阈值改为严格大于", "m22_阈值下移一个百分点"], "checks": [],
+        "note": (
+            "**补入条目（评审 F5）**：杀手 TestGateWatermarkBoundaryIsInclusive。"
+            "m21 钉「等于侧」（`>=` 写成 `>`），m22（注入式反向变异，阈值下移 1 个百分点）"
+            "钉「低于侧」—— 否则「89.9%% 不得闩锁」这半条断言没有归属的变异。"
         ),
     },
     {

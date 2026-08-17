@@ -73,6 +73,26 @@ func TestGateTripsOnDiskWatermark(t *testing.T) {
 	require.Contains(t, stats.Reason, "watermark")
 }
 
+// TestGateWatermarkBoundaryIsInclusive 钉住阈值的**闭区间**语义（规格 R9
+// 「达到或超过水位线」）：恰好等于 `DiskWatermarkPercent` ⇒ 必须闩锁；
+// 低于 ⇒ 必须不闩锁。此前只用 91%%/95%% 与 10%% 这类远离阈值的数，
+// 「>= 写成 >」这类边界错法测不出来。
+func TestGateWatermarkBoundaryIsInclusive(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	u := &countingUsage{pct: 89.9}
+	g := newGate(t, u, &countingProbe{}, clk)
+
+	g.Tick(clk.now())
+	require.True(t, g.Allow(), "水位 89.9%% < 90%% ⇒ 不得闩锁")
+	require.Equal(t, int64(0), g.Stats().Trips)
+
+	u.pct = 90 // 恰好等于阈值
+	g.Tick(clk.now())
+	require.False(t, g.Allow(), "恰好等于阈值必须闩锁（阈值是闭区间，不是严格大于）")
+	require.Equal(t, int64(1), g.Stats().Trips)
+	require.Contains(t, g.Reason(), "watermark")
+}
+
 // TestGateTripIsIdempotentAndReportedOnce 跳变只报一次：Trip 的返回值是
 // 「本次是否跳变」，日志据此只打一条（否则每行一次 ERROR 会淹没日志）。
 func TestGateTripIsIdempotentAndReportedOnce(t *testing.T) {
@@ -138,6 +158,30 @@ func TestGateProbeRespectsInterval(t *testing.T) {
 	require.Equal(t, afterTrip+1, p.calls, "距上次探针不足周期不得重复探针")
 }
 
+// TestGateTripStartsProbeInterval 通过 Trip 进入闩锁后，第一次探针同样要等满一个
+// ProbeInterval：写入**刚刚**失败就立刻再探一次没有意义，闩锁的意义正是把
+// 「每请求重试」变成「每周期一次」。⇒ Trip 必须同时记下 latchedAt 与 lastProbe。
+func TestGateTripStartsProbeInterval(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	p := &countingProbe{fail: errors.New("read-only file system")}
+	g := newGate(t, &countingUsage{pct: 0}, p, clk) // 水位 0 ⇒ 不会由水位闩锁
+
+	require.True(t, g.Trip("append_failed", errors.New("no space")))
+	require.False(t, g.Allow())
+
+	clk.advance(30 * time.Second)
+	g.Tick(clk.now())
+	require.Equal(t, 0, p.calls, "Trip 之后未满一个 ProbeInterval 不得探针")
+
+	clk.advance(31 * time.Second) // 距 Trip 累计 61s
+	g.Tick(clk.now())
+	require.Equal(t, 1, p.calls, "Trip 之后满一个 ProbeInterval 必须探针一次")
+
+	clk.advance(1 * time.Second)
+	g.Tick(clk.now())
+	require.Equal(t, 1, p.calls, "距上次探针不足周期不得重复探针")
+}
+
 // TestGateProbeFailureKeepsLatched 探针失败 ⇒ 保持闩锁，并计入 ProbeFailures
 // 与本次闩锁已持续秒数（§9.3 的降级计数器）。
 func TestGateProbeFailureKeepsLatched(t *testing.T) {
@@ -169,6 +213,9 @@ func TestGateProbeSuccessWithHighWatermarkKeepsLatched(t *testing.T) {
 	g.Tick(clk.now()) // 探针成功，但水位仍是 95% ≥ 90%
 	require.False(t, g.Allow(), "探针成功不能单独解锁：水位未回落 ⇒ 必须保持闩锁")
 	require.Equal(t, 1, p.calls)
+	// 这一条出口（探针成功、水位未回落）自己也要被观察：它同样计入 ProbeFailures，
+	// 否则该出口的计数恒错也全绿（对应变异 m19）。
+	require.Equal(t, int64(1), g.Stats().ProbeFailures, "水位未回落同样计入探针失败")
 }
 
 // TestGateProbeSuccessUnlatches 恢复条件必须显式：探针成功（且水位低于阈值）⇒ 解锁，

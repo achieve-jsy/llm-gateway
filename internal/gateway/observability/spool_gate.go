@@ -14,8 +14,14 @@ import (
 // 一旦这里出现 MkdirAll（例如早期的探针实现），它会把消失的挂载点在容器可写层
 // 重新建回来，从而掩盖 D49 要检测的「运行中挂载消失」。见 defaultProbeWrite。
 //
-// （静态检查「网关侧不出现建目录调用」用正则 `\bMkdir[A-Za-z]*\s*\(` 钉住这一条：
-// 任何建目录调用形态都会命中，无论用 os 的原名还是别名。）
+// 【静态检查的效力边界（如实标注，不要据此宣称结构不变量）】集合里的
+// CHECKS 行用正则 `\bMkdir[A-Za-z]*\s*\(` 做启发式匹配：它覆盖**直接调用**形态
+//（`os.MkdirAll(...)`、别名导入后的 `o.MkdirAll(...)`、`syscall.Mkdir(...)`），
+// 但**不是**结构不变量 —— 把 os.MkdirAll 取出赋值再调用、或走 exec 调 mkdir(1)
+// 都能绕过；反向它也会命中注释里带括号的提及（本文件的注释因此不写该形态）。
+// **承重证据是行为用例**：TestGateDefaultProbeDoesNotCreateRoot 用真实的
+// defaultProbeWrite 对不存在的 <root> 断言「探针失败 + 保持闩锁 + 根目录仍不存在」
+//（对应变异 m16：往探针里注入一次 MkdirAll 即转红）。静态行只是辅助信号。
 
 // ErrSpoolLatched 表示正文落盘已被闩锁关闭：调用方**不得**再尝试写 spool，
 // 而应把该行标为 body_missing=true（规格 §15.1 R9 的降级约定）。
@@ -113,6 +119,16 @@ func (g *SpoolGate) Trip(reason string, cause error) bool {
 // 【为什么解锁要两个条件】水位回落只说明盘上有空间了，不说明本进程能写
 // （权限、只读挂载、目录被删都可能）。反之探针成功也可能只是写进了别的文件系统。
 // 两个条件同时成立才恢复，是 R9「恢复条件必须显式」的落地。
+//
+// 【一处**故意的 fail-open 取舍**（必须写明，不能靠读代码猜）】已闩锁分支里，
+// 若 statfs（UsagePercent）本身失败，`usageErr == nil && …` 这一半为假 ⇒
+// 「双条件解锁」退化为**只看探针**：探针可写就解锁。取舍理由：statfs 的 err
+// 可能只是权限/短暂故障，把它当成「水位未回落」会把网关永久钉死在闩锁上；
+// 而「根目录是否还是原来那个挂载点」这件事**探针判不了** —— 冻结包的
+// writer.go:489 会在容器可写层把根目录重建出来，容器层里写探针是会成功的。
+// 因此运行中挂载消失的判据（根目录身份基线 + 每 tick/滚动比对 + 解锁前先验身份）
+// **不在本文件**，属 Task 5 的周期 flush 与滚动路径；本文件只保证
+// 「读不到水位」不伪装成「盘满」（变异 m17 / TestGateUsageErrorDoesNotLatch）。
 func (g *SpoolGate) Tick(now time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

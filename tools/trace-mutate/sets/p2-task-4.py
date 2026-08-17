@@ -199,6 +199,19 @@ MUTATIONS["m17_statfs失败也闩锁"] = [
             "\t\tif err == nil {"),
 ]
 
+# ---- §9.3 计数器：ProbeFailures（探针未通过恢复判据的次数）----
+# 杀手用例 TestGateProbeFailureKeepsLatched（断言 == 1）与
+# TestGateDefaultProbeDoesNotCreateRoot（真实探针失败后断言 == 1）。
+# 【为什么必须同时摘掉两处】`g.probeFailures++` 出现在两条互斥出口（探针写失败、
+# 水位未回落）；单独摘掉前者时，后者在同一条用例里照样把它加回 1 ⇒ 断言被遮蔽、
+# 变异假绿。两处一起摘掉才证明「这个计数器确实被断言承重」。
+MUTATIONS["m18_探针失败计数不再累加"] = [
+    ("sub", "if probeErr != nil {\n\t\tg.probeFailures++\n\t\treturn\n\t}",
+            "if probeErr != nil {\n\t\treturn\n\t}"),
+    ("sub", "if usageErr == nil && pct >= float64(g.opts.DiskWatermarkPercent) {\n\t\tg.probeFailures++\n\t\treturn\n\t}",
+            "if usageErr == nil && pct >= float64(g.opts.DiskWatermarkPercent) {\n\t\treturn\n\t}"),
+]
+
 # ---------------------------------------------------------------------------
 # 静态检查：**变异测不到**的要求必须有静态检查行（全局约束的证据制度第 4 条）。
 # ---------------------------------------------------------------------------
@@ -265,11 +278,14 @@ REQUIREMENTS = [
         "plan": ("规格 §9.3：降级必须暴露计数器与状态快照"
                  "（Trips / ProbeFailures / LatchedSeconds / UsagePercent / Latched / Reason）"),
         "mutations": ["m07_闩锁秒数不再累计", "m09_最近水位不写入快照",
-                      "m10_Latched读数取反", "m11_快照Latched恒false"], "checks": [],
+                      "m10_Latched读数取反", "m11_快照Latched恒false",
+                      "m18_探针失败计数不再累加"], "checks": [],
         "note": (
             "**补入条目（简报没有）**：简报只断言了 Trips 与 ProbeFailures，"
             "`LatchedSeconds` / `UsagePercent` / `Latched` 三个 §9.3 字段可以恒错而全绿。"
             "LatchedSeconds 的口径按本实现登记为「本次闩锁已持续秒数」（解锁归零）。"
+            "m18 另修一处**遮蔽**：`g.probeFailures++` 在两条互斥出口各有一处，"
+            "只摘一处时另一处会把计数补回 ⇒ 断言被遮蔽、变异假绿，故两处一起摘。"
         ),
     },
     {

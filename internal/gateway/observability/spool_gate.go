@@ -15,13 +15,15 @@ import (
 // 重新建回来，从而掩盖 D49 要检测的「运行中挂载消失」。见 defaultProbeWrite。
 //
 // 【静态检查的效力边界（如实标注，不要据此宣称结构不变量）】集合里的
-// CHECKS 行用正则 `\bMkdir[A-Za-z]*\s*\(` 做启发式匹配：它覆盖**直接调用**形态
-//（`os.MkdirAll(...)`、别名导入后的 `o.MkdirAll(...)`、`syscall.Mkdir(...)`），
-// 但**不是**结构不变量 —— 把 os.MkdirAll 取出赋值再调用、或走 exec 调 mkdir(1)
-// 都能绕过；反向它也会命中注释里带括号的提及（本文件的注释因此不写该形态）。
-// **承重证据是行为用例**：TestGateDefaultProbeDoesNotCreateRoot 用真实的
-// defaultProbeWrite 对不存在的 <root> 断言「探针失败 + 保持闩锁 + 根目录仍不存在」
-//（对应变异 m16：往探针里注入一次 MkdirAll 即转红）。静态行只是辅助信号。
+// CHECKS 行用正则 `\bMkdir[A-Za-z]*\s*\(` 做启发式匹配：它覆盖**直接调用**形态 ——
+// 无论写成 os.MkdirAll、别名导入后的 o.MkdirAll，还是 syscall.Mkdir，
+// 只要标识符后面紧跟一个 ASCII 左括号就命中；但它**不是**结构不变量 ——
+// 把 os.MkdirAll 取出赋值再调用、或走 exec 调 mkdir(1)，都能绕过；
+// 反向它也会命中注释里那种「标识符紧跟 ASCII 左括号」的提及
+//（本文件的注释因此一律不写该形态）。**承重证据是行为用例**：
+// TestGateDefaultProbeDoesNotCreateRoot 用真实的 defaultProbeWrite 对不存在的 <root>
+// 断言「探针失败 + 保持闩锁 + 根目录仍不存在」（对应变异 m16：往探针里注入一次
+// MkdirAll 调用即转红）。静态行只是辅助信号。
 
 // ErrSpoolLatched 表示正文落盘已被闩锁关闭：调用方**不得**再尝试写 spool，
 // 而应把该行标为 body_missing=true（规格 §15.1 R9 的降级约定）。

@@ -16,11 +16,15 @@ r"""计划 2 / 任务 4 的变异集合（作者编写的产物 ⇒ 必须 git-t
    m05 的判定是「**绿（零覆盖！）**」；补上第 8 条后为
    「红 / TestGateProbeSuccessWithHighWatermarkKeepsLatched」。详见报告 §变异集合证据。
 
-2. **m07..m14 是补入条目**（简报只有 m01..m06）。依据是控制者硬性指令第 1 条
-   「**每一条断言都必须能红**」：简报没有断言 `Stats()` 快照里的
-   `LatchedSeconds` / `UsagePercent` / `Latched`，也没断言 `Latched()` 与
-   `Trip` 的 reason 拼接 —— 这些字段**全都可以恒错而全部用例仍绿**。
-   补入的每条都对应测试文件里新增的一条断言，且各有唯一杀手用例。
+2. **m07..m17 是补入条目**（简报只有 m01..m06）。依据是控制者硬性指令第 1 条
+   「**每一条断言都必须能红**」以及自检发现的零覆盖：
+   - 简报没有断言 `Stats()` 快照里的 `LatchedSeconds` / `UsagePercent` / `Latched`，
+     也没断言 `Latched()` 与 `Trip` 的 reason 拼接 —— 这些字段**全都可以恒错而全部用例仍绿**；
+   - `NewSpoolGate` 的 `ProbeInterval <= 0 ⇒ 1m` 默认值无人守（Task 2 评审 F1 同类：
+     默认值漂移无守卫）；
+   - D49 的硬约束「探针不得创建根目录」原本只有静态检查 ⇒ 补一条**行为**用例
+     （用真实默认探针 + 不存在的 `<root>`），使注入 MkdirAll 能被行为断言抓住；
+   - `statfs 失败本身不闩锁` 是简报明确写下的设计决定，却没有任何用例覆盖。
 
 3. **m07/m13 的语义按本实现登记**：`LatchedSeconds` 是「**本次**闩锁已持续秒数」
    （每次 Tick 重算、解锁归零），不是跨闩锁周期的历史累计 —— 后者需要额外字段与
@@ -158,6 +162,43 @@ MUTATIONS["m13_解锁不归零闩锁秒数"] = [
     ("sub", "g.reason = \"\"\n\tg.latchedSeconds = 0", "g.reason = \"\""),
 ]
 
+# ---- 构造期的默认值：ProbeInterval 未设置 ⇒ 1m ----
+# 杀手用例 TestGateProbeIntervalDefaultsToOneMinute：默认值失效后 ProbeInterval=0，
+# 每次 Tick 都探针 ⇒ 该用例第二段（30s 时不得探针）转红。
+# 闩锁的节流靠这个默认值兜底：没有它，「每请求重试」就退化成「每 flush tick 探针」。
+MUTATIONS["m15_探针周期默认值失效"] = [
+    ("sub", "if opts.ProbeInterval <= 0 {\n\t\topts.ProbeInterval = time.Minute\n\t}",
+            "if false {\n\t\topts.ProbeInterval = time.Minute\n\t}"),
+]
+
+# ---- D49：探针绝不得创建根目录 ----
+# 杀手用例 TestGateDefaultProbeDoesNotCreateRoot（真实默认探针 + 不存在的 `<root>`）：
+# 注入 MkdirAll 后根目录被建出来 ⇒ 探针「成功」、闩锁被解开，且
+# `os.IsNotExist(missing)` 断言命中 ⇒ 转红。
+# 注意这条**同时**会被 CHECKS 的静态行命中：行为与结构两条独立证据。
+MUTATIONS["m16_探针创建根目录"] = [
+    ("sub", "f, err := os.CreateTemp(root, \".probe-*\")",
+            "_ = os.MkdirAll(root, 0o755)\n\tf, err := os.CreateTemp(root, \".probe-*\")"),
+]
+
+# ---- statfs 失败不得伪装成「盘满」----
+# 杀手用例 TestGateUsageErrorDoesNotLatch：把「读不到水位」也当闩锁后
+# `Allow()` / `Trips == 0` / `Reason() == ""` 三条断言同时转红。
+# 【这是注入反向行为的变异】它正是「顺手修 D49」时最可能被引入的改动，
+# 也正是简报明确禁止的（权限/路径问题会伪装成磁盘问题）。
+MUTATIONS["m17_statfs失败也闩锁"] = [
+    ("sub", "if pct, err := g.opts.UsagePercent(g.opts.Root); err == nil {",
+            "pct, err := g.opts.UsagePercent(g.opts.Root)\n"
+            "\t\tif err != nil {\n"
+            "\t\t\tg.latched = true\n"
+            "\t\t\tg.reason = \"statfs_failed\"\n"
+            "\t\t\tg.latchedAt = now\n"
+            "\t\t\tg.lastProbe = now\n"
+            "\t\t\tg.trips++\n"
+            "\t\t}\n"
+            "\t\tif err == nil {"),
+]
+
 # ---------------------------------------------------------------------------
 # 静态检查：**变异测不到**的要求必须有静态检查行（全局约束的证据制度第 4 条）。
 # ---------------------------------------------------------------------------
@@ -234,6 +275,32 @@ REQUIREMENTS = [
     {
         "plan": "计划 2 任务 4：解锁必须把上一次闩锁的状态清零（reason / 本次闩锁秒数）",
         "mutations": ["m12_解锁不清空reason", "m13_解锁不归零闩锁秒数"], "checks": [],
+    },
+    {
+        "plan": "计划 2 任务 4：ProbeInterval 默认 1m（未设置时不得退化成「每 tick 探针」）",
+        "mutations": ["m15_探针周期默认值失效"], "checks": [],
+        "note": (
+            "**补入条目**：`NewSpoolGate` 的默认值原先零覆盖（与 Task 2 评审 F1「默认值漂移"
+            "无守卫」同类）。杀手用例 TestGateProbeIntervalDefaultsToOneMinute。"
+        ),
+    },
+    {
+        "plan": "规格 §15.1 R9 + 全局约束 D49：探针不得创建根目录（根目录不存在 ⇒ 探针失败并保持闩锁）",
+        "mutations": ["m16_探针创建根目录"], "checks": ["网关侧不出现建目录调用"],
+        "note": (
+            "**补入条目**：D49 的这条硬约束原先只有静态检查 ⇒ 补行为用例 "
+            "TestGateDefaultProbeDoesNotCreateRoot（真实默认探针 + 不存在的 `<root>`），"
+            "注入 MkdirAll 即转红；静态行与行为断言是两条独立证据。"
+        ),
+    },
+    {
+        "plan": "计划 2 任务 4：statfs 失败本身不闩锁（「读不到水位」≠「盘满」）",
+        "mutations": ["m17_statfs失败也闩锁"], "checks": [],
+        "note": (
+            "**补入条目**：简报在 Tick 里明确写下这条设计决定却无用例覆盖；"
+            "杀手用例 TestGateUsageErrorDoesNotLatch。该分支是 D49「运行中挂载消失」"
+            "交接给任务 5 的关键上下文（见交付报告 §顾虑）。"
+        ),
     },
     {
         "plan": "计划 2 全局约束 / D49：网关侧（含恢复探针）绝不得创建目录",

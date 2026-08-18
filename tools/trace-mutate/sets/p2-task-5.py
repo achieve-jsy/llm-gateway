@@ -45,7 +45,9 @@ r"""计划 2 / 任务 5 的变异集合（作者编写的产物 ⇒ 必须 git-t
    - A5-4（Tick 持锁做探针 fsync，会堵住热路径 Allow）：⇒ m14（Run 的 goroutine 上直接
      Tick）、m18（到期标志不再恰好消费一次）；
    - §9.3 计数器与周期默认值原先零覆盖 ⇒ m15（周期默认值失效）、m16（Flushes 不计）、
-     m17（Rolls 不计）。
+     m17（Rolls 不计）；
+   - A5-1 的**身份取值本身**也要有观察者 ⇒ m20（挂载级身份不再选最长前缀）、
+     m21（身份取值不稳定 ⇒ 第一次复检就永久闩锁）。
 
 6. **用例分两层**：A5-4 的两条守卫里，「Run 不得在自己的 goroutine 上探针」可在
    B 层观测（`TestSpoolerRunDefersProbeToWriteGoroutine`）；「到期标志恰消费一次」必须
@@ -215,6 +217,27 @@ MUTATIONS["m17_Rolls计数不再累加"] = [
     ("sub", "s.rolls++", "_ = s.rolls"),
 ]
 
+# ==== A5-1 的身份取值本身（判别逻辑与稳定性）====
+# ---- ⑳ 挂载级身份不再选取「覆盖 root 的最长前缀挂载项」----
+# 杀手 = TestMountIdentityForPicksLongestPrefixAndSurvivesEscape（包内）：
+# 合成 mountinfo 里 /datalog 与 / 都覆盖 root，只有最长前缀是对的；
+# 摘掉选取逻辑后解析器判不出所属挂载 ⇒ require.True(ok) 转红。
+# 【为什么必须用合成内容】本机（macOS）没有 /proc/self/mountinfo，挂载级解析只在
+# Linux 生产路径上生效 ⇒ 不测就是开发环境里的零覆盖。
+MUTATIONS["m20_挂载身份不再选最长前缀"] = [
+    ("sub", "if len(mp) > bestLen {", "if len(mp) > bestLen && false {"),
+]
+# ---- ㉑ 身份取值不稳定（把时间掺进身份）----
+# 杀手 = TestDefaultRootIdentityIsStableForTheSameDirectory（包内）：同一目录两次取身份
+# 必须相同。不稳定 ⇒ 第一次周期复检就与基线不一致 ⇒ **永久闩锁**、全部正文变 body_missing。
+# 两个分支都注入（挂载级 / 设备级），使这条变异在 Linux 与 macOS 上都能被杀死。
+MUTATIONS["m21_身份取值不稳定"] = [
+    ("sub", 'return fmt.Sprintf("mount=%s|dev=%s|fstype=%s", key.mountPoint, key.dev, key.fsType), nil',
+            'return fmt.Sprintf("mount=%s|dev=%s|fstype=%s|t=%d", key.mountPoint, key.dev, key.fsType, time.Now().UnixNano()), nil'),
+    ("sub", 'return fmt.Sprintf("dev=%d|fstype=%d", uint64(st.Dev), fsType), nil',
+            'return fmt.Sprintf("dev=%d|fstype=%d|t=%d", uint64(st.Dev), fsType, time.Now().UnixNano()), nil'),
+]
+
 # ---------------------------------------------------------------------------
 # 静态检查：**变异测不到**的要求必须有静态检查行（全局约束的证据制度第 4 条）。
 # ---------------------------------------------------------------------------
@@ -266,7 +289,7 @@ CHECKS = [
 ]
 
 # ---------------------------------------------------------------------------
-# 允许的绿：本集合预期为空 —— 19 条变异各由一条具体顶层用例杀死。
+# 允许的绿：本集合预期为空 —— 21 条变异各由一条具体顶层用例杀死。
 # ---------------------------------------------------------------------------
 EXPECTED_GREEN = {}
 
@@ -309,6 +332,17 @@ REQUIREMENTS = [
         "plan": "A5-1 第 3 点：解锁探针必须先过同一道身份检查（不得为此改 SpoolGate 接口）",
         "mutations": ["m12_解锁探针不再验身份"], "checks": [],
         "note": "杀手 = TestSpoolerProbeRefusesToUnlatchWhenIdentityMismatched（探针成功 + 水位正常，只有身份维持闩锁）。",
+    },
+    {
+        "plan": "A5-1：身份的取值本身必须可判别（覆盖 root 的最长前缀挂载项）且**稳定**（同一目录同一挂载点随时间不变）",
+        "mutations": ["m20_挂载身份不再选最长前缀", "m21_身份取值不稳定"], "checks": [],
+        "note": (
+            "**补入条目**：挂载级解析是 Linux 生产路径上的代码，本机（macOS）没有 "
+            "/proc/self/mountinfo ⇒ 用合成 mountinfo 内容覆盖（包内用例 "
+            "TestMountIdentityForPicksLongestPrefixAndSurvivesEscape）。"
+            "「不稳定」是比「漏检」更容易发生的失效：任何把时间掺进身份的实现都会让"
+            "第一次周期复检就永久闩锁（杀手 TestDefaultRootIdentityIsStableForTheSameDirectory）。"
+        ),
     },
     {
         "plan": "计划 2 任务 5：根目录不可用的那一轮不得滚动（不做结构性写入）",

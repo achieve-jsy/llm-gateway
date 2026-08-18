@@ -8,6 +8,9 @@ package observability
 //     后者是崩溃红，不是断言红，不能作为证据（证据制度要求断言红）。
 //  ② 未导出方法 markProbeDue：A5-4 的「到期标志恰好消费一次」需要**确定性地**
 //     置一次标志；靠 Run 的 ticker 置标志无法避免竞态（无法断言「恰好一次」）。
+//  ③ 未导出纯函数 mountIdentityFor：挂载级身份解析是 **Linux 生产路径**上的代码，
+//     而本机（macOS）没有 /proc/self/mountinfo ⇒ 若不在这里用合成内容测，
+//     这条 A5-1 的判别逻辑在开发环境中完全没有覆盖。
 //
 // 其余全部行为都由 B 层（tests/gateway/observability/spooler_test.go）覆盖。
 
@@ -72,4 +75,54 @@ func TestSpoolerDueProbeIsConsumedExactlyOnce(t *testing.T) {
 	_, err = s.AppendLine("2026-09-24", []byte(`{"a":3}`))
 	require.NoError(t, err)
 	require.Equal(t, int32(1), usageCalls.Load(), "到期标志必须恰好消费一次，不得重复 Tick")
+}
+
+// TestMountIdentityForPicksLongestPrefixAndSurvivesEscape 钉住挂载级身份的判别逻辑
+// （A5-1 的核心）：身份取「覆盖 root 的**最长前缀**挂载项」的 挂载点 + 设备 + 类型。
+//
+// 【为什么必须有这条】本机（macOS）没有 /proc/self/mountinfo，`defaultRootIdentity`
+// 走的是设备级退化分支 ⇒ 挂载级解析在生产（Linux）路径上，只有合成内容能覆盖它。
+// 合成内容按 mountinfo 的真实字段顺序写：挂载 ID / 父 ID / major:minor / 根 /
+// 挂载点 / 挂载选项 [可选字段…] "-" fstype 源 super-options。
+// 杀手：变异 m20（不再选取最长前缀 ⇒ 解析器直接判不出所属挂载）。
+func TestMountIdentityForPicksLongestPrefixAndSurvivesEscape(t *testing.T) {
+	const mounted = `25 30 0:23 / / rw,relatime - overlay overlay rw,lowerdir=/l
+36 25 8:1 / /datalog rw,relatime shared:1 - ext4 /dev/sda1 rw
+40 36 8:1 /sub /datalog/trace-archive-v4 rw,relatime - ext4 /dev/sda1 rw
+garbage line
+`
+	key, ok := mountIdentityFor([]byte(mounted), "/datalog/trace-archive-v4/")
+	require.True(t, ok, "覆盖 root 的挂载项必须被找到（root 末尾的 / 由 Clean 归一）")
+	require.Equal(t, mountKey{mountPoint: "/datalog/trace-archive-v4", dev: "8:1", fsType: "ext4"}, key)
+
+	// 「挂载消失」= 覆盖 root 的挂载项退化成容器根文件系统（overlay）⇒ 最长前缀变了。
+	const unmounted = `25 30 0:23 / / rw,relatime - overlay overlay rw,lowerdir=/l
+`
+	gone, ok := mountIdentityFor([]byte(unmounted), "/datalog/trace-archive-v4")
+	require.True(t, ok)
+	require.Equal(t, mountKey{mountPoint: "/", dev: "0:23", fsType: "overlay"}, gone)
+	require.NotEqual(t, key, gone, "挂载消失必须被判为不同身份，否则 A5-1 无从检测")
+
+	// mountinfo 的八进制转义（空格 = \040）必须还原，否则含空格的挂载点永远匹配不上。
+	esc, ok := mountIdentityFor([]byte(`7 1 8:2 / /data\040vol rw - ext4 /dev/sdb1 rw`), "/data vol/x")
+	require.True(t, ok)
+	require.Equal(t, "/data vol", esc.mountPoint)
+}
+
+// TestDefaultRootIdentityIsStableForTheSameDirectory 钉住身份取值的**稳定性**：
+// 同一目录、同一挂载点，在时间上必须返回同一个身份。
+//
+// 【为什么这是承重守卫】身份是与**启动期基线**比较的：只要取值本身会随时间变化，
+// 第一次周期复检就会「身份不一致」⇒ 网关被永久闩锁、所有正文变成 body_missing。
+// 这是一条比「漏检」更容易发生的失效（任何把时间/随机量/进程状态掺进身份的实现
+// 都会命中），故必须有观察者。杀手：变异 m21（把时间掺进身份）。
+func TestDefaultRootIdentityIsStableForTheSameDirectory(t *testing.T) {
+	root := t.TempDir()
+	a, err := defaultRootIdentity(root)
+	require.NoError(t, err)
+	require.NotEmpty(t, a)
+	time.Sleep(2 * time.Millisecond)
+	b, err := defaultRootIdentity(root)
+	require.NoError(t, err)
+	require.Equal(t, a, b, "同一目录的身份必须稳定：否则每次 tick 都会与基线不一致而被闩锁")
 }

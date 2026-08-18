@@ -9,6 +9,7 @@ import (
 	"time"
 
 	obsmodel "github.com/example/llm-gateway/internal/observability/model"
+	ta "github.com/example/llm-gateway/internal/tracearchive"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -46,6 +47,10 @@ type TraceWriter struct {
 	ch       chan TraceEvent
 	flushN   int
 	interval time.Duration
+
+	// sink 是正文落盘目标（见 TraceBodySink）。nil ⇒ 功能关闭，
+	// 走既有路径（正文仍写进本表的 jsonb 列），与本改动之前逐字段相同。
+	sink TraceBodySink
 
 	// maxBatchBytes：单次批量 INSERT 的正文字节上限（防止 pgx 简单协议内联出 GB 级 SQL 文本）
 	maxBatchBytes int64
@@ -89,6 +94,36 @@ func NewTraceWriterWithLimits(db *gorm.DB, bufSize, flushN int, interval time.Du
 		maxBatchBytes: limits.MaxBatchBytes,
 		maxQueueBytes: limits.MaxQueueBytes,
 	}
+}
+
+// TraceBodySink 是正文落盘目标（生产实现由 main.go 组装：AppendLine 归
+// *TraceSpooler，DayStart/DayOf 归 config.TraceBodyConfig）。
+//
+// 【为什么用接口】「先追加 spool、再写 PG 元数据行」是规格 §10.1 I1 的前提
+// （元数据行存在 ⇒ 产物 XOR spool 存在 或 body_missing=true），必须有测试能观测到
+// 两个动作的**相对次序**。接口让测试注入一个记录次序的替身
+// （tests/gateway/observability/trace_event_spool_test.go 的 orderRecorder），
+// 而不必依赖真实磁盘的时序。
+type TraceBodySink interface {
+	AppendLine(dt string, line []byte) (ta.Ref, error)
+
+	// DayStart 是唯一的日期计算入口，返回该事件归属日历日的 **UTC 零点**，
+	// 供 body_ref_dt（PG date 列）使用（理由见 config.TraceBodyConfig.DayStart）。
+	DayStart(ts time.Time) time.Time
+
+	// DayOf 拼 dt= 目录名，**必须**实现为 DayStart(ts).Format("2006-01-02")
+	// —— 同源才能保证「列里的日期」与「目录名里的日期」永远一致。
+	DayOf(ts time.Time) string
+}
+
+// NewTraceWriterWithSink 构造带正文落盘目标的写入器。
+//
+// sink 为 nil 时行为与 NewTraceWriterWithLimits 完全一致（功能关闭路径）。
+func NewTraceWriterWithSink(db *gorm.DB, bufSize, flushN int, interval time.Duration,
+	limits TraceWriterLimits, sink TraceBodySink) *TraceWriter {
+	w := NewTraceWriterWithLimits(db, bufSize, flushN, interval, limits)
+	w.sink = sink
+	return w
 }
 
 // traceEventBodyBytes 返回单条 trace 的原始正文字节数。
@@ -135,27 +170,30 @@ func (w *TraceWriter) Emit(e TraceEvent) {
 
 // Run 消费 channel，批量写入 DB
 func (w *TraceWriter) Run(ctx context.Context) {
-	batch := make([]obsmodel.CallTrace, 0, w.flushN)
+	// batch 保存**尚未组装**的事件：行构造与 spool 追加都在 flush 时、也就是这条
+	// 唯一的写协程上完成（不引入第二条写路径；成本口径见 D54）。
+	batch := make([]TraceEvent, 0, w.flushN)
 	// batchBytes 为当前批各行的原始正文字节数之和，用于按字节限批（D5）
 	var batchBytes int64
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 
-	flush := func(flushCtx context.Context, b []obsmodel.CallTrace) {
-		if len(b) == 0 {
+	flush := func(flushCtx context.Context, events []TraceEvent) {
+		if len(events) == 0 {
 			return
 		}
+		models := w.buildTraceModels(events)
 		if err := w.db.WithContext(flushCtx).
 			Clauses(clause.OnConflict{DoNothing: true}).
-			Create(&b).Error; err != nil {
+			Create(&models).Error; err != nil {
 			log.Printf("[trace] batch insert error, falling back to per-record: %v", err)
 			// 单条坏记录（如 jsonb 含 PG 不接受的 NUL 转义）会导致整批回滚，
 			// 降级为逐条插入并跳过坏记录，避免连坐丢弃正常 trace。
-			for i := range b {
+			for i := range models {
 				if err := w.db.WithContext(flushCtx).
 					Clauses(clause.OnConflict{DoNothing: true}).
-					Create(&b[i]).Error; err != nil {
-					log.Printf("[trace] skip trace request_id=%s: %v", b[i].RequestID, err)
+					Create(&models[i]).Error; err != nil {
+					log.Printf("[trace] skip trace request_id=%s: %v", models[i].RequestID, err)
 				}
 			}
 		}
@@ -178,7 +216,7 @@ func (w *TraceWriter) Run(ctx context.Context) {
 			// 保证任何后续路径（flush 失败、ctx 取消）都不会漏减。
 			n := traceEventBodyBytes(e)
 			w.queuedBytes.Add(-n)
-			batch = append(batch, traceEventToModel(e))
+			batch = append(batch, e)
 			batchBytes += n
 			if len(batch) >= w.flushN || batchBytes >= w.maxBatchBytes {
 				flush(ctx, batch)
@@ -193,8 +231,51 @@ func (w *TraceWriter) Run(ctx context.Context) {
 	}
 }
 
-func traceEventToModel(e TraceEvent) obsmodel.CallTrace {
-	ct := obsmodel.CallTrace{
+// buildTraceModels 把一批事件组装成待写入的元数据行，并**先**把正文追加到 spool。
+//
+// 【次序是本方法的核心不变量（规格 §10.1 I1）】每个事件都是
+// 「① AppendLine 成功 ⇒ ③ 组装带定位键的行」；①失败则组装 body_missing 行。
+// 反序（先写 PG 再落 spool）会留下一条「元数据说正文在某处、而那个地方什么都没有」
+// 的行 —— 读侧会报 ErrNotArchived（500），把一个正常降级伪装成存储故障。
+//
+// 【调用者只有 Run】行构造（含 json.Valid 与 json.Marshal 对 RawMessage 的 compact 校验）
+// 与 AppendLine 都发生在唯一的写协程上，本方法不派生任何 goroutine。
+func (w *TraceWriter) buildTraceModels(events []TraceEvent) []obsmodel.CallTrace {
+	models := make([]obsmodel.CallTrace, 0, len(events))
+	for i := range events {
+		e := events[i]
+		bodyBytes := int(traceEventBodyBytes(e))
+
+		if w.sink == nil {
+			// 功能关闭：既有路径，逐字段不变。
+			models = append(models, traceEventToModel(e))
+			continue
+		}
+
+		// ① 先落 spool。次序**承重**（规格 §10.1 I1）。
+		line := traceEventLine(e)
+		// day 与 dt 同源：DayOf 必须由 DayStart 派生（全局约束的单一事实源）。
+		// day 进 body_ref_dt 列（*time.Time，date），dt 进 spool 路径与 ta.Ref。
+		day := w.sink.DayStart(e.TS)
+		dt := w.sink.DayOf(e.TS)
+		ref, err := w.sink.AppendLine(dt, line)
+		if err != nil {
+			// ② 失败 ⇒ body_missing=true、定位键全 NULL、不重试（R9）。
+			models = append(models, traceEventToModelMissing(e, bodyBytes))
+			continue
+		}
+		// ③ 成功之后才组装带定位键的元数据行。
+		models = append(models, traceEventToModelWithRef(e, day, ref, bodyBytes))
+	}
+	return models
+}
+
+// traceEventToModelMeta 组装与正文无关的元数据字段（两条路径共用）。
+//
+// 【为什么必须共用】「功能关闭」与「功能开启」两条路径给出的元数据必须逐字段一致，
+// 否则同一份事件会因为开关得到两套数据；公共字段收在这里，一处改、两处生效。
+func traceEventToModelMeta(e TraceEvent) obsmodel.CallTrace {
+	return obsmodel.CallTrace{
 		RequestID:       e.RequestID,
 		TS:              e.TS,
 		StageAuthMs:     e.StageAuthMs,
@@ -206,6 +287,38 @@ func traceEventToModel(e TraceEvent) obsmodel.CallTrace {
 		ErrorCode:       e.ErrorCode,
 		ErrorMessage:    e.ErrorMessage,
 	}
+}
+
+// traceEventToModelWithRef 组装「正文在 spool 里」的元数据行（规格 §6）：
+// 三个 jsonb 列恒为 NULL，定位键与 body_bytes 由本函数写入。
+//
+// day 由调用方从 `sink.DayStart(e.TS)` 取得，与定位 spool 用的
+// `dt := sink.DayOf(e.TS)` 同源 ⇒ 列里的日期与目录名里的日期不可能不一致。
+//
+// BodyRefPart/BodyRefRow/BodyRefDT/BodyRefInst 取指针：part 0 与 row 0 都是
+// 合法值，用值类型会让「定位键缺失」与「第 0 块第 0 行」不可区分。
+func traceEventToModelWithRef(e TraceEvent, day time.Time, ref ta.Ref, bodyBytes int) obsmodel.CallTrace {
+	m := traceEventToModelMeta(e)
+	inst, part, row := ref.Inst, ref.Part, ref.Row
+	m.BodyRefDT, m.BodyRefInst, m.BodyRefPart, m.BodyRefRow = &day, &inst, &part, &row
+	m.BodyBytes = &bodyBytes
+	return m
+}
+
+// traceEventToModelMissing 组装「正文从未落盘」的元数据行（规格 §9.1 / §15.1 R9）：
+// body_missing=true、四个定位键全 NULL。
+//
+// 【为什么不占行号】失败的追加不消耗行号（冻结包只在两次写入都成功后才推进 rows），
+// 而本行的定位键是 NULL ⇒ 读侧永远不会按行号去取它的正文，因此不需要占位行。
+func traceEventToModelMissing(e TraceEvent, bodyBytes int) obsmodel.CallTrace {
+	m := traceEventToModelMeta(e)
+	m.BodyMissing = true
+	m.BodyBytes = &bodyBytes
+	return m
+}
+
+func traceEventToModel(e TraceEvent) obsmodel.CallTrace {
+	ct := traceEventToModelMeta(e)
 	if len(e.RequestHeadersRaw) > 0 && json.Valid(e.RequestHeadersRaw) {
 		ct.RequestHeaders = scrubNULEscapes(e.RequestHeadersRaw)
 	}

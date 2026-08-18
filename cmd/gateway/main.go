@@ -33,6 +33,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/gateway/server"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
+	ta "github.com/example/llm-gateway/internal/tracearchive"
 
 	// Register all GoModel provider adapters.
 	"github.com/example/llm-gateway/internal/providers"
@@ -257,8 +258,44 @@ func main() {
 		// 请求/响应 trace 写入器：使用独立 session + 专用 logger（D8），
 		// 避免慢 SQL 把内嵌的完整 request/response body 内联进日志。
 		traceDB := db.Session(&gorm.Session{Logger: newTraceDBLogger()})
-		traceWriter = gwobs.NewTraceWriterWithLimits(traceDB, 1024, 50, 2*time.Second, gwobs.TraceWriterLimits{})
+
+		// 正文直写 /datalog（规格 §4.2 方案 C）。默认关闭（TRACE_BODY_ROOT 为空），
+		// 此时 sink == nil，写入路径与本改动之前逐字段相同。
+		var sink gwobs.TraceBodySink
+		var spooler *gwobs.TraceSpooler
+		if cfg.TraceBody.Enabled {
+			s, serr := gwobs.NewTraceSpooler(gwobs.TraceSpoolerOptions{
+				Root:          cfg.TraceBody.Root,
+				Inst:          cfg.TraceBody.Inst,
+				BlockBytes:    cfg.TraceBody.BlockMB << 20,
+				RollInterval:  cfg.TraceBody.RollInterval,
+				FlushInterval: cfg.TraceBody.FlushInterval,
+				// 水位从配置层传入，闸门由 Spooler 自己构造：不去注入自建的闸门
+				// （解锁探针的根目录身份包装是构造期闭包，外部重复包装会叠加上一次的
+				// 身份错误 ⇒ 闸门可能永远解不开）。
+				DiskWatermarkPercent: cfg.TraceBody.DiskWatermarkPercent,
+			})
+			if serr != nil {
+				// 可服务性优先（规格 §9.3 G4）：网关继续启动，正文退回 PG 的 jsonb 列，
+				// 而不是把正文标成 body_missing（那才是真的丢）。响亮记录。
+				slog.Error("正文直写不可用，已退回 JSONB 正文列；请检查 /datalog 挂载与 TRACE_BODY_*", "error", serr)
+			} else {
+				sink, spooler = traceBodySink{spooler: s, day: cfg.TraceBody}, s
+				slog.Info("trace body direct write enabled",
+					"root", cfg.TraceBody.Root, "inst", cfg.TraceBody.Inst,
+					"block_mb", cfg.TraceBody.BlockMB,
+					"flush_interval", cfg.TraceBody.FlushInterval.String(),
+					"roll_interval", cfg.TraceBody.RollInterval.String())
+			}
+		}
+
+		traceWriter = gwobs.NewTraceWriterWithSink(traceDB, 1024, 50, 2*time.Second, gwobs.TraceWriterLimits{}, sink)
 		go traceWriter.Run(ctx)
+		if spooler != nil {
+			// 周期循环（flush / 滚动 / 根目录复检 / 探针调度）全部由 TraceSpooler 拥有：
+			// 这里只启动它；写入侧不驱动任何闸门动作或滚动。
+			go spooler.Run(ctx)
+		}
 
 		slog.Info("usage tracking enabled (direct-DB mode)")
 	}
@@ -393,6 +430,26 @@ func buildProviderFactory() *providers.ProviderFactory {
 
 	return factory
 }
+
+// traceBodySink 把「正文落盘」与「日期口径」两个来源合成为一个 gwobs.TraceBodySink：
+//   - AppendLine 归 *gwobs.TraceSpooler（它拥有 spool、闸门与周期循环）；
+//   - DayStart/DayOf 归 config.TraceBodyConfig —— 全局约束要求**只有一个**日期入口，
+//     且 DayOf 必须由 DayStart 派生，列里的日期与目录名因此不可能不一致。
+//
+// 【为什么在 main.go 组装，而不是给 TraceSpooler 加日期方法】observability 包不依赖
+// config 包（依赖方向）；在它内部再实现一份日期口径就会造出第二个日期入口。
+type traceBodySink struct {
+	spooler *gwobs.TraceSpooler
+	day     config.TraceBodyConfig
+}
+
+func (s traceBodySink) AppendLine(dt string, line []byte) (ta.Ref, error) {
+	return s.spooler.AppendLine(dt, line)
+}
+
+func (s traceBodySink) DayStart(ts time.Time) time.Time { return s.day.DayStart(ts) }
+
+func (s traceBodySink) DayOf(ts time.Time) string { return s.day.DayOf(ts) }
 
 // newTraceDBLogger 返回 trace 写入专用的 GORM logger（D8）。
 // 不能改 internal/controlplane/infra/postgres.go 的全局 logger（control-plane 共用，

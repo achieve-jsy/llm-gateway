@@ -65,8 +65,60 @@ r"""计划 2 / 任务 5 的变异集合（作者编写的产物 ⇒ 必须 git-t
   注意：该正则也会命中**注释**里「标识符紧跟 ASCII 左括号」的提及 ⇒ 它反向约束了
   本任务自己的注释写法（spooler.go 的注释一律不写该形态，已登记在报告里）。
 - 「空块不滚动的守卫来自计划 1 冻结的 PendingSeals」：本计划不得修改该文件，
-  故用静态行固定其存在。
+  故用静态行固定它（拆成承重的 `cur == nil` 与防御性的 `rows == 0` 两行，见修复轮 M1）。
 """
+
+# ---------------------------------------------------------------------------
+# 评审修复轮（task-5 评审：I1/I2/I3/M1/M3/M5/M6）之后的改动
+#
+# 新增 7 条变异（m22–m28），并修正两条已有变异的定位串（m07/m20 —— 实现形态变了，
+# 原串不再唯一/合法）。全部改动：
+#
+# - **I1（重要）§9.3 闩锁日志**：三处 `Trip` 的返回值原先被丢弃 ⇒ 跳变那一刻**一条日志
+#   都没有**（Run 只在 `FlushAndRoll` 返错时打日志，而根目录不可用那一轮返回 nil）。
+#   改为 `if s.gate.Trip(...) { log.Printf("... ERROR ...") }` ⇒ 跳变恰好一条、
+#   闩锁期间不刷屏（Trip 的契约把「打日志」交给调用方）。m25（每次 tick 都打）与
+#   m26（去掉 ERROR 标记）分别钉住「不刷屏」与「级别可见」；
+#   杀手 = TestSpoolerLatchLogsExactlyOncePerTransition。
+#   【归属】闩锁**期间**的周期汇总日志判给 Task 7（§9.3 的降级可观测性），
+#   本任务只负责跳变那一刻这一条。
+# - **I2（重要）A5-1 第 3 点在注入 Gate 时失效**（两条都做）：
+#   ① 新增 `TraceSpoolerOptions.DiskWatermarkPercent`（0 ⇒ 90）传给**内置** Gate ⇒
+#      Task 6 不必为「尊重配置水位」而注入 Gate（m23 忽略选项、m24 去掉 0⇒90 默认值；
+#      杀手 = TestSpoolerDiskWatermarkOptionReachesBuiltGate）；
+#   ② 身份包装**无条件**套在 `Gate.ProbeWrite` 外层（`guardProbe`，放在两个分支之后）⇒
+#      注入的 Gate 的探针也先验身份（m22；
+#      杀手 = TestSpoolerInjectedGateProbeStillRequiresIdentity）。
+# - **I3（裁定，无需改行为）A5-4 条件④的顺序**：先消费到期标志 → 再 `Allow()`。
+#   控制者已正式批准；实现注释（AppendLine）与报告都写明这是**已批准的偏离**，
+#   防止 Task 6 照字面重写而把「超水位放弃正文」变成死代码。
+# - **M1（轻微）静态检查归因不实**：原 CHECKS 把「空块不滚动」归给 `rows == 0` 守卫，
+#   而冻结包自己写明该守卫经公开 API **不可达**（writer.go:369-376）；真正承重的是
+#   `cur == nil`（writer.go:358-360：没有 Append 就没有块）。现拆成两行 ——
+#   一行钉 `cur == nil`（承重），一行钉 `rows == 0`（防御性守卫；简报点名要钉，
+#   但明确声明它**不是**本用例的证据）。
+# - **M3（轻微）Close 后可静默重建 part**：冻结包的 `Writer.Close` 只是关句柄、没有
+#   closed 标志 ⇒ 之后 AppendLine 会被当成「正常的新块」重新建 part。加
+#   `closed atomic.Bool`（Close 用 CAS 幂等，AppendLine 在 Close 后返回 ErrSpoolLatched）
+#   ⇒ m27；杀手 = TestSpoolerAppendAfterCloseDoesNotRecreatePart。
+# - **M5（轻微）两条用例押在「宿主真实盘用量 < 90%」上** ⇒ 盘用量高的机器假红：
+#   TestSpoolerDoesNotRollWhileRootUnavailable 与
+#   TestSpoolerProbeRefusesToUnlatchWhenIdentityMismatched 改为注入水位恒 10% 的 Gate
+#   （测试内的 lowUsageGate）。这是可移植性修复，不产生新变异（它本身不是守卫）。
+# - **M6（轻微）并列挂载点「先到者胜」⇒ 身份随行序漂移**：`mountKey.beats` 提供确定性
+#   tie-break（dev、再 fstype，字典序最大），使身份与 mountinfo 行序无关 ——
+#   「行序变化 ⇒ 身份变化 ⇒ 永久闩锁」与 m21（不稳定身份）是同一类失效。
+#   ⇒ m28；杀手 = TestMountIdentityForPicksLongestPrefixAndSurvivesEscape 的两种行序断言。
+#
+# 【评审「登记不修」的三条，不在本集合内（报告里登记）】
+#   1. `MarkSealed` 无返回值 ⇒ close/Flush 错误只能丢弃：`FlushAndRoll` 在
+#      `PendingSeals` 与 `MarkSealed` 之间释放 `w.mu`，该窗口内写协程缓冲进同一 part 的
+#      行若遇 close-flush 失败（ENOSPC）会被丢弃，而那一行的 `Ref` 已作为成功返回
+#      （点读表现为「行号越界」，不是响亮缺失）。冻结契约无返回值 ⇒ 超出本任务可修范围。
+#   2. 解锁探针在 Gate 锁内做 4 类文件操作（CreateTemp/write/fsync/unlink）⇒
+#      Task 4 锁设计的延续。
+#   3. 构造期只查 `Clean(root) == "/"`、不查 `filepath.IsAbs`（与全局约束一致，
+#      配置层已校验）；但提交信息里写了「绝对路径」⇒ 提交信息与代码不符（历史不改，报告登记）。
 
 NAME = "p2-task-5"
 TARGET = "internal/gateway/observability/spooler.go"
@@ -130,8 +182,11 @@ MUTATIONS["m06_闩锁时仍然尝试写入"] = [
 # 杀手 = TestSpoolerLatchesOnAppendFailureWhileRootHealthy（**本任务新增**：
 # 简报指定的 TestSpoolerChecksRootAfterAppendFailure 会先被 checkRoot 闩锁并提前
 # return，到不了这一支 ⇒ 零覆盖）。摘掉 Trip 后 Allow() 仍为真 ⇒ 转红。
+# 【修复轮】I1 之后这一支变成 `if s.gate.Trip("append_failed", err) { log… }`，
+# 因此定位串随之更新（旧串 `s.gate.Trip(...)` 仍在，但把它换成 `_ = err` 会得到
+# 非法的 `if _ = err {` ⇒ 编译红，不是断言红）。
 MUTATIONS["m07_写失败不闩锁"] = [
-    ("sub", 's.gate.Trip("append_failed", err)', "_ = err"),
+    ("sub", 'if s.gate.Trip("append_failed", err) {', "if false {"),
 ]
 # ---- ⑧ 周期 flush 必须真的调 PendingSeals（R8/§7.1）----
 # 杀手 = TestSpoolerFlushMakesBufferedLinesVisible：不再 flush ⇒ 缓冲里的两行永远
@@ -221,11 +276,13 @@ MUTATIONS["m17_Rolls计数不再累加"] = [
 # ---- ⑳ 挂载级身份不再选取「覆盖 root 的最长前缀挂载项」----
 # 杀手 = TestMountIdentityForPicksLongestPrefixAndSurvivesEscape（包内）：
 # 合成 mountinfo 里 /datalog 与 / 都覆盖 root，只有最长前缀是对的；
-# 摘掉选取逻辑后解析器判不出所属挂载 ⇒ require.True(ok) 转红。
+# 摘掉选取逻辑后解析器只认「首个覆盖项」（= /）⇒ require.Equal(挂载点 …) 转红。
+# 【修复轮】M6 之后该条件多了并列 tie-break，定位串随之更新（见 m28）。
 # 【为什么必须用合成内容】本机（macOS）没有 /proc/self/mountinfo，挂载级解析只在
 # Linux 生产路径上生效 ⇒ 不测就是开发环境里的零覆盖。
 MUTATIONS["m20_挂载身份不再选最长前缀"] = [
-    ("sub", "if len(mp) > bestLen {", "if len(mp) > bestLen && false {"),
+    ("sub", "if len(mp) > bestLen || (len(mp) == bestLen && cand.beats(best)) {",
+            "if bestLen < 0 {"),
 ]
 # ---- ㉑ 身份取值不稳定（把时间掺进身份）----
 # 杀手 = TestDefaultRootIdentityIsStableForTheSameDirectory（包内）：同一目录两次取身份
@@ -238,20 +295,98 @@ MUTATIONS["m21_身份取值不稳定"] = [
             'return fmt.Sprintf("dev=%d|fstype=%d|t=%d", uint64(st.Dev), fsType, time.Now().UnixNano()), nil'),
 ]
 
+# ==== 评审修复轮（I1/I2/M3/M6）====
+# ---- I2-② 注入 Gate 的探针不再套身份包装 ----
+# 杀手 = TestSpoolerInjectedGateProbeStillRequiresIdentity（**本任务新增**）：
+# 把无条件包装改成「只有 Gate 没自带探针时才包」⇒ Task 6 注入的探针没有身份检查
+# ⇒「挂载缺失但容器可写」时探针成功 + 水位正常 ⇒ 解锁 ⇒ A5-1 的静默错位。
+# 【为什么这条变异必须在】仅靠 m12（身份检查本身失效）杀不出「包装只对内建 Gate 生效」
+# 这一形态：m12 会把两条路径一起打断，而本变异只打断注入路径。
+MUTATIONS["m22_注入Gate的探针不再套身份包装"] = [
+    ("sub", "opts.Gate.opts.ProbeWrite = guardProbe(identityErr, opts.Gate.opts.ProbeWrite)",
+            "if opts.Gate.opts.ProbeWrite == nil {\n\t\topts.Gate.opts.ProbeWrite = guardProbe(identityErr, nil)\n\t}"),
+]
+# ---- I2-① 内置 Gate 忽略配置的水位 ----
+# 杀手 = TestSpoolerDiskWatermarkOptionReachesBuiltGate（包内）：选项 42 应传到内置
+# Gate；硬编码 90 后断言 42 转红（Task 6 于是只能靠注入 Gate 来「尊重配置」，而那条路
+# 正是 I2-② 要补的绕路）。
+MUTATIONS["m23_内置Gate忽略配置水位"] = [
+    ("sub", "DiskWatermarkPercent: opts.DiskWatermarkPercent,", "DiskWatermarkPercent: 90,"),
+]
+# ---- I2-① 去掉「0 ⇒ 90」的默认值 ----
+# 杀手 = TestSpoolerDiskWatermarkOptionReachesBuiltGate 的第二个断言。
+# 【为什么它是承重的】SpoolGate **自己不为水位设默认值**，而 Tick 的未闩锁判据是
+# `pct >= DiskWatermarkPercent` ⇒ 传 0 会让第一次 Tick 就闩锁（0% 水位）。
+MUTATIONS["m24_去掉水位默认值"] = [
+    ("sub", "if opts.DiskWatermarkPercent <= 0 {\n\t\topts.DiskWatermarkPercent = 90\n\t}",
+            "if false {\n\t\topts.DiskWatermarkPercent = 90\n\t}"),
+]
+# ---- I1 §9.3 闩锁日志：每次复检都打（噪音）----
+# 杀手 = TestSpoolerLatchLogsExactlyOncePerTransition：跳变一条、闩锁期间不再打。
+# 改成 `if true` 后，闩锁期间的每个 tick 都打一条 ⇒ require.Len(lines, 1) 转红。
+MUTATIONS["m25_闩锁日志每次都打"] = [
+    ("sub", "if s.gate.Trip(reason, err) {", "if true {"),
+]
+# ---- I1 §9.3 闩锁日志：去掉 ERROR 级别标记 ----
+# 杀手 = TestSpoolerLatchLogsExactlyOncePerTransition 的 require.Contains(..., "ERROR")。
+# 标准 log 包没有级别，本项目用消息里的 ERROR 标记表达级别 ⇒ 删掉它，日志里就再也
+# 分不出「闩锁跳变」这件需要人工介入的事。
+MUTATIONS["m26_闩锁日志不再标ERROR"] = [
+    ("sub", 'log.Printf("[trace-spool] ERROR 正文落盘闩锁（跳变）：reason=%s root=%s cause=%v"',
+            'log.Printf("[trace-spool] 正文落盘闩锁（跳变）：reason=%s root=%s cause=%v"'),
+]
+# ---- M3 Close 之后不再拒绝写入 ----
+# 杀手 = TestSpoolerAppendAfterCloseDoesNotRecreatePart：摘掉 closed 判定后，
+# 冻结包的 Writer 会把这次 Append 当成「正常的新块」重建 part-000001 ⇒ 转红。
+MUTATIONS["m27_Close后仍允许写入"] = [
+    ("sub", "if s.closed.Load() {", "if false {"),
+]
+# ---- M6 并列挂载点回到「先到者胜」 ----
+# 杀手 = TestMountIdentityForPicksLongestPrefixAndSurvivesEscape 的行序断言：
+# 同一挂载点的两条记录换序后身份必须相同；「先到者胜」会随行序漂移 ⇒ 转红
+# （「行序一变身份就变」= 与 m21 同一类的永久闩锁）。
+MUTATIONS["m28_并列挂载点先到者胜"] = [
+    ("sub", "if len(mp) > bestLen || (len(mp) == bestLen && cand.beats(best)) {",
+            "if len(mp) > bestLen {"),
+]
+
 # ---------------------------------------------------------------------------
 # 静态检查：**变异测不到**的要求必须有静态检查行（全局约束的证据制度第 4 条）。
 # ---------------------------------------------------------------------------
 CHECKS = [
     {
-        "name": "空块不滚动的守卫来自 PendingSeals（计划 1 冻结行为）",
+        "name": "空块不滚动：真正承重的守卫是 PendingSeals 的 `cur == nil` 提前返回（计划 1 冻结行为）",
+        "file": "internal/tracearchive/writer.go",
+        # 【评审 M1 的修正】原以为承重的是 `rows == 0` 守卫；实测读源码后确认：
+        # 没有 Append 就没有块（cur == nil），这才是 TestSpoolerDoesNotRollEmptyBlock
+        # 在空块那一轮走到的那条提前返回（writer.go:358-360）。因此这一行的 pattern
+        # 钉的是它，而不是 rows == 0。
+        "pattern": r"cur := w\.cur\s*\n\s*if cur == nil \{\s*\n\s*return nil, nil",
+        "expect": "present",
+        "why": (
+            "「空块不滚动」在 Spooler 这一侧的实际机理是：那一轮从未 Append 过 ⇒ 冻结包的 "
+            "Writer 根本没有当前块 ⇒ PendingSeals 的 `cur == nil` 提前返回 nil（无 SealTask）"
+            "⇒ Spooler 无可滚动对象。行为侧证据 = TestSpoolerDoesNotRollEmptyBlock"
+            "（断言空块那一轮后 spool 文件仍不存在、首次写入落在 part-000000）。"
+            "本计划不得修改冻结包，故用静态行固定该守卫存在。"
+        ),
+    },
+    {
+        "name": "空块不滚动：`rows == 0` 防御性守卫仍在（经公开 API 不可达；简报点名要钉）",
         "file": "internal/tracearchive/writer.go",
         "pattern": r"if cur\.rows == 0 \{\s*\n\s*return nil, nil",
         "expect": "present",
+        # 【评审 M1 的修正：归因必须说实话】冻结包在这条守卫上方自己写明：经公开 API
+        # 它**不可达**（唯一能造出空块的路径是写失败，而写失败会先毒化该块，
+        # 上面那条 poisoned 分支已提前返回，writer.go:369-376）。
+        # 因此本行只钉「防御性守卫仍在」，**不是** TestSpoolerDoesNotRollEmptyBlock 的证据。
         "why": (
-            "「空块不滚动」由计划 1 的 PendingSeals 空块守卫提供（本计划不得修改该文件），"
-            "因此这里用静态检查固定它的存在；若计划 1 的守卫被删，本检查会红。"
-            "行为侧的证据是 TestSpoolerDoesNotRollEmptyBlock（它断言首次写入落在 "
-            "part-000000，即空块上那一轮没有 MarkSealed 过）。"
+            "简报点名要钉这条冻结守卫，故保留本行；但归因必须说实话："
+            "冻结包自己标注该守卫**经公开 API 不可达**（writer.go:369-376，写失败先毒化块），"
+            "保留它是防御性的（不让封块器拿到 0 行 spool ⇒ 否则该 part 的所有点读会从"
+            "「响亮缺失」退化成「行号越界」）。因此本行只证明「守卫没被删」，"
+            "**不能**用它宣称「Spooler 的空块不滚动由它保证」——后者见上一行与 "
+            "TestSpoolerDoesNotRollEmptyBlock。"
         ),
     },
     {
@@ -289,7 +424,7 @@ CHECKS = [
 ]
 
 # ---------------------------------------------------------------------------
-# 允许的绿：本集合预期为空 —— 21 条变异各由一条具体顶层用例杀死。
+# 允许的绿：本集合预期为空 —— 28 条变异各由一条具体顶层用例杀死。
 # ---------------------------------------------------------------------------
 EXPECTED_GREEN = {}
 
@@ -329,19 +464,29 @@ REQUIREMENTS = [
         ),
     },
     {
-        "plan": "A5-1 第 3 点：解锁探针必须先过同一道身份检查（不得为此改 SpoolGate 接口）",
-        "mutations": ["m12_解锁探针不再验身份"], "checks": [],
-        "note": "杀手 = TestSpoolerProbeRefusesToUnlatchWhenIdentityMismatched（探针成功 + 水位正常，只有身份维持闩锁）。",
+        "plan": "A5-1 第 3 点：解锁探针必须先过同一道身份检查，且**对注入的 Gate 同样生效**（不得为此改 SpoolGate 接口）",
+        "mutations": ["m12_解锁探针不再验身份", "m22_注入Gate的探针不再套身份包装"], "checks": [],
+        "note": (
+            "杀手 = TestSpoolerProbeRefusesToUnlatchWhenIdentityMismatched（探针成功 + 水位正常，"
+            "只有身份维持闩锁）与 TestSpoolerInjectedGateProbeStillRequiresIdentity。"
+            "【评审 I2-②】原实现只在 `opts.Gate == nil` 分支里做包装 ⇒ Task 6 为尊重配置水位"
+            "而注入 Gate 时探针没有身份检查，identityErr 又是构造期闭包、Task 6 自建不出等价探针 "
+            "⇒ 「挂载缺失 + 容器层可写」会解锁并按 ProbeInterval 反复发生。现改为无条件包装"
+            "（guardProbe，放在两个分支之后）⇒ m22 专盯「只对内建 Gate 生效」这一形态。"
+        ),
     },
     {
-        "plan": "A5-1：身份的取值本身必须可判别（覆盖 root 的最长前缀挂载项）且**稳定**（同一目录同一挂载点随时间不变）",
-        "mutations": ["m20_挂载身份不再选最长前缀", "m21_身份取值不稳定"], "checks": [],
+        "plan": "A5-1：身份的取值本身必须可判别（覆盖 root 的最长前缀挂载项）、**稳定**（同一目录同一挂载点随时间不变）、且与 mountinfo 行序无关",
+        "mutations": ["m20_挂载身份不再选最长前缀", "m21_身份取值不稳定",
+                      "m28_并列挂载点先到者胜"], "checks": [],
         "note": (
             "**补入条目**：挂载级解析是 Linux 生产路径上的代码，本机（macOS）没有 "
             "/proc/self/mountinfo ⇒ 用合成 mountinfo 内容覆盖（包内用例 "
             "TestMountIdentityForPicksLongestPrefixAndSurvivesEscape）。"
             "「不稳定」是比「漏检」更容易发生的失效：任何把时间掺进身份的实现都会让"
             "第一次周期复检就永久闩锁（杀手 TestDefaultRootIdentityIsStableForTheSameDirectory）。"
+            "【评审 M6】并列挂载点（同一路径被多次挂载）原先「先到者胜」⇒ 身份随行序漂移，"
+            "与「不稳定」同类；现由 mountKey.beats 提供确定性 tie-break（m28 专盯它）。"
         ),
     },
     {
@@ -385,18 +530,49 @@ REQUIREMENTS = [
         ),
     },
     {
-        "plan": "规格 §9.3：降级必须有计数器（Flushes / Rolls 必须真的写进状态快照）",
-        "mutations": ["m16_Flushes计数不再累加", "m17_Rolls计数不再累加"], "checks": [],
-        "note": "**补入条目**：简报只定义了 Stats()，没有任何断言 ⇒ 两个计数器原先零覆盖。",
+        "plan": "规格 §9.3：降级必须有计数器（Flushes / Rolls 必须真的写进状态快照）；闩锁**跳变**必须恰好一条 ERROR 日志",
+        "mutations": ["m16_Flushes计数不再累加", "m17_Rolls计数不再累加",
+                      "m25_闩锁日志每次都打", "m26_闩锁日志不再标ERROR"], "checks": [],
+        "note": (
+            "**补入条目**：简报只定义了 Stats()，没有任何断言 ⇒ 两个计数器原先零覆盖。"
+            "【评审 I1】闩锁日志原先**完全没有**：三处 `Trip` 的返回值被丢弃，"
+            "而 Run 只在 FlushAndRoll 返错时打日志（根目录不可用那一轮返回 nil）"
+            "⇒ 跳变时刻一条日志都没有。现改为 `if Trip(...) { log.Printf(... ERROR ...) }`"
+            "（Trip 契约要求调用方据此恰好打一条）：杀手 = "
+            "TestSpoolerLatchLogsExactlyOncePerTransition（m25 钉「不刷屏」、m26 钉「级别可见」）。"
+            "【归属】闩锁**期间**的周期汇总日志属 Task 7，本任务只负责跳变那一刻。"
+        ),
+    },
+    {
+        "plan": "规格 §9.3 / Task 4 契约：内置 Gate 的水位必须来自配置（TraceSpoolerOptions.DiskWatermarkPercent，0 ⇒ 90）",
+        "mutations": ["m23_内置Gate忽略配置水位", "m24_去掉水位默认值"], "checks": [],
+        "note": (
+            "**补入条目（评审 I2-①）**：原先水位硬编码 90，配置层的 DiskWatermarkPercent "
+            "唯一消费者就是那个硬编码值 ⇒ Task 6 只能靠注入 Gate 来「尊重配置」，"
+            "而那条路会让身份探针失效（见 A5-1 第 3 点那条要求）。"
+            "杀手 = TestSpoolerDiskWatermarkOptionReachesBuiltGate（包内，断言接线而不依赖真实盘用量）。"
+        ),
+    },
+    {
+        "plan": "Task 5 契约：Close 之后不得再写（冻结包 Writer.Close 没有 closed 标志）",
+        "mutations": ["m27_Close后仍允许写入"], "checks": [],
+        "note": (
+            "**补入条目（评审 M3）**：`Writer.Close` 只关句柄并把 cur 置 nil ⇒ 之后 AppendLine "
+            "会被当成「正常的新块」重建 part，一个已封口的 spool 被静默续写。"
+            "杀手 = TestSpoolerAppendAfterCloseDoesNotRecreatePart。"
+        ),
     },
     {
         "plan": "计划 2 任务 5：空块不滚动（守卫来自计划 1 冻结的 PendingSeals）",
         "mutations": [],
-        "checks": ["空块不滚动的守卫来自 PendingSeals（计划 1 冻结行为）"],
+        "checks": ["空块不滚动：真正承重的守卫是 PendingSeals 的 `cur == nil` 提前返回（计划 1 冻结行为）",
+                   "空块不滚动：`rows == 0` 防御性守卫仍在（经公开 API 不可达；简报点名要钉）"],
         "note": (
             "摘掉滚动（m09）之后 TestSpoolerDoesNotRollEmptyBlock 仍会绿（它断言的是"
             "「不滚动」）—— 正常：该守卫由计划 1 冻结的行为提供，本计划不得修改该文件，"
-            "故用静态检查行固定其存在。"
+            "故用静态检查行固定它。**评审 M1 的修正**：原先把归因写成 `rows == 0` 守卫，"
+            "而冻结包自己标注该守卫经公开 API **不可达**（writer.go:369-376）；"
+            "实际承重的是 `cur == nil`（writer.go:358-360）⇒ 现拆成两行，归因如实。"
         ),
     },
     {

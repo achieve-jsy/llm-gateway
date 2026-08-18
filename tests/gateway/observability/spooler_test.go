@@ -33,8 +33,10 @@ package observability_test
 //     写失败必须闩锁 ⇒ TestSpoolerLatchesOnAppendFailureWhileRootHealthy。
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,6 +102,30 @@ type atomicProbe struct {
 func (p *atomicProbe) probe(string) error {
 	p.calls.Add(1)
 	return p.err
+}
+
+// lowUsageGate 构造一个「水位恒为 10%」的 Gate（评审 M5）。
+//
+// 【为什么必须注入】凡是要让闸门**解锁/恢复**的用例，若用内部默认 Gate，解锁条件就
+// 包含「宿主真实盘用量 < 90%」—— 开发机或 CI 的盘用量超过 90% 时这两条用例**假红**。
+// 它们要验证的是「解锁探针先验身份」与「根目录不可用时不做结构性写入」，与真实水位无关。
+func lowUsageGate(root string) *gwobs.SpoolGate {
+	return gwobs.NewSpoolGate(gwobs.SpoolGateOptions{
+		Root:                 root,
+		DiskWatermarkPercent: 90,
+		UsagePercent:         func(string) (float64, error) { return 10, nil },
+	})
+}
+
+// logLines 返回日志缓冲里的非空行（用于「跳变时恰好一条 ERROR」这类计数断言）。
+func logLines(s string) []string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // TestSpoolerFlushMakesBufferedLinesVisible：Append 只是进 bufio 缓冲，
@@ -347,6 +373,7 @@ func TestSpoolerDoesNotRollWhileRootUnavailable(t *testing.T) {
 			}
 			return nil
 		},
+		Gate: lowUsageGate(root), // M5：不依赖宿主真实盘用量
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
@@ -360,7 +387,7 @@ func TestSpoolerDoesNotRollWhileRootUnavailable(t *testing.T) {
 
 	// 根目录与闸门都恢复：此时若那一轮滚过，新行会进 part-000001
 	gone = false
-	s.Gate().Tick(time.Now().Add(2 * time.Minute)) // 越过 ProbeInterval，真实探针会成功
+	s.Gate().Tick(time.Now().Add(2 * time.Minute)) // 越过 ProbeInterval，探针会成功
 	require.True(t, s.Gate().Allow(), "前置条件：闸门必须已恢复")
 
 	_, err = s.AppendLine("2026-09-24", []byte(`{"a":2}`))
@@ -463,8 +490,13 @@ func TestSpoolerLatchesWhenRootIdentityUnobtainable(t *testing.T) {
 // ⇒ 网关解锁 ⇒ 正文继续写进容器可写层（静默错位，重新部署后消失）。
 //
 // 【为什么必须用它而不是只测闩锁】这条分支只在「闩锁 + 探针成功 + 水位正常」时
-// 才可见：本条用例把水位与探针都做成「看起来好了」（真实默认探针在 t.TempDir() 上
-// 会成功），唯一能维持闩锁的就是探针里的身份检查。
+// 才可见：本条用例把水位与探针都做成「看起来好了」（探针是 SpoolGate 的默认实现，
+// 在 t.TempDir() 上会成功），唯一能维持闩锁的就是探针里的身份检查。
+//
+// 【为什么注入 Gate 而不是用内部默认 Gate（评审 M5）】默认 Gate 的水位来自真实 statfs，
+// 解锁那一步会依赖「宿主盘用量 < 90%」⇒ 盘用量高的机器上假红；这里注入水位恒为 10% 的
+// Gate。**注意**：注入 Gate 不改变被验证的行为 —— 身份包装对注入的 Gate 同样生效
+// （这正是 TestSpoolerInjectedGateProbeStillRequiresIdentity 单独盯住的那一点）。
 func TestSpoolerProbeRefusesToUnlatchWhenIdentityMismatched(t *testing.T) {
 	root := t.TempDir()
 	id := newIdentityStub("mount=/datalog|dev=1:1|fstype=ext4")
@@ -472,6 +504,7 @@ func TestSpoolerProbeRefusesToUnlatchWhenIdentityMismatched(t *testing.T) {
 		Root: root, Inst: "blue", BlockBytes: 1 << 20,
 		RollInterval: time.Hour, FlushInterval: time.Minute,
 		RootIdentity: id.fn,
+		Gate:         lowUsageGate(root), // M5：不依赖宿主真实盘用量
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
@@ -483,7 +516,7 @@ func TestSpoolerProbeRefusesToUnlatchWhenIdentityMismatched(t *testing.T) {
 	require.NoError(t, s.FlushAndRoll())
 	require.False(t, s.Gate().Allow())
 
-	// 探针（真实默认实现）在 root 上会成功、水位也远低于 90%：
+	// 探针（默认实现）在 root 上会成功、注入的水位是 10%（远低于 90%）：
 	// 若探针不先验身份，网关就会在这里解锁。
 	s.Gate().Tick(time.Now().Add(2 * time.Minute))
 	require.False(t, s.Gate().Allow(), "身份不一致时解锁探针必须失败（A5-1 第 3 点）")
@@ -574,4 +607,129 @@ func mustRead(t *testing.T, p string) string {
 	b, err := os.ReadFile(p)
 	require.NoError(t, err)
 	return string(b)
+}
+
+// TestSpoolerInjectedGateProbeStillRequiresIdentity 固定 A5-1 第 3 点在**注入 Gate**
+// 时同样成立（评审 I2）。
+//
+// 【为什么单独一条】身份包装若只做在「内部构造 Gate」的分支里，Task 6 为了尊重配置
+// 水位而自带 Gate（并自带一个会成功的探针）时，探针里就没有身份检查；而 identityErr
+// 是构造期闭包 ⇒ Task 6 自建不出等价探针。后果：「挂载缺失但容器可写」时探针成功 +
+// 水位正常 ⇒ 解锁 ⇒ 正文写进容器可写层，并按 ProbeInterval **反复**发生 ——
+// 正是 A5-1 要堵的静默错位。
+//
+// 【本用例与 TestSpoolerProbeRefusesToUnlatchWhenIdentityMismatched 的分工】那条
+// 覆盖「身份检查本身存在」，本条覆盖「**包装无条件生效**」（去掉无条件包装后，
+// 只有本条会红：那条也注入了 Gate，但它的断言在身份检查存在时仍成立）。
+func TestSpoolerInjectedGateProbeStillRequiresIdentity(t *testing.T) {
+	root := t.TempDir()
+	id := newIdentityStub("mount=/datalog|dev=1:1|fstype=ext4")
+	probes := 0
+	s, err := gwobs.NewTraceSpooler(gwobs.TraceSpoolerOptions{
+		Root: root, Inst: "blue", BlockBytes: 1 << 20,
+		RollInterval: time.Hour, FlushInterval: time.Minute,
+		RootIdentity: id.fn,
+		// Task 6 的典型注入：配置水位 + 自带探针（这里让它恒成功，模拟
+		// 「容器可写层里写探针会成功」）。
+		Gate: gwobs.NewSpoolGate(gwobs.SpoolGateOptions{
+			Root:                 root,
+			DiskWatermarkPercent: 90,
+			ProbeInterval:        time.Minute,
+			UsagePercent:         func(string) (float64, error) { return 10, nil },
+			ProbeWrite: func(string) error {
+				probes++
+				return nil
+			},
+		}),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	_, err = s.AppendLine("2026-09-24", []byte(`{"a":1}`))
+	require.NoError(t, err)
+
+	// 等价于「挂载点消失、路径落到容器可写层」：身份变了，存在性与可写性都还在。
+	id.id.Store("mount=/|dev=0:99|fstype=overlay")
+	require.NoError(t, s.FlushAndRoll())
+	require.False(t, s.Gate().Allow())
+
+	s.Gate().Tick(time.Now().Add(2 * time.Minute))
+	require.False(t, s.Gate().Allow(),
+		"注入 Gate 的探针也必须先验身份：否则「挂载缺失 + 容器层可写」会解锁（A5-1 静默错位）")
+
+	// 身份恢复（例如挂载被重新挂上）⇒ 注入的探针成功 + 水位正常 ⇒ 才允许解锁。
+	id.id.Store("mount=/datalog|dev=1:1|fstype=ext4")
+	s.Gate().Tick(time.Now().Add(4 * time.Minute))
+	require.True(t, s.Gate().Allow(), "身份恢复后注入的探针成功 + 水位正常 ⇒ 必须能解锁")
+	require.Greater(t, probes, 0, "解锁那一次必须真的调用过注入的探针")
+}
+
+// TestSpoolerAppendAfterCloseDoesNotRecreatePart 固定「Close 之后不得再写」（评审 M3）。
+//
+// 【为什么需要本任务自己挡】冻结包的 Writer.Close 只是关掉当前句柄并把 cur 置 nil，
+// **没有** closed 标志；此后 AppendLine 会被当成「正常的新块」重新建 part ⇒
+// 一个已经封口的 spool 被静默续写，而调用方以为它不再变化。
+func TestSpoolerAppendAfterCloseDoesNotRecreatePart(t *testing.T) {
+	s, root := newSpooler(t, 1<<30, time.Hour, time.Minute)
+	_, err := s.AppendLine("2026-09-24", []byte(`{"a":1}`))
+	require.NoError(t, err)
+	require.NoError(t, s.FlushAndRoll())
+	require.NoError(t, s.Close())
+	require.NoError(t, s.Close(), "Close 必须幂等（Run 在 ctx.Done 时也会调一次）")
+
+	_, err = s.AppendLine("2026-09-24", []byte(`{"a":2}`))
+	require.ErrorIs(t, err, gwobs.ErrSpoolLatched, "Close 之后不得再写")
+
+	dir := filepath.Join(root, "spool", "dt=2026-09-24", "inst=blue")
+	require.NoFileExists(t, filepath.Join(dir, "part-000001.jsonl"), "Close 之后不得再建 part")
+	require.Equal(t, "{\"a\":1}\n", mustRead(t, spoolPath(root, "2026-09-24")),
+		"Close 之后的写入不得落到盘上")
+}
+
+// TestSpoolerLatchLogsExactlyOncePerTransition 固定规格 §9.3 的降级可观测性：
+// 闩锁**跳变那一刻恰好一条 ERROR**，闩锁期间**不再重复**打日志。
+//
+// 【为什么这一条必须存在】SpoolGate.Trip 的契约把「打日志」交给调用方（它返回
+// 「本次是否跳变」），而 checkRoot 每个 tick、每次 Append 失败都会跑 ⇒ 无条件打日志会
+// 把日志淹没（§9.3 要的是信号，不是噪音）。反过来，一条都不打则跳变时刻完全没有信号
+// （Run 只在 FlushAndRoll 返错时打日志，而根目录不可用那一轮返回 nil）。
+func TestSpoolerLatchLogsExactlyOncePerTransition(t *testing.T) {
+	root := t.TempDir()
+	gone := false
+	s, err := gwobs.NewTraceSpooler(gwobs.TraceSpoolerOptions{
+		Root: root, Inst: "blue", BlockBytes: 1 << 20,
+		RollInterval: time.Hour, FlushInterval: time.Minute,
+		RootCheck: func(string) error {
+			if gone {
+				return os.ErrNotExist
+			}
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(prevOut); log.SetFlags(prevFlags) })
+
+	_, err = s.AppendLine("2026-09-24", []byte(`{"a":1}`))
+	require.NoError(t, err)
+	require.Empty(t, logLines(buf.String()), "未闩锁时不得有闩锁 ERROR")
+
+	gone = true
+	require.NoError(t, s.FlushAndRoll())
+	lines := logLines(buf.String())
+	require.Len(t, lines, 1, "跳变时必须恰好一条 ERROR（规格 §9.3：要信号不要噪音）")
+	require.Contains(t, lines[0], "ERROR")
+	require.Contains(t, lines[0], "root_unavailable")
+
+	// 闩锁期间：每个 tick 都复检、每行都被拒绝 —— 都不得再打日志
+	require.NoError(t, s.FlushAndRoll())
+	require.NoError(t, s.FlushAndRoll())
+	_, err = s.AppendLine("2026-09-24", []byte(`{"a":2}`))
+	require.ErrorIs(t, err, gwobs.ErrSpoolLatched)
+	require.Len(t, logLines(buf.String()), 1, "闩锁期间不得重复打日志（噪音）")
 }

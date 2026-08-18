@@ -45,8 +45,13 @@ type TraceSpoolerOptions struct {
 	BlockBytes    int64         // 字节（调用方负责 MB → 字节换算）
 	RollInterval  time.Duration // = WriterOptions.SealInterval，≤1h 且 < sealer 的 minAge 3h
 	FlushInterval time.Duration // ≤1m；≤0 ⇒ 1m
-	Gate          *SpoolGate    // nil ⇒ 内部建一个默认的（其解锁探针会先验根目录身份）
-	Now           func() time.Time
+	// DiskWatermarkPercent 是**内置 Gate** 的闩锁水位（0 ⇒ 90，与 Task 4 的既有默认一致）。
+	// Task 6 用它把 `trace_body.disk_watermark_percent` 传进来即可，**不必**自己注入 Gate：
+	// 注入 Gate 只是多一层绕路（身份包装仍会无条件套上，见 NewTraceSpooler），
+	// 而且会让「水位来自配置」这件事散到两个地方。
+	DiskWatermarkPercent int
+	Gate                 *SpoolGate // nil ⇒ 内部建一个默认的（其解锁探针会先验根目录身份）
+	Now                  func() time.Time
 	// RootCheck nil ⇒ 默认实现 = 存在性检查 + 身份比对（A5-1）。注入它会**替换**掉
 	// 默认的身份比对，因此注入只用于测试（如表达「挂载点消失后 stat 失败」）。
 	RootCheck func(root string) error
@@ -87,6 +92,15 @@ type TraceSpooler struct {
 	probeDue   atomic.Bool
 	probeDueAt atomic.Int64
 
+	// closed：Close 之后不得再写。
+	//
+	// 【为什么需要它】冻结包的 Writer.Close 只是关掉当前句柄并把 cur 置 nil，
+	// **没有** closed 标志（`writer.go` 的 Close 契约）；此后 Append 会被当成
+	// 「正常的新块」重新建 part ⇒ 一个已关闭的 spool 会被静默续写，
+	// 而调用方（或 sealer）以为它已经封口。闩锁语义与「已关闭」在此等价：
+	// 都是「不得再尝试写 spool，该行走 body_missing」。
+	closed atomic.Bool
+
 	mu      sync.Mutex
 	flushes int64
 	rolls   int64
@@ -120,32 +134,25 @@ func NewTraceSpooler(opts TraceSpoolerOptions) (*TraceSpooler, error) {
 		return nil, fmt.Errorf("正文根目录不得是文件系统根 %q：spool 会被建在宿主根文件系统上", opts.Root)
 	}
 
-	// 身份基线（A5-1）在两种情形下必须建立：默认检查要比对它；默认 Gate 的解锁探针
-	// 要先验它。调用方把两者都注入时（测试）才不需要。
-	needIdentity := opts.RootCheck == nil || opts.Gate == nil
-	var baseline string
-	if needIdentity {
-		if opts.RootCheck == nil {
-			// 启动期的存在性确认（默认检查的第一半）。目录不在时取身份必然也失败，
-			// 先报「未挂载」比报「取不到身份」更贴切。
-			if err := rootExists(opts.Root); err != nil {
-				return nil, fmt.Errorf("正文根目录 %s 不可用（未挂载？）: %w", opts.Root, err)
-			}
+	// 身份基线（A5-1）：**无条件建立**。
+	// ① 默认 RootCheck 要比对它；② 解锁探针的身份包装对**注入的 Gate 同样生效**
+	//（见下面 guardProbe 的注释）⇒ 不再有「两边都注入就不取基线」的短路。
+	if opts.RootCheck == nil {
+		// 启动期的存在性确认（默认检查的第一半）。目录不在时取身份必然也失败，
+		// 先报「未挂载」比报「取不到身份」更贴切。
+		if err := rootExists(opts.Root); err != nil {
+			return nil, fmt.Errorf("正文根目录 %s 不可用（未挂载？）: %w", opts.Root, err)
 		}
-		var identErr error
-		baseline, identErr = opts.RootIdentity(opts.Root)
-		if identErr != nil {
-			// 取不到基线 ⇒ 响亮失败：若悄悄退化成「只验存在/可写」，挂载消失而容器层
-			// 可写时一切检查都会通过（A5-1 要堵的正是这条静默错位）。
-			return nil, fmt.Errorf("正文根目录 %s 无法取到身份基线（无法检测运行中挂载消失）: %w",
-				opts.Root, identErr)
-		}
+	}
+	baseline, identErr := opts.RootIdentity(opts.Root)
+	if identErr != nil {
+		// 取不到基线 ⇒ 响亮失败：若悄悄退化成「只验存在/可写」，挂载消失而容器层
+		// 可写时一切检查都会通过（A5-1 要堵的正是这条静默错位）。
+		return nil, fmt.Errorf("正文根目录 %s 无法取到身份基线（无法检测运行中挂载消失）: %w",
+			opts.Root, identErr)
 	}
 	// identityErr 是「当前身份是否仍是启动时那个」的唯一判据（A5-1 第 2 点）。
 	identityErr := func(root string) error {
-		if !needIdentity {
-			return nil
-		}
 		cur, err := opts.RootIdentity(root)
 		if err != nil {
 			// 【为什么 err 也算不一致】取不到身份就无法证明「根目录还是原来那个」。
@@ -172,21 +179,30 @@ func NewTraceSpooler(opts TraceSpoolerOptions) (*TraceSpooler, error) {
 			return identityErr(root)
 		}
 	}
+	// 水位默认值：**不能省**。SpoolGate 自己**不**为 DiskWatermarkPercent 设默认值，
+	// 而 Tick 的未闩锁分支判据是 `pct >= DiskWatermarkPercent` ⇒ 传 0 会让**每一次**
+	// Tick 都闩锁（0% 水位），正文全部变 body_missing。这里就是「0 ⇒ 90」的落点。
+	if opts.DiskWatermarkPercent <= 0 {
+		opts.DiskWatermarkPercent = 90
+	}
 	if opts.Gate == nil {
 		opts.Gate = NewSpoolGate(SpoolGateOptions{
 			Root:                 opts.Root,
-			DiskWatermarkPercent: 90, // 与 SpoolGate 的既有默认一致
-			// A5-1 第 3 点：解锁探针必须**先验身份、再试写**，否则「挂载仍缺失但
-			// 容器层可写」时探针会报成功 ⇒ 解锁 ⇒ 静默错位。这里不改 SpoolGate 接口，
-			// 只从 Task 5 侧注入一个「先验身份」的探针。
-			ProbeWrite: func(root string) error {
-				if err := identityErr(root); err != nil {
-					return err
-				}
-				return defaultProbeWrite(root)
-			},
+			DiskWatermarkPercent: opts.DiskWatermarkPercent,
 		})
 	}
+	// A5-1 第 3 点：解锁探针必须**先验身份、再试写** —— 而且**对注入的 Gate 同样成立**。
+	//
+	// 【为什么无条件套用，而不是只做在 `opts.Gate == nil` 分支里】Task 6 为了尊重
+	// 配置里的水位而注入自己的 Gate 时，注入的探针**没有**身份检查；而 identityErr
+	// 是构造期的闭包，Task 6 也自建不出等价探针。后果：「挂载缺失但容器可写」时
+	// 探针成功 + 水位正常 ⇒ 解锁 ⇒ 正文继续写进容器可写层，并按 ProbeInterval
+	// **反复**发生 —— 正是 A5-1 要堵的静默错位。因此包装放在这里（两个分支之后）。
+	//
+	// 【写入时机】构造尚未返回、Gate 也还没被任何 goroutine 共享 ⇒ 这里改
+	// `Gate.opts.ProbeWrite` 不与 Tick 并发（Tick 读它时持 g.mu，但那发生在构造之后）。
+	// NewSpoolGate 已把 nil 探针换成 defaultProbeWrite ⇒ inner 必非 nil。
+	opts.Gate.opts.ProbeWrite = guardProbe(identityErr, opts.Gate.opts.ProbeWrite)
 
 	w, err := ta.NewWriter(ta.WriterOptions{
 		Root:         opts.Root,
@@ -205,6 +221,22 @@ func NewTraceSpooler(opts TraceSpoolerOptions) (*TraceSpooler, error) {
 		flushInterval: opts.FlushInterval,
 		now:           opts.Now,
 	}, nil
+}
+
+// guardProbe 把「先验根目录身份、再调用 inner」包成一个解锁探针（A5-1 第 3 点）。
+//
+// 【为什么是独立函数而不是内联闭包】构造函数对**默认的 Gate 与注入的 Gate** 走同一条
+// 包装路径（见 NewTraceSpooler 的调用点），独立出来让「包装无条件生效」这一形态可被
+// 静态检查与变异直接盯住。
+//
+// inner 由调用方保证非 nil（SpoolGate 在 NewSpoolGate 里已把 nil 换成 defaultProbeWrite）。
+func guardProbe(identityErr func(string) error, inner func(string) error) func(string) error {
+	return func(root string) error {
+		if err := identityErr(root); err != nil {
+			return err
+		}
+		return inner(root)
+	}
 }
 
 // rootExists 是默认检查的第一半：根目录必须存在且是目录。
@@ -300,12 +332,30 @@ func mountIdentityFor(data []byte, root string) (mountKey, bool) {
 		if !pathCoveredBy(mp, clean) {
 			continue
 		}
-		if len(mp) > bestLen {
+		cand := mountKey{mountPoint: mp, dev: fields[2], fsType: fields[sep+1]}
+		// 【并列的处理】同一路径被**多次挂载**时 mountinfo 里会有多条同挂载点的记录
+		//（overmount）。只比长度的「先到者胜」会让身份随**行序**变化 —— 而行序不是
+		// 稳定契约 ⇒ 行序一变身份就变 ⇒ 与启动期基线比较必然不等 ⇒ **永久闩锁**
+		//（正是 TestDefaultRootIdentityIsStableForTheSameDirectory / m21 在防的
+		// 「不稳定身份」这一类失效）。因此并列时按 dev、再按 fstype 取字典序最大者，
+		// 使结果与行序无关。这是**确定性 tie-break**，不声称能选出「实际可见」的那条
+		//（真实可见性由内核的挂载栈决定，mountinfo 的行序不是它的定义）。
+		if len(mp) > bestLen || (len(mp) == bestLen && cand.beats(best)) {
 			bestLen = len(mp)
-			best = mountKey{mountPoint: mp, dev: fields[2], fsType: fields[sep+1]}
+			best = cand
 		}
 	}
 	return best, bestLen >= 0
+}
+
+// beats 是 mountKey 的确定性 tie-break：并列挂载点（同一路径被多次挂载）时
+// 按 dev、再按 fstype 取字典序最大者，使**结果与 mountinfo 的行序无关**。
+// 目的只是消除「身份随行序漂移 ⇒ 永久闩锁」这一失效，不声称能选出内核实际可见的那条。
+func (k mountKey) beats(o mountKey) bool {
+	if k.dev != o.dev {
+		return k.dev > o.dev
+	}
+	return k.fsType > o.fsType
 }
 
 // pathCoveredBy 判断 dir 是否是 path 的祖先目录（或就是它）。两侧都已 Clean。
@@ -345,11 +395,19 @@ func (s *TraceSpooler) checkRoot() bool {
 	if err == nil {
 		return true
 	}
+	reason := "root_unavailable"
 	if errors.Is(err, errRootIdentityMismatch) {
-		s.gate.Trip("root-identity-mismatch", err)
-		return false
+		reason = "root-identity-mismatch"
 	}
-	s.gate.Trip("root_unavailable", err)
+	// 【规格 §9.3 的降级可观测性】Trip 的返回值表示「本次是否发生了跳变」——
+	// 只有跳变才打**恰好一条** ERROR。`checkRoot` 每个 tick、每次 Append 失败都会跑，
+	// 若无条件打日志，闩锁期间每行一条会把日志淹没（§9.3 要的是信号，不是噪音）。
+	// 闩锁**期间**的周期汇总日志（如「已闩锁 Ns，原因 …」）属 Task 7 的职责，
+	// 本任务只负责**跳变那一刻**这一条。
+	if s.gate.Trip(reason, err) {
+		log.Printf("[trace-spool] ERROR 正文落盘闩锁（跳变）：reason=%s root=%s cause=%v",
+			reason, s.root, err)
+	}
 	return false
 }
 
@@ -357,14 +415,21 @@ func (s *TraceSpooler) Gate() *SpoolGate { return s.gate }
 
 // AppendLine 追加一行正文，返回定位键。
 //
-// 闩锁中直接返回 ErrSpoolLatched，**不触碰文件系统**：调用方据此把该行标成
-// body_missing=true（规格 §15.1 R9）。
+// 闩锁中或已 Close 时直接返回 ErrSpoolLatched，**不触碰文件系统**：调用方据此把该行
+// 标成 body_missing=true（规格 §15.1 R9）。
 //
-// 【顺序（A5-4）】① 先消费「探针到期」标志并在**本 goroutine**（唯一写协程）上
-// 执行 gate.Tick —— 它做水位评估与（已闩锁时的）探针 fsync；② 再读 Allow()。
+// 【顺序 —— 已批准的偏离，Task 6 不得按「先 Allow 再消费」的字面顺序重写（A5-4）】
+// ① 先消费「探针到期」标志并在**本 goroutine**（唯一写协程）上执行 gate.Tick ——
+// 它做水位评估与（已闩锁时的）探针 fsync；② 再读 Allow()。
 // 未闩锁时 ① 也是**唯一**的水位评估点（Run 不得调用 gate.Tick）：若只在已闩锁时
-// 才消费标志，「超水位必须放弃正文」这条守卫就永远不会触发。
+// 才消费标志，「超水位必须放弃正文」这条守卫就永远不会触发（Tick 的水位判定只在
+// **未闩锁**分支里）—— 那会把这条守卫变成死代码。此顺序经控制者评审正式批准。
 func (s *TraceSpooler) AppendLine(dt string, line []byte) (ta.Ref, error) {
+	if s.closed.Load() {
+		// Close 之后不得再写：冻结包的 Writer.Close 没有 closed 标志，
+		// 继续 Append 会被当成「正常的新块」重建 part（静默续写）。
+		return ta.Ref{}, fmt.Errorf("%w（原因：spooler 已 Close）", ErrSpoolLatched)
+	}
 	s.applyDueTick()
 	if !s.gate.Allow() {
 		return ta.Ref{}, fmt.Errorf("%w（原因：%s）", ErrSpoolLatched, s.gate.Reason())
@@ -379,7 +444,11 @@ func (s *TraceSpooler) AppendLine(dt string, line []byte) (ta.Ref, error) {
 		}
 		// 写失败 ⇒ 立即闩锁。下一个事件不会再试（R9），
 		// 直到探针确认可写为止；这段时间里所有行都走 body_missing。
-		s.gate.Trip("append_failed", err)
+		if s.gate.Trip("append_failed", err) {
+			// 规格 §9.3：跳变那一刻恰好一条 ERROR（闩锁期间每行都打会淹没日志）。
+			log.Printf("[trace-spool] ERROR 正文落盘闩锁（跳变）：reason=append_failed root=%s cause=%v",
+				s.root, err)
+		}
 		return ta.Ref{}, err
 	}
 	return ref, nil
@@ -503,7 +572,14 @@ func (s *TraceSpooler) Run(ctx context.Context) {
 	}
 }
 
-func (s *TraceSpooler) Close() error { return s.w.Close() }
+func (s *TraceSpooler) Close() error {
+	// CAS ⇒ 幂等：Run 在 ctx.Done 时会 Close，调用方通常也 Close 一次；
+	// 第二次直接返回 nil（既不重复关句柄，也不会把首次的错误覆盖成 nil）。
+	if !s.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+	return s.w.Close()
+}
 
 func (s *TraceSpooler) Stats() SpoolerStats {
 	s.mu.Lock()

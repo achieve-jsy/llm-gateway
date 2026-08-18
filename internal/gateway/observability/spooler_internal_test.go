@@ -77,6 +77,36 @@ func TestSpoolerDueProbeIsConsumedExactlyOnce(t *testing.T) {
 	require.Equal(t, int32(1), usageCalls.Load(), "到期标志必须恰好消费一次，不得重复 Tick")
 }
 
+// TestSpoolerDiskWatermarkOptionReachesBuiltGate 钉住内置 Gate 的水位来自**本包的选项**
+// （评审 I2 第 ① 条）：Task 6 只需把 `trace_body.disk_watermark_percent` 传进
+// `TraceSpoolerOptions.DiskWatermarkPercent`，不必自己注入 Gate 来「尊重配置水位」。
+//
+// 【为什么断言 Gate 的配置字段而不是行为】水位的**行为**（pct ≥ 水位 ⇒ 闩锁）由 Task 4
+// 的用例覆盖；在这一层要验证的是**接线**（选项真的传到了那个被使用的 Gate）。
+// 用真实 statfs 断言行为会依赖宿主盘用量 ⇒ 机器相关（正是评审 M5 的教训）。
+// 杀手：变异 m23（忽略选项、硬编码 90）与 m24（去掉 0 ⇒ 90 的默认值）。
+func TestSpoolerDiskWatermarkOptionReachesBuiltGate(t *testing.T) {
+	newSpooler := func(t *testing.T, watermark int) *TraceSpooler {
+		t.Helper()
+		s, err := NewTraceSpooler(TraceSpoolerOptions{
+			Root: t.TempDir(), Inst: "blue", BlockBytes: 1 << 20,
+			RollInterval: time.Hour, FlushInterval: time.Minute,
+			DiskWatermarkPercent: watermark,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+		return s
+	}
+
+	require.Equal(t, 42, newSpooler(t, 42).gate.opts.DiskWatermarkPercent,
+		"配置的水位必须传到内置 Gate（Task 6 不必自己注入 Gate）")
+
+	// 0 ⇒ 90 不是「锦上添花」：SpoolGate **自己不为水位设默认值**，而 Tick 的未闩锁判据
+	// 是 `pct >= DiskWatermarkPercent` ⇒ 传 0 会让**每一次** Tick 都闩锁（0% 水位）。
+	require.Equal(t, 90, newSpooler(t, 0).gate.opts.DiskWatermarkPercent,
+		"DiskWatermarkPercent=0 必须取默认 90（否则第一次 Tick 就因 0% 水位闩锁）")
+}
+
 // TestMountIdentityForPicksLongestPrefixAndSurvivesEscape 钉住挂载级身份的判别逻辑
 // （A5-1 的核心）：身份取「覆盖 root 的**最长前缀**挂载项」的 挂载点 + 设备 + 类型。
 //
@@ -107,6 +137,26 @@ garbage line
 	esc, ok := mountIdentityFor([]byte(`7 1 8:2 / /data\040vol rw - ext4 /dev/sdb1 rw`), "/data vol/x")
 	require.True(t, ok)
 	require.Equal(t, "/data vol", esc.mountPoint)
+
+	// 【并列挂载点必须与行序无关（评审 M6）】同一路径被多次挂载（overmount）时
+	// mountinfo 里会有多条同挂载点的记录；若「先到者胜」，身份就随**行序**变化 ——
+	// 而行序不是稳定契约 ⇒ 行序一变身份就变 ⇒ 与启动期基线比较必然不等 ⇒ 永久闩锁
+	//（与 m21「不稳定身份」同一类失效）。这里把两条记录**两种顺序**各喂一次，
+	// 结果必须相同，且取到的是 tie-break 选出的那条（dev 字典序最大 = 8:2）。
+	const dupA = `25 30 0:23 / / rw,relatime - overlay overlay rw
+36 25 8:1 / /datalog rw,relatime - ext4 /dev/sda1 rw
+41 36 8:2 / /datalog rw,relatime - ext4 /dev/sdb1 rw
+`
+	const dupB = `25 30 0:23 / / rw,relatime - overlay overlay rw
+41 36 8:2 / /datalog rw,relatime - ext4 /dev/sdb1 rw
+36 25 8:1 / /datalog rw,relatime - ext4 /dev/sda1 rw
+`
+	first, ok := mountIdentityFor([]byte(dupA), "/datalog/trace-archive-v4")
+	require.True(t, ok)
+	second, ok := mountIdentityFor([]byte(dupB), "/datalog/trace-archive-v4")
+	require.True(t, ok)
+	require.Equal(t, mountKey{mountPoint: "/datalog", dev: "8:2", fsType: "ext4"}, first)
+	require.Equal(t, first, second, "并列挂载点的身份必须与 mountinfo 的行序无关（否则永久闩锁）")
 }
 
 // TestDefaultRootIdentityIsStableForTheSameDirectory 钉住身份取值的**稳定性**：

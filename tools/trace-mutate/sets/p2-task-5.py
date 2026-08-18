@@ -296,13 +296,18 @@ MUTATIONS["m21_身份取值不稳定"] = [
 ]
 
 # ==== 评审修复轮（I1/I2/M3/M6）====
-# ---- I2-② 注入 Gate 的探针不再套身份包装 ----
-# 杀手 = TestSpoolerInjectedGateProbeStillRequiresIdentity（**本任务新增**）：
-# 把无条件包装改成「只有 Gate 没自带探针时才包」⇒ Task 6 注入的探针没有身份检查
-# ⇒「挂载缺失但容器可写」时探针成功 + 水位正常 ⇒ 解锁 ⇒ A5-1 的静默错位。
-# 【为什么这条变异必须在】仅靠 m12（身份检查本身失效）杀不出「包装只对内建 Gate 生效」
-# 这一形态：m12 会把两条路径一起打断，而本变异只打断注入路径。
-MUTATIONS["m22_注入Gate的探针不再套身份包装"] = [
+# ---- I2-② 探针身份包装被条件化（= 原来那句「只对内建 Gate 包装」的直觉写法）----
+# 杀手 = TestSpoolerInjectedGateProbeStillRequiresIdentity（**本任务新增**）与
+# TestSpoolerProbeRefusesToUnlatchWhenIdentityMismatched（两者都注入 Gate）。
+#
+# 【杀伤面的如实说明】`if ProbeWrite == nil` 是「把包装挪回内建分支」最自然的写法，但
+# NewSpoolGate 已把 nil 探针换成 defaultProbeWrite ⇒ 该条件**实际恒假** ⇒ 两种 Gate 的
+# 探针都不再验身份。因此本变异比「只对注入 Gate 生效」更宽（它同时打断了内建路径）。
+# 「注入的 Gate 也必须先验身份」这一具体形态由上面两条行为用例直接把关：
+# 去掉无条件包装后，注入的成功探针 + 正常水位会让网关解锁 ⇒ 两条用例转红。
+# 之所以仍需要本变异：m12 改的是「身份检查本身」，而本变异改的是「包装是否生效」，
+# 修的人可能只动其中一处。
+MUTATIONS["m22_探针身份包装被条件化（两种Gate的探针都不再验身份）"] = [
     ("sub", "opts.Gate.opts.ProbeWrite = guardProbe(identityErr, opts.Gate.opts.ProbeWrite)",
             "if opts.Gate.opts.ProbeWrite == nil {\n\t\topts.Gate.opts.ProbeWrite = guardProbe(identityErr, nil)\n\t}"),
 ]
@@ -321,17 +326,22 @@ MUTATIONS["m24_去掉水位默认值"] = [
     ("sub", "if opts.DiskWatermarkPercent <= 0 {\n\t\topts.DiskWatermarkPercent = 90\n\t}",
             "if false {\n\t\topts.DiskWatermarkPercent = 90\n\t}"),
 ]
-# ---- I1 §9.3 闩锁日志：每次复检都打（噪音）----
+# ---- I1 §9.3 闩锁日志：不再按「跳变」判定，每次都打（噪音）----
 # 杀手 = TestSpoolerLatchLogsExactlyOncePerTransition：跳变一条、闩锁期间不再打。
-# 改成 `if true` 后，闩锁期间的每个 tick 都打一条 ⇒ require.Len(lines, 1) 转红。
-MUTATIONS["m25_闩锁日志每次都打"] = [
-    ("sub", "if s.gate.Trip(reason, err) {", "if true {"),
+# `|| true` 保留 Trip 调用（跳变语义不变），只让日志无条件打印 ⇒ 闩锁期间的每个 tick
+# 都打一条 ⇒ require.Len(lines, 1) 转红。
+# 【为什么不能写成 `if true {`】那样会**连 Trip 调用一起删掉**（它就在 if 条件里）
+# ⇒ 变成「根目录失败不再闩锁」这条完全不同的变异（杀伤面 8 条用例，不再是「日志噪音」），
+# 归因就不实了 —— 本集合第一版正是这么写的，权威表一跑就暴露出来，故修正。
+MUTATIONS["m25_闩锁日志不再按跳变判定（每次都打）"] = [
+    ("sub", "if s.gate.Trip(reason, err) {", "if s.gate.Trip(reason, err) || true {"),
 ]
 # ---- I1 §9.3 闩锁日志：去掉 ERROR 级别标记 ----
 # 杀手 = TestSpoolerLatchLogsExactlyOncePerTransition 的 require.Contains(..., "ERROR")。
 # 标准 log 包没有级别，本项目用消息里的 ERROR 标记表达级别 ⇒ 删掉它，日志里就再也
-# 分不出「闩锁跳变」这件需要人工介入的事。
-MUTATIONS["m26_闩锁日志不再标ERROR"] = [
+# 分不出「闩锁跳变」这件需要人工介入的事。这里只改**根目录**那一处（AppendLine 的
+# append_failed 那一处有自己的消息，行为侧由 m07 覆盖）。
+MUTATIONS["m26_根目录闩锁日志不再标ERROR"] = [
     ("sub", 'log.Printf("[trace-spool] ERROR 正文落盘闩锁（跳变）：reason=%s root=%s cause=%v"',
             'log.Printf("[trace-spool] 正文落盘闩锁（跳变）：reason=%s root=%s cause=%v"'),
 ]
@@ -465,7 +475,8 @@ REQUIREMENTS = [
     },
     {
         "plan": "A5-1 第 3 点：解锁探针必须先过同一道身份检查，且**对注入的 Gate 同样生效**（不得为此改 SpoolGate 接口）",
-        "mutations": ["m12_解锁探针不再验身份", "m22_注入Gate的探针不再套身份包装"], "checks": [],
+        "mutations": ["m12_解锁探针不再验身份",
+                      "m22_探针身份包装被条件化（两种Gate的探针都不再验身份）"], "checks": [],
         "note": (
             "杀手 = TestSpoolerProbeRefusesToUnlatchWhenIdentityMismatched（探针成功 + 水位正常，"
             "只有身份维持闩锁）与 TestSpoolerInjectedGateProbeStillRequiresIdentity。"
@@ -532,7 +543,7 @@ REQUIREMENTS = [
     {
         "plan": "规格 §9.3：降级必须有计数器（Flushes / Rolls 必须真的写进状态快照）；闩锁**跳变**必须恰好一条 ERROR 日志",
         "mutations": ["m16_Flushes计数不再累加", "m17_Rolls计数不再累加",
-                      "m25_闩锁日志每次都打", "m26_闩锁日志不再标ERROR"], "checks": [],
+                      "m25_闩锁日志不再按跳变判定（每次都打）", "m26_根目录闩锁日志不再标ERROR"], "checks": [],
         "note": (
             "**补入条目**：简报只定义了 Stats()，没有任何断言 ⇒ 两个计数器原先零覆盖。"
             "【评审 I1】闩锁日志原先**完全没有**：三处 `Trip` 的返回值被丢弃，"

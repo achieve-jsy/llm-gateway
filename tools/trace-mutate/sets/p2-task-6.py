@@ -51,6 +51,17 @@ r"""计划 2 / 任务 6 的变异集合（作者编写的产物 ⇒ 必须 git-t
    （「写入侧与启动接线都**不得**驱动闸门或滚动」）和「水位经 `DiskWatermarkPercent`
    传入而不自建闸门」都是**不存在的东西**，变异（删除守卫）表达不了 ⇒ 只能静态钉住。
 
+8. **简报的定位串接收者写错了名字（`tw` → `w`），影响 m01/m04/m05 三条**
+   （评审 F2 补充登记）。简报 `task-6-brief.md:524/541/547` 的三条原串分别是
+   `ref, err := tw.sink.AppendLine(dt, line)`、`if tw.sink == nil {`、
+   `dt := tw.sink.DayOf(e.TS)`；而实现里 `TraceWriter` 的接收者是 `w`
+   （`trace_event.go:172` 的 `func (w *TraceWriter) Run`，`buildTraceModels` 里同样是 `w.sink`），
+   全文**没有 `tw`** ⇒ 这三条若按字面执行都是「0 处定位」而非有效变异。
+   本集合实际写入的定位串一律用 `w.sink…`（`--check` 8/8 唯一定位可证）。
+   —— 上面第 1 条只登记了 m01「补 `_ = line`」那一半，这条补上「接收者名字」这一半；
+   m04 的简报原串以本条为准：**`if tw.sink == nil {` → `if false {`**
+   （此前报告曾错引为 `w.sink == nil`，已订正）。
+
 ## 命名的坑（A6-5）
 
 `internal/gateway/observability/spool.go` 是 `call_logs` 的 **Redis Stream** spool，

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	gwconfig "github.com/example/llm-gateway/internal/gateway/config"
 	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	ta "github.com/example/llm-gateway/internal/tracearchive"
@@ -25,9 +26,16 @@ import (
 	"gorm.io/gorm"
 )
 
-// cstTestZone 是测试侧的 dt 口径：固定 UTC+8。
+// cstTestZone 只用于**构造时间戳**（把事件的瞬间摆在北京时间的某个点上），
+// **不参与**任何 dt / body_ref_dt 的计算 —— 日期口径一律走生产入口
+// `gwconfig.TraceBodyConfig`（见 fakeSink / sinkWithDayOf）。
 //
-// 【为什么测试里的时间戳一律用「北京 01:00」这种跨日形状】北京 01:00 的 UTC 日期是
+// 【为什么两边刻意用不同的来源】时间戳固定在测试自带的 +08:00、期望值由生产入口算，
+// 二者一旦不再一致就会错位：例如 `config.TraceBodyZone` 被改成 UTC，
+// 「北京 01:00」这个瞬间的归属日就变成 09-23，而期望值仍是 09-24 ⇒ 用例立刻红。
+// 若时间戳也用 `config.TraceBodyZone` 构造，时区一改两边同时平移，反而测不出来。
+//
+// 【为什么时间戳一律用「北京 01:00」这种跨日形状】北京 01:00 的 UTC 日期是
 // **前一天**。若时间戳取在中午（如 12:00），UTC 日期与 UTC+8 日期恰好相同，
 // 「dt 退回 UTC」这类缺陷会全绿地溜过去（假绿）——本文件的几条标点用例因此
 // 刻意选在跨日边界附近。
@@ -61,14 +69,18 @@ func (r *orderRecorder) appendedDTs() []string {
 	return append([]string(nil), r.appends...)
 }
 
-// fakeSink 实现 gwobs.TraceBodySink：记录追加次序，不碰磁盘。
+// fakeSink 实现 gwobs.TraceBodySink：**生产日期入口**（gwconfig.TraceBodyConfig）
+// + 假落盘（记录追加次序，不碰磁盘）。
+//
+// 【为什么日期也走 config 而不是测试自算】写入器的 dt/body_ref_dt 断言必须链到
+// 生产唯一的日期入口上，否则 config.TraceBodyZone 被改动时用例发现不了。
 type fakeSink struct {
 	rec *orderRecorder
 
 	mu      sync.Mutex
 	appendI []int64
 	err     error
-	zone    *time.Location
+	day     gwconfig.TraceBodyConfig
 }
 
 func (s *fakeSink) AppendLine(dt string, line []byte) (ta.Ref, error) {
@@ -91,16 +103,12 @@ func (s *fakeSink) appendSeqs() []int64 {
 	return append([]int64(nil), s.appendI...)
 }
 
-func (s *fakeSink) DayStart(ts time.Time) time.Time {
-	loc := s.zone
-	if loc == nil {
-		loc = cstTestZone
-	}
-	t := ts.In(loc)
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
-}
+// DayStart 与 DayOf 同源：DayOf 由 DayStart 派生（全局约束的单一事实源）。
+// 零值 TraceBodyConfig 足够：这两个方法只读包级 TraceBodyZone，不读结构体字段
+// （与生产 main.go 的 traceBodySink 同形，只是那里的 cfg 来自 viper）。
+func (s *fakeSink) DayStart(ts time.Time) time.Time { return s.day.DayStart(ts) }
 
-func (s *fakeSink) DayOf(ts time.Time) string { return s.DayStart(ts).Format("2006-01-02") }
+func (s *fakeSink) DayOf(ts time.Time) string { return s.day.DayOf(ts) }
 
 // insertRecorder 记录每次 INSERT 的序号（受锁保护：回调在写协程上跑，断言在主测试协程上读）。
 type insertRecorder struct {
@@ -160,12 +168,13 @@ func newTestSpooler(t *testing.T, root, inst string) *gwobs.TraceSpooler {
 	return spooler
 }
 
-// sinkWithDayOf 把真实 spooler 与测试侧的 dt 口径装在一起
-// （生产里这两件事由 main.go 组装：TraceSpooler 实现 AppendLine，
-// config.TraceBodyConfig 提供 DayStart/DayOf —— 见 main.go 的 traceBodySink）。
+// sinkWithDayOf 把真实 spooler 与**生产日期入口**装在一起，是 main.go 里
+// traceBodySink 的测试侧同形物（TraceSpooler 提供 AppendLine，
+// gwconfig.TraceBodyConfig 提供 DayStart/DayOf）⇒ 生产日期胶水在这里被真正执行，
+// 而不是由测试自算一遍。
 type sinkWithDayOf struct {
 	spooler *gwobs.TraceSpooler
-	zone    *time.Location
+	day     gwconfig.TraceBodyConfig
 }
 
 func (s *sinkWithDayOf) AppendLine(dt string, line []byte) (ta.Ref, error) {
@@ -173,12 +182,9 @@ func (s *sinkWithDayOf) AppendLine(dt string, line []byte) (ta.Ref, error) {
 }
 
 // DayStart 与 DayOf 同源：DayOf 由 DayStart 派生（全局约束的单一事实源）。
-func (s *sinkWithDayOf) DayStart(ts time.Time) time.Time {
-	t := ts.In(s.zone)
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
-}
+func (s *sinkWithDayOf) DayStart(ts time.Time) time.Time { return s.day.DayStart(ts) }
 
-func (s *sinkWithDayOf) DayOf(ts time.Time) string { return s.DayStart(ts).Format("2006-01-02") }
+func (s *sinkWithDayOf) DayOf(ts time.Time) string { return s.day.DayOf(ts) }
 
 // TestTraceWriterAppendsSpoolBeforeMetadataRow 是**承重**用例（规格 §10.1 I1）：
 // 每一次 flush 里，所有 AppendLine 必须先于任何一次 INSERT 发生。
@@ -190,7 +196,7 @@ func (s *sinkWithDayOf) DayOf(ts time.Time) string { return s.DayStart(ts).Forma
 func TestTraceWriterAppendsSpoolBeforeMetadataRow(t *testing.T) {
 	rec := &orderRecorder{}
 	db, inserts := newSpoolTestDB(t, rec)
-	sink := &fakeSink{rec: rec}
+	sink := &fakeSink{rec: rec, day: gwconfig.TraceBodyConfig{}}
 
 	w := gwobs.NewTraceWriterWithSink(db, 1024, 1, time.Hour, gwobs.TraceWriterLimits{}, sink)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -219,7 +225,9 @@ func TestTraceWriterAppendsSpoolBeforeMetadataRow(t *testing.T) {
 		require.Less(t, app, ins[i], "第 %d 行：spool 追加（seq=%d）必须先于 PG 插入（seq=%d）", i, app, ins[i])
 	}
 
-	// dt（目录名分量）必须按 UTC+8 口径，且与 body_ref_dt 列同源。
+	// dt（目录名分量）必须按生产日期入口（TraceBodyConfig → TraceBodyZone，UTC+8）口径，
+	// 且与 body_ref_dt 列同源。期望值是字面量，而时间戳由测试自带的 +08:00 构造 ⇒
+	// 日期入口的时区一旦改变，这里就会错位（评审 F1 要求的耦合）。
 	require.Equal(t, []string{"2026-09-24", "2026-09-24", "2026-09-24"}, rec.appendedDTs(),
 		"dt 必须是 TS 在 UTC+8 下的日期；退回 UTC 会得到 2026-09-23")
 
@@ -252,7 +260,7 @@ func TestTraceWriterAppendsSpoolBeforeMetadataRow(t *testing.T) {
 func TestTraceWriterMarksBodyMissingWhenSpoolFails(t *testing.T) {
 	rec := &orderRecorder{}
 	db, _ := newSpoolTestDB(t, rec)
-	sink := &fakeSink{rec: rec, err: errors.New("no space left on device")}
+	sink := &fakeSink{rec: rec, err: errors.New("no space left on device"), day: gwconfig.TraceBodyConfig{}}
 
 	w := gwobs.NewTraceWriterWithSink(db, 1024, 1, time.Hour, gwobs.TraceWriterLimits{}, sink)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -295,7 +303,7 @@ func TestTraceWriterLatchedSpoolMarksBodyMissing(t *testing.T) {
 
 	rec := &orderRecorder{}
 	db, inserts := newSpoolTestDB(t, rec)
-	sink := &sinkWithDayOf{spooler: spooler, zone: cstTestZone}
+	sink := &sinkWithDayOf{spooler: spooler, day: gwconfig.TraceBodyConfig{}}
 	w := gwobs.NewTraceWriterWithSink(db, 1024, 1, time.Minute, gwobs.TraceWriterLimits{}, sink)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -385,7 +393,7 @@ func TestTraceWriterRetryAfterFailureStartsAtRowZero(t *testing.T) {
 
 	rec := &orderRecorder{}
 	db, _ := newSpoolTestDB(t, rec)
-	sink := &sinkWithDayOf{spooler: spooler, zone: cstTestZone}
+	sink := &sinkWithDayOf{spooler: spooler, day: gwconfig.TraceBodyConfig{}}
 	w := gwobs.NewTraceWriterWithSink(db, 1024, 1, 50*time.Millisecond, gwobs.TraceWriterLimits{}, sink)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -447,20 +455,33 @@ func TestTraceWriterRetryAfterFailureStartsAtRowZero(t *testing.T) {
 // TestTraceWriterDtCoversUTCPlus8DayBoundary 是 A6-4 的交接项①：
 // 行内 ts 的时区常量（observability 包内的 traceLineZone）与 dt 口径的时区常量
 // （config.TraceBodyZone）是两份，Task 3 在包内无法钉住二者相等 ⇒ 这里用
-// **真实 spooler + 真实目录名 + 真实行内容**把「同一天」这件事一并钉住：
+// **生产日期入口（gwconfig.TraceBodyConfig）+ 真实 spooler + 真实目录名 + 真实行内容**
+// 把「同一天」这件事一并钉住：
 //
 //	① 目录名：北京 2026-09-25 00:30（UTC 仍是 09-24 16:30）的事件必须落进 dt=2026-09-25；
-//	② 列值：body_ref_dt 必须是 2026-09-25；
+//	② 列值：body_ref_dt 必须是 2026-09-25 的 UTC 零点；
 //	③ 行内 ts：必须写成 +08:00 的 2026-09-25T00:30:00+08:00（与目录同一天）。
 //
+// **本用例真正钉住的范围**（评审 F1 后按实际改写）：① 与② 走的是生产日期入口
+// （sinkWithDayOf 的 DayStart/DayOf 委托给 TraceBodyConfig，不再由测试自算），
+// 因此 `config.TraceBodyZone` 一旦被改成会改变归属日的口径（例如 UTC），
+// 前置断言与①都会立刻红；③ 钉的是 observability 包内行序列化器的 +08:00。
+// 两份常量「恰好都是 +08:00」只在「归属日相同」这个可观测后果上被覆盖，
+// 本用例不声称做了常量相等性检查（那由 p2-task-2 的静态检查负责）。
 // dt 退回 UTC 会让①变成 dt=2026-09-24，行内 ts 退回 UTC 会让③变成 UTC 时刻。
 func TestTraceWriterDtCoversUTCPlus8DayBoundary(t *testing.T) {
+	// 前置条件：生产日期入口本身必须把「北京 09-25 00:30」归到 09-25。
+	// 这一条把期望值与 config.TraceBodyZone 显式绑在一起 —— 否则期望值只是本地字面量，
+	// 时区常量被改也看不出来。
+	require.Equal(t, "2026-09-25", gwconfig.TraceBodyConfig{}.DayOf(cstCrossDayTS),
+		"前置条件：生产日期入口（TraceBodyZone）必须把北京 09-25 00:30 归到 09-25")
+
 	root := t.TempDir()
 	spooler := newTestSpooler(t, root, "blue")
 
 	rec := &orderRecorder{}
 	db, _ := newSpoolTestDB(t, rec)
-	sink := &sinkWithDayOf{spooler: spooler, zone: cstTestZone}
+	sink := &sinkWithDayOf{spooler: spooler, day: gwconfig.TraceBodyConfig{}}
 	w := gwobs.NewTraceWriterWithSink(db, 1024, 1, time.Minute, gwobs.TraceWriterLimits{}, sink)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -515,7 +536,7 @@ func TestTraceWriterIndentedBodyStaysOneLine(t *testing.T) {
 
 	rec := &orderRecorder{}
 	db, _ := newSpoolTestDB(t, rec)
-	sink := &sinkWithDayOf{spooler: spooler, zone: cstTestZone}
+	sink := &sinkWithDayOf{spooler: spooler, day: gwconfig.TraceBodyConfig{}}
 	w := gwobs.NewTraceWriterWithSink(db, 1024, 1, time.Minute, gwobs.TraceWriterLimits{}, sink)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

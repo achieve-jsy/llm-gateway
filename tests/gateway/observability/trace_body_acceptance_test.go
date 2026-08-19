@@ -182,9 +182,14 @@ func TestAcceptanceA1WriteHalf(t *testing.T) {
 	defer cancel()
 	go w.Run(ctx)
 
-	// 时间戳固定在北京 2026-09-24 10:00（其 UTC 日期是同一天 ⇒ dt 必须由生产日期
-	// 入口算，而不是跟着宿主时区走）。
-	base := time.Date(2026, 9, 24, 10, 0, 0, 0, cstTestZone)
+	// 时间戳刻意取「北京 2026-09-25 00:00 起、每条 +1s」这一段**跨日形状**：
+	// 这 2000 条事件的 UTC 日期全是 09-24，而 UTC+8 日期是 09-25 ⇒ 「dt 退回 UTC」
+	// 或「dt 跟着宿主时区走」都会让下面的期望值对不上。
+	// 【为什么不取白天的时刻】北京 2026-09-24 10:00 的 UTC 日期恰好也是 09-24 ⇒
+	// 时区口径退回 UTC 的实现在那种取法下**全绿**（假绿）；跨日形状与宿主时区无关，
+	// 又能把那类缺陷钉住。时间戳是固定字面量（不用 time.Now）⇒ 与宿主时钟、
+	// 分钟/日边界也无关。
+	base := time.Date(2026, 9, 25, 0, 0, 0, 0, cstTestZone)
 	for i := 0; i < n; i++ {
 		w.Emit(gwobs.TraceEvent{
 			RequestID:         fmt.Sprintf("req-%05d", i),
@@ -237,9 +242,9 @@ func TestAcceptanceA1WriteHalf(t *testing.T) {
 		require.NotNil(t, row.BodyRefPart, "第 %d 行：定位键不得缺失", i)
 		require.NotNil(t, row.BodyRefRow, "第 %d 行：定位键不得缺失", i)
 		require.Equal(t, "blue", *row.BodyRefInst, "第 %d 行：inst 必须取自 spooler 的配置", i)
-		require.Equal(t, "2026-09-24", row.BodyRefDT.Format("2006-01-02"),
-			"第 %d 行的 dt 必须是 UTC+8 的日期", i)
-		require.Equal(t, time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC), row.BodyRefDT.UTC(),
+		require.Equal(t, "2026-09-25", row.BodyRefDT.Format("2006-01-02"),
+			"第 %d 行的 dt 必须是 UTC+8 的日期（这些事件在 UTC 下仍是 09-24）", i)
+		require.Equal(t, time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC), row.BodyRefDT.UTC(),
 			"第 %d 行的 dt 必须是该日历日的 UTC 零点（PG date 列按会话时区折算）", i)
 	}
 

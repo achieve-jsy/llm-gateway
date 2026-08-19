@@ -307,10 +307,23 @@ func TestDegradationSummaryIsThrottled(t *testing.T) {
 	}
 	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 5 }, waitBudget, 10*time.Millisecond)
 	time.Sleep(200 * time.Millisecond) // 期间会跑很多个 flush 周期
-	require.LessOrEqual(t, capture.countContaining("汇总"), 1, "未到 SummaryInterval 不得重复输出汇总")
+	require.Zero(t, capture.countContaining("汇总"),
+		"闩锁那一刻刚把 degLastSum 置为当前时刻 ⇒ 未到 SummaryInterval 必须一条都没有：%v", capture.snapshot())
 
-	clock.Advance(2 * time.Hour)
-	require.Eventually(t, func() bool { return capture.countContaining("汇总") >= 1 }, waitBudget, 10*time.Millisecond)
+	// 【边界对（评审 M4）】只断言「<= 1」在时钟冻结时对任何读过注入时钟的实现都恒为 0
+	// （只杀得掉「完全不看时钟」的那类变异），既没有检验「未到间隔不重复」也没有检验
+	// 「到点必输出」。这里用两次采样把区间两侧都钉住：先走到间隔**之前**，再越过间隔。
+	clock.Advance(time.Hour - time.Second)
+	time.Sleep(100 * time.Millisecond) // 冻结在 T0+59m59s，跑过若干 tick
+	require.Zero(t, capture.countContaining("汇总"), "未到 SummaryInterval 不得输出")
+
+	clock.Advance(2 * time.Second) // 越过 1h
+	require.Eventually(t, func() bool { return capture.countContaining("汇总") == 1 }, waitBudget, 10*time.Millisecond,
+		"到点必须恰好输出一条：%v", capture.snapshot())
+
+	clock.Advance(time.Hour - time.Second)
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, 1, capture.countContaining("汇总"), "下一个区间之前不得再输出：%v", capture.snapshot())
 }
 
 // ---------------------------------------------------------------------------
@@ -441,12 +454,11 @@ func TestDegradationLogsWatermarkLatchWithoutGateStats(t *testing.T) {
 	require.Contains(t, summary, "不可观测")
 }
 
-// TestDegradationSuppressesWriterLogsForRootClassLatch 是 A7-1 的「不重复打日志」证据：
-// 根目录类闩锁（root_unavailable / root-identity-mismatch，由 Task 5 的 checkRoot 在
-// Trip 返回值上**已经**按跳变打过恰好一条 ERROR）在写入侧必须**零条 ERROR** ——
-// 否则 §9.3 的「跳变恰好一条」会被两侧同时打日志破坏。
-func TestDegradationSuppressesWriterLogsForRootClassLatch(t *testing.T) {
-	root := t.TempDir()
+// newRootFailingSpooler 造一个「根目录复检必然失败」的 spooler：闸门会由 spooler 自己的
+// FlushAndRoll → checkRoot 以 root_unavailable 跳变，**不需要任何写入流量**
+// —— 也就是 D49「运行中挂载消失」在低流量/空闲期最容易出现的形态。
+func newRootFailingSpooler(t *testing.T, root string) (*gwobs.TraceSpooler, *gwobs.SpoolGate) {
+	t.Helper()
 	gate := gwobs.NewSpoolGate(gwobs.SpoolGateOptions{
 		Root: root, DiskWatermarkPercent: 90, ProbeInterval: time.Millisecond,
 		UsagePercent: func(string) (float64, error) { return 1, nil },
@@ -460,6 +472,16 @@ func TestDegradationSuppressesWriterLogsForRootClassLatch(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = spooler.Close() })
+	return spooler, gate
+}
+
+// TestDegradationSuppressesWriterLogsForRootClassLatch 是 A7-1 的「不重复打日志」证据：
+// 根目录类闩锁（root_unavailable / root-identity-mismatch，由 Task 5 的 checkRoot 在
+// Trip 返回值上**已经**按跳变打过恰好一条 ERROR）在写入侧必须**零条 ERROR** ——
+// 否则 §9.3 的「跳变恰好一条」会被两侧同时打日志破坏。
+func TestDegradationSuppressesWriterLogsForRootClassLatch(t *testing.T) {
+	root := t.TempDir()
+	spooler, _ := newRootFailingSpooler(t, root)
 
 	rec := &orderRecorder{}
 	db, _ := newSpoolTestDB(t, rec)
@@ -487,8 +509,11 @@ func TestDegradationSuppressesWriterLogsForRootClassLatch(t *testing.T) {
 
 	require.Equal(t, 0, capture.countContaining("ERROR"),
 		"根目录类跳变的日志归 Task 5 的三处 Trip 调用点，写入侧必须零条 ERROR：%v", capture.snapshot())
-	require.Equal(t, 0, capture.countContaining("body_missing"),
-		"写入侧不得为根目录类闩锁重复打印降级行")
+	// 【精确子串（评审 M3）】原断言用的是 "body_missing"，而**汇总行**里含
+	// `body_missing_rows=` —— 当前只靠 SummaryInterval=1h 恰好不触发才没假红。
+	// 断「降级为 body_missing=true」= 闩锁 ERROR 的原文，与汇总字段不可能混淆。
+	require.Equal(t, 0, capture.countContaining("降级为 body_missing=true"),
+		"写入侧不得为根目录类闩锁重复打印降级行：%v", capture.snapshot())
 	// 降级本身仍然生效：行还是 body_missing，只是日志不重复打。
 	var row obsmodel.CallTrace
 	require.NoError(t, db.First(&row, "request_id = ?", "root-0").Error)
@@ -564,4 +589,99 @@ func TestDegradationSummaryCarriesGateFields(t *testing.T) {
 
 	time.Sleep(150 * time.Millisecond) // 时钟未推进 ⇒ 再来多个 tick 也不得再输出
 	require.Equal(t, 1, capture.countContaining("汇总"), "同一周期内不得重复输出汇总：%v", capture.snapshot())
+}
+
+// TestDegradationSummarizesRootLatchWithoutTraffic 是**评审 I2** 的证据：根目录类闩锁由
+// spooler 自己的 FlushAndRoll → checkRoot 触发，**不需要任何写入流量** ⇒ 会出现「闸门已
+// 闩锁、写入侧还没有失败过（degLatched == false）」的空闲窗口。此时：
+//   - A7-2 的周期汇总必须照常输出（否则整段闩锁期一条都没有，而「没有新行」正是运维最需要
+//     汇总的时刻）；
+//   - DegradationStats().Latched 必须为 true（否则看板读不到闩锁）。
+//
+// 注意本用例**不发任何 Emit**：这也是它与 TestDegradationSuppressesWriterLogsForRootClassLatch
+// （那里有 5 行流量、SummaryInterval=1h）的分工 —— 那条覆盖「不重复打日志」，这条覆盖
+// 「空闲窗口仍然可见」。
+func TestDegradationSummarizesRootLatchWithoutTraffic(t *testing.T) {
+	root := t.TempDir()
+	spooler, _ := newRootFailingSpooler(t, root)
+
+	rec := &orderRecorder{}
+	db, _ := newSpoolTestDB(t, rec)
+	sink := &sinkWithGateStats{&sinkWithDayOf{spooler: spooler, day: gwconfig.TraceBodyConfig{}}}
+	capture := &logCapture{}
+	clock := newTestClock(time.Unix(0, 0))
+
+	w := gwobs.NewTraceWriterWithSink(db, 1024, 1, 20*time.Millisecond, gwobs.TraceWriterLimits{}, sink)
+	w.ConfigureDegradation(gwobs.DegradationOptions{Logf: capture.logf, Now: clock.Now, SummaryInterval: time.Minute})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+	go spooler.Run(ctx)
+
+	// 零流量：闸门照样会被 spooler 自己的周期复检闩锁。
+	require.Eventually(t, func() bool { return spooler.Gate().Latched() }, waitBudget, time.Millisecond)
+	require.Zero(t, w.DegradationStats().MissingRows, "本用例不发任何流量 ⇒ 不该有降级行")
+
+	// 写入侧的周期比对至多一个 tick 就能看见并**认领**这次闩锁。
+	require.Eventually(t, func() bool { return w.DegradationStats().Latched }, waitBudget, 10*time.Millisecond,
+		"闸门已闩锁时写入侧必须看得到（否则看板读不到闩锁）")
+	require.Zero(t, capture.countContaining("ERROR"), "根目录类的日志归 Task 5：%v", capture.snapshot())
+
+	clock.Advance(2 * time.Minute)
+	require.Eventually(t, func() bool { return capture.countContaining("汇总") >= 1 }, waitBudget, 10*time.Millisecond,
+		"闸门闩锁且无流量时也必须按周期汇总：%v", capture.snapshot())
+	line := capture.firstContaining(t, "汇总")
+	require.Contains(t, line, "latched=true", "汇总必须反映闸门已闩锁")
+	require.Contains(t, line, "root_unavailable", "汇总必须带闸门的 reason")
+	require.Contains(t, line, "body_missing_rows=0", "无流量 ⇒ 缺失行数为 0")
+	// 汇总里的 `latched_seconds=` 是**闸门自己**的读数（A7-2 要的就是闸门字段），闸门用真实
+	// 时钟 ⇒ 这里只能断言「字段在」；写入侧口径的时长用注入时钟做确定性断言（下面那行）。
+	require.Contains(t, line, "latched_seconds=")
+	require.Equal(t, int64(120), w.DegradationStats().LatchedSeconds,
+		"写入侧闩锁时长必须按认领时刻起算（注入时钟推进 2 分钟）")
+}
+
+// TestDegradationIsSilentWhenFeatureDisabled 是**评审 I1** 的证据：`TRACE_BODY_ROOT` 未设
+// ⇒ sink == nil ⇒ 正文仍写在 PG 的 jsonb 列（**功能整体关闭**）。global-constraints 要求
+// 关闭路径与本计划之前**行为一致** ⇒ 一条降级日志都不许新增。
+//
+// 原先的实现在启动约一个 tick 后会打出「闸门状态不可观测（sink 未暴露 GateStats）…请检查
+// 组装接线…改由 AppendLine 的错误文本判定」—— 三重错误：① 这是关闭路径上的新增日志；
+// ② 接线是**有意**缺失的，不是待检查的故障；③ 它承诺的 AppendLine 兜底在 sink == nil 时
+// 根本不存在（buildTraceModels 走既有路径，连 AppendLine 都不会调用）。
+func TestDegradationIsSilentWhenFeatureDisabled(t *testing.T) {
+	rec := &orderRecorder{}
+	db, _ := newSpoolTestDB(t, rec)
+	capture := &logCapture{}
+
+	// 即便调用方注入了日志出口，关闭路径也必须一个字节都不打。
+	w := gwobs.NewTraceWriterWithSink(db, 1024, 1, 20*time.Millisecond, gwobs.TraceWriterLimits{}, nil)
+	w.ConfigureDegradation(gwobs.DegradationOptions{Logf: capture.logf})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	for i := 0; i < 3; i++ {
+		w.Emit(gwobs.TraceEvent{
+			RequestID: fmt.Sprintf("off-%d", i), TS: cstCrossDayTS,
+			RequestBodyRaw: []byte(`{"a":1}`),
+		})
+	}
+	require.Eventually(t, func() bool {
+		var n int64
+		db.Model(&obsmodel.CallTrace{}).Count(&n)
+		return n == 3
+	}, waitBudget, 10*time.Millisecond)
+
+	time.Sleep(200 * time.Millisecond) // 覆盖至少 10 个写入侧 tick（20ms）
+
+	require.Zero(t, capture.countContaining(""),
+		"关闭路径（sink == nil）不得新增任何降级日志：%v", capture.snapshot())
+	require.Equal(t, gwobs.DegradationStats{}, w.DegradationStats(), "关闭路径不得累积任何降级状态")
+	// 既有行为不变：正文仍在 jsonb 列，没有 body_missing、没有 spool 定位键。
+	var row obsmodel.CallTrace
+	require.NoError(t, db.First(&row, "request_id = ?", "off-0").Error)
+	require.False(t, row.BodyMissing)
+	require.NotNil(t, row.RequestBody)
+	require.Nil(t, row.BodyRefDT)
 }

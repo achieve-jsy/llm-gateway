@@ -359,9 +359,30 @@ func (w *TraceWriter) maybeSummaryLog(now time.Time) {
 		return
 	}
 	// 闸门不可观测：只报写入侧确实知道的字段，**不伪造**闸门侧数值。
-	w.logf("[trace-body] WARN 正文落盘闩锁中，周期汇总：latched=%t latched_seconds=%d trips=%d "+
+	//
+	// 【字段名口径（评审 M2）】闸门可观测那一行里的 `trips=` 是**闸门**的 Stats().Trips；
+	// 这里拿不到闸门快照，只能用写入侧自己数到的跳变次数 ⇒ 必须换名字，否则看板解析者
+	// 会把两个不同来源的计数当成同一个序列。
+	w.logf("[trace-body] WARN 正文落盘闩锁中，周期汇总：latched=%t latched_seconds=%d writer_latch_trips=%d "+
 		"body_missing_rows=%d spool_failures=%d reason=%q；probe_failures/usage_percent 不可观测（sink 未暴露 GateStats）",
 		true, int64(now.Sub(since).Seconds()), trips, missing, failures, reason)
+}
+
+// observePeriodic 是写入侧**唯一的**周期可观测性入口（A7-1 的比对 + A7-2 的汇总）。
+//
+// 【为什么合并成一个入口】关闭路径（`TRACE_BODY_ROOT` 未设 ⇒ `sink == nil`，正文仍写在
+// PG 的 jsonb 列里）必须与本计划之前**行为一致**：不许新增任何日志、也不该多做可观测性
+// 工作。分开两处调用时，`observeGateTrips` 会在启动约一个 tick 后把「闸门不可观测」的
+// WARN 打出来 —— 那条文案不仅多余（接线是有意缺失的），而且**误导**：它承诺的
+// 「改由 AppendLine 的错误文本判定」在 `sink == nil` 时根本不存在（buildTraceModels 在
+// sink == nil 分支直接走既有路径，连 AppendLine 都不会调用）。合并后只有一个判断点，
+// 关闭路径确定性零日志（用例 TestDegradationIsSilentWhenFeatureDisabled 守着它）。
+func (w *TraceWriter) observePeriodic() {
+	if w.sink == nil {
+		return
+	}
+	w.observeGateTrips()
+	w.maybeSummaryLog(w.now())
 }
 
 // observeGateTrips 是 A7-1 的周期检测：把**这一次**观测到的闸门快照与上一次比对，
@@ -390,12 +411,46 @@ func (w *TraceWriter) observeGateTrips() {
 	w.degGateSeen = gateSeen{valid: true, trips: st.Trips, latched: st.Latched, reason: st.Reason}
 	w.degMu.Unlock()
 
-	if !changed || !st.Latched || !strings.HasPrefix(st.Reason, diskWatermarkReasonPrefix) {
+	if !changed || !st.Latched {
+		return
+	}
+	// 【认领闸门侧的闩锁（评审 I2）】根目录类闩锁由 TraceSpooler 自己的周期滚动流程
+	// （那里的 checkRoot）触发 —— 注意：此处**不能**把那个方法名字面写进来，本文件有一条
+	// absent 静态检查禁止出现它（A5-4/A6-1：滚动与探针的所有权在 spooler 一侧）——
+	// 它与「写入侧是否在写」无关 ⇒ 完全可能出现
+	// 「闸门已闩锁、写入侧 degLatched 仍为 false」的**空闲窗口**（低流量/空闲时最容易发生，
+	// D49「运行中挂载消失」正是这个形态）。不认领的话：A7-2 的汇总判据（看 degLatched）
+	// 在整个闩锁期一条都不会打，`DegradationStats().Latched` 也恒为 false —— 恰在运维
+	// 最需要它的时刻失效，且与「没有新行正是最需要汇总的时刻」的注释自相矛盾。
+	//
+	// 【为什么不在这里主动解除】解锁的权威信号仍然是「写入侧真的写成功了一次」
+	// （noteSpoolSuccess）：只有真的落盘成功才能证明不再是降级状态，而「闸门未闩锁」并不
+	// 等价于「现在能写」（API 缝不需要清零；空转期读到 latched=true 是保守而正确的）。
+	w.adoptGateLatch(st.Reason)
+
+	// 日志归属不变：水位类由本侧打（Task 5 没有水位这条路径），Task 5 已经按跳变打过的
+	// 三类在本侧保持零条（§9.3 的「恰好一条」）。
+	if !strings.HasPrefix(st.Reason, diskWatermarkReasonPrefix) {
 		return
 	}
 	w.logf("[trace-body] ERROR 正文落盘已闩锁，开始降级为 body_missing=true（网关继续服务）："+
 		"跳变起因 = 磁盘水位（reason=%q usage_percent=%.1f trips=%d）；"+
 		"解锁条件 = 水位回落 且 探针可写", st.Reason, st.UsagePercent, st.Trips)
+}
+
+// adoptGateLatch 把「闸门侧观测到的闩锁」记入写入侧的降级状态（同一闩锁周期只认第一眼）。
+//
+// 【Trips 的语义】写入侧数的是「我观察到的闩锁跳变次数」：失败路径的首次失败算一次，
+// 周期比对首次看见闸门闩锁也算一次；同一周期里重复观测不算。因此它 ≤ 闸门的
+// Stats().Trips（闸门可能在下一次比对之前已经解锁，见报告登记的边界）。
+func (w *TraceWriter) adoptGateLatch(reason string) {
+	now := w.now()
+	w.degMu.Lock()
+	if !w.degLatched {
+		w.degLatched, w.degSince, w.degLastSum, w.degReason = true, now, now, reason
+		w.degTrips++
+	}
+	w.degMu.Unlock()
 }
 
 // warnGateUnobservable 在闸门状态不可观测时**响亮**说明（不得静默降级成「水位跳变
@@ -582,14 +637,8 @@ func (w *TraceWriter) Run(ctx context.Context) {
 			flush(ctx, batch)
 			batch = batch[:0]
 			batchBytes = 0
-			// 周期动作（都不在请求路径上）：
-			//   ① A7-1：水位闩锁跳变的比对。闸门不可观测的 Warn 也在这里（首次周期）
-			//      打一条 —— 不静默降级；
-			//   ② A7-2：闩锁期间的汇总，由 degLastSum 节流到每 SummaryInterval 一条。
-			// 汇总必须由周期分支驱动：闩锁后可能长时间没有正文可写，而「没有新行」正是
-			// 运维最需要看到汇总的时刻（只在失败路径打的话，那时一条都不会有）。
-			w.observeGateTrips()
-			w.maybeSummaryLog(w.now())
+			// 周期动作（都不在请求路径上）：见 observePeriodic 的注释。
+			w.observePeriodic()
 		}
 	}
 }

@@ -7,6 +7,15 @@ A7-1 / A7-2 / A7-3）。这一批变异的共同主题：**「盘满/写失败�
 
 编号一经发布不再改动；匹配一律用字符串（不用行号），行号仅供人读。
 
+## 评审修复轮（控制者裁定「需修复」）新增的条目
+
+- `m14_关闭路径也打警告`（I1）：关闭路径（`TRACE_BODY_ROOT` 未设 ⇒ `sink == nil`）必须零新增
+  日志；原先的实现会在启动约一个 tick 后打一条**误导性** WARN（接线是有意缺失的，且它承诺的
+  AppendLine 兜底在 sink == nil 时不存在）。
+- `m15_不认领闸门侧闩锁`（I2）：根目录类闩锁由 spooler 自己的 FlushAndRoll 触发 ⇒ 有
+  「闸门已闩锁、写入侧还没失败过」的空闲窗口；不认领则整段闩锁期没有汇总、看板读不到闩锁。
+- 两条静态检查补齐「两侧 reason 集合不相交」的**另一半**（Task 5 的 reason 字面量）。
+
 ## 相对简报（task-7-brief.md 步骤 5）的如实改动 —— 每条都是实测发现
 
 1. **简报的 m01/m02 定位串在实现里不存在**：简报的字符串按「失败路径自己维护
@@ -108,9 +117,11 @@ MUTATIONS["m03_汇总不节流"] = [
 # 汇总退回「只在失败路径打」（简报草稿的形态）：闩锁后若没有新行就永远没有汇总 ——
 # 而盘满后长时间没有正文可写，正是运维最需要汇总的时刻。
 # 杀手 TestDegradationSummaryIsThrottled（推进时钟后 Eventually 等不到汇总）。
+# 【评审修复轮更新定位串】I2 把周期动作合并成 observePeriodic 一个入口，这条变异改为
+# 「去掉该入口里的汇总调用」—— 语义与原先完全一致（汇总退回只在失败路径打）。
 MUTATIONS["m11_汇总只在失败路径打"] = [
-    ("sub", "\t\t\tw.observeGateTrips()\n\t\t\tw.maybeSummaryLog(w.now())",
-            "\t\t\tw.observeGateTrips()"),
+    ("sub", "\tw.observeGateTrips()\n\tw.maybeSummaryLog(w.now())",
+            "\tw.observeGateTrips()"),
 ]
 
 # 汇总丢掉闸门字段（只留写入侧计数）⇒ A7-2 的六字段要求破功。
@@ -154,8 +165,11 @@ MUTATIONS["m09_闸门不可观测不告警"] = [
 MUTATIONS["m04_不累加missingRows"] = [
     ("sub", "\tw.missingRows.Add(1)", "\t_ = w.missingRows"),
 ]
+# 【评审修复轮更新定位串】I2 的 adoptGateLatch 里出现了第二处 `w.degTrips++` ⇒ 带上上下文
+# 保证唯一；本条只针对**失败路径**的计数（认领路径的计数由 m15 覆盖）。
 MUTATIONS["m12_不累加闩锁跳变次数"] = [
-    ("sub", "\t\tw.degTrips++", "\t\t_ = w.degTrips"),
+    ("sub", "\t\tw.degLatched, w.degSince, w.degLastSum = true, now, now\n\t\tw.degTrips++",
+            "\t\tw.degLatched, w.degSince, w.degLastSum = true, now, now\n\t\t_ = w.degTrips"),
 ]
 
 # 闩锁起始时刻不记录（degSince 置零值）⇒ LatchedSince 为零值、LatchedSeconds 变成
@@ -165,6 +179,24 @@ MUTATIONS["m12_不累加闩锁跳变次数"] = [
 MUTATIONS["m13_不记录闩锁起始时刻"] = [
     ("sub", "w.degLatched, w.degSince, w.degLastSum = true, now, now",
             "w.degLatched, w.degSince, w.degLastSum = true, time.Time{}, now"),
+]
+
+# ---- 评审 I1：关闭路径（sink == nil）必须零新增日志 ----
+# 去掉 observePeriodic 的关闭判断 ⇒ 关闭路径每个进程都会打一条「闸门状态不可观测」的
+# 误导性 WARN（它承诺的 AppendLine 兜底在 sink == nil 时并不存在）。
+# 杀手 TestDegradationIsSilentWhenFeatureDisabled 的「零行日志」断言红。
+MUTATIONS["m14_关闭路径也打警告"] = [
+    ("sub", "\tif w.sink == nil {\n\t\treturn\n\t}\n\tw.observeGateTrips()",
+            "\tw.observeGateTrips()"),
+]
+
+# ---- 评审 I2：必须认领闸门侧自行置位的闩锁（否则空闲窗口里汇总与看板都看不到）----
+# 去掉认领 ⇒ 根目录类闩锁 + 无流量时：degLatched 恒 false ⇒ 汇总整段闩锁期一条不打、
+# DegradationStats().Latched 恒 false。
+# 杀手 TestDegradationSummarizesRootLatchWithoutTraffic。
+MUTATIONS["m15_不认领闸门侧闩锁"] = [
+    ("sub", "\tif !w.degLatched {\n\t\tw.degLatched, w.degSince, w.degLastSum, w.degReason = true, now, now, reason\n\t\tw.degTrips++\n\t}",
+            "\t_, _ = now, reason"),
 ]
 
 CHECKS = [
@@ -190,6 +222,26 @@ CHECKS = [
             "水位 = `disk_watermark: `（本文件判据）；Task 5 的三类 = root-identity-mismatch / "
             "root_unavailable / append_failed（Task 5 已按跳变打过日志）。"
         ),
+    },
+    {
+        "name": "Task 5 侧根目录类 reason 字面量（root_unavailable / root-identity-mismatch）",
+        "file": "internal/gateway/observability/spooler.go",
+        "pattern": r'"root_unavailable"[\s\S]{0,200}"root-identity-mismatch"',
+        "expect": "present",
+        "why": (
+            "评审 M1：「两侧 reason 集合不相交」原先只有水位那一对有静态检查，Task 5 这三类"
+            "（spooler.go 的 checkRoot 与写失败分支）没人钉。若那边的文案改了，写入侧的"
+            "task5Reason* 判据就失效 ⇒ 同一个跳变会在两侧各打一条 ERROR（破坏 §9.3 的「恰好一条」），"
+            "而没有任何用例或检查会变红（Task 5 的日志来自 log.Printf，测试不解析真实 stderr）。"
+            "文件间耦合只能静态钉住。"
+        ),
+    },
+    {
+        "name": "Task 5 侧写失败 reason 字面量（append_failed）",
+        "file": "internal/gateway/observability/spooler.go",
+        "pattern": r'Trip\("append_failed"',
+        "expect": "present",
+        "why": "同上，第三类 reason；写入侧 task5ReasonWriteFailed 的取值必须与它逐字一致。",
     },
     {
         "name": "生产接线暴露只读 GateStats（A7-1 在生产的落点）",
@@ -356,6 +408,34 @@ REQUIREMENTS = [
             "水位闩锁下的行 BodyMissing=true、四个定位键全 NULL、且不产出任何 spool part"
             "（闩锁在建块之前返回）。「不使用 AppendFailed」是零引用，只能静态钉住。"
         ),
+    },
+    {
+        "plan": "评审 I1：关闭路径（TRACE_BODY_ROOT 未设 ⇒ sink == nil）必须零新增日志（global-constraints 的关闭路径不变量）",
+        "mutations": ["m14_关闭路径也打警告"],
+        "checks": [],
+        "note": (
+            "杀手 TestDegradationIsSilentWhenFeatureDisabled：注入日志出口 + 不发 spool + 跑满"
+            "十余个写入侧 tick ⇒ 必须零行日志、DegradationStats 全零、正文仍在 jsonb 列。"
+        ),
+    },
+    {
+        "plan": "评审 I2：闸门自行置位的根目录类闩锁在空闲窗口也必须可见（周期汇总 + Latched）",
+        "mutations": ["m15_不认领闸门侧闩锁"],
+        "checks": [],
+        "note": (
+            "杀手 TestDegradationSummarizesRootLatchWithoutTraffic：零流量 + root_unavailable 闩锁"
+            "+ 推进 SummaryInterval ⇒ 仍有汇总（latched=true、reason 与闸门一致），且"
+            "DegradationStats().Latched 为 true、LatchedSeconds 按认领时刻起算。"
+        ),
+    },
+    {
+        "plan": "评审 M1：两侧 reason 集合不相交（Task 5 那一半也要静态钉住）",
+        "mutations": [],
+        "checks": [
+            "Task 5 侧根目录类 reason 字面量（root_unavailable / root-identity-mismatch）",
+            "Task 5 侧写失败 reason 字面量（append_failed）",
+        ],
+        "note": "水位那一半由本文件前两条静态检查钉住；两条合起来才是完整的不相交声明。",
     },
     {
         "plan": "A5-4 / A6-1：周期动作的所有权（探针与 flush 仍归 TraceSpooler，写入侧只读观测）",

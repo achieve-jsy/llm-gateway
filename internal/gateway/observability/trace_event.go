@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -59,6 +61,353 @@ type TraceWriter struct {
 	// queuedBytes：channel 中待写正文的字节数（各行 len(RequestBodyRaw)+len(ResponseBodyRaw) 之和）。
 	// Emit 投递前累加、Run 取走事件后立即递减，用于按字节闸门丢弃过载事件。
 	queuedBytes atomic.Int64
+
+	// ---- 降级可观测性（规格 §9.3；计划 2 任务 7 / A7-1 / A7-2）----
+	//
+	// degMu 保护下面全部非原子字段：noteSpoolFailure / noteSpoolSuccess 在**唯一写协程**
+	// 上跑，而 DegradationStats 与周期比对在别的 goroutine 上读（监控、Run 的 ticker）
+	// ⇒ 必须有锁（裸 bool / time.Time 会 data race）。
+	//
+	// degLogf / degNow / degSummary 只在 Run 启动前由 ConfigureDegradation 写一次，
+	// 之后只读；其余状态字段一律持 degMu 访问。
+	degMu      sync.Mutex
+	degLogf    func(format string, args ...any)
+	degNow     func() time.Time
+	degSummary time.Duration
+	degLatched bool
+	degSince   time.Time
+	degLastSum time.Time
+	degTrips   int64
+	degReason  string
+	// degGateSrc 是 sink 侧「闸门状态可观测」能力（构造期解析一次）；nil ⇒ 不可观测。
+	degGateSrc spoolGateStatsSource
+	// degGateSeen 是上一次观测到的闸门快照（A7-1 前后比对用的「前」）。
+	degGateSeen gateSeen
+	// degWarned：「闸门状态不可观测」的 Warn 只打一次。
+	degWarned bool
+	// missingRows / spoolFailure 是 §9.3 要求的计数器（body_missing 行数 / spool 失败数）。
+	missingRows  atomic.Int64
+	spoolFailure atomic.Int64
+}
+
+// ---------------------------------------------------------------------------
+// 降级可观测性（规格 §9.3；计划 2 任务 7）
+// ---------------------------------------------------------------------------
+
+const (
+	// defaultDegradationSummaryInterval 是闩锁期间周期汇总的默认间隔（零值 ⇒ 5m）。
+	defaultDegradationSummaryInterval = 5 * time.Minute
+
+	// diskWatermarkReasonPrefix 是 `SpoolGate.Tick` 在**水位**闩锁分支写入的 reason 前缀
+	//（spool_gate.go 的未闩锁分支：`fmt.Sprintf("disk_watermark: %s 已用 %.1f%% ≥ %d%%", …)`）。
+	//
+	// 【为什么需要它，以及两侧 reason 集合如何做到不相交】闩锁有三类起因，日志归属如下：
+	//   - `root-identity-mismatch` / `root_unavailable`（checkRoot）与 `append_failed`
+	//     （AppendLine 的写失败）：**Task 5** 已在三处 `Trip` 的返回值上按跳变恰好打一条 ERROR；
+	//   - `disk_watermark: …`：由 `SpoolGate.Tick` 自行置位（spool_gate.go 未闩锁分支的
+	//     `g.latched = true; g.trips++`），**没有任何调用方消费** ⇒ 归本文件（A7-1）。
+	// 因此写入侧只对**水位**这一类打跳变日志，其余保持零条 —— 否则同一个跳变会被两侧
+	// 各打一条，§9.3 的「跳变恰好一条」当场破功。
+	diskWatermarkReasonPrefix = "disk_watermark:"
+
+	// task5ReasonRootIdentity / task5ReasonRootUnavailable / task5ReasonAppendFailed 是
+	// Task 5 写入的三类 reason（spooler.go 的 checkRoot 与 AppendLine）。它们出现在原因里
+	// 就表示「这一条跳变已经由 Task 5 打过日志」⇒ 写入侧不得重复。
+	task5ReasonRootIdentity    = "root-identity-mismatch"
+	task5ReasonRootUnavailable = "root_unavailable"
+	task5ReasonAppendFailed    = "append_failed"
+)
+
+// DegradationStats 是降级状态的可观测快照（规格 §9.3：降级必须有明确可观测信号）。
+type DegradationStats struct {
+	MissingRows   int64 // 累计被标 body_missing 的行数
+	SpoolFailures int64 // 累计 spool 写入失败次数（含闩锁期间的每一行）
+	Latched       bool
+	// LatchedSince 是本次闩锁开始的时刻（未闩锁时为**最近一次**闩锁的开始时刻）。
+	LatchedSince time.Time
+	// Trips 是写入侧观测到的闩锁跳变次数；LatchedSeconds 是本次闩锁已持续的秒数
+	//（未闩锁时为 0）。全局约束要求暴露「body_missing 行数 / 闩锁次数 / 闩锁累计秒数」
+	// 三个计数器，后两个就是它们。
+	Trips          int64
+	LatchedSeconds int64
+}
+
+// DegradationOptions 让测试注入日志与时钟；零值 = log.Printf / time.Now / 5m。
+type DegradationOptions struct {
+	Logf            func(format string, args ...any)
+	Now             func() time.Time
+	SummaryInterval time.Duration
+}
+
+// spoolGateStatsSource 是 sink **可选**实现的只读能力：给出闸门状态快照。
+//
+// 【为什么是可选窄接口，而不是扩 TraceBodySink】A5-1 第 3 点禁止改动闸门接口；
+// 而扩 TraceBodySink 会让组装物编译失败（它们只实现三个方法）。能观测的实现多一个
+// 只读访问器即可被识别，其余实现（测试替身、其它接线）完全不受影响。
+//
+// 【生产接线】`cmd/gateway/main.go` 的 traceBodySink 已实现
+// `GateStats() gwobs.GateStats { return s.spooler.Gate().Stats() }`（计划 2 任务 7），
+// 只读、**不交出自闸门句柄**。若某个替身/接线不实现它，走错误文本兜底路径，
+// 并由 warnGateUnobservable 打一条 Warn（不静默）。
+type spoolGateStatsSource interface {
+	GateStats() GateStats
+}
+
+// gateSeen 是上一次观测到的闸门快照（A7-1 的「前后比对」用的「前」）。
+type gateSeen struct {
+	valid   bool
+	trips   int64
+	latched bool
+	reason  string
+}
+
+// latchCause 是闩锁起因的三分：水位（归本文件）、Task 5 已打日志（不重复）、
+// 无法归因（宁可多一条可见的降级信号，也不静默）。
+type latchCause int
+
+const (
+	latchCauseUnknown latchCause = iota
+	latchCauseWatermark
+	latchCauseTask5Logged
+)
+
+// classifyLatchReason 由 reason 文本判定起因类别。
+//
+// 【为什么水位用 Contains 而不是 HasPrefix】reason 有两条来源形态：
+//   - 闸门快照的 `Reason` 字段：以 `disk_watermark: …` **开头**；
+//   - `AppendLine` 上报的错误：`ErrSpoolLatched` 把闸门 reason 逐字裹进
+//     `（原因：disk_watermark: …）`，此时它只在**中间**出现。
+//
+// 用 Contains 同时覆盖两条形态（水位 reason 是 `disk_watermark: ` 加冒号，不会与
+// 其它 reason 撞车）。两侧 reason 的归属见 diskWatermarkReasonPrefix 的注释。
+func classifyLatchReason(reason string) latchCause {
+	if strings.Contains(reason, diskWatermarkReasonPrefix) {
+		return latchCauseWatermark
+	}
+	if strings.Contains(reason, task5ReasonRootIdentity) ||
+		strings.Contains(reason, task5ReasonRootUnavailable) ||
+		strings.Contains(reason, task5ReasonAppendFailed) {
+		return latchCauseTask5Logged
+	}
+	return latchCauseUnknown
+}
+
+// ConfigureDegradation 覆盖降级观测的日志与时钟（生产不调用，用零值）。
+// 必须在 Run 启动前调用（字段之后只读）。
+func (w *TraceWriter) ConfigureDegradation(opts DegradationOptions) {
+	if opts.Logf != nil {
+		w.degLogf = opts.Logf
+	}
+	if opts.Now != nil {
+		w.degNow = opts.Now
+	}
+	if opts.SummaryInterval > 0 {
+		w.degSummary = opts.SummaryInterval
+	}
+}
+
+// DegradationStats 返回降级状态快照（规格 §9.3）。
+func (w *TraceWriter) DegradationStats() DegradationStats {
+	w.degMu.Lock()
+	st := DegradationStats{
+		Latched:      w.degLatched,
+		LatchedSince: w.degSince,
+		Trips:        w.degTrips,
+	}
+	if w.degLatched {
+		st.LatchedSeconds = int64(w.now().Sub(w.degSince).Seconds())
+	}
+	w.degMu.Unlock()
+	st.MissingRows = w.missingRows.Load()
+	st.SpoolFailures = w.spoolFailure.Load()
+	return st
+}
+
+// now 返回注入时钟（零值 ⇒ time.Now）。
+func (w *TraceWriter) now() time.Time {
+	if w.degNow != nil {
+		return w.degNow()
+	}
+	return time.Now()
+}
+
+// summaryInterval 返回汇总间隔（零值 ⇒ 5m）。
+func (w *TraceWriter) summaryInterval() time.Duration {
+	if w.degSummary > 0 {
+		return w.degSummary
+	}
+	return defaultDegradationSummaryInterval
+}
+
+// logf 输出一条降级日志（注入 Logf 优先，生产走标准日志）。
+func (w *TraceWriter) logf(format string, args ...any) {
+	if w.degLogf != nil {
+		w.degLogf(format, args...)
+		return
+	}
+	log.Printf(format, args...)
+}
+
+// gateStats 读一次闸门状态快照（不可观测时 ok=false）。
+func (w *TraceWriter) gateStats() (GateStats, bool) {
+	if w.degGateSrc == nil {
+		return GateStats{}, false
+	}
+	return w.degGateSrc.GateStats(), true
+}
+
+// classifyLatch 判定这次失败属于哪一类闩锁起因。闸门可观测时以闸门自己的 reason 为准
+// （周期比对用的就是同一份 GateStats）；否则退化为 AppendLine 上报的错误文本。
+// 第二个返回值表示判据是否来自闸门快照。
+func (w *TraceWriter) classifyLatch(err error) (latchCause, bool) {
+	if st, ok := w.gateStats(); ok && st.Latched {
+		return classifyLatchReason(st.Reason), true
+	}
+	return classifyLatchReason(err.Error()), false
+}
+
+// noteSpoolFailure 记录一次 spool 失败，并按状态机输出日志：
+//
+//	未闩锁 → 闩锁：**恰好一条** ERROR（起因、影响、解锁条件）
+//	闩锁中        ：每 SummaryInterval **恰好一条**汇总（见 maybeSummaryLog）
+//
+// 【为什么必须节流】2026-09-24 的事故里，失败路径对每个请求打印完整语句，一天写了
+// 244 GB —— 日志本身成了把盘写满的原因。降级日志必须与降级同量级：盘满时每秒可能有
+// 上千行降级，绝不能每行一条。
+//
+// 【日志归属：§9.3 的「恰好一条」不允许两侧同时打】Task 5 已在三处 Trip 调用点按跳变
+// 打日志（root-identity-mismatch / root_unavailable / append_failed）；水位那一类
+// （disk_watermark）没有任何调用方消费 ⇒ 归本文件（A7-1）。因此：
+//   - 闸门可观测且是水位类：这里**不打**，交给周期分支的 observeGateTrips（它是
+//     A7-1 原文要求的「Stats() 前后比对」，且闸门可观测时才有 Stats 读数）；
+//   - Task 5 已打过的三类：这里**零条**（不重复）；
+//   - 无法归因（测试替身 / 只实现三方法的接线）：这里打一条通用 ERROR —— 宁可多一条
+//     可见的降级信号，也不要静默。
+func (w *TraceWriter) noteSpoolFailure(err error) {
+	w.spoolFailure.Add(1)
+	w.missingRows.Add(1)
+	now := w.now()
+	cause, fromGate := w.classifyLatch(err)
+
+	w.degMu.Lock()
+	w.degReason = err.Error()
+	first := !w.degLatched
+	if first {
+		w.degLatched, w.degSince, w.degLastSum = true, now, now
+		w.degTrips++
+	}
+	w.degMu.Unlock()
+
+	if first && cause != latchCauseTask5Logged {
+		switch {
+		case cause == latchCauseWatermark && fromGate:
+			// 闸门可观测：水位跳变归周期分支（observeGateTrips），此处不打。
+		case cause == latchCauseWatermark:
+			w.logf("[trace-body] ERROR 正文落盘已闩锁，开始降级为 body_missing=true（网关继续服务）：%v；"+
+				"跳变起因 = 磁盘水位（AppendLine 上报的原因含 %q，原文见上）；"+
+				"解锁条件 = 水位回落 且 探针可写", err, diskWatermarkReasonPrefix)
+		default:
+			w.logf("[trace-body] ERROR 正文落盘已闩锁，开始降级为 body_missing=true（网关继续服务）：%v；"+
+				"解锁条件 = 水位回落 且 探针可写", err)
+		}
+	}
+	w.maybeSummaryLog(now)
+}
+
+// noteSpoolSuccess 在闩锁后的第一条成功落盘时调用（恢复信号）。
+//
+// 【为什么必须有这一条】Task 5 只在跳变那一刻打日志，解锁是静默的；没有恢复信号，
+// 运维无法从日志判断「降级已经结束」，只能靠猜。
+func (w *TraceWriter) noteSpoolSuccess() {
+	w.degMu.Lock()
+	if !w.degLatched {
+		w.degMu.Unlock()
+		return
+	}
+	w.degLatched = false
+	since := w.degSince
+	w.degMu.Unlock()
+	missing := w.missingRows.Load()
+	w.logf("[trace-body] INFO 正文落盘已恢复，body_missing 降级结束（本次降级持续 %s，期间累计缺失 %d 行）",
+		w.now().Sub(since).Truncate(time.Second), missing)
+}
+
+// maybeSummaryLog 在闩锁期间按 SummaryInterval 输出**恰好一条**周期汇总（A7-2）。
+// 由失败路径与周期分支共同调用，degLastSum 保证同一个区间里只输出一次。
+func (w *TraceWriter) maybeSummaryLog(now time.Time) {
+	w.degMu.Lock()
+	if !w.degLatched || now.Sub(w.degLastSum) < w.summaryInterval() {
+		w.degMu.Unlock()
+		return
+	}
+	w.degLastSum = now
+	since := w.degSince
+	trips := w.degTrips
+	reason := w.degReason
+	w.degMu.Unlock()
+
+	missing := w.missingRows.Load()
+	failures := w.spoolFailure.Load()
+	if st, ok := w.gateStats(); ok {
+		// A7-2 的六个闸门字段（latched / latched_seconds / trips / probe_failures /
+		// usage_percent / reason）+ 写入侧两个计数。
+		w.logf("[trace-body] WARN 正文落盘闩锁中，周期汇总：latched=%t latched_seconds=%d trips=%d "+
+			"probe_failures=%d usage_percent=%.1f reason=%q body_missing_rows=%d spool_failures=%d",
+			st.Latched, st.LatchedSeconds, st.Trips, st.ProbeFailures, st.UsagePercent, st.Reason, missing, failures)
+		return
+	}
+	// 闸门不可观测：只报写入侧确实知道的字段，**不伪造**闸门侧数值。
+	w.logf("[trace-body] WARN 正文落盘闩锁中，周期汇总：latched=%t latched_seconds=%d trips=%d "+
+		"body_missing_rows=%d spool_failures=%d reason=%q；probe_failures/usage_percent 不可观测（sink 未暴露 GateStats）",
+		true, int64(now.Sub(since).Seconds()), trips, missing, failures, reason)
+}
+
+// observeGateTrips 是 A7-1 的周期检测：把**这一次**观测到的闸门快照与上一次比对，
+// 发现**水位类**跳变时恰好打一条 ERROR；Task 5 已打过的那三类在本侧保持零日志。
+//
+// 【为什么必须有它】`SpoolGate.Tick` 的水位闩锁是唯一「自行置位、没有调用方消费」的
+// 跳变（spool_gate.go 未闩锁分支的 `g.latched = true; g.trips++`）⇒ 盘满导致的闩锁
+// 当前零日志。周期分支是不依赖「下一行何时到达」的观测点。
+//
+// 【时机口径】闸门真正跳变的时刻仍在写协程的 AppendLine 里（Tick 只从 applyDueTick
+// 调用 —— A5-4 禁止 Run 直接 Tick），所以这里不是「更早发现跳变」，而是「不必等到下
+// 一次请求就能把它打出来」。
+//
+// 【恰好一条】判据 = 快照发生变化**且**新原因是水位类：同一闩锁周期里重复观测到同一份
+// 快照 ⇒ 不再打；跳变次数/原因变了（新一轮闩锁）⇒ 再打一条。
+func (w *TraceWriter) observeGateTrips() {
+	if w.degGateSrc == nil {
+		w.warnGateUnobservable()
+		return
+	}
+	st := w.degGateSrc.GateStats()
+
+	w.degMu.Lock()
+	prev := w.degGateSeen
+	changed := !prev.valid || prev.trips != st.Trips || prev.latched != st.Latched || prev.reason != st.Reason
+	w.degGateSeen = gateSeen{valid: true, trips: st.Trips, latched: st.Latched, reason: st.Reason}
+	w.degMu.Unlock()
+
+	if !changed || !st.Latched || !strings.HasPrefix(st.Reason, diskWatermarkReasonPrefix) {
+		return
+	}
+	w.logf("[trace-body] ERROR 正文落盘已闩锁，开始降级为 body_missing=true（网关继续服务）："+
+		"跳变起因 = 磁盘水位（reason=%q usage_percent=%.1f trips=%d）；"+
+		"解锁条件 = 水位回落 且 探针可写", st.Reason, st.UsagePercent, st.Trips)
+}
+
+// warnGateUnobservable 在闸门状态不可观测时**响亮**说明（不得静默降级成「水位跳变
+// 没有日志」这个新盲区）。只打一次，避免每周期刷屏；用注入的 Logf，因此可被断言。
+func (w *TraceWriter) warnGateUnobservable() {
+	w.degMu.Lock()
+	if w.degWarned {
+		w.degMu.Unlock()
+		return
+	}
+	w.degWarned = true
+	w.degMu.Unlock()
+	w.logf("[trace-body] WARN 闸门状态不可观测（sink 未暴露 GateStats）：无法在周期循环里判定水位一类跳变，" +
+		"改由 AppendLine 的错误文本判定；请检查组装接线（cmd/gateway/main.go 的 traceBodySink）")
 }
 
 // TraceWriterLimits 按字节约束写入器，防止单次 flush 的 SQL 文本与队列滞留失控。
@@ -123,6 +472,10 @@ func NewTraceWriterWithSink(db *gorm.DB, bufSize, flushN int, interval time.Dura
 	limits TraceWriterLimits, sink TraceBodySink) *TraceWriter {
 	w := NewTraceWriterWithLimits(db, bufSize, flushN, interval, limits)
 	w.sink = sink
+	// A7-1 / A7-2：闸门状态是否可观测只在构造期解析一次（sink 之后不变）。
+	if src, ok := sink.(spoolGateStatsSource); ok {
+		w.degGateSrc = src
+	}
 	return w
 }
 
@@ -227,6 +580,14 @@ func (w *TraceWriter) Run(ctx context.Context) {
 			flush(ctx, batch)
 			batch = batch[:0]
 			batchBytes = 0
+			// 周期动作（都不在请求路径上）：
+			//   ① A7-1：水位闩锁跳变的比对。闸门不可观测的 Warn 也在这里（首次周期）
+			//      打一条 —— 不静默降级；
+			//   ② A7-2：闩锁期间的汇总，由 degLastSum 节流到每 SummaryInterval 一条。
+			// 汇总必须由周期分支驱动：闩锁后可能长时间没有正文可写，而「没有新行」正是
+			// 运维最需要看到汇总的时刻（只在失败路径打的话，那时一条都不会有）。
+			w.observeGateTrips()
+			w.maybeSummaryLog(w.now())
 		}
 	}
 }
@@ -261,10 +622,14 @@ func (w *TraceWriter) buildTraceModels(events []TraceEvent) []obsmodel.CallTrace
 		ref, err := w.sink.AppendLine(dt, line)
 		if err != nil {
 			// ② 失败 ⇒ body_missing=true、定位键全 NULL、不重试（R9）。
+			// 降级可观测性（§9.3 / A7-1）：失败与恢复各记录一次状态机转移，
+			// 跳变只在这里/周期比对里打**恰好一条**（绝不每行一条）。
+			w.noteSpoolFailure(err)
 			models = append(models, traceEventToModelMissing(e, bodyBytes))
 			continue
 		}
-		// ③ 成功之后才组装带定位键的元数据行。
+		// ③ 成功之后才组装带定位键的元数据行。恢复（闩锁 → 可写）在这里记录一条 INFO。
+		w.noteSpoolSuccess()
 		models = append(models, traceEventToModelWithRef(e, day, ref, bodyBytes))
 	}
 	return models

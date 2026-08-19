@@ -451,6 +451,14 @@ func (s traceBodySink) DayStart(ts time.Time) time.Time { return s.day.DayStart(
 
 func (s traceBodySink) DayOf(ts time.Time) string { return s.day.DayOf(ts) }
 
+// GateStats 让写入侧在**生产**观测闸门状态（只读；**不**交出自闸门句柄）。
+//
+// 【为什么必须在这里开一个只读口子】TraceWriter 只能通过 sink 触达 spool 侧，而水位闩锁
+// 由 `SpoolGate.Tick` 自行置位、没有别的调用方消费 ⇒ 没有这条访问器，盘满导致的闩锁跳变
+// 在生产里就没有日志（计划 2 任务 7 / A7-1 实测发现的静默盲区）。返回 GateStats 值而不是
+// *SpoolGate：上层只能读快照，拿不到闸门本体。
+func (s traceBodySink) GateStats() gwobs.GateStats { return s.spooler.Gate().Stats() }
+
 // newTraceDBLogger 返回 trace 写入专用的 GORM logger（D8）。
 // 不能改 internal/controlplane/infra/postgres.go 的全局 logger（control-plane 共用，
 // 改全局会让管理面丢失慢 SQL 日志），因此只给 trace 写入挂独立 session。

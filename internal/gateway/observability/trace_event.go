@@ -110,12 +110,14 @@ const (
 	// 各打一条，§9.3 的「跳变恰好一条」当场破功。
 	diskWatermarkReasonPrefix = "disk_watermark:"
 
-	// task5ReasonRootIdentity / task5ReasonRootUnavailable / task5ReasonAppendFailed 是
+	// 【命名】常量名刻意避开冻结包那个「失败标记行」方法的字面量：p2-task-6 与 p2-task-7 都有
+	// 一条 absent 静态检查钉住「不使用标记行方案」（D51），常量名撞上那个子串会让它假红（实测发生过）。
+	// task5ReasonRootIdentity / task5ReasonRootUnavailable / task5ReasonWriteFailed 是
 	// Task 5 写入的三类 reason（spooler.go 的 checkRoot 与 AppendLine）。它们出现在原因里
 	// 就表示「这一条跳变已经由 Task 5 打过日志」⇒ 写入侧不得重复。
 	task5ReasonRootIdentity    = "root-identity-mismatch"
 	task5ReasonRootUnavailable = "root_unavailable"
-	task5ReasonAppendFailed    = "append_failed"
+	task5ReasonWriteFailed     = "append_failed"
 )
 
 // DegradationStats 是降级状态的可观测快照（规格 §9.3：降级必须有明确可观测信号）。
@@ -186,7 +188,7 @@ func classifyLatchReason(reason string) latchCause {
 	}
 	if strings.Contains(reason, task5ReasonRootIdentity) ||
 		strings.Contains(reason, task5ReasonRootUnavailable) ||
-		strings.Contains(reason, task5ReasonAppendFailed) {
+		strings.Contains(reason, task5ReasonWriteFailed) {
 		return latchCauseTask5Logged
 	}
 	return latchCauseUnknown

@@ -279,6 +279,52 @@ func TestTraceWriterMarksBodyMissingWhenSpoolFails(t *testing.T) {
 	require.Nil(t, row.RequestBody)
 }
 
+// TestTraceWriterLatchedSpoolMarksBodyMissing 覆盖 A6-2 的**闩锁中**这一半
+// （上一个用例覆盖的是「被拒绝/失败」这一半）：
+// 闸门已闩锁时 AppendLine 返回 ErrSpoolLatched，写入器必须把该行标成
+// body_missing=true、定位键全 NULL，**且不去触碰磁盘**（闩锁的意义就是把
+// 「每请求重试一次」变成「每周期探一次」，闩锁中不得再尝试建块/建目录）。
+//
+// 【为什么用 Trip 构造前置状态而不是真盘满】真实水位/盘满不可复现，
+// 且闸门本身的状态机由 Task 4 的证据覆盖；本用例只依赖「已闩锁」这一状态。
+func TestTraceWriterLatchedSpoolMarksBodyMissing(t *testing.T) {
+	root := t.TempDir()
+	spooler := newTestSpooler(t, root, "blue")
+	spooler.Gate().Trip("disk_watermark", errors.New("测试构造的闩锁"))
+	require.False(t, spooler.Gate().Allow(), "前置条件：闸门必须已闩锁")
+
+	rec := &orderRecorder{}
+	db, inserts := newSpoolTestDB(t, rec)
+	sink := &sinkWithDayOf{spooler: spooler, zone: cstTestZone}
+	w := gwobs.NewTraceWriterWithSink(db, 1024, 1, time.Minute, gwobs.TraceWriterLimits{}, sink)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	w.Emit(gwobs.TraceEvent{RequestID: "req-latched", TS: cstCrossDayTS, RequestBodyRaw: []byte(`{"a":1}`)})
+	require.Eventually(t, func() bool {
+		var n int64
+		db.Model(&obsmodel.CallTrace{}).Count(&n)
+		return n == 1
+	}, 5*time.Second, 10*time.Millisecond)
+
+	var row obsmodel.CallTrace
+	require.NoError(t, db.First(&row, "request_id = ?", "req-latched").Error)
+	require.True(t, row.BodyMissing, "闩锁中的行必须标 body_missing=true")
+	require.Nil(t, row.BodyRefDT)
+	require.Nil(t, row.BodyRefInst)
+	require.Nil(t, row.BodyRefPart)
+	require.Nil(t, row.BodyRefRow)
+	require.NotNil(t, row.BodyBytes)
+	require.Nil(t, row.RequestBody)
+
+	// 闩锁中不得触盘：连 spool 目录都不该被建出来（网关侧不建目录，
+	// 冻结包只在真的建块时才建 —— 闩锁必须在建块之前就返回）。
+	_, statErr := os.Stat(filepath.Join(root, "spool"))
+	require.True(t, os.IsNotExist(statErr), "闩锁中不得尝试写盘（不得留下 spool 目录）")
+	require.Len(t, inserts.snapshot(), 1, "PG 元数据行照常写入（降级只影响正文）")
+}
+
 // TestTraceWriterLegacyPathKeepsBodiesInPG 是**回归**用例：
 // sink == nil（功能关闭）时必须与本计划之前的行为逐字段相同 —— 正文仍进 jsonb 列。
 func TestTraceWriterLegacyPathKeepsBodiesInPG(t *testing.T) {

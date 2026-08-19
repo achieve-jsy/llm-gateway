@@ -219,10 +219,14 @@ REQUIREMENTS = [
         ),
     },
     {
-        "plan": "规格 §9.1 / §15.1 R9：落盘失败 ⇒ body_missing=true、定位键 NULL",
+        "plan": "规格 §9.1 / §15.1 R9 + A6-2：落盘失败/被拒绝/闩锁 ⇒ body_missing=true、定位键 NULL",
         "mutations": ["m02_落盘失败不标body_missing"],
         "checks": [],
-        "note": "杀手 TestTraceWriterMarksBodyMissingWhenSpoolFails（另杀重试用例的失败行断言）。",
+        "note": (
+            "杀手 TestTraceWriterMarksBodyMissingWhenSpoolFails（被拒绝）与 "
+            "TestTraceWriterLatchedSpoolMarksBodyMissing（闩锁中，另断言不触盘），"
+            "以及重试用例里的失败行断言。"
+        ),
     },
     {
         "plan": "规格 §6 / 目标 G1：新行的三个正文列恒为 NULL，改写 body_ref_* + body_bytes",

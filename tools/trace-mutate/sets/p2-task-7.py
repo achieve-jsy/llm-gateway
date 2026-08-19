@@ -158,6 +158,15 @@ MUTATIONS["m12_不累加闩锁跳变次数"] = [
     ("sub", "\t\tw.degTrips++", "\t\t_ = w.degTrips"),
 ]
 
+# 闩锁起始时刻不记录（degSince 置零值）⇒ LatchedSince 为零值、LatchedSeconds 变成
+# 「距公元 1 年」的巨数、恢复日志的时长也失真。
+# 杀手 TestDegradationLogsRecovery 的三条确定性断言（LatchedSince 非零 / LatchedSeconds==30 /
+# 恢复行含 "30s"）都会红。
+MUTATIONS["m13_不记录闩锁起始时刻"] = [
+    ("sub", "w.degLatched, w.degSince, w.degLastSum = true, now, now",
+            "w.degLatched, w.degSince, w.degLastSum = true, time.Time{}, now"),
+]
+
 CHECKS = [
     {
         "name": "闸门侧水位 reason 的实际取值（跨文件耦合的「另一半」）",
@@ -314,12 +323,17 @@ REQUIREMENTS = [
     },
     {
         "plan": "规格 §9.3 + 计划 2 全局约束：暴露计数器（body_missing 行数 / 闩锁次数 / 闩锁累计秒数）",
-        "mutations": ["m04_不累加missingRows", "m12_不累加闩锁跳变次数"],
+        "mutations": [
+            "m04_不累加missingRows",
+            "m12_不累加闩锁跳变次数",
+            "m13_不记录闩锁起始时刻",
+        ],
         "checks": [],
         "note": (
             "杀手都是 TestDegradationLogsLatchExactlyOnce：m04 让 MissingRows 永远为 0"
             "（Eventually 等不到 20），m12 让 Trips 永远为 0（require.Equal(int64(1)) 断言红）。"
-            "LatchedSeconds 由 Latched/LatchedSince 派生，由同一条断言链覆盖。"
+            "LatchedSeconds 由**注入时钟**做确定性断言（测试 2：推进 30s ⇒ LatchedSeconds==30、"
+            "解锁后归零、恢复行含时长），m13 即它的杀手。"
         ),
     },
     {

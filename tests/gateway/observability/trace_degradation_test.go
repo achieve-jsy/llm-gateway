@@ -258,9 +258,10 @@ func TestDegradationLogsRecovery(t *testing.T) {
 	db, _ := newSpoolTestDB(t, rec)
 	capture := &logCapture{}
 	sink := &switchableSink{err: fmt.Errorf("%w", gwobs.ErrSpoolLatched), day: gwconfig.TraceBodyConfig{}}
+	clock := newTestClock(time.Unix(0, 0))
 
 	w := gwobs.NewTraceWriterWithSink(db, 1024, 1, time.Hour, gwobs.TraceWriterLimits{}, sink)
-	w.ConfigureDegradation(gwobs.DegradationOptions{Logf: capture.logf})
+	w.ConfigureDegradation(gwobs.DegradationOptions{Logf: capture.logf, Now: clock.Now})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go w.Run(ctx)
@@ -268,10 +269,20 @@ func TestDegradationLogsRecovery(t *testing.T) {
 	w.Emit(gwobs.TraceEvent{RequestID: "req-1", TS: time.Now()})
 	require.Eventually(t, func() bool { return w.DegradationStats().Latched }, waitBudget, 10*time.Millisecond)
 
+	// 全局约束要求暴露「闩锁累计秒数」。用注入时钟做**确定性**断言（不依赖真实时间流逝，
+	// 否则只能断言 > 0 这种弱形态）：LatchedSeconds 必须随时钟推进，且解锁后归零。
+	st := w.DegradationStats()
+	require.False(t, st.LatchedSince.IsZero(), "闩锁起始时刻必须可见（LatchedSeconds 由它派生）")
+	clock.Advance(30 * time.Second)
+	require.Equal(t, int64(30), w.DegradationStats().LatchedSeconds, "闩锁累计秒数必须随时钟推进")
+
 	sink.setErr(nil) // 空间已释放
 	w.Emit(gwobs.TraceEvent{RequestID: "req-2", TS: time.Now()})
 	require.Eventually(t, func() bool { return !w.DegradationStats().Latched }, waitBudget, 10*time.Millisecond)
 	require.Equal(t, 1, capture.countContaining("恢复"), "恢复必须有且只有一条信号：%v", capture.snapshot())
+	require.Zero(t, w.DegradationStats().LatchedSeconds, "解锁后累计秒数归零，不给看板留陈旧值")
+	// 恢复信号必须带上本次降级时长（由注入时钟确定 = 30s），否则「恢复了多久」只能靠猜。
+	require.Contains(t, capture.firstContaining(t, "恢复"), "30s", "恢复日志必须带降级时长")
 }
 
 // TestDegradationSummaryIsThrottled：闩锁期间按 SummaryInterval 输出汇总，

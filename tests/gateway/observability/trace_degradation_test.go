@@ -48,6 +48,15 @@ import (
 // 不重复定义 —— 同包重名会编译失败）。
 // ---------------------------------------------------------------------------
 
+// waitBudget 是「等一个已经发生的事实落进可观测状态」的**活性**预算，不是性能门槛：
+// 真实实现在毫秒级就满足（轮询 10ms），2s 只是留给调度抖动。
+//
+// 【为什么刻意这么短】p2-task-7 的变异集里有「计数器不累加」这类变异，它会让本文件里
+// 每一条等待都**烧满预算**；用例数 × 预算必须留在变异工具固定的包级 `-timeout 30s`
+// 之内，否则那条变异会变成「超时红」而不是「断言红」，证据等级会掉（这是在权威表上
+// 实测到过的：8 条 5s 等待把包跑成挂死）。
+const waitBudget = 2 * time.Second
+
 // logCapture 收集写入的降级日志行。所有日志断言都逐条打在**注入的 Logf** 上，
 // 不看真实标准错误输出：§9.3 要的是「恰好一条」，而 grep 真实日志既拿不到
 // 「闩锁期间零条」的确定性，也会把别处的日志混进来。
@@ -231,7 +240,7 @@ func TestDegradationLogsLatchExactlyOnce(t *testing.T) {
 	}
 	require.Eventually(t, func() bool {
 		return w.DegradationStats().MissingRows == 20
-	}, 5*time.Second, 10*time.Millisecond)
+	}, waitBudget, 10*time.Millisecond)
 
 	require.Equal(t, 1, capture.countContaining("闩锁"), "跳变日志必须恰好一条：%v", capture.snapshot())
 	require.Equal(t, 1, capture.countContaining("降级为 body_missing"), "只允许一条进入降级的 ERROR")
@@ -257,11 +266,11 @@ func TestDegradationLogsRecovery(t *testing.T) {
 	go w.Run(ctx)
 
 	w.Emit(gwobs.TraceEvent{RequestID: "req-1", TS: time.Now()})
-	require.Eventually(t, func() bool { return w.DegradationStats().Latched }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return w.DegradationStats().Latched }, waitBudget, 10*time.Millisecond)
 
 	sink.setErr(nil) // 空间已释放
 	w.Emit(gwobs.TraceEvent{RequestID: "req-2", TS: time.Now()})
-	require.Eventually(t, func() bool { return !w.DegradationStats().Latched }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return !w.DegradationStats().Latched }, waitBudget, 10*time.Millisecond)
 	require.Equal(t, 1, capture.countContaining("恢复"), "恢复必须有且只有一条信号：%v", capture.snapshot())
 }
 
@@ -285,12 +294,12 @@ func TestDegradationSummaryIsThrottled(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		w.Emit(gwobs.TraceEvent{RequestID: fmt.Sprintf("req-%d", i), TS: time.Now()})
 	}
-	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 5 }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 5 }, waitBudget, 10*time.Millisecond)
 	time.Sleep(200 * time.Millisecond) // 期间会跑很多个 flush 周期
 	require.LessOrEqual(t, capture.countContaining("汇总"), 1, "未到 SummaryInterval 不得重复输出汇总")
 
 	clock.Advance(2 * time.Hour)
-	require.Eventually(t, func() bool { return capture.countContaining("汇总") >= 1 }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return capture.countContaining("汇总") >= 1 }, waitBudget, 10*time.Millisecond)
 }
 
 // ---------------------------------------------------------------------------
@@ -323,12 +332,12 @@ func TestDegradationLogsWatermarkLatchExactlyOnce(t *testing.T) {
 
 	// 等到周期 tick 真的跑过一次：它置「探针到期」标志，而水位评估在写协程的
 	// AppendLine 入口执行（A5-4）⇒ 第一条事件的追加必然先触发水位分支，而不是先落盘。
-	require.Eventually(t, func() bool { return spooler.Stats().Flushes >= 1 }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return spooler.Stats().Flushes >= 1 }, waitBudget, time.Millisecond)
 
 	for i := 0; i < 5; i++ {
 		w.Emit(gwobs.TraceEvent{RequestID: fmt.Sprintf("wm-%d", i), TS: cstCrossDayTS, RequestBodyRaw: []byte(`{"a":1}`)})
 	}
-	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 5 }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 5 }, waitBudget, 10*time.Millisecond)
 
 	st := spooler.Gate().Stats()
 	require.True(t, st.Latched, "前置条件：闸门必须因水位闩锁（走 SpoolGate.Tick 的未闩锁分支）")
@@ -337,7 +346,7 @@ func TestDegradationLogsWatermarkLatchExactlyOnce(t *testing.T) {
 
 	// 周期检测在 ticker 上跑 ⇒ 那条 ERROR 最多一个 tick 之后出现。
 	require.Eventually(t, func() bool { return capture.countContaining("跳变起因 = 磁盘水位") == 1 },
-		5*time.Second, 10*time.Millisecond, "水位跳变必须恰好在写入侧打出一条日志：%v", capture.snapshot())
+		waitBudget, 10*time.Millisecond, "水位跳变必须恰好在写入侧打出一条日志：%v", capture.snapshot())
 
 	require.Equal(t, 1, capture.countContaining("闩锁"), "水位闩锁跳变必须恰好一条 ERROR：%v", capture.snapshot())
 	require.Equal(t, 1, capture.countContaining("降级为 body_missing"), "降级信号恰好一条")
@@ -349,7 +358,7 @@ func TestDegradationLogsWatermarkLatchExactlyOnce(t *testing.T) {
 	for i := 5; i < 15; i++ {
 		w.Emit(gwobs.TraceEvent{RequestID: fmt.Sprintf("wm-%d", i), TS: cstCrossDayTS, RequestBodyRaw: []byte(`{"a":1}`)})
 	}
-	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 15 }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 15 }, waitBudget, 10*time.Millisecond)
 	require.Equal(t, 1, capture.countContaining("闩锁"), "闩锁期间不得重复打跳变日志")
 	require.Equal(t, 0, capture.countContaining("恢复"), "尚未恢复时不得出现恢复信号")
 	require.Equal(t, int64(15), w.DegradationStats().SpoolFailures)
@@ -390,12 +399,12 @@ func TestDegradationLogsWatermarkLatchWithoutGateStats(t *testing.T) {
 	go w.Run(ctx)
 	go spooler.Run(ctx)
 
-	require.Eventually(t, func() bool { return spooler.Stats().Flushes >= 1 }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return spooler.Stats().Flushes >= 1 }, waitBudget, time.Millisecond)
 
 	for i := 0; i < 3; i++ {
 		w.Emit(gwobs.TraceEvent{RequestID: fmt.Sprintf("plain-%d", i), TS: cstCrossDayTS, RequestBodyRaw: []byte(`{"a":1}`)})
 	}
-	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 3 }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 3 }, waitBudget, 10*time.Millisecond)
 	require.True(t, spooler.Gate().Latched(), "前置条件：水位闩锁")
 
 	require.Equal(t, 1, capture.countContaining("跳变起因 = 磁盘水位"), "兜底路径也必须打出水位起因：%v", capture.snapshot())
@@ -408,13 +417,13 @@ func TestDegradationLogsWatermarkLatchWithoutGateStats(t *testing.T) {
 	// 闸门不可观测必须**响亮**说明，不得静默降级。Warn 在**周期分支**上打（首次周期），
 	// 因此这里必须等到第一个 tick，而不是立即断言。
 	require.Eventually(t, func() bool { return capture.countContaining("闸门状态不可观测") == 1 },
-		5*time.Second, 10*time.Millisecond, "必须恰好一条 Warn：%v", capture.snapshot())
+		waitBudget, 10*time.Millisecond, "必须恰好一条 Warn：%v", capture.snapshot())
 	time.Sleep(80 * time.Millisecond) // 再跑几个周期，确认不刷屏
 	require.Equal(t, 1, capture.countContaining("闸门状态不可观测"), "Warn 只允许一条：%v", capture.snapshot())
 
 	// A7-2 的汇总在不可观测时也不得伪造闸门字段：显式说明哪些字段拿不到。
 	clock.Advance(2 * time.Minute)
-	require.Eventually(t, func() bool { return capture.countContaining("汇总") == 1 }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return capture.countContaining("汇总") == 1 }, waitBudget, 10*time.Millisecond)
 	summary := capture.firstContaining(t, "汇总")
 	require.Contains(t, summary, "body_missing_rows=3")
 	require.NotContains(t, summary, "usage_percent=", "不可观测时不得伪造 usage_percent")
@@ -454,7 +463,7 @@ func TestDegradationSuppressesWriterLogsForRootClassLatch(t *testing.T) {
 	go spooler.Run(ctx)
 
 	// 周期复检（FlushAndRoll → checkRoot）会以 root_unavailable 跳变（Task 5 的 Trip 调用点）。
-	require.Eventually(t, func() bool { return spooler.Gate().Latched() }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return spooler.Gate().Latched() }, waitBudget, time.Millisecond)
 	st := spooler.Gate().Stats()
 	require.Contains(t, st.Reason, "root_unavailable", "前置条件：根目录类闩锁")
 	require.Equal(t, int64(1), st.Trips)
@@ -462,7 +471,7 @@ func TestDegradationSuppressesWriterLogsForRootClassLatch(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		w.Emit(gwobs.TraceEvent{RequestID: fmt.Sprintf("root-%d", i), TS: cstCrossDayTS, RequestBodyRaw: []byte(`{"a":1}`)})
 	}
-	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 5 }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 5 }, waitBudget, 10*time.Millisecond)
 	time.Sleep(100 * time.Millisecond) // 让周期比对再跑几轮
 
 	require.Equal(t, 0, capture.countContaining("ERROR"),
@@ -490,7 +499,7 @@ func TestDegradationWarnsWhenGateStatsUnobservable(t *testing.T) {
 	go w.Run(ctx)
 
 	require.Eventually(t, func() bool { return capture.countContaining("闸门状态不可观测") == 1 },
-		5*time.Second, 10*time.Millisecond, "闸门不可观测必须打一条 Warn：%v", capture.snapshot())
+		waitBudget, 10*time.Millisecond, "闸门不可观测必须打一条 Warn：%v", capture.snapshot())
 	time.Sleep(100 * time.Millisecond) // 期间会跑多个周期
 	require.Equal(t, 1, capture.countContaining("闸门状态不可观测"), "Warn 只允许一条，不得每周期刷屏")
 }
@@ -519,17 +528,17 @@ func TestDegradationSummaryCarriesGateFields(t *testing.T) {
 	go w.Run(ctx)
 	go spooler.Run(ctx)
 
-	require.Eventually(t, func() bool { return spooler.Stats().Flushes >= 1 }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return spooler.Stats().Flushes >= 1 }, waitBudget, time.Millisecond)
 
 	for i := 0; i < 3; i++ {
 		w.Emit(gwobs.TraceEvent{RequestID: fmt.Sprintf("sum-%d", i), TS: cstCrossDayTS, RequestBodyRaw: []byte(`{"a":1}`)})
 	}
-	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 3 }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return w.DegradationStats().MissingRows == 3 }, waitBudget, 10*time.Millisecond)
 	time.Sleep(100 * time.Millisecond)
 	require.Equal(t, 0, capture.countContaining("汇总"), "未到 SummaryInterval 不得输出汇总")
 
 	clock.Advance(2 * time.Minute)
-	require.Eventually(t, func() bool { return capture.countContaining("汇总") == 1 }, 5*time.Second, 10*time.Millisecond,
+	require.Eventually(t, func() bool { return capture.countContaining("汇总") == 1 }, waitBudget, 10*time.Millisecond,
 		"到点必须恰好输出一条汇总：%v", capture.snapshot())
 
 	line := capture.firstContaining(t, "汇总")

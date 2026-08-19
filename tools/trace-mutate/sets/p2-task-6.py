@@ -86,10 +86,17 @@ MUTATIONS["m01_落盘调用被整段移除"] = [
 
 # 真反序（隔离次序守卫本身）：把 spool 追加推到 flush 返回时（即 PG 批次插入之后）执行，
 # 于是「插入序号 < 追加序号」，`require.Less` 那一行直接失败。
+#
+# 【为什么延迟体里要判 sink == nil】第一版漏了这个判断，`TestTraceWriterLegacyPathKeepsBodiesInPG`
+# （sink == nil）里对 nil 接口调方法 ⇒ panic ⇒ 测试进程中止、后 3 条用例没有终判，
+# 整条被工具判成「崩溃红」。控制者指令第 1 条要求每条变异都是**断言红** ⇒ 补上判空。
 MUTATIONS["m06_真反序_先写PG后落spool"] = [
     ("sub", "\t\tmodels := w.buildTraceModels(events)",
             "\t\tmodels := w.buildTraceModels(events)\n"
             "\t\tdefer func() {\n"
+            "\t\t\tif w.sink == nil {\n"
+            "\t\t\t\treturn\n"
+            "\t\t\t}\n"
             "\t\t\tfor j := range events {\n"
             "\t\t\t\t_, _ = w.sink.AppendLine(w.sink.DayOf(events[j].TS), traceEventLine(events[j]))\n"
             "\t\t\t}\n"

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -19,6 +20,7 @@ type Config struct {
 	Auth          AuthConfig
 	OIDC          OIDCConfig
 	Observability ObservabilityConfig
+	TraceBody     TraceBodyConfig
 }
 
 // ServerConfig 服务配置
@@ -102,6 +104,18 @@ func Load() *Config {
 	v.SetDefault("observability.billable_reservation_ttl", "10m")
 	v.SetDefault("observability.trace_max_string_len", 500_000)
 	v.SetDefault("observability.trace_max_base64_len", 64)
+	// 正文直写 /datalog（规格 §11.1）。root 默认为**空** ⇒ 功能关闭，
+	// 网关走既有路径（正文仍写 PG）。计划 4 的部署动作是
+	// 「加 /datalog 挂载 + 设 TRACE_BODY_ROOT」同时发生。
+	//
+	// 【键必须在顶层 trace_body.*】放进 observability.* 会得到
+	// OBSERVABILITY_TRACE_BODY_ROOT，与规格 §11.1 的环境变量名不符。
+	v.SetDefault("trace_body.root", "")
+	v.SetDefault("trace_body.inst", "")
+	v.SetDefault("trace_body.block_mb", int64(1536))
+	v.SetDefault("trace_body.flush_interval", "1m")
+	v.SetDefault("trace_body.roll_interval", "1h")
+	v.SetDefault("trace_body.disk_watermark_percent", 90)
 	v.SetDefault("otlp.endpoint", "localhost:4317")
 	v.SetDefault("otlp.enabled", false)
 	v.SetDefault("provider.internal_token", "")
@@ -182,6 +196,16 @@ func Load() *Config {
 			TraceMaxStringLen:      v.GetInt("observability.trace_max_string_len"),
 			TraceMaxBase64Len:      v.GetInt("observability.trace_max_base64_len"),
 		},
+		TraceBody: func() TraceBodyConfig {
+			tb, err := LoadTraceBodyConfig(v)
+			if err != nil {
+				// 配置错误必须在启动时响亮失败，而不是让网关带着非法 inst 跑起来
+				// （规格 §5.1：inst 是路径分量，非法值会让正文落到错误的目录）。
+				// Load() 的签名不返回 error（既有风格），因此用 panic 表达启动失败。
+				panic(fmt.Errorf("trace_body 配置非法: %w", err))
+			}
+			return tb
+		}(),
 		OTLP: OTLPConfig{
 			Endpoint: v.GetString("otlp.endpoint"),
 			Enabled:  v.GetBool("otlp.enabled"),

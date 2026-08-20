@@ -56,3 +56,9 @@ tools/atlas-loader/atlas-loader
 
 # ── 用量报告批量产物（本地生成，不入库） ───────────────────────────────────
 out/
+
+# 本地 git worktree 工作区（多个并行特性各自一份检出，绝不入库）
+.worktrees/
+
+# 全量套件运行时产物（会脏树并导致 tools/trace-mutate 拒绝出证据）
+/reports/

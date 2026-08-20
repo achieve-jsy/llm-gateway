@@ -57,7 +57,7 @@ r"""计划 2 / 任务 6 的变异集合（作者编写的产物 ⇒ 必须 git-t
    `dt := tw.sink.DayOf(e.TS)`；而实现里 `TraceWriter` 的接收者是 `w`
    （`trace_event.go:172` 的 `func (w *TraceWriter) Run`，`buildTraceModels` 里同样是 `w.sink`），
    全文**没有 `tw`** ⇒ 这三条若按字面执行都是「0 处定位」而非有效变异。
-   本集合实际写入的定位串一律用 `w.sink…`（`--check` 8/8 唯一定位可证）。
+   本集合实际写入的定位串一律用 `w.sink…`（`--check` 全条唯一定位可证；本轮补 m09 后为 9/9）。
    —— 上面第 1 条只登记了 m01「补 `_ = line`」那一半，这条补上「接收者名字」这一半；
    m04 的简报原串以本条为准：**`if tw.sink == nil {` → `if false {`**
    （此前报告曾错引为 `w.sink == nil`，已订正）。
@@ -67,6 +67,18 @@ r"""计划 2 / 任务 6 的变异集合（作者编写的产物 ⇒ 必须 git-t
 `internal/gateway/observability/spool.go` 是 `call_logs` 的 **Redis Stream** spool，
 与本任务的文件 spool（`internal/tracearchive`）只是重名、机制完全不同；本集合的每一条
 都只谈后者。
+
+## 合并前广度评审修复轮（必修 1：关停竞态）补入 m09
+
+`TraceWriter` 新增 `done` 通道与 `Done()`：Run 返回**之前**（即关停补写的最后一批
+写出并插入之后）关闭，供 `cmd/gateway/main.go` 的关停编排决定何时 Close spool。
+m09 让这个信号不再发出（`close(w.done)` → `_ = w.done`），杀手 =
+`TestTraceWriterDoneSignalsAfterShutdownFlush`（无缓冲 channel + flushN=50/interval=1m
+使该事件只能由 `ctx.Done` 分支的关停 flush 写出 ⇒ Done 关闭时 PG 行必须已落库）。
+【次序的耐久性窗口（评审必修 2）】本次序保证的是**调用次序**：AppendLine 只进冻结包的
+1MB bufio 缓冲，字节进入 `write(2)` 的最坏延迟 = FlushInterval（默认 1m）⇒ 该窗口内
+崩溃仍会产生计划 D47 的形态。本集合的变异（含 m09）**覆盖不到**这一点，不得用「全绿」
+推断它没问题。
 """
 
 NAME = "p2-task-6"
@@ -156,6 +168,19 @@ MUTATIONS["m08_交给Append的行被缩进美化"] = [
             "\t\tvar pretty bytes.Buffer\n"
             "\t\t_ = json.Indent(&pretty, traceEventLine(e), \"\", \"  \")\n"
             "\t\tline := pretty.Bytes()"),
+]
+
+# ---- ⑨ 关停信号（合并前广度评审必修 1）----
+# `(*TraceWriter).Done()` 是关停编排用来决定「何时可以 Close spool」的唯一信号：
+# `main` 的次序是 cancel → 等 Done → Close。若这个信号不再发出（忘记 close），
+# 等待方只能靠自己的超时预算收尾 ⇒ 关停被拖住并打一条 ERROR；更糟的形态是
+# 提前发出（Done 在最后一批之前关闭），那会让 main 在写入侧还在补写时关掉 spool ⇒
+# 健康盘上的最后一批被 closed 检查拒绝（body_missing + 假降级 ERROR）。
+# 杀手 TestTraceWriterDoneSignalsAfterShutdownFlush：无缓冲 channel 保证 Emit 返回即
+# 代表事件已进 batch、flushN=50/interval=1m 保证它只能由关停 flush 写出 ⇒
+# Done 关闭时该 PG 行必须已经落库；信号不发出 ⇒ 用例在有界等待处确定性失败。
+MUTATIONS["m09_关停信号不再发出"] = [
+    ("sub", "\t\t\tclose(w.done)", "\t\t\t_ = w.done"),
 ]
 
 CHECKS = [
@@ -299,6 +324,20 @@ REQUIREMENTS = [
             "启动接线不自建闸门（A6-7 / A6-9 第 2 条）",
         ],
         "note": "四条都是「不该存在的调用 / 不该出现的构造」⇒ 静态检查，行为证据在用例与 Task 5 侧。",
+    },
+    {
+        "plan": "合并前广度评审必修 1：(*TraceWriter).Done 必须在关停补写的最后一批之后才发出",
+        "mutations": ["m09_关停信号不再发出"],
+        "checks": [],
+        "note": (
+            "关停编排（cmd/gateway/main.go）用 Done 决定何时可以 Close spool："
+            "cancel → 等 Done → Close。信号不发出 ⇒ 关停被拖到 6s 预算并打 ERROR；"
+            "信号提前发出 ⇒ main 会在写入侧还在补写时关掉 spool（健康盘上的最后一批变 "
+            "body_missing + 假降级 ERROR）。杀手 "
+            "TestTraceWriterDoneSignalsAfterShutdownFlush：无缓冲 channel（Emit 返回即代表"
+            "事件已进 batch）+ flushN=50/interval=1m（只能由关停 flush 写出）⇒ Done 关闭时"
+            "该 PG 行必须已落库。"
+        ),
     },
 ]
 

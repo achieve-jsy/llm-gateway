@@ -75,10 +75,11 @@ type SpoolerStats struct {
 // 它**不压缩、不写产物、不封块** —— 封块是计划 4 的独立 sealer 进程的职责。
 //
 // 【并发模型（A5-4）】AppendLine 由网关的**唯一写协程**调用；Run 由另一个 goroutine
-// 跑周期 ticker。热路径 Allow() 与 SpoolGate.Tick 的探针（CreateTemp + write + fsync +
+// 跑周期 ticker。写协程的 Allow() 与 SpoolGate.Tick 的探针（CreateTemp + write + fsync +
 // unlink）取**同一把锁**，所以 Run 的 goroutine 只做「复检根目录 + 无条件 flush + 滚动
 // 判定」并把「探针到期」记成一个原子标志；真正的 gate.Tick（含探针 fsync）由写协程在
-// AppendLine 入口消费该标志时执行 —— 于是探针永远不会阻塞另一条 goroutine 的 Allow()。
+// AppendLine 入口消费该标志时执行 —— 于是探针不会在 Run 的 goroutine 上做 IO，
+// 也就不会把周期 fsync 的抖动带进共享的闸门锁（Allow() 不在请求路径上，见 markProbeDue）。
 type TraceSpooler struct {
 	w             *ta.Writer
 	gate          *SpoolGate
@@ -277,6 +278,13 @@ type mountKey struct {
 // 但它要求能读到 mountinfo。本部署的 `/datalog` 是独立卷（独立文件系统）⇒
 // dev 本身已足够区分；该边界已登记。
 //
+// 【换卷必须重启网关（评审必修 3.4）】身份 = 挂载点 + dev + fstype，只在 dev/fstype
+// 不变时对 remount 稳定。若运维把 `/datalog` 换到另一个卷（换盘 / 迁移数据），身份必然
+// 不等于启动基线 ⇒ 网关**永久闩锁到重启**（每 tick 一跳变日志 + 闩锁期间的周期汇总），
+// 正文全部 body_missing=true。这是**正确**的 fail-closed 语义（身份无法证明「还是原来
+// 那个卷」，保守侧是停止写盘），但**换卷后必须重启网关**才能重建基线 —— 该条应写入
+// runbook（runbook 属计划 4，本计划不改文档）。
+//
 // 【退化行为（非 Linux / 读不到 mountinfo）】不报错、不闩锁，退化为
 // `dev=<Stat_t.Dev>|fstype=<statfs Type>`（设备级标识）——本机 macOS 的开发与
 // 测试走这条路径。退化形态**不能**区分同设备的不同挂载，这是已知边界。
@@ -457,9 +465,15 @@ func (s *TraceSpooler) AppendLine(dt string, line []byte) (ta.Ref, error) {
 // markProbeDue 置「探针到期」标志（**只由 Run 的 ticker** 调用）。
 //
 // 【为什么把 Tick 的时机拆出来（A5-4）】SpoolGate.Tick 持同一把锁执行探针
-//（CreateTemp + write + fsync + unlink），而热路径 Allow() 取同一把锁；若 Tick 在
-// Run 的 goroutine 上跑，探针的 fsync 会阻塞写协程的 Allow()（直接影响 p99）。
-// 这里只记录「到点了」，真正的 Tick 由写协程在 AppendLine 入口执行。
+//（CreateTemp + write + fsync + unlink）；若 Tick 在 Run 的 goroutine 上跑，探针的
+// fsync 就与 `GateStats()` / `Allow()` 争**同一把锁**，把周期 IO 的抖动带进共享的闸门
+// 状态。这里只记录「到点了」，真正的 Tick 由写协程在 AppendLine 入口执行。
+//
+// 【论据订正（评审必修 3.3）】**不要**用「阻塞 `Allow()` 直接影响请求 p99」来论证：
+// `Allow()` 在生产上唯一的调用者是 `TraceSpooler.AppendLine`（spooler.go:434），
+// 而它跑在 `cmd/gateway/main.go:293` 的**后台写协程**上，**不在请求路径上**。
+// 真正的理由就是上面这一条：不在 Run 的 goroutine 上做探针 IO（探针含 fsync，
+// 且会与 GateStats()/Allow() 争同一把锁）。
 func (s *TraceSpooler) markProbeDue(now time.Time) {
 	s.probeDueAt.Store(now.UnixNano())
 	s.probeDue.Store(true)
@@ -491,12 +505,17 @@ func (s *TraceSpooler) applyDueTick() {
 // 「网关自己封块」：网关只调 MarkSealed 关掉自己的句柄、让下一个 Append 换新 part；
 // 压缩与产物生成仍是计划 4 那个进程外 sealer 的职责（方案 C）。
 //
-// 【空块为什么不滚动 —— 承重】PendingSeals 对 rows == 0 的块返回 nil
-//（writer.go:377-379），所以这里天然不会在空块上滚动。这一点必须有测试盯着
-//（spooler_test.go 的 TestSpoolerDoesNotRollEmptyBlock）：MarkSealed 只关句柄，
-// 下一次 Append 才建新 part；若在空块上滚动，会留下 0 字节 spool 文件，
-// sealer 按文件名照样能发现它，可能封出 0 行产物，使该 part 的所有点读
-// 从「响亮缺失」退化成「行号越界」。
+// 【空块为什么不滚动 —— 承重的守卫与「可观测后果」的区分（评审必修 3.2 订正）】
+// PendingSeals 对空块提前返回，所以这里天然不会在空块上滚动。但**必须说准是哪条守卫**：
+//   - 承重的是 `cur == nil`（writer.go:358）：没有 Append 就没有块，这是
+//     TestSpoolerDoesNotRollEmptyBlock 在空块那一轮真正走到的那条提前返回；
+//   - `rows == 0`（writer.go:377-379）是**防御性**守卫，冻结包自己标注它经公开 API
+//     **不可达**（writer.go:369-376）⇒ **没有任何用例能覆盖它**，本文件也不声称覆盖。
+// 有用例盯着的只是空块的**可观测后果**：该用例断言「不滚动」（Rolls == 0、且不出现新的
+// part 文件），而不是断言那条不可达守卫被执行过。
+// 后果说明（为什么值得盯）：MarkSealed 只关句柄，下一次 Append 才建新 part；若在空块上
+// 滚动，会留下 0 字节 spool 文件，sealer 按文件名照样能发现它，可能封出 0 行产物，
+// 使该 part 的所有点读从「响亮缺失」退化成「行号越界」。
 //
 // 【为什么必须先 flush、后滚动（R8/D7）】sealer 只按 mtime + minAge(3h) 判断
 //「已停止追加」。滚动间隔 ≤1h 且严格小于 3h ⇒ 任何一块在被 sealer 判定「静止」
@@ -555,13 +574,21 @@ func (s *TraceSpooler) FlushAndRoll() error {
 // R8 要求的是「滚动间隔 ≤1h 且**严格小于** minAge(3h)」；1h1m 仍远小于 3h，
 // 因此这个上界是安全的 —— 但必须写明，因为它决定了 D7 的残余窗口：
 // 网关持有某个 part 的 fd 的最长时间是 1h1m，而 sealer 要等 mtime + 3h 才会碰它。
+//
+// 【Run 不拥有 spool 的生命周期：ctx.Done 只 return，不 Close（评审必修 1）】
+// 关停时 `main` 的 `cancel()` 会同时唤醒本循环与写入侧的 Run，而写入侧还要用
+// WithoutCancel 补写最后一批（≤flushN 条 / ≤TraceSpoolerOptions.FlushInterval）。
+// 本函数若在这里 Close，**健康盘**上的最后一批就会撞上 AppendLine 的 closed 检查 ⇒
+// 全部 body_missing=true + 一条「正文落盘已闩锁」ERROR（假磁盘降级告警），
+// 且每次优雅重启都可能发生。次序改由调用方编排：
+// `cancel()` → 等 `(*TraceWriter).Done()`（最后一批已写完）→ `TraceSpooler.Close()`。
+// 因此**生产必须显式调用 Close**；Close 仍是幂等的（CAS）。
 func (s *TraceSpooler) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.flushInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			_ = s.Close()
 			return
 		case <-ticker.C:
 			s.markProbeDue(s.now())

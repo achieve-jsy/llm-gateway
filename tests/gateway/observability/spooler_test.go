@@ -40,11 +40,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	gwconfig "github.com/example/llm-gateway/internal/gateway/config"
 	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
+	obsmodel "github.com/example/llm-gateway/internal/observability/model"
+	ta "github.com/example/llm-gateway/internal/tracearchive"
 	"github.com/stretchr/testify/require"
 )
 
@@ -675,7 +679,7 @@ func TestSpoolerAppendAfterCloseDoesNotRecreatePart(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.FlushAndRoll())
 	require.NoError(t, s.Close())
-	require.NoError(t, s.Close(), "Close 必须幂等（Run 在 ctx.Done 时也会调一次）")
+	require.NoError(t, s.Close(), "Close 必须幂等（关停编排与 t.Cleanup 各调一次）")
 
 	_, err = s.AppendLine("2026-09-24", []byte(`{"a":2}`))
 	require.ErrorIs(t, err, gwobs.ErrSpoolLatched, "Close 之后不得再写")
@@ -732,4 +736,146 @@ func TestSpoolerLatchLogsExactlyOncePerTransition(t *testing.T) {
 	_, err = s.AppendLine("2026-09-24", []byte(`{"a":2}`))
 	require.ErrorIs(t, err, gwobs.ErrSpoolLatched)
 	require.Len(t, logLines(buf.String()), 1, "闩锁期间不得重复打日志（噪音）")
+}
+
+// ---------------------------------------------------------------------------
+// 关停竞态（评审必修 1）：spool 的生命周期不归 Run，归关停编排
+// ---------------------------------------------------------------------------
+
+// TestSpoolerRunDoesNotCloseOnContextCancel 固定「Run 退出**不**关闭 spool」这条契约。
+//
+// 【为什么必须有它】关停时 `main` 的 `cancel()` 会同时唤醒 spooler 的 Run 与写入侧的
+// Run；写入侧还要用 WithoutCancel 补写最后一批（≤flushN 条 / ≤2s）。Run 若在 ctx.Done
+// 里 Close，这一批就会撞上 AppendLine 的 closed 检查 ⇒ 健康盘上的最后一批全部
+// body_missing=true，并且经 noteSpoolFailure 打一条「正文落盘已闩锁」的 ERROR
+//（每次优雅重启都可能发生的假磁盘降级告警）。次序必须由调用方编排：
+// cancel → 等 (*TraceWriter).Done() → Close。
+//
+// 【确定性】本用例先等 Run 的包装 goroutine 真正返回（`<-done`），再调 AppendLine ——
+// 不存在「谁先跑」的调度概率：旧实现（Run 里 Close）在这里必然已置 closed。
+func TestSpoolerRunDoesNotCloseOnContextCancel(t *testing.T) {
+	// 用 newTestSpooler（注入闸门、固定水位 1%）：避免把「能解锁」押在宿主磁盘用量上。
+	s := newTestSpooler(t, t.TempDir(), "blue")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runReturned := make(chan struct{})
+	go func() {
+		s.Run(ctx)
+		close(runReturned)
+	}()
+
+	cancel()
+	select {
+	case <-runReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run 未在预算内退出")
+	}
+
+	ref, err := s.AppendLine("2026-09-24", []byte(`{"a":1}`))
+	require.NoError(t, err,
+		"ctx 取消后 spool 必须仍可写：Run 不得自行 Close（生命周期归关停编排，排空后才关）")
+	require.Equal(t, "blue", ref.Inst)
+}
+
+// shutdownGateSink 是把「spooler 先退出、写入侧的最后一批随后到达」这个交错变成
+// **确定性事实**的探针：它在第一次追加之前先等 spooler 的 Run 真正返回。
+//
+// 于是旧实现（Run 在 ctx.Done 里 Close）下，这一批必然撞上 closed 检查 ——
+// 不是「写入侧先跑就绿」的调度概率。
+type shutdownGateSink struct {
+	gwobs.TraceBodySink // DayStart / DayOf 委托给真实组装物（生产日期入口）
+
+	spoolerRunDone <-chan struct{}
+
+	mu       sync.Mutex
+	appends  int
+	nonNilEr []error
+}
+
+func (s *shutdownGateSink) AppendLine(dt string, line []byte) (ta.Ref, error) {
+	select {
+	case <-s.spoolerRunDone:
+	case <-time.After(5 * time.Second):
+		// 预算内 spooler 的 Run 没退出 ⇒ 关停编排失效。返回错误让用例以断言红暴露，
+		// 而不是把整包拖成 30s 超时红。
+		return ta.Ref{}, errors.New("spooler.Run 未在预算内退出（关停编排失效）")
+	}
+	ref, err := s.TraceBodySink.AppendLine(dt, line)
+	s.mu.Lock()
+	s.appends++
+	if err != nil {
+		s.nonNilEr = append(s.nonNilEr, err)
+	}
+	s.mu.Unlock()
+	return ref, err
+}
+
+func (s *shutdownGateSink) appendCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appends
+}
+
+func (s *shutdownGateSink) appendErrors() []error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]error(nil), s.nonNilEr...)
+}
+
+// TestShutdownFlushIsNotLatchedBySpoolerRun 是关停竞态的**端到端**确定性用例
+//（评审必修 1 要求的「cancel 同一 ctx 后，最后一批追加不是 ErrSpoolLatched、
+// 且这些 PG 行没有 body_missing=true」）。
+//
+// 【确定性从哪来（两层，都不靠调度概率）】
+//  ① 写入器用**无缓冲** channel（bufSize=0）：`Emit` 的发送与写协程的接收同步，
+//     Emit 返回即代表该事件已被取进 batch；`flushN=50` / `interval=1m` ⇒ 它只能由
+//     `ctx.Done` 分支的关停 flush 写出（该分支用 WithoutCancel，故 PG 插入不会因
+//     取消而失败）。
+//  ② 追加被 shutdownGateSink 押在「spooler 的 Run 已返回」之后 ⇒ 旧实现里 spooler
+//     必然已 Close，最后一批必然被拒绝。
+func TestShutdownFlushIsNotLatchedBySpoolerRun(t *testing.T) {
+	root := t.TempDir()
+	spooler := newTestSpooler(t, root, "blue")
+
+	spoolerRunDone := make(chan struct{})
+	sink := &shutdownGateSink{
+		TraceBodySink:  &sinkWithDayOf{spooler: spooler, day: gwconfig.TraceBodyConfig{}},
+		spoolerRunDone: spoolerRunDone,
+	}
+
+	db, _ := newSpoolTestDB(t, &orderRecorder{})
+	w := gwobs.NewTraceWriterWithSink(db, 0, 50, time.Minute, gwobs.TraceWriterLimits{}, sink)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		spooler.Run(ctx)
+		close(spoolerRunDone)
+	}()
+	go w.Run(ctx)
+
+	w.Emit(gwobs.TraceEvent{
+		RequestID: "req-shutdown", TS: cstCrossDayTS, RequestBodyRaw: []byte(`{"a":1}`),
+	})
+	cancel()
+
+	select {
+	case <-w.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("写入侧未在预算内排空（Done 未关闭）：关停编排失效")
+	}
+
+	require.Equal(t, 1, sink.appendCount(), "最后一批必须交给 sink（否则下面的断言是空的）")
+	require.Empty(t, sink.appendErrors(),
+		"健康盘上关停的最后一批不得被 spooler 拒绝（ErrSpoolLatched）")
+	require.NoError(t, spooler.Close())
+
+	var row obsmodel.CallTrace
+	require.NoError(t, db.First(&row, "request_id = ?", "req-shutdown").Error)
+	require.False(t, row.BodyMissing,
+		"健康盘上关停的最后一批不得降级为 body_missing=true（旧实现：Run 先 Close ⇒ 断言在这里红）")
+	require.NotNil(t, row.BodyRefPart)
+	require.NotNil(t, row.BodyRefRow)
+	require.Equal(t, "blue", *row.BodyRefInst)
 }

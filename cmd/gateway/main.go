@@ -71,6 +71,14 @@ type providerLoadResult struct {
 	version int64
 }
 
+// traceSpoolCloseWait 是关停时等待「正文写入侧排空（最后一批落盘）」的上限。
+//
+// 写入侧自己的关停 flush 上限是 `observability.traceShutdownFlushTimeout` = 5s
+// （ctx 已取消，必须用 WithoutCancel 才能写完最后一批）⇒ 本预算比它多留 1s。
+// 它只用于避免关停死锁：超时后仍然会关闭 spool，此时最后一批才按降级处理
+// （评审必修 1：正常路径上不得让健康盘上的最后一批被 Close 拒绝）。
+const traceSpoolCloseWait = 6 * time.Second
+
 func main() {
 	// 加载 .env 文件（开发环境，文件不存在时不报错）
 	_ = godotenv.Load()
@@ -252,6 +260,9 @@ func main() {
 		nil,
 	)
 	var traceWriter *gwobs.TraceWriter
+	// traceBodySpooler 必须在**外层**声明：它的生命周期归关停编排（取消 ctx → 等写入侧
+	// 排空 → Close），不能由 spooler.Run 在 ctx.Done 时自行 Close（评审必修 1）。
+	var traceBodySpooler *gwobs.TraceSpooler
 	if db, err := cpinfra.InitPostgres(cfg.Database.URL); err != nil {
 		slog.Warn("request trace persistence unavailable at startup; call logs remain spooled", "error", err)
 	} else {
@@ -262,7 +273,6 @@ func main() {
 		// 正文直写 /datalog（规格 §4.2 方案 C）。默认关闭（TRACE_BODY_ROOT 为空），
 		// 此时 sink == nil，写入路径与本改动之前逐字段相同。
 		var sink gwobs.TraceBodySink
-		var spooler *gwobs.TraceSpooler
 		if cfg.TraceBody.Enabled {
 			s, serr := gwobs.NewTraceSpooler(gwobs.TraceSpoolerOptions{
 				Root:          cfg.TraceBody.Root,
@@ -280,7 +290,8 @@ func main() {
 				// 而不是把正文标成 body_missing（那才是真的丢）。响亮记录。
 				slog.Error("正文直写不可用，已退回 JSONB 正文列；请检查 /datalog 挂载与 TRACE_BODY_*", "error", serr)
 			} else {
-				sink, spooler = traceBodySink{spooler: s, day: cfg.TraceBody}, s
+				traceBodySpooler = s
+				sink = traceBodySink{spooler: s, day: cfg.TraceBody}
 				slog.Info("trace body direct write enabled",
 					"root", cfg.TraceBody.Root, "inst", cfg.TraceBody.Inst,
 					"block_mb", cfg.TraceBody.BlockMB,
@@ -291,10 +302,12 @@ func main() {
 
 		traceWriter = gwobs.NewTraceWriterWithSink(traceDB, 1024, 50, 2*time.Second, gwobs.TraceWriterLimits{}, sink)
 		go traceWriter.Run(ctx)
-		if spooler != nil {
+		if traceBodySpooler != nil {
 			// 周期循环（flush / 滚动 / 根目录复检 / 探针调度）全部由 TraceSpooler 拥有：
 			// 这里只启动它；写入侧不驱动任何闸门动作或滚动。
-			go spooler.Run(ctx)
+			// 【它不再自己 Close】ctx.Done 只让 Run 返回，Close 由下面的关停编排在
+			// 写入侧排空之后执行（评审必修 1：反序会把健康盘上的最后一批误报成降级）。
+			go traceBodySpooler.Run(ctx)
 		}
 
 		slog.Info("usage tracking enabled (direct-DB mode)")
@@ -371,6 +384,29 @@ func main() {
 		}
 	}
 	cancel()
+	// 【关停次序承重（评审必修 1：关停竞态）】ctx 一取消，写入侧的 Run 与
+	// traceBodySpooler.Run 会各自响应、彼此**没有同步**。写入侧还要用 WithoutCancel 补写
+	// 最后一批（≤flushN=50 条 / ≤2s），而 spooler 的 Run 只退出、不再自己 Close
+	//（见 TraceSpooler.Run 的注释）⇒ 这里必须**先等写入侧排空、再 Close spool**。
+	// 反序（或让 spooler 自己在 Run 里 Close）会让这一批撞上 AppendLine 的 closed 检查：
+	// 全部 body_missing=true，并经 noteSpoolFailure 打一条 ERROR 级「正文落盘已闩锁」
+	// —— 盘是健康的，却发出磁盘降级告警，且每次优雅重启都可能发生。
+	//
+	// 外层超时避免死锁：写入侧的关停 flush 自身有 5s 上限（traceShutdownFlushTimeout），
+	// 超过本预算说明写入侧卡死（DB 挂起等），此时只能照常关闭 spool 并把这一批按降级处理。
+	if traceWriter != nil {
+		select {
+		case <-traceWriter.Done():
+		case <-time.After(traceSpoolCloseWait):
+			slog.Error("正文写入侧未在关停预算内排空，其最后一批将按降级处理",
+				"wait", traceSpoolCloseWait.String())
+		}
+	}
+	if traceBodySpooler != nil {
+		if err := traceBodySpooler.Close(); err != nil {
+			slog.Error("关闭正文 spool 失败", "error", err)
+		}
+	}
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	if err := collector.Wait(drainCtx); err != nil {
 		slog.Error("call log writer drain timed out", "error", err)

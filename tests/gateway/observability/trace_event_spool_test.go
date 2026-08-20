@@ -467,7 +467,15 @@ func TestTraceWriterRetryAfterFailureStartsAtRowZero(t *testing.T) {
 // 因此 `config.TraceBodyZone` 一旦被改成会改变归属日的口径（例如 UTC），
 // 前置断言与①都会立刻红；③ 钉的是 observability 包内行序列化器的 +08:00。
 // 两份常量「恰好都是 +08:00」只在「归属日相同」这个可观测后果上被覆盖，
-// 本用例不声称做了常量相等性检查（那由 p2-task-2 的静态检查负责）。
+// **本用例不声称做过常量相等性检查，也**没有任何集合**在钉这两个常量相等**
+// （评审必修 3.1 订正：原文指向的「p2-task-2 的静态检查」并不存在 —— 该集合的
+// CHECKS 只覆盖配置校验，`traceLineZone` 只在 p2-task-3 的说明文字里被提及）。
+// 真实覆盖是行为用例，分两侧：
+//   - ts 侧（observability 包内的 +08:00）：A 层的 TestTraceEventLineKeyOrderAndTSFormat
+//     直接断言序列化结果为 `+08:00`；本用例③从落盘行上再钉一次同日。
+//   - dt 侧（config.TraceBodyZone）：本用例的前置断言与①，加上 p2-task-8-dt-zone 的
+//     m01（口径退回 UTC）/ m02（DayStart 不归一为 UTC 零点）两条变异对同一批断言的敏感性。
+//
 // dt 退回 UTC 会让①变成 dt=2026-09-24，行内 ts 退回 UTC 会让③变成 UTC 时刻。
 func TestTraceWriterDtCoversUTCPlus8DayBoundary(t *testing.T) {
 	// 前置条件：生产日期入口本身必须把「北京 09-25 00:30」归到 09-25。
@@ -573,4 +581,45 @@ func TestTraceWriterIndentedBodyStaysOneLine(t *testing.T) {
 	// 正文往返无损：缩进被 compact 掉，但字符串里的换行语义必须保留。
 	require.JSONEq(t, indented, string(decoded.RequestBody),
 		"正文内容必须无损（只允许去掉缩进空白）")
+}
+
+// TestTraceWriterDoneSignalsAfterShutdownFlush 固定 (*TraceWriter).Done 的语义
+// （评审必修 1 的关停编排依赖它）：它在 ctx 取消后补写的最后一批**写出之后**才关闭。
+//
+// 【为什么必须有它】`main` 的关停次序是 `cancel()` → 等 `Done()` → `Close()` spool。
+// 若 Done 在最后一批之前（或永不）关闭，`main` 就会在写入侧还在补写时关掉 spool ⇒
+// 健康盘上的最后一批被 closed 检查拒绝、全部 body_missing + 一条假闩锁 ERROR
+// （Done 永不关闭则整段关停被拖到 6s 预算并打一条 ERROR）。
+//
+// 【确定性】写入器用无缓冲 channel：`Emit` 的发送与写协程的接收同步 ⇒ Emit 返回即代表
+// 该事件已进 batch；`flushN=50` / `interval=1m` ⇒ 它只能由 `ctx.Done` 分支的关停 flush
+// 写出（该分支用 WithoutCancel，PG 插入不会因取消而失败）⇒ Done 关闭时该行必须已落库。
+func TestTraceWriterDoneSignalsAfterShutdownFlush(t *testing.T) {
+	root := t.TempDir()
+	spooler := newTestSpooler(t, root, "blue")
+
+	db, _ := newSpoolTestDB(t, &orderRecorder{})
+	sink := &sinkWithDayOf{spooler: spooler, day: gwconfig.TraceBodyConfig{}}
+	w := gwobs.NewTraceWriterWithSink(db, 0, 50, time.Minute, gwobs.TraceWriterLimits{}, sink)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	w.Emit(gwobs.TraceEvent{
+		RequestID: "req-done", TS: cstCrossDayTS, RequestBodyRaw: []byte(`{"a":1}`),
+	})
+	cancel()
+
+	select {
+	case <-w.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Done 未在预算内关闭：Run 未退出，或忘记在退出前发出关停信号")
+	}
+
+	var row obsmodel.CallTrace
+	require.NoError(t, db.First(&row, "request_id = ?", "req-done").Error,
+		"Done 关闭时最后一批必须已经落库（否则关停编排会提前 Close spool）")
+	require.False(t, row.BodyMissing)
+	require.NotNil(t, row.BodyRefPart)
 }

@@ -69,6 +69,26 @@ r"""计划 2 / 任务 5 的变异集合（作者编写的产物 ⇒ 必须 git-t
 """
 
 # ---------------------------------------------------------------------------
+# 合并前广度评审修复轮（必修 1：关停竞态）之后的改动
+#
+# 新增 1 条变异（m29）与 1 条静态检查行（main.go 的关停次序）。
+#
+# - **必修 1（重要）关停竞态**：`cancel()` 之后 spooler 的 Run 与写入侧的 Run 各自
+#   select、**无同步**。原实现（`case <-ctx.Done(): _ = s.Close()`，来自计划草稿
+#   plan:2481 骨架）会在写入侧补写最后一批（≤flushN=50 条 / ≤2s）之前关掉 spool ⇒
+#   该批全部 body_missing=true + 一条 ERROR 级「正文落盘已闩锁」= **健康盘上的假
+#   磁盘降级告警**，每次优雅重启都可能发生（违反计划 plan:66「main.go 关闭时保持
+#   既有行为」）。修复：Run 的 ctx.Done 只 `return`（spool 的生命周期归调用方），
+#   main 在 `cancel()` 后先等 `(*TraceWriter).Done()`（外层 6s 上限防死锁）再 `Close()`。
+#   ⇒ m29 恢复「Run 自行 Close」的形态；杀手 =
+#   TestSpoolerRunDoesNotCloseOnContextCancel（Run 退出后 spool 仍可写）与
+#   TestShutdownFlushIsNotLatchedBySpoolerRun（端到端 PG 行不得 body_missing）。
+#   main.go 的语句次序没有用例覆盖 ⇒ 用静态检查行钉住「先等 Done、再 Close」。
+# - 语义不得变坏：真实闩锁/真实故障时最后一批仍必须降级（body_missing）—— 修复只消除
+#   「健康盘被误判」这一段。m27（Close 后仍允许写入）与 p2-task-8-spooler 的 m01
+#   （闩锁期间仍写盘）仍在守这条边界；m29 本身的杀手断言也依赖「真的拒绝写入」。
+#
+# ---------------------------------------------------------------------------
 # 评审修复轮（task-5 评审：I1/I2/I3/M1/M3/M5/M6）之后的改动
 #
 # 新增 7 条变异（m22–m28），并修正两条已有变异的定位串（m07/m20 —— 实现形态变了，
@@ -359,6 +379,22 @@ MUTATIONS["m28_并列挂载点先到者胜"] = [
     ("sub", "if len(mp) > bestLen || (len(mp) == bestLen && cand.beats(best)) {",
             "if len(mp) > bestLen {"),
 ]
+# ---- 合并前广度评审必修 1：关停竞态（Run 自行 Close → 健康盘假降级） ----
+# 把 Run 的 ctx.Done 分支改回「自己 Close」（= 修复前的实现，也正是计划草稿
+# plan:2481 骨架里的 `_ = s.Close()`）：关停时它与写入侧的排空**没有任何同步**，
+# 写入侧用 WithoutCancel 补写的最后一批（≤flushN=50 条 / ≤2s）会撞上 AppendLine 的
+# closed 检查 ⇒ 全部 body_missing=true，并经 noteSpoolFailure 打一条 ERROR 级
+# 「正文落盘已闩锁」—— 盘是健康的，却发出磁盘降级告警，每次优雅重启都可能发生。
+# 杀手：
+#   - TestSpoolerRunDoesNotCloseOnContextCancel（Run 退出后 spool 必须仍可写）；
+#   - TestShutdownFlushIsNotLatchedBySpoolerRun（端到端：最后一批的追加不得是
+#     ErrSpoolLatched，且对应 PG 行不得 body_missing=true）。
+# 两条都是**确定性**断言（前者先等 Run 返回；后者把追加押在「spooler 的 Run 已返回」
+# 之后），不靠「写入侧跑得快就绿」的调度概率。
+MUTATIONS["m29_Run在ctx取消时自行关闭spool"] = [
+    ("sub", "\t\tcase <-ctx.Done():\n\t\t\treturn",
+            "\t\tcase <-ctx.Done():\n\t\t\t_ = s.Close()\n\t\t\treturn"),
+]
 
 # ---------------------------------------------------------------------------
 # 静态检查：**变异测不到**的要求必须有静态检查行（全局约束的证据制度第 4 条）。
@@ -410,7 +446,9 @@ CHECKS = [
         "why": (
             "A5-4：SpoolGate.Tick 持同一把锁执行探针（CreateTemp + write + fsync + unlink），"
             "而热路径 Allow() 取同一把锁 ⇒ Tick 不得在 Run 的 goroutine 上执行，"
-            "否则每分钟一次的 fsync 会阻塞写协程。"
+            "否则每分钟一次的 fsync 的抖动会进共享的闸门锁（【论据订正，评审必修 3.3】"
+            "**不要**说「阻塞 Allow() 直接影响请求 p99」：Allow() 在生产上唯一的调用者是"
+            "TraceSpooler.AppendLine，而它跑在 main.go 的后台写协程上，不在请求路径上）。"
             "【效力边界】这是源码形态的启发式，不是结构不变量（把置标志挪到别处仍可绕过）；"
             "承重证据是行为用例与变异 m14/m18。"
         ),
@@ -431,10 +469,28 @@ CHECKS = [
             "使运行中挂载消失**无法被检测**（D49）。"
         ),
     },
+    {
+        "name": "关停次序：先等写入侧排空（Done），再关 spool（评审必修 1）",
+        "file": "cmd/gateway/main.go",
+        # 次序检查：要求 `traceWriter.Done()` 的等待出现在 `traceBodySpooler.Close()` 之前。
+        # 它是**启发式**（正则要求两条语句按此顺序出现），但真能红：把 Close 提到等待之前
+        # 就不再命中。为什么只能静态钉：main() 不被任何用例执行，行为侧覆盖不到这段编排。
+        "pattern": r"case <-traceWriter\.Done\(\):[\s\S]*?traceBodySpooler\.Close\(\)",
+        "expect": "present",
+        "why": (
+            "关停竞态的修复有两半：① spooler 的 Run 不再自行 Close（杀手 "
+            "TestSpoolerRunDoesNotCloseOnContextCancel / TestShutdownFlushIsNotLatchedBySpoolerRun，"
+            "变异 m29）；② 关停编排必须**先等写入侧排空、再 Close**（本行）。"
+            "反序会让写入侧用 WithoutCancel 补写的最后一批撞上 AppendLine 的 closed 检查 ⇒ "
+            "健康盘上该批全部 body_missing=true + 一条假的「磁盘降级」ERROR。"
+            "【为什么不是变异】本段是 main() 里的语句次序，没有被任何用例执行到，"
+            "删掉或换序都不会让测试红 ⇒ 只能静态钉住。"
+        ),
+    },
 ]
 
 # ---------------------------------------------------------------------------
-# 允许的绿：本集合预期为空 —— 28 条变异各由一条具体顶层用例杀死。
+# 允许的绿：本集合预期为空 —— 29 条变异各由一条具体顶层用例杀死。
 # ---------------------------------------------------------------------------
 EXPECTED_GREEN = {}
 
@@ -589,5 +645,26 @@ REQUIREMENTS = [
     {
         "plan": "计划 2 全局约束 / D49：网关侧（含 spooler）绝不得创建目录",
         "mutations": [], "checks": ["spooler 侧不出现建目录调用"],
+    },
+    {
+        "plan": "合并前广度评审必修 1：关停竞态 —— Run 不得自行 Close；关停次序 = cancel → 等 Done → Close",
+        "mutations": ["m29_Run在ctx取消时自行关闭spool"],
+        "checks": ["关停次序：先等写入侧排空（Done），再关 spool（评审必修 1）"],
+        "note": (
+            "缺陷：`cancel()` 后 spooler 的 Run 与写入侧的 Run 各自 select、**无同步**；"
+            "spooler 先 Close ⇒ 写入侧补写的最后一批（≤flushN=50 条 / ≤2s）全部 "
+            "body_missing=true，并经 noteSpoolFailure 打一条 ERROR 级「正文落盘已闩锁」"
+            "—— 盘健康却发出磁盘降级告警，每次优雅重启都可能发生（违反计划 plan:66"
+            "「main.go 关闭时保持既有行为」）。根因是计划草稿 plan:2481 骨架的 `_ = s.Close()`。"
+            "修复：Run 的 ctx.Done 只 return（生命周期归调用方），main 在 cancel 后先等 "
+            "(*TraceWriter).Done()（外层 6s 上限防死锁）再 Close。"
+            "杀手（确定性，不靠调度概率）："
+            "TestSpoolerRunDoesNotCloseOnContextCancel —— 先等 Run 的包装 goroutine 返回"
+            "（旧实现此刻必然已 Close），再断言 AppendLine 仍然成功；"
+            "TestShutdownFlushIsNotLatchedBySpoolerRun —— 写入器用无缓冲 channel（Emit 返回"
+            "即代表事件已进 batch），追加被押在「spooler 的 Run 已返回」之后，断言最后一批的"
+            "追加不是 ErrSpoolLatched 且 PG 行没有 body_missing=true。"
+            "②（main.go 的语句次序）不被任何用例执行 ⇒ 由静态检查行钉住次序。"
+        ),
     },
 ]

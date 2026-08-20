@@ -88,6 +88,15 @@ type TraceWriter struct {
 	// missingRows / spoolFailure 是 §9.3 要求的计数器（body_missing 行数 / spool 失败数）。
 	missingRows  atomic.Int64
 	spoolFailure atomic.Int64
+
+	// done 在 Run 返回**之前**关闭（见 Done）。只由 Run 关闭，且 Run 只会被启动一次。
+	//
+	// 【为什么必须有它（评审必修 1：关停竞态）】关停时 `cancel()` 会让写入侧的 Run 与
+	// spooler 的 Run 各自响应；写入侧要用 WithoutCancel 补写最后一批，而 spooler 若先
+	// Close，这一批会撞上 AppendLine 的 closed 检查 ⇒ 全部 body_missing=true + 一条
+	// 「正文落盘已闩锁」ERROR（健康盘被误报成磁盘降级）。次序必须由关停编排显式串起来：
+	// 先等本通道关闭（最后一批已写完），再 Close spool。
+	done chan struct{}
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +117,20 @@ const (
 	//     `g.latched = true; g.trips++`），**没有任何调用方消费** ⇒ 归本文件（A7-1）。
 	// 因此写入侧只对**水位**这一类打跳变日志，其余保持零条 —— 否则同一个跳变会被两侧
 	// 各打一条，§9.3 的「跳变恰好一条」当场破功。
+	//
+	// 【「恰好一条」的两处已知偏离（评审必修 3.5：显式列出，不留在 ledger 里）】
+	//   ① **闸门状态不可观测**（sink 未实现 GateStats）时走错误文本兜底：跳变那一刻的
+	//      ERROR 由 noteSpoolFailure 的 default 分支打，**另外** observeGateTrips 还会打
+	//      一条 WARN（warnGateUnobservable，只打一次）。那一条 WARN 是「接线错误」的告警，
+	//      不属闩锁跳变计数 —— 因此该段的日志条数多于一条，不能声称严格「恰好一条」。
+	//      当前生产接线（main.go 的 traceBodySink）实现了 GateStats，该路径只在替身 /
+	//      其它接线上出现（p2-task-7 的 m09/m14 守着告警本身）。
+	//   ② **水位跳变在两次写侧周期之间已自行解锁**时该跳变零条：周期比对是**快照前后比对**
+	//      （observeGateTrips 只在 `st.Latched` 为真时认领），一旦闸门在两次比对之间解锁，
+	//      比对看不到 latched=true ⇒ 这一次水位跳变没有任何日志。生产 ProbeInterval=1m
+	//      远大于写侧 tick 粒度（main.go 的 interval=2s）时不可达；只有替身注入极小
+	//      ProbeInterval 才可能出现（observeGateTrips 的注释与 adoptGateLatch 的
+	//      「Trips ≤ 闸门 Stats().Trips」登记了同一边界）。
 	diskWatermarkReasonPrefix = "disk_watermark:"
 
 	// 【命名】常量名刻意避开冻结包那个「失败标记行」方法的字面量：p2-task-6 与 p2-task-7 都有
@@ -499,6 +522,7 @@ func NewTraceWriterWithLimits(db *gorm.DB, bufSize, flushN int, interval time.Du
 		interval:      interval,
 		maxBatchBytes: limits.MaxBatchBytes,
 		maxQueueBytes: limits.MaxQueueBytes,
+		done:          make(chan struct{}),
 	}
 }
 
@@ -578,8 +602,30 @@ func (w *TraceWriter) Emit(e TraceEvent) {
 	}
 }
 
+// Done 在 Run 返回**之后**关闭：调用方据此在关闭正文 sink（spool）之前，等待 ctx 取消后
+// 补写的最后一批真正写完（评审必修 1 的关停竞态）。
+//
+// 【关停次序为什么必须由调用方串起来】`cancel()` 之后，本 Run 会用 WithoutCancel 补写
+// 最后一批（≤flushN 条 / ≤interval），而 `TraceSpooler.Run` 也从同一个 ctx 退出。
+// 两条 goroutine 各自 select、**没有任何同步**：spooler 先 Close 时，这一批会撞上
+// AppendLine 的 closed 检查 ⇒ 全部 body_missing=true，并经 noteSpoolFailure 打一条
+// ERROR 级「正文落盘已闩锁」——盘是健康的，却发出磁盘降级告警（每次优雅重启都可能发生）。
+// 因此 `cmd/gateway/main.go` 的关停次序是：cancel → 等本通道 → `traceBodySpooler.Close()`。
+//
+// 【超时】调用方必须给自己的等待套一个上限（写入侧的关停 flush 自身有
+// traceShutdownFlushTimeout 的上限）：超时说明写入侧卡死（DB 挂起等），此时只能照常
+// 关闭 spool 并把这一批按降级处理。
+func (w *TraceWriter) Done() <-chan struct{} { return w.done }
+
 // Run 消费 channel，批量写入 DB
 func (w *TraceWriter) Run(ctx context.Context) {
+	// 先注册「收尾信号」：无论从哪条分支返回，Done 都在**最后一批写完之后**才关闭。
+	// （defer 在函数返回时执行 ⇒ 下面的 ctx.Done 分支先 flush 完才走到这里。）
+	defer func() {
+		if w.done != nil {
+			close(w.done)
+		}
+	}()
 	// batch 保存**尚未组装**的事件：行构造与 spool 追加都在 flush 时、也就是这条
 	// 唯一的写协程上完成（不引入第二条写路径；成本口径见 D54）。
 	batch := make([]TraceEvent, 0, w.flushN)
@@ -649,6 +695,19 @@ func (w *TraceWriter) Run(ctx context.Context) {
 // 「① AppendLine 成功 ⇒ ③ 组装带定位键的行」；①失败则组装 body_missing 行。
 // 反序（先写 PG 再落 spool）会留下一条「元数据说正文在某处、而那个地方什么都没有」
 // 的行 —— 读侧会报 ErrNotArchived（500），把一个正常降级伪装成存储故障。
+//
+// 【本次序保证的是**调用次序**，不是「字节已经落盘」（评审必修 2；计划 §10.1 同步）】
+// AppendLine 只把字节写进冻结包的 1 MB bufio 缓冲（internal/tracearchive/writer.go:518），
+// 字节真正进入 `write(2)` 由 `PendingSeals()` 里的 Flush 完成，而它由 spooler 的周期
+// tick 驱动 ⇒ **最坏延迟 = FlushInterval（默认 1m，规格 §7.1 的上界）**。
+// 因此「spool 追加严格早于 PG 元数据行」只在 API 调用次序上成立：这个窗口内进程被
+// SIGKILL / OOM / 容器 kill 时，缓冲里的字节从未写出，而已提交的 PG 行仍带着指向
+// 不存在正文的 body_ref_* —— 与反序同样的形态（正是计划 D47 登记的残余窗口）。
+// 【窗口大小与后果】≤ FlushInterval（默认 1m）；后果 = 该窗口内崩溃的那些行在归档里
+// 缺正文（读侧按 (dt, inst, part, row) 取到 ErrNotArchived），**不是**静默读到错误行。
+// 收紧它需要在每批之后调用 PendingSeals()（评审已登记为计划 4 的可选项，本计划控制器
+// 裁定**不做**）——不得用「已有变异全绿」推断这个窗口不存在：p2-task-6 的变异条目
+// 全部只看**调用次序**，一条都覆盖不到崩溃时的耐久性。
 //
 // 【调用者只有 Run】行构造（含 json.Valid 与 json.Marshal 对 RawMessage 的 compact 校验）
 // 与 AppendLine 都发生在唯一的写协程上，本方法不派生任何 goroutine。

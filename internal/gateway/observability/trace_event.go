@@ -602,8 +602,9 @@ func (w *TraceWriter) Emit(e TraceEvent) {
 	}
 }
 
-// Done 在 Run 返回**之后**关闭：调用方据此在关闭正文 sink（spool）之前，等待 ctx 取消后
-// 补写的最后一批真正写完（评审必修 1 的关停竞态）。
+// Done 在 Run 返回**之前**关闭（由 Run 的 `defer` 执行；与 `done` 字段、Run 开头的
+// 注释同一口径）：调用方据此在关闭正文 sink（spool）之前，
+// 等待 ctx 取消后补写的最后一批真正写完（评审必修 1 的关停竞态）。
 //
 // 【关停次序为什么必须由调用方串起来】`cancel()` 之后，本 Run 会用 WithoutCancel 补写
 // 最后一批（≤flushN 条 / ≤interval），而 `TraceSpooler.Run` 也从同一个 ctx 退出。

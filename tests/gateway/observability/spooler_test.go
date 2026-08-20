@@ -206,11 +206,12 @@ func TestSpoolerDoesNotRollEmptyBlock(t *testing.T) {
 }
 
 // TestSpoolerRollLeavesCompleteSpoolAndNeverAppendsAgain 固定「先滚动、后封块」的次序
-//（规格 §15.1 R8、计划 1 `MarkSealed` 的契约）：滚动之后，sealer 可能随时封块并删除
+// （规格 §15.1 R8、计划 1 `MarkSealed` 的契约）：滚动之后，sealer 可能随时封块并删除
 // spool；若网关仍持有该 part 的 fd 继续追加，写会落进已被 unlink 的 inode ——
 // write(2) 返回成功、正文永久不可达（D7）。本用例断言两件事：
-//  ① 被滚动的文件在滚动那一刻是**完整**的（最后一行有换行）；
-//  ② 之后再 Append，老文件逐字节不变（新内容进 part-000001）。
+//
+//	① 被滚动的文件在滚动那一刻是**完整**的（最后一行有换行）；
+//	② 之后再 Append，老文件逐字节不变（新内容进 part-000001）。
 func TestSpoolerRollLeavesCompleteSpoolAndNeverAppendsAgain(t *testing.T) {
 	s, root := newSpooler(t, 1<<10, time.Hour, time.Minute)
 	p0 := spoolPath(root, "2026-09-24")
@@ -267,7 +268,7 @@ func TestSpoolerRefusesMissingRoot(t *testing.T) {
 }
 
 // TestSpoolerRefusesFilesystemRoot 固定第二道防线：root 不得是文件系统根
-//（第一道在 config.LoadTraceBodyConfig）。"/" 能通过「是个目录」的检查，
+// （第一道在 config.LoadTraceBodyConfig）。"/" 能通过「是个目录」的检查，
 // 于是 spool 会建在宿主根文件系统上（/spool/dt=…）。
 func TestSpoolerRefusesFilesystemRoot(t *testing.T) {
 	for _, bad := range []string{"/", "//", "/./"} {
@@ -363,7 +364,7 @@ func TestSpoolerChecksRootAfterAppendFailure(t *testing.T) {
 //
 // 【可观测量是 part 序号】根目录与闸门恢复后，如果那一轮滚过，新行会落在
 // part-000001；没滚则仍落在 part-000000。这是该分支唯一的可观测差异，故用它判定
-//（否则这条守卫在测试里不可见，会变成一条无法证明承重的分支）。
+// （否则这条守卫在测试里不可见，会变成一条无法证明承重的分支）。
 func TestSpoolerDoesNotRollWhileRootUnavailable(t *testing.T) {
 	root := t.TempDir()
 	gone := false
@@ -748,7 +749,7 @@ func TestSpoolerLatchLogsExactlyOncePerTransition(t *testing.T) {
 // Run；写入侧还要用 WithoutCancel 补写最后一批（≤flushN 条 / ≤2s）。Run 若在 ctx.Done
 // 里 Close，这一批就会撞上 AppendLine 的 closed 检查 ⇒ 健康盘上的最后一批全部
 // body_missing=true，并且经 noteSpoolFailure 打一条「正文落盘已闩锁」的 ERROR
-//（每次优雅重启都可能发生的假磁盘降级告警）。次序必须由调用方编排：
+// （每次优雅重启都可能发生的假磁盘降级告警）。次序必须由调用方编排：
 // cancel → 等 (*TraceWriter).Done() → Close。
 //
 // 【确定性】本用例先等 Run 的包装 goroutine 真正返回（`<-done`），再调 AppendLine ——
@@ -824,16 +825,17 @@ func (s *shutdownGateSink) appendErrors() []error {
 }
 
 // TestShutdownFlushIsNotLatchedBySpoolerRun 是关停竞态的**端到端**确定性用例
-//（评审必修 1 要求的「cancel 同一 ctx 后，最后一批追加不是 ErrSpoolLatched、
+// （评审必修 1 要求的「cancel 同一 ctx 后，最后一批追加不是 ErrSpoolLatched、
 // 且这些 PG 行没有 body_missing=true」）。
 //
 // 【确定性从哪来（两层，都不靠调度概率）】
-//  ① 写入器用**无缓冲** channel（bufSize=0）：`Emit` 的发送与写协程的接收同步，
-//     Emit 返回即代表该事件已被取进 batch；`flushN=50` / `interval=1m` ⇒ 它只能由
-//     `ctx.Done` 分支的关停 flush 写出（该分支用 WithoutCancel，故 PG 插入不会因
-//     取消而失败）。
-//  ② 追加被 shutdownGateSink 押在「spooler 的 Run 已返回」之后 ⇒ 旧实现里 spooler
-//     必然已 Close，最后一批必然被拒绝。
+//
+//	① 写入器用**无缓冲** channel（bufSize=0）：`Emit` 的发送与写协程的接收同步，
+//	   Emit 返回即代表该事件已被取进 batch；`flushN=50` / `interval=1m` ⇒ 它只能由
+//	   `ctx.Done` 分支的关停 flush 写出（该分支用 WithoutCancel，故 PG 插入不会因
+//	   取消而失败）。
+//	② 追加被 shutdownGateSink 押在「spooler 的 Run 已返回」之后 ⇒ 旧实现里 spooler
+//	   必然已 Close，最后一批必然被拒绝。
 func TestShutdownFlushIsNotLatchedBySpoolerRun(t *testing.T) {
 	root := t.TempDir()
 	spooler := newTestSpooler(t, root, "blue")

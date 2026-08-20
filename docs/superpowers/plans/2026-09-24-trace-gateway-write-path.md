@@ -19,6 +19,7 @@
   - **滚动间隔 ≤ 1 小时，且严格小于 sealer 的 `minAge` = 3 小时**。本计划默认 `TRACE_BODY_ROLL_INTERVAL = "1h"`，理由：`minAge = 3 × 1h = 3h` 的推导链要求「网关滚动间隔取 ~1 小时，让**大小**阈值（1536 MB）先触发，从而保住已标定的 **10.26×** 压缩比（滚动过短会把块截成 ~400 MB，压缩比退到未标定的区间）」。**15m 也满足「≤1h」，但会让块只有 ~400 MB、加密约 10.26× 的标定失效 ⇒ 不采用**（规格 §11.1 的 `"15m"` 与之冲突，登记为 D44）。
   - **flush 周期 ≤ 1 分钟**，默认 `TRACE_BODY_FLUSH_INTERVAL = "1m"`，且**必须无条件执行**（不设「本轮是否要封块」的前置条件），入口是 `(*tracearchive.Writer).PendingSeals()`——它的 `Flush` 在空块提前返回（`writer.go:377`）与阈值提前返回（`writer.go:380-384`）**之前**执行；只有 `cur == nil`（`:358`）与 `poisoned`（`:365`，故意不 flush）两条路径不 flush。
 - **数据流与次序（规格 §4.1、§10.1 I1）**：一条事件在网关内依次是 ① `Emit`（非阻塞，不变）→ ② 唯一写入协程里序列化成一行 JSON → ③ **追加 spool** → ④ **写 PG 元数据行**。**③ 必须早于 ④**。失败次序：③ 失败 ⇒ 该行 `body_missing=true`、定位键全 NULL、不写 spool、**不重试**；④ 沿用现有降级（批量失败逐条重试，坏记录跳过）。
+  **本次序保证的是「调用次序」，不是「字节已落盘」**（评审必修 2 订正，与 `internal/gateway/observability/trace_event.go` 里 `buildTraceModels` 的注释同一口径）：`AppendLine` 只把字节写进冻结包的 1 MB `bufio` 缓冲（`internal/tracearchive/writer.go:518`），字节真正进入 `write(2)` 由 `PendingSeals()` 的 `Flush` 完成，而它只由 spooler 的周期 tick 驱动 ⇒ **最坏延迟 = `FlushInterval`（默认 `1m`，规格 §7.1 的上界）**。该窗口内进程被 `SIGKILL`/OOM/容器 kill 时，缓冲里的字节从未写出，而已提交的 PG 行仍带着指向不存在正文的 `body_ref_*` ⇒ 正是 D47 登记的形态（读侧按 `(dt, inst, part, row)` 取到 `ErrNotArchived`，不是静默读到错误行）。**收紧这个窗口的方案 B（每批之后调 `PendingSeals()`）登记为计划 4 的可选项，本期控制器裁定不做**；也不得用「变异全绿」推断该窗口不存在——p2-task-6 的变异条目全部只看调用次序，一条都覆盖不到崩溃时的耐久性。
 - **新行不再写入正文（规格 §6、目标 G1）**：`request_headers` / `request_body` / `response_body` 对新行**恒为 NULL**；改为写 `body_ref_dt` / `body_ref_inst` / `body_ref_part` / `body_ref_row` / `body_missing` / `body_bytes`。
 - **`body_bytes` 口径（规格 §6 自相矛盾，本计划裁定，登记 D42）**：取 **`len(RequestBodyRaw) + len(ResponseBodyRaw)`**，**不含 headers**（即复用既有的 `traceEventBodyBytes`）。理由：① 与既有字节闸门（`maxQueueBytes` / `maxBatchBytes`）同口径，避免「同名两个数」；② 请求头经 `scrub` 过滤且体积为 KB 级，对「压缩比核算」影响可忽略；③ 只保留**一个**计数器，不会漂移。规格 §6 的字面公式含 headers，**以本计划为准**（规格待订正）。
 - **`dt` 口径（规格未定义，本计划定死）**：`dt` = 事件 `TS` 在 **UTC+8** 下的日期（`2006-01-02`）。理由：① 归档行里的 `ts` 惯例是 `+08:00`（与 `/datalog/emergency-archive` 的存量格式一致），二者必须指向同一天，否则「元数据说这天、目录在那天」；② 运维与保留期讨论全部按北京时间；③ 与存量归档脚本的口径一致。实现用**固定偏移** `time.FixedZone("CST", 8*60*60)`，**不用** `time.LoadLocation`——容器里没有 tzdata，`LoadLocation` 会失败；中国自 1991 年起无夏令时，固定 +08:00 与真实时区等价。**`dt` 选错会让正文落进错误的 `dt=` 目录 ⇒ 按 `dt` 查不到**，因此必须有边界测试（见任务 2）。
@@ -63,7 +64,7 @@
 | `internal/gateway/observability/spool_gate.go` | **新建**：`SpoolGate`（磁盘水位 + 写失败闩锁 + 探针恢复） | ~190 行 |
 | `internal/gateway/observability/spooler.go` | **新建**：`TraceSpooler`（`TraceBodySink` 实现：周期 flush + 滚动 + 统计） | ~230 行 |
 | `internal/gateway/observability/trace_event.go` | **修改**：`TraceWriter` 增 `sink`/`dayOf` 两个可注入字段；`flush` 闭包改为「先 spool 后 PG」；`traceEventToModel` 区分开启/关闭两条路径 | +90/-25 行 |
-| `cmd/gateway/main.go` | **修改**：按配置构造 `TraceSpooler` 并接线；关闭时保持既有行为 | +40 行 |
+| `cmd/gateway/main.go` | **修改**：按配置构造 `TraceSpooler` 并接线；关停次序归 main 编排（`cancel()` → 等 `TraceWriter.Done()` → `Close()`，见任务 5 骨架的订正） | +40 行 |
 | `tests/gateway/config/trace_body_test.go` | **B 层**：默认值 / env 覆盖 / 非法值 / `DayOf` 边界 | ~180 行 |
 | `tests/gateway/observability/trace_line_test.go` | **B 层**：序列化逐字节断言（键序、`+08:00`、无裸换行、scrub/包装规则） | ~200 行 |
 | `tests/gateway/observability/spool_gate_test.go` | **B 层**：水位闩锁、写失败闩锁、闩锁期不写盘、探针恢复、无真实盘满 | ~200 行 |
@@ -2472,13 +2473,19 @@ func (s *TraceSpooler) FlushAndRoll() error {
 // R8 要求的是「滚动间隔 ≤1h 且**严格小于** minAge(3h)」；1h1m 仍远小于 3h，
 // 因此这个上界是安全的 —— 但必须写明，因为它决定了 D7 的残余窗口：
 // 网关持有某个 part 的 fd 的最长时间是 1h1m，而 sealer 要等 mtime + 3h 才会碰它。
+//
+// 【Run 不拥有 spool 的生命周期：ctx.Done 只 return，不 Close（订正，见骨架下方的警告）】
+// 关停时 main 的 cancel() 会同时唤醒本循环与写入侧的 Run，而写入侧还要用 WithoutCancel
+// 补写最后一批。本函数若在这里 Close，健康盘上的最后一批就会撞上 AppendLine 的 closed
+// 检查 ⇒ 全部 body_missing=true + 一条假的「磁盘降级」ERROR，且每次优雅重启都可能发生。
+// 次序改由调用方编排：cancel() → 等 (*TraceWriter).Done() → TraceSpooler.Close()。
 func (s *TraceSpooler) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.flushInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			_ = s.Close()
+			// 只 return，**不得** Close（旧骨架的 `_ = s.Close()` 是关停竞态的根因）。
 			return
 		case now := <-ticker.C:
 			s.gate.Tick(now)
@@ -2503,6 +2510,17 @@ func (s *TraceSpooler) Stats() SpoolerStats {
 
 运行：`go test ./tests/gateway/observability/ -run 'TestSpooler' -v`
 预期：PASS（11 个顶层用例）。
+
+> ⚠️ **订正（2026-09 收尾整理，评审必修 1）**：上面的骨架**原本**在 `ctx.Done()` 分支里写
+> `_ = s.Close()`，而「文件结构」表又把 main 的关停描述为「关闭时保持既有行为」——两句互相
+> 矛盾，而这个矛盾正是关停竞态的根因。**实际实现**（已随计划 2 落地并修复）是：`Run` 在
+> `ctx.Done` 时**只 return**，生命周期归调用方编排 —— `cmd/gateway/main.go` 在 `cancel()`
+> 之后**先等 `(*TraceWriter).Done()`**（最后一批已写完；`Done` 由写入侧 `Run` 的 `defer`
+> 在返回之前关闭）、**再调 `TraceSpooler.Close()`**（CAS 幂等），并用 6s 外层预算防死锁。
+> **计划 3/4 不要复制旧骨架**（`case <-ctx.Done(): _ = s.Close()` 形态）：它会让写入侧用
+> `WithoutCancel` 补写的最后一批全部退化成 `body_missing=true`，并打出假的磁盘降级
+> ERROR。骨架里 `s.gate.Tick(now)` 那一行同样只代表计划时设计；实际实现改为「tick 只置
+> 『探针到期』标志、由写协程消费」（A5-4），理由见本任务 `markProbeDue` 的注释。
 
 - [ ] **步骤 5：写本任务的变异集合**
 
@@ -3826,7 +3844,10 @@ A3：注入水位把系统推到与盘满同一状态（不是真实盘满，报
 ### Task 9：分支级证据重跑（R11 式）
 
 **文件：**
-- 新建（证据目录，gitignored）：`.superpowers/sdd/trace-write-path/R11-v1.md`
+- 新建（证据目录，gitignored）：`.superpowers/sdd/2026-09-24-trace-gateway-write-path/R11-v1.md`
+  - **路径订正**：本计划初稿写作 `.superpowers/sdd/trace-write-path/`（无日期前缀），与仓库实际使用的
+    `.superpowers/sdd/2026-09-24-trace-gateway-write-path/` 不符，属路径笔误；本轮实际落地在该目录下的
+    `task-9-report-v2.md` 与 `task-9-summary-v2.md`。
 - 不改任何生产代码
 
 **为什么必须有这一步**：CI 完全不跑 `go test`（`.gitlab-ci.yml` 只有三处 `CGO_ENABLED=0 go build`），因此**逐任务**的变异表是过程证据，而**同一棵树上的全任务重跑**才是最终结论——它同时自查「后续任务的改动有没有让前面任务的守卫失效」。
@@ -3843,24 +3864,25 @@ git log --oneline -12
 
 - [ ] **步骤 2：逐集合跑权威表**
 
-对 `tools/trace-mutate/sets/p2-task-{2,3,4,5,6,7,8,8-spooler}.py` **各跑一次**（每次都要它自己的名字清单）。**恰好 8 个集合**，少一个就是漏跑：
+对 `tools/trace-mutate/sets/p2-task-{2,3,4,5,6,7,8,8-dt-zone,8-spooler}.py` **各跑一次**（每次都要它自己的名字清单）。**恰好 9 个集合**（含 `p2-task-8-dt-zone.py`；本计划初稿误写为 8 个且漏列它），少一个就是漏跑：
 
 ```bash
-for s in 2 3 4 5 6 7 8 8-spooler; do
+: > /tmp/p2-task-all.out          # 逐集合的输出重定向到 /tmp/p2-task-$s.out，退出码另行汇总到本文件
+for s in 2 3 4 5 6 7 8 8-dt-zone 8-spooler; do
   set=tools/trace-mutate/sets/p2-task-$s.py
   [ -f "$set" ] || { echo "MISSING SET: $set"; exit 1; }   # 不得静默跳过
   python3 tools/trace-mutate/trace_mutate.py --repo . \
-    --manifest .superpowers/sdd/trace-write-path/p2-task-$s-names.txt \
+    --manifest .superpowers/sdd/2026-09-24-trace-gateway-write-path/p2-task-$s-names.txt \
     --mutation-set "$set" > /tmp/p2-task-$s.out 2>&1
-  echo "task-$s exit=$?"
+  echo "task-$s exit=$?" | tee -a /tmp/p2-task-all.out
 done
-grep -c '^task-.* exit=0$' /tmp/p2-task-all.out 2>/dev/null || true
+grep -c '^task-.* exit=0$' /tmp/p2-task-all.out   # 必须 = 9
 ```
 
-**三个硬门（任一不过即本轮结论无效）**：① 8 个集合全部存在且都被跑过（`MISSING SET` 一次都不许出现）；
+**三个硬门（任一不过即本轮结论无效）**：① 9 个集合全部存在且都被跑过（`MISSING SET` 一次都不许出现）；
 ② 每个集合的权威表 `exit=0`；③ 每个集合的三断言全过（见步骤 3 第 3 项）。
 
-- [ ] **步骤 3：写报告 `.superpowers/sdd/trace-write-path/R11-v1.md`**
+- [ ] **步骤 3：写报告 `.superpowers/sdd/2026-09-24-trace-gateway-write-path/R11-v1.md`**
 
 报告固定结构（**事实，不是声明**）：
 
@@ -3929,7 +3951,7 @@ git log --oneline 3a2301ad..HEAD
 | 必改 3 | 显式声明对 §7.1 `AppendFailed` 的偏离与理由；实证「失败不占行号」 | 任务 6「偏离登记」段；`TestTraceWriterRetryAfterFailureStartsAtRowZero`；集合 `CHECKS`（`AppendFailed` 必须 absent）；D51 |
 | 必改 4 | 注释点名具体测试；探针周期必须有专用用例 | 任务 2 集合 `m03` 注释点名 `TestTraceBodyConfigRollIntervalMustBeUnderOneHour`；任务 4 新增 `TestGateProbeRespectsInterval` 并映射到 `m04` |
 | 必改 5 | 网关键改名 `TRACE_BODY_ROLL_INTERVAL`，登记 D50，计划 4 交接用新名 | 全文改名（0 处 `SEAL_INTERVAL` 残留，除 D44/D50/H3/H4 里**引用规格原名**处）；D50；H3/H4 |
-| 小项 | 「闩锁」错别字（原为「闰锁」）；滚动上界的精确值；任务 9 集合数 = 8 | 全文；任务 5 `Run` 注释（≤ `1h + 1m` ≪ minAge 3h）；任务 9 步骤 2（硬门 + `MISSING SET` 不得静默跳过） |
+| 小项 | 「闩锁」错别字（原为「闰锁」）；滚动上界的精确值；任务 9 集合数 = 9（`p2-task-8-dt-zone` 初稿漏列） | 全文；任务 5 `Run` 注释（≤ `1h + 1m` ≪ minAge 3h）；任务 9 步骤 2（硬门 + `MISSING SET` 不得静默跳过） |
 
 **第三次修订（由 Task 1 执行者的真实环境实测驱动）**：
 

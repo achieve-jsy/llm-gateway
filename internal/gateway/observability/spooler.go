@@ -114,8 +114,8 @@ type TraceSpooler struct {
 // 正文会写到宿主根文件系统上，把 `/` 写满。但构造期的检查**只能挡「启动时未挂载」**：
 // 网关依赖的冻结包自己**每次建块都会建目录**（`internal/tracearchive/writer.go:489`），
 // 所以「**运行中**挂载消失」挡不住，由周期复检 + 身份基线 + 闩锁兜底
-//（残余窗口 = 一个 tick）。构造失败时由 main 记录 ERROR 并退回既有路径
-//（正文仍写 PG，不丢数据）。
+// （残余窗口 = 一个 tick）。构造失败时由 main 记录 ERROR 并退回既有路径
+// （正文仍写 PG，不丢数据）。
 func NewTraceSpooler(opts TraceSpoolerOptions) (*TraceSpooler, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -265,7 +265,7 @@ type mountKey struct {
 // 挂载消失后容器可写层会让存在性、IsDir、写探针全部成功。
 //
 // 【取法（Linux）】读 /proc/self/mountinfo，取**覆盖该路径的最长前缀挂载项**
-//（mountinfo 第 5 字段是挂载点，第 3 字段是 major:minor 设备号，"-" 之后是文件
+// （mountinfo 第 5 字段是挂载点，第 3 字段是 major:minor 设备号，"-" 之后是文件
 // 系统类型），身份 = `mount=<挂载点>|dev=<major:minor>|fstype=<类型>`。
 //
 // 【为什么带挂载点而不是 mountinfo 第 1 字段的 mount ID】同一设备上的不同挂载有
@@ -279,8 +279,9 @@ type mountKey struct {
 // dev 本身已足够区分；该边界已登记。
 //
 // 【换卷必须重启网关（评审必修 3.4）】身份 = 挂载点 + dev + fstype，只在 dev/fstype
-// 不变时对 remount 稳定。若运维把 `/datalog` 换到另一个卷（换盘 / 迁移数据），身份必然
-// 不等于启动基线 ⇒ 网关**永久闩锁到重启**（每 tick 一跳变日志 + 闩锁期间的周期汇总），
+// 不变时对 remount 稳定。若运维把 `/datalog` 换到另一个卷（换盘 / 迁移数据），身份**很
+// 可能**不等于启动基线（dev 变化；`major:minor` 在重启后可能被复用）⇒ 届时网关会**永久
+// 闩锁到重启**（每 tick 一跳变日志 + 闩锁期间的周期汇总），
 // 正文全部 body_missing=true。这是**正确**的 fail-closed 语义（身份无法证明「还是原来
 // 那个卷」，保守侧是停止写盘），但**换卷后必须重启网关**才能重建基线 —— 该条应写入
 // runbook（runbook 属计划 4，本计划不改文档）。
@@ -314,7 +315,7 @@ func defaultRootIdentity(root string) (string, error) {
 //
 // 单独拆成纯函数是为了让判别力本身可测（本机 macOS 上没有 /proc/self/mountinfo，
 // 但仍可用合成内容断言：「/datalog/trace-archive-v4 的所属挂载从 /datalog 变成 /
-//（挂载消失后落到容器层）」必须被判为不同身份）。
+// （挂载消失后落到容器层）」必须被判为不同身份）。
 func mountIdentityFor(data []byte, root string) (mountKey, bool) {
 	clean := filepath.Clean(root)
 	var best mountKey
@@ -386,7 +387,7 @@ func unescapeMountField(s string) string {
 }
 
 // checkRoot 在**周期 tick、滚动前、以及任何 Append 失败**时复检根目录，失败即闩锁
-//（`body_missing=true`、停止写盘、响亮 ERROR）。返回根目录是否可用。
+// （`body_missing=true`、停止写盘、响亮 ERROR）。返回根目录是否可用。
 //
 // 【为什么必须有周期复检（登记 D49）】网关自身不建目录，但它依赖的**冻结包会**：
 // `internal/tracearchive/writer.go:471-521` 的 ensureBlockLocked 在**每次建块**时
@@ -465,13 +466,14 @@ func (s *TraceSpooler) AppendLine(dt string, line []byte) (ta.Ref, error) {
 // markProbeDue 置「探针到期」标志（**只由 Run 的 ticker** 调用）。
 //
 // 【为什么把 Tick 的时机拆出来（A5-4）】SpoolGate.Tick 持同一把锁执行探针
-//（CreateTemp + write + fsync + unlink）；若 Tick 在 Run 的 goroutine 上跑，探针的
+// （CreateTemp + write + fsync + unlink）；若 Tick 在 Run 的 goroutine 上跑，探针的
 // fsync 就与 `GateStats()` / `Allow()` 争**同一把锁**，把周期 IO 的抖动带进共享的闸门
 // 状态。这里只记录「到点了」，真正的 Tick 由写协程在 AppendLine 入口执行。
 //
 // 【论据订正（评审必修 3.3）】**不要**用「阻塞 `Allow()` 直接影响请求 p99」来论证：
-// `Allow()` 在生产上唯一的调用者是 `TraceSpooler.AppendLine`（spooler.go:434），
-// 而它跑在 `cmd/gateway/main.go:293` 的**后台写协程**上，**不在请求路径上**。
+// `Allow()` 在生产上唯一的调用者是 `TraceSpooler.AppendLine`（本文件的 AppendLine
+// 入口），而它跑在 `cmd/gateway/main.go` 里 `go traceWriter.Run(ctx)` 启动的
+// **后台写协程**上，**不在请求路径上**。
 // 真正的理由就是上面这一条：不在 Run 的 goroutine 上做探针 IO（探针含 fsync，
 // 且会与 GateStats()/Allow() 争同一把锁）。
 func (s *TraceSpooler) markProbeDue(now time.Time) {
@@ -482,7 +484,7 @@ func (s *TraceSpooler) markProbeDue(now time.Time) {
 // applyDueTick 原子地消掉「到期」标志并执行一次 gate.Tick。
 //
 // 【恰好一次】用原子交换消费标志：一个到期标志换来恰好一次 Tick，既不会漏
-//（标志保留到写协程下一次 AppendLine），也不会重复探针。
+// （标志保留到写协程下一次 AppendLine），也不会重复探针。
 //
 // 【有意的延迟解锁】写协程空闲时闩锁保持、标志保留；恢复流量后由首个 AppendLine
 // 完成探针与解锁。空闲时没有任何待写的行，解锁早一步晚一步都不影响正确性。
@@ -496,7 +498,7 @@ func (s *TraceSpooler) applyDueTick() {
 // FlushAndRoll 无条件 flush 一次，并对**已达阈值**的块执行滚动。
 //
 // 【为什么用 PendingSeals 做周期 flush 的入口】它的 Flush 发生在空块提前返回
-//（writer.go:377）与阈值提前返回（:380-384）**之前**；只有 cur == nil（:358）
+// （writer.go:377）与阈值提前返回（:380-384）**之前**；只有 cur == nil（:358）
 // 与 poisoned（:365，故意不 flush）两条路径不 flush。因此定时调它即可满足
 // 规格 §7.1 的「无条件执行」。
 //
@@ -511,6 +513,7 @@ func (s *TraceSpooler) applyDueTick() {
 //     TestSpoolerDoesNotRollEmptyBlock 在空块那一轮真正走到的那条提前返回；
 //   - `rows == 0`（writer.go:377-379）是**防御性**守卫，冻结包自己标注它经公开 API
 //     **不可达**（writer.go:369-376）⇒ **没有任何用例能覆盖它**，本文件也不声称覆盖。
+//
 // 有用例盯着的只是空块的**可观测后果**：该用例断言「不滚动」（Rolls == 0、且不出现新的
 // part 文件），而不是断言那条不可达守卫被执行过。
 // 后果说明（为什么值得盯）：MarkSealed 只关句柄，下一次 Append 才建新 part；若在空块上
@@ -518,11 +521,11 @@ func (s *TraceSpooler) applyDueTick() {
 // 使该 part 的所有点读从「响亮缺失」退化成「行号越界」。
 //
 // 【为什么必须先 flush、后滚动（R8/D7）】sealer 只按 mtime + minAge(3h) 判断
-//「已停止追加」。滚动间隔 ≤1h 且严格小于 3h ⇒ 任何一块在被 sealer 判定「静止」
+// 「已停止追加」。滚动间隔 ≤1h 且严格小于 3h ⇒ 任何一块在被 sealer 判定「静止」
 // 之前就已被网关滚掉，网关手里不再有它的 fd，追加不会落进已被 unlink 的 inode。
 // 次序错误在这里没有守卫可加（正常流程 sealer 确实已删 spool，「stat 文件是否存在」
 // 的守卫会在正常路径上误报）—— 只能靠**次序保证**，因此本函数的实现次序
-//（先 flush、再 MarkSealed）是承重的，且由
+// （先 flush、再 MarkSealed）是承重的，且由
 // TestSpoolerRollLeavesCompleteSpoolAndNeverAppendsAgain 固定。
 func (s *TraceSpooler) FlushAndRoll() error {
 	// ① 先复检根目录（每个 tick 一次；stat + 身份比对在写协程/循环协程上，开销可忽略）。
@@ -562,7 +565,7 @@ func (s *TraceSpooler) FlushAndRoll() error {
 // Run 是周期循环：每个 FlushInterval 做一次「根目录复检 + 无条件 flush + 滚动判定」。
 //
 // 这三个动作合并在同一个 tick 里是刻意的：滚动必须发生在 flush 之后
-//（先落盘、再让 sealer 可能看见），而 flush 本身由 PendingSeals 完成。
+// （先落盘、再让 sealer 可能看见），而 flush 本身由 PendingSeals 完成。
 //
 // 【Run 不得调用 gate.Tick（A5-4）】Tick 持锁做探针 fsync，会阻塞写协程的
 // Allow() ⇒ 这里只置「探针到期」标志，由写协程消费（见 markProbeDue/applyDueTick）。
@@ -600,7 +603,9 @@ func (s *TraceSpooler) Run(ctx context.Context) {
 }
 
 func (s *TraceSpooler) Close() error {
-	// CAS ⇒ 幂等：Run 在 ctx.Done 时会 Close，调用方通常也 Close 一次；
+	// CAS ⇒ 幂等：**Close 由调用方在关停编排里显式调用一次**（Run 在 ctx.Done 时只
+	// return、不再自行 Close，见 Run 的注释；`cmd/gateway/main.go` 里的次序是
+	// `cancel()` → 等 `(*TraceWriter).Done()`（最后一批已写完）→ 调本方法）；
 	// 第二次直接返回 nil（既不重复关句柄，也不会把首次的错误覆盖成 nil）。
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil

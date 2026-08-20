@@ -113,7 +113,7 @@ type insertBatch struct {
 // 【为什么需要批次行数】写入器按 flushN 分批（本用例 200）⇒ 一次追加与一次 INSERT
 // 并非一一对应，「第 i 条追加先于承载它的那条 INSERT」必须按批次算。
 // 行数从 Statement.Dest 读：flush 里的 Create(&models) 传的是 *[]obsmodel.CallTrace
-//（逐条降级路径传 *obsmodel.CallTrace ⇒ 记 1 行）。
+// （逐条降级路径传 *obsmodel.CallTrace ⇒ 记 1 行）。
 type insertObserver struct {
 	rec  *orderRecorder
 	sink *acceptanceSink

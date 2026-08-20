@@ -475,7 +475,15 @@ CHECKS = [
         # 次序检查：要求 `traceWriter.Done()` 的等待出现在 `traceBodySpooler.Close()` 之前。
         # 它是**启发式**（正则要求两条语句按此顺序出现），但真能红：把 Close 提到等待之前
         # 就不再命中。为什么只能静态钉：main() 不被任何用例执行，行为侧覆盖不到这段编排。
-        "pattern": r"case <-traceWriter\.Done\(\):[\s\S]*?traceBodySpooler\.Close\(\)",
+        #
+        # 【收尾订正（2026-09 非行为性整理提交）】原正则以 `case <-traceWriter\.Done\(\):`
+        # 直接起头、不带行首锚 ⇒ 把该行**注释掉**（`// case <-traceWriter.Done():`）仍然命中，
+        # 于是「main.go 关停次序的唯一证据」可被一个注释满足（换序会红，注释不会）。
+        # 现收紧为先匹配行首（`\n` + 只允许空白）再匹配 `case`，注释前缀 `//` 不再命中。
+        # 就地实测（三种 main.go 变体，re.search 与 trace_mutate.py:373 同一调用）：
+        #   旧正则：真实文件=命中 / 注释掉该 case=命中（洞） / Close 提到等 Done 之前=未命中
+        #   新正则：真实文件=命中 / 注释掉该 case=未命中     / Close 提到等 Done 之前=未命中
+        "pattern": r"\n[ \t]*case <-traceWriter\.Done\(\):[\s\S]*?traceBodySpooler\.Close\(\)",
         "expect": "present",
         "why": (
             "关停竞态的修复有两半：① spooler 的 Run 不再自行 Close（杀手 "
@@ -485,6 +493,8 @@ CHECKS = [
             "健康盘上该批全部 body_missing=true + 一条假的「磁盘降级」ERROR。"
             "【为什么不是变异】本段是 main() 里的语句次序，没有被任何用例执行到，"
             "删掉或换序都不会让测试红 ⇒ 只能静态钉住。"
+            "【效力边界】带行首锚后，注释掉 `case` 行不再算命中；但把整段编排挪进另一个"
+            "函数、或把 `Close()` 改成经别名调用，仍可绕过 —— 它依然是启发式，不是结构不变量。"
         ),
     },
 ]

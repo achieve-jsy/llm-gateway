@@ -15,8 +15,10 @@ package observability_test
 //
 // 【A1 的边界：只覆盖写入半部】
 // 本文件只断言「写进去的字节」与「写出来的定位键」对得上 —— 这是读写两侧唯一能在
-// 写入侧独立固定的契约。**读回半部**（按 (dt, inst, part, row) 取回正文并逐字节比对）
-// 属计划 3 的点读服务：本文件不实现、不断言读侧，也不构造读侧替身。
+// 写入侧独立固定的契约。**生产读侧服务**（按 (dt, inst, part, row) 取回正文的点读
+// 闭环）、封块产物与索引属计划 3：本文件不实现、不断言生产读侧，也不构造读侧替身。
+// A1 ② 里那次「按定位键拼路径读文件」是**测试内直接读 spool 文件**，作用只是把写入侧
+// 契约钉死（写进去的字节 == 事件给的字节），不是读侧服务的实现、替身或验收。
 //
 // 【A3 的边界：注入式等价，不是真实盘满】
 // TestAcceptanceA3DegradesWithoutDiskPressure 用**可注入的水位函数**把系统推到与
@@ -155,9 +157,9 @@ func splitLines(t *testing.T, p string) []string {
 // 用真实 TraceSpooler（临时目录，非替身）+ 内存 sqlite，逐条比对
 // 「事件 → spool 行」的字节与「事件 → 元数据行」的定位键。
 //
-// 读回半部（按 (dt, inst, part, row) 取回正文并逐字节比对）属计划 3 的点读服务，
-// 本用例只断言「写进去的字节与写出来的键是对得上的」：
-// 这是读写两侧唯一能在写入侧独立固定的契约。
+// **生产读侧服务**（按 (dt, inst, part, row) 取回正文的点读闭环）与封块产物/索引
+// 属计划 3：本用例不实现、不断言它们。下面 ② 里那次「按定位键拼路径读文件」是
+// **测试内直接读 spool 文件**，用来固定写入侧契约（写进去的字节 == 事件给的字节）。
 func TestAcceptanceA1WriteHalf(t *testing.T) {
 	const n = 2000
 	root := t.TempDir()
@@ -250,9 +252,12 @@ func TestAcceptanceA1WriteHalf(t *testing.T) {
 
 	// ② 定位键必须能落回真实存在的 spool 行，且字节与事件一致（逐字节）
 	//
+	// 【这是测试内直接读文件，不是读侧服务】本用例没有构造任何读侧替身，也不验收
+	// 点读闭环（属计划 3）；这里只是把写入侧的契约钉死 —— 写进去的字节必须等于
+	// 事件给的字节。
 	// 【为什么解码后比字节，而不是 Contains】`"i":1` 是 `"i":12` 的前缀 ⇒ 子串断言
 	// 在 1..9 上会假绿。这里按 request_id 认行、按 request_body/response_body/
-	// request_headers 的**字节**比对（读者在计划 3 会做的事）。
+	// request_headers 的**字节**比对。
 	fileCache := map[string][]string{}
 	for i, row := range rows {
 		spoolPath := filepath.Join(root, "spool",

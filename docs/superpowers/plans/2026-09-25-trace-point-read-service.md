@@ -545,8 +545,10 @@ git commit -m "feat(controlplane): 点读读侧配置与定位键入口校验（
   **`GetBody` 的判定顺序（**逐条都是承重的，任何一步被摘掉或换序都必须有变异红**）：**
   ```
   0. 记录不存在（gorm.ErrRecordNotFound）                ⇒ 透传（handler 映射 404）
-  1. body_missing == true                               ⇒ 返回 ErrBodyMissing
+  1. body_missing == true【且四个定位键全为 NULL】      ⇒ 返回 ErrBodyMissing
                                                            【必须早于定位键判定】
+  1'. body_missing == true 却【带定位键】（数据写坏）    ⇒ 返回 ErrTraceBodyInconsistent
+                                                           （500，**绝不报 404**，见 E9）
   2. 四个定位键【全为 NULL】
        2a. 若 Config.Disabled()                        ⇒ 200 + SourceJSONB（正常路径）
        2b. 否则                                        ⇒ 200 + SourceJSONB（功能关闭的历史行）
@@ -608,9 +610,13 @@ git commit -m "feat(controlplane): 点读读侧配置与定位键入口校验（
 //   （不是 404、不是 ErrNotArchived、不是 jsonb 回退）
 
 // TestTraceBodyServiceRejectsIllegalRefBeforeIO  ← m06 的杀手+隔离探针
-//   行的 dt 值是 "2026-09-24/../.."（模拟列被写坏）⇒
+//   行的定位键列值非法（inst 穿越向量 / inst 空串 / part 超上界 / part 为负 / row 为负）⇒
 //   必须 ErrTraceBodyInconsistent，且【替身 reader 的调用次数必须为 0】。
 //   调用次数断言是承重的：它证明校验【先于】任何存储访问。
+//   【为什么不用 dt 的非法值（订正 E12）】body_ref_dt 是 *time.Time（type:date），
+//   `.Format("2006-01-02")` **恒**产出合法日期（实测：往该列写文本 "2026-09-24/../.."
+//   读回来是零值时间，`.Format` 得到 "0001-01-01"，仍是合法日期）⇒ 服务层不可能构造出
+//   非法 dt；dt 分支的守卫由任务 1 的配置层用例承担（不得为此改模型）。
 
 // TestTraceBodyServiceRecordNotFound  ← 透传 gorm.ErrRecordNotFound 的杀手
 
@@ -642,7 +648,7 @@ func (f *fakeReader) GetBody(ctx context.Context, ref ta.Ref) ([]byte, error) {
 3. **错误一律 `%w` 包装**，检查一律 `errors.Is`。
 4. **不要把 handler 的东西（状态码、gin.Context）引进服务**。
 5. **【变异目标的唯一性约束，必须满足】** 为了让任务 2/4 的变异能唯一定位（工具一次只替换**恰好 1 处**），服务文件里必须满足：
-   - `return nil, err` **只出现一次**，就是 `Reader.GetBody` 错误的原样透传（它保留冻结包的底层诊断文本，任务 3 要求不得替换成固定文案）；其余所有错误路径都要用带上下文的 `fmt.Errorf` 包装。
+   - `return nil, err` **只出现一次**，就是 `Reader.GetBody` 错误的原样透传（它保留冻结包的底层诊断文本，任务 3 要求不得替换成固定文案）；其余所有错误路径都要用带上下文的 `fmt.Errorf` 包装。**⚠️ 计数的口径（订正 E10）**：裸串 `return nil, err` 会被 `return nil, errors.New(...)` 这类构造期返回**顺带命中**（本实现 3 次）⇒ 变异/静态检查一律用**带缩进的精确行** `"\t\treturn nil, err\n"`（它在服务文件里唯一，且要求透传点位于**函数体第一层**，不得嵌进 `if` 块）。
    - `src := sourceOf(s.paths, ref)` **只出现一次**（`Source` 的来源判定），其返回语句 `return SourceSpool` 在**本文件里唯一**。
    - `return s.fromJSONB(trace)` **只出现一次**（判定顺序的 2a 与 2b 是同一结果 ⇒ 合并成**一处**返回；`fromJSONB` 内部**不得**再出现这一行，它自己要返回时用 `return &TraceBodyResult{Body: b, Source: SourceJSONB}, nil`）。**任务 2 的 `m01` 以它为变异目标**。
    - 成功返回**只有一处**：`return &TraceBodyResult{Body: body, Source: src}, nil`。
@@ -656,19 +662,41 @@ func (f *fakeReader) GetBody(ctx context.Context, ref ta.Ref) ([]byte, error) {
      }
      ```
    - 定位键构造**原样**使用上面「`dt` 的来源」给出的 `ta.Ref` 字面量（**任务 4 的 `m04` 以 `DT: trace.BodyRefDT.Format("2006-01-02")` 为变异目标**）。
-   - **前两步的硬形状**（判定顺序 1 与「部分 NULL」的入口；**任务 2 的 `m02` 是 `cut` 变异，它的两个端点必须逐字存在**）：
+   - **前两步的硬形状**（判定顺序 1 / 1' 与「部分 NULL」的入口；**已按 E9 订正**——原稿把
+     `body_missing` 无条件判在定位键之前，会让「带定位键的 `body_missing`」返回 404，
+     与全局约束「该形态 ⇒ 500，绝不报 404」互斥；订正后三种形态共用**一处**「不一致」出口）：
      ```go
-     refs := []string{/* 四个定位键的「非 NULL」文本形态，按 dt/inst/part/row 顺序，NULL 处留空串 */}
+     refs := refsOf(&trace)      // 四个定位键中「非 NULL」分量的文本形态（长度即非 NULL 分量数）
+     allRefs := len(refs) == traceBodyRefKeyCount
+
+     // 只有四个键全非 NULL 才构造定位键；其它形态下 ref 保持零值且不参与任何判定
+     var ref ta.Ref
+     if allRefs {
+         ref = ta.Ref{DT: trace.BodyRefDT.Format("2006-01-02"), Inst: *trace.BodyRefInst,
+                      Part: *trace.BodyRefPart, Row: *trace.BodyRefRow}
+     }
+
+     // 【不一致的唯一出口】部分 NULL（1..3）/ body_missing 却带定位键 / 列值非法
+     badRefs := len(refs) > 0 && (!allRefs || trace.BodyMissing)
+     if allRefs {
+         if err := cpconfig.ValidateRef(ref); err != nil {
+             badRefs = true
+         }
+     }
+     if badRefs {
+         return nil, fmt.Errorf("%w: %s", ErrTraceBodyInconsistent, requestID)
+     }
 
      if trace.BodyMissing {
          return nil, ta.ErrBodyMissing
      }
-     if len(refs) > 0 {
-         // 到这里才可能访问存储（纪律 1）
+     if len(refs) == 0 {
+         return s.fromJSONB(trace)   // 四个键全为 NULL：2a 与 2b 共用这一处
      }
-     return s.fromJSONB(trace)   // 四个键全为 NULL：2a 与 2b 共用这一处
      ```
-     `refs` 的作用是让「全 NULL / 部分 NULL / 全非 NULL」三种形态共用一次判定，**不得**改成三段 `if`（那样 `m02` 的两个端点都不存在 ⇒ `PATTERN-MISS`）。
+     `refs` 的作用是让「全 NULL / 部分 NULL / 全非 NULL」三种形态共用**一次**判定，
+     **不得**改成三段 `if`（那样「部分 NULL」的入口与归档入口会各判一次，`m02`/`m03`
+     的变异目标也随之不存在 ⇒ `PATTERN-MISS`）。
 
 - [ ] **步骤 4：运行测试确认通过**
 
@@ -686,10 +714,11 @@ MUTATIONS = {}
 MUTATIONS["m01_全NULL不再回退jsonb"] = [
     ("sub", "return s.fromJSONB(trace)", 'return nil, fmt.Errorf("%w: %s", ta.ErrNotArchived, requestID)'),
 ]
-# m02 body_missing 判定被移到定位键判定之后（换序）⇒ 带键且 missing 的行会去读归档
-#     杀手：TestTraceBodyServiceBodyMissingWinsOverEverything
-MUTATIONS["m02_body_missing判定后置"] = [
-    ("cut", "\tif trace.BodyMissing {", "\t}\n\tif len(refs) > 0 {"),
+# m02 「body_missing=true 却带定位键」这条矛盾判据被摘掉 ⇒ 数据写坏被伪装成
+#     「正文从未落盘」（404）。**替换串已按 E9/E10 订正**（原 `cut` 括号失衡 ⇒ 语法红）
+#     杀手：TestTraceBodyServiceBodyMissingWinsOverEverything（第二格）
+MUTATIONS["m02_body_missing与定位键的矛盾未判"] = [
+    ("sub", "!allRefs || trace.BodyMissing", "!allRefs"),
 ]
 # m03 部分 NULL 被静默回退成 jsonb（最阴的一类：一致性问题被伪装成「正文就是空的」）
 #     杀手：TestTraceBodyServicePartialRefsAreInconsistent
@@ -698,10 +727,12 @@ MUTATIONS["m03_部分NULL静默回退jsonb"] = [
             "return s.fromJSONB(trace)"),
 ]
 # m04 归档字节被换成 jsonb 序列化结果 ⇒ 逐字节保证丢失
+#     **替换串已按 E10 订正**：原文会让 `src`/`body` 在替换后未被使用 ⇒ 编译红
+#     （实测 `declared and not used: body` / `: src`）
 #     杀手：TestTraceBodyServiceReadsArchiveWhenRefsPresent（逐字节断言那一条）
 MUTATIONS["m04_归档结果被重新序列化"] = [
     ("sub", "return &TraceBodyResult{Body: body, Source: src}, nil",
-            "return s.fromJSONB(trace)"),
+            "_, _ = body, src\n\treturn s.fromJSONB(trace)"),
 ]
 # m05 读侧禁用不再报 503，而是回落 jsonb ⇒ 部署错误被伪装成「正文在 jsonb 列」
 #     杀手：TestTraceBodyServiceDisabledWithRefsIs503
@@ -709,15 +740,28 @@ MUTATIONS["m05_禁用时回落jsonb"] = [
     ("sub", "return nil, fmt.Errorf(\"%w: %s\", ErrTraceBodyDisabled, requestID)",
             "return s.fromJSONB(trace)"),
 ]
-# m06 ValidateRef 被移到 IO 之后（或摘掉）⇒ 畸形 dt 会真的去访问文件系统
+# m06 ValidateRef 的判据被摘掉 ⇒ 畸形定位键会真的去访问存储
+#     （`if false {` 连 if-init 一起去掉 ⇒ 可编译；实测断言红，见 E10 第 4 条）
 #     杀手：TestTraceBodyServiceRejectsIllegalRefBeforeIO（calls==0 断言）
-MUTATIONS["m06_校验被移到IO之后"] = [
+MUTATIONS["m06_不校验定位键"] = [
     ("sub", "if err := cpconfig.ValidateRef(ref); err != nil {", "if false {"),
 ]
 # m07 哨兵被吞掉/替换 ⇒ 上层无法分类（把存储故障伪装成业务事实）
+#     **定位串已按 E10 订正**：裸串 `return nil, err` 在服务文件里出现 3 次
+#     （构造期两条 `return nil, errors.New(...)` 也以它起手）⇒ 原文是 PATTERN-MISS
 #     杀手：TestTraceBodyServicePassthroughSentinels
 MUTATIONS["m07_吞掉reader哨兵"] = [
-    ("sub", "return nil, err", 'return nil, fmt.Errorf("%w: %s", ErrTraceBodyInconsistent, requestID)'),
+    ("sub", "\t\treturn nil, err\n",
+            '\t\treturn nil, fmt.Errorf("%w: %s", ErrTraceBodyInconsistent, requestID)\n'),
+]
+# m08 记录缺失不再透传 gorm.ErrRecordNotFound（换成「正文从未落盘」）⇒ handler 会把
+#     「记录不存在」映射成 404 body_missing，前端无法区分「没有这条 trace」与
+#     「有这条 trace 但正文写入时失败」。**按 E11 补入**：计划把判定顺序 0 也声明为
+#     承重，却没有给它任何变异。
+#     杀手：TestTraceBodyServiceRecordNotFound
+MUTATIONS["m08_记录缺失被吞掉"] = [
+    ("sub", "return nil, fmt.Errorf(\"tracebody: %s 无对应 call_traces 记录: %w\", requestID, gorm.ErrRecordNotFound)",
+            "return nil, ta.ErrBodyMissing"),
 ]
 ```
 
@@ -734,11 +778,19 @@ CHECKS = [
    "pattern": r'ErrNotArchived = errors\.New\("tracearchive: 产物与暂存均不存在"\)',
    "expect": "present",
    "why": "服务层「透传冻结包哨兵、不新增哨兵」的前提是哨兵定义不变；整目录零改动的权威判据是任务 9 的 git diff（D59）。**不得**把 `file` 写成 `internal/tracearchive`（目录 ⇒ 工具 `open()` 抛 IsADirectoryError，整轮零产出）"},
+  # 【按 E11 补入的一行】判定顺序 0 的可验证形式：REQUIREMENTS 的「记录缺失」若既无变异
+  # 也无静态检查，映射表会出现 GAP（工具判失败）。m08 已覆盖其行为 ⇒ 这一行钉住**包装形态**
+  # 的结构不变量（去掉 %w 或换成固定文案都会命中失败）。
+  {"name": "记录缺失保留gorm哨兵", "file": "internal/observability/service/trace_body_service.go",
+   "pattern": r'fmt\.Errorf\("tracebody: %s 无对应 call_traces 记录: %w", requestID, gorm\.ErrRecordNotFound\)',
+   "expect": "present",
+   "why": "记录缺失必须用 %w 包装 gorm.ErrRecordNotFound，handler 才能用 errors.Is 把它映射成 404 trace_not_found（而不是 body_missing）"},
 ]
 ```
 
 - [ ] **步骤 6：跑变异集合**（命令同任务 1，换集合与清单）
-预期：7 条断言红、三断言过、无未登记绿。
+预期：**8 条断言红**（原稿写「7 条」；按 **E11** 补入 `m08` 覆盖判定顺序 0 ⇒ 8 条）、
+三断言过、无未登记绿、4 行静态检查全 PASS。
 
 - [ ] **步骤 7：提交**
 
@@ -1896,6 +1948,19 @@ git log --oneline <base>..HEAD
 | **E6** | `internal/controlplane/config/config.go:111-114` + `trace_body_read.go:97-99` + `vendor/github.com/spf13/viper/viper.go:444` vs 任务 3 / 5 / 8 的 200/503 判据 | 三个 `trace_body.*` 键都注册了 `SetDefault` ⇒ 生产路径上 `IsSet` **恒为 true**，`trace_body_read.go:97-99` 的回落分支在生产上是**死代码**（无害，默认值与回落值同为 2）；`viper.go:444`（`allowEmptyEnv` 默认 false）让**空串环境变量被跳过** ⇒ `TRACE_BODY_ROOT=""` **无法**覆盖 YAML 里的 `root`，「功能关闭」只能靠 **YAML 缺键**实现 | 语义逐字写进**全局约束**的新增条目「读侧键的存在性 / 空串语义（已核实的行为）」；任务 5 的 200/503 段下加了一条三格判据，任务 8 的互异性矩阵下加了一条依赖提示（「设了空 root 仍走归档 ⇒ 先查 YAML」）。**明确标注为「已核实」，不是推测**；**不影响 E5 的裁定**（显式 0/-1 仍必须被拒） |
 | **E7** | 任务 1 的 `REQUIREMENTS` 映射表左列 vs `trace_body_read.go:100` 的 `c < 1` 分支 | `c < 1`（显式 0/-1）**只有测试承重、没有变异承重**：集合 `tools/trace-mutate/sets/p3-task-1.py:179` 的 note 已如实登记「本集合无对应变异」；且 `TestTraceBodyReadConfigMaxConcurrentBounds` 是**共享断言环**（`{-1,0,17,64}` 同一循环）⇒ 0/-1 子例的承重无法从整条红里分辨（受 17/64 遮蔽）。原映射表左列 `并发上界 → m04` 读起来像已覆盖 | 映射表**措辞订正**为「`并发上界` → m04（**只覆盖 `>16` 的一侧**）」，并在表下增「已知缺口」第 1 条。**不新增 m10**（会改动已提交并绑定的集合，见本表表头） |
 | **E8** | 任务 8 的窗口耦合：读侧上限 vs 计划 4 的 sealer 窗口（`trace_body_read.go:29` / `internal/tracearchive/defaults.go:57` / 计划 4 `:349` / `:781`） | `traceBodyWriteSideWindowMB = 512` 是冻结包 `defaultZstdWindowBytes` 的**手抄副本**；写侧无窗口键，计划 4 的 sealer **独立**声明窗口。窗口不一致时 klauspost 流式解码在帧头返回 `ErrDecoderSizeExceeded`（`decoder.go:861`），冻结包在 `reader.go:232-263` 包成「解压读取失败」且**不命中任何哨兵** ⇒ 对外是 500 `internal_error` **固定文案**（**不是**评审假设的 `ErrFooterCorrupt`，因此也不能靠「不是 ErrFooterCorrupt」这种恒绿断言来覆盖） | 任务 8 新增「**跨计划耦合**」块：残余缺口（端到端窗口不一致用例不在本计划，理由三条，与 A5 的残余同形）＋ 替代证据（任务 1 的配置期用例、`p3-task-8.py` 新增 CHECKS 行「冻结包默认窗口未被静默改动」、交接 **H18**）；并在计划里**禁止**把窗口类失败归入 `part_corrupt` / `not_archived` / 404。跨计划契约写进 **H18**（只引用计划 4 的任务 1 / 任务 5，不改它） |
+
+---
+
+### 追加登记（任务 2 实现轮，2026-10-08：E9–E12）
+
+> 编号续 E8（**E6–E8 已被上一轮占用，故本轮的缺陷登记从 E9 起**；派单口令里的「从 E6 起」是在 E6–E8 落盘之前写下的）。与 E1–E3 同一条纪律：**只登记与订正文本**。本轮的订正随**单独提交**落盘（不混进任务 2 的实现提交）；任务 2 的实现提交 = `a2f024b2`（3 文件 1003 插入），其变异权威表绑定在该提交与随后的订正提交上（**新提交后已重跑并重记绑定**）。
+
+| 编号 | 位置 | 已核实的事实（本轮实测，不是推测） | 本计划的裁定 / 登记 |
+|---|---|---|---|
+| **E9** | 任务 2 步骤 3 的「硬形状」与判定顺序 1 vs 全局约束「四者之外的形态 ⇒ 500」 | 原稿的判定顺序 1（`body_missing == true ⇒ ErrBodyMissing`，**无条件**且「必须早于定位键判定」）与三处文本互斥：① 全局约束「四者之外的形态（含 `body_missing = true` 且定位键非 NULL）⇒ **500 + 明确诊断**，**绝不报 404**」；② 本节接口注释（`ErrTraceBodyInconsistent` 覆盖「`body_missing=true` 却带定位键」）；③ 步骤 1 的用例 `TestTraceBodyServiceBodyMissingWinsOverEverything` 第二格要求 `ErrTraceBodyInconsistent`。按原文字面实现，②③ 成为不可达的死代码，且「数据写坏」会被伪装成「正文从未落盘」（正是规格 §8.1 要消灭的一类错误） | **全局约束优先**：判定顺序 1 补上限定「**且四个定位键全为 NULL**」，并新增 **1'**「`body_missing=true` 却带定位键 ⇒ `ErrTraceBodyInconsistent`（500）」。步骤 3 的硬形状按此逐字订正（三种形态共用**一处**不一致出口，判据仍是纯内存 ⇒ 1' 不破坏「先于任何存储访问」）。实现取此裁定 |
+| **E10** | 任务 2 步骤 5 的 `MUTATIONS`（m02 / m04 / m07） | 三条按原文逐字使用会让该集合**零产出**或产出**编译红**（都违反全局约束第 5 条「变异必须是断言红」）：① **m07** 的定位串 `return nil, err` 在服务文件里出现 **3** 次（构造期两条 `return nil, errors.New(...)` 也以它起手）⇒ 工具以 `count=3` 抛 **PATTERN-MISS**，整轮在跑变异之前就终止；② **m02** 的 `cut` 删掉 `if trace.BodyMissing {` … 其闭合 `}` … 与 **`if len(refs) > 0 {` 这个开括号**，却把后者的闭合 `}` 留下 ⇒ 括号失衡（**实测**：把该 cut 施于原硬形状片段后 `gofmt -e` 退出 2，`expected declaration, found 'return'`）；③ **m04** 的替换串把 `src`/`body` 的**唯一使用**换掉 ⇒ `go build` 退出 1，`declared and not used: body` + `: src` | 三条**改写为断言红**并逐字登记在集合头：m07 改用带缩进的精确行 `"\t\treturn nil, err\n"`（唯一；同时要求透传点位于函数体第一层）；m02 改为摘掉「`body_missing` 与定位键矛盾」这条判据（`!allRefs \|\| trace.BodyMissing` → `!allRefs`）；m04 的替换串用 `_, _ = body, src` 保留两个变量被引用。**m01/m03/m05/m06 逐字保留**（m06 的 `if false {` 实测**可编译**：它连 if-init 一起去掉，`err` 并未留下——与任务 1 的 m05「保留 init 而让判据恒假」是两种形态，别混为一谈） |
+| **E11** | 任务 2 的判定顺序 0 vs 步骤 5 的 7 条变异 | 任务 2 明文「判定顺序 **0..4** 逐条都是承重的，**任何一步**被摘掉或换序都必须有变异红」，但步骤 5 的 7 条变异**没有步骤 0**（记录缺失 ⇒ 透传 `gorm.ErrRecordNotFound`）⇒ 「每一条承重」对步骤 0 无证据；且 `REQUIREMENTS` 映射表若为它留行会因「既无变异也无静态检查」被判 **GAP**（工具整轮失败） | **补入 `m08_记录缺失被吞掉`**（把透传换成 `ta.ErrBodyMissing` ⇒ 杀手 `TestTraceBodyServiceRecordNotFound` 转红，实测断言红），并把步骤 6 的预期由「7 条断言红」改为「**8 条**」；另补一行静态检查「记录缺失保留gorm哨兵」钉住 `%w` 包装形态。集合头如实登记「相对计划的一处补入」 |
+| **E12** | 任务 2 步骤 1 的 `TestTraceBodyServiceRejectsIllegalRefBeforeIO` | 原稿要求「行的 dt 值是 `"2026-09-24/../.."`（模拟列被写坏）」。但 `body_ref_dt` 是 `*time.Time`（`type:date`；正是计划 2 为避免字符串往返有损而选定的类型，见 `call_trace.go` 的字段注释）⇒ `.Format("2006-01-02")` **恒**产出合法日期。**实测**：往该列写文本 `"2026-09-24/../.."`（raw INSERT 成功），读回来是**零值时间**、`.Format` 得 `"0001-01-01"`——仍是合法日期 ⇒ 服务层**不可能**构造出非法 dt，该子例不可能成立 | 该用例改用**可达**的非法向量（`inst` 穿越向量 / `inst` 空串 / `part` 超上界 / `part` 为负 / `row` 为负，共 5 格）并保留 `calls==0` 断言；**dt 的守卫由任务 1 的配置层用例承担**（`TestValidateRefRejectsIllegalComponents` 的 dt 子例）。**不得**为此改模型（把 `*time.Time` 换成 `*string` 会重新引入计划 2 已消除的往返有损） |
 
 ---
 

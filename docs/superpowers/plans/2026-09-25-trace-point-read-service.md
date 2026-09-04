@@ -235,7 +235,12 @@ git diff --stat <base>..HEAD -- go.mod go.sum                 # 必须为空（�
   }
 
   // LoadTraceBodyReadConfig 从 viper 装配并校验。
-  func LoadTraceBodyReadConfig(v *viper.Viper) TraceBodyReadConfig
+  // 【订正 E4】返回 (TraceBodyReadConfig, error)：原稿写成单返回值，与本节
+  // :275（用例要求「相对路径与 "/" 都必须让 Load 返回 error」）及变异杀手
+  // m02/m03/m09 矛盾。调用侧按**网关侧同形先例**
+  // （internal/gateway/config/config.go:198-206：`panic(fmt.Errorf("trace_body 配置非法: %w", err))`）
+  // 处理 —— config.Load() 的签名不返回 error，非法配置在启动时响亮失败。
+  func LoadTraceBodyReadConfig(v *viper.Viper) (TraceBodyReadConfig, error)
 
   // ValidateRef 校验定位键的四个分量（计划 1 的 N3：GetBody 自身不校验，
   // 冻结包不可改，故在调用侧收口）。任何不合法都必须返回 error 且
@@ -264,7 +269,10 @@ git diff --stat <base>..HEAD -- go.mod go.sum                 # 必须为空（�
 // TestTraceBodyReadConfigDefaults —— 默认值：Root 空 ⇒ 禁用；并发 2；窗口 512 MiB。
 func TestTraceBodyReadConfigDefaults(t *testing.T) {
     v := viper.New()
-    cfg := cpconfig.LoadTraceBodyReadConfig(v)
+    // 【订正 E4 的配套】原稿这里写成单值赋值 `cfg := LoadTraceBodyReadConfig(v)`，
+    // 与 :275「Load 必须返回 error」自相矛盾。
+    cfg, err := cpconfig.LoadTraceBodyReadConfig(v)
+    require.NoError(t, err)
     require.Empty(t, cfg.Root)
     require.True(t, cfg.Disabled(), "Root 留空必须等于读侧禁用（默认值，安全）")
     require.Equal(t, 2, cfg.MaxConcurrent, "规格 §8.4 C5 的默认并发是 2")
@@ -314,7 +322,10 @@ func TestValidateRefRejectsIllegalComponents(t *testing.T) {
 //      空 ⇒ 直接返回 {Root:"", 默认并发/窗口}，Disabled()==true（不报错：禁用是合法状态）
 //   2. 非空 ⇒ filepath.IsAbs(root) 必须成立；filepath.Clean(root) != "/"
 //      否则 return error（与网关侧同判据；"Clean == /" 会让 spool 建在宿主根）
-//   3. 并发：v.GetInt("trace_body.read_max_concurrent")；<=0 ⇒ 2；范围校验 1..16
+//   3. 并发：v.GetInt("trace_body.read_max_concurrent")；【订正 E5】键**未出现** ⇒ 默认 2；
+//      显式配置的 0/-1 ⇒ 报错（0 会让 sem 容量为 0 ⇒ 等待槽位的请求永久阻塞）；
+//      范围校验 1..16（>16 报错）。原稿写的「<=0 ⇒ 2」与本节用例
+//      「0 / -1 / 17 都必须被拒」矛盾。
 //   4. 窗口：v.GetInt("trace_body.read_zstd_window_mb")；<=0 ⇒ 512；单位 MiB
 //      必须 >= 512（写入侧窗口），否则 error 且错误文本含「必须 >= 512 MiB」
 //

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -20,6 +21,8 @@ type Config struct {
 	Gateway      GatewayConfig
 	Budget       BudgetConfig
 	BudgetTier   BudgetTierConfig
+	// TraceBodyRead 是读侧（点读服务）的点读配置：只含 root 与两个解码参数。
+	TraceBodyRead TraceBodyReadConfig
 }
 
 type ServerConfig struct {
@@ -105,6 +108,10 @@ func Load() *Config {
 	v.SetDefault("budget_tier.legacy_total_write_enabled", true)
 	v.SetDefault("budget.timezone", "Asia/Shanghai")
 	v.SetDefault("budget.week_start", "monday")
+	// 读侧点读配置（与网关侧同名同前缀：两侧读的是同一个目录）
+	v.SetDefault("trace_body.root", "")
+	v.SetDefault("trace_body.read_max_concurrent", 2)
+	v.SetDefault("trace_body.read_zstd_window_mb", 512)
 
 	// 读取环境对应的 YAML
 	env := os.Getenv("APP_ENV")
@@ -177,5 +184,15 @@ func Load() *Config {
 			V2TotalEnforcementEnabled:  v.GetBool("budget_tier.v2_total_enforcement_enabled"),
 			LegacyTotalWriteEnabled:    v.GetBool("budget_tier.legacy_total_write_enabled"),
 		},
+		TraceBodyRead: func() TraceBodyReadConfig {
+			tbRead, err := LoadTraceBodyReadConfig(v)
+			if err != nil {
+				// 配置错误必须在启动时响亮失败，而不是让 control-plane 带着非法
+				// 读侧配置跑起来（与网关侧 TraceBody 的处理同一判据）。
+				// Load() 的签名不返回 error（既有风格），因此用 panic 表达启动失败。
+				panic(fmt.Errorf("trace_body 读侧配置非法: %w", err))
+			}
+			return tbRead
+		}(),
 	}
 }

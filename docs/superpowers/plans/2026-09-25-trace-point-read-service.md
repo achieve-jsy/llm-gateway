@@ -87,6 +87,11 @@
   - 「定位键全非 NULL」⇒ **503 + 诊断**（元数据指向归档但读侧未配置，属部署错误，需人工介入）；
   - **绝不**因为读侧禁用就把有归档键的行报成 404/500-不是-503。
   理由：读侧禁用**不等于**「正文不存在」。
+- **读侧键的存在性 / 空串语义（已核实的行为；2026-10-08 在 HEAD `71766032` 上复核，订正 E6）**——**任务 3 / 任务 5 / 任务 8 的 200/503 判据直接依赖它**，不得按直觉改写：
+  - **`SetDefault` 让 `IsSet` 恒真（已核实）**：`internal/controlplane/config/config.go:111-114` 为 `trace_body.root` / `trace_body.read_max_concurrent` / `trace_body.read_zstd_window_mb` 三个键都注册了默认值 ⇒ 生产路径（`config.Load()`）上 `v.IsSet("trace_body.read_max_concurrent")` **恒为 true**，`internal/controlplane/config/trace_body_read.go:97-99` 的「键未出现 ⇒ 默认 2」回落分支在**生产上是死代码**（无害：回落值与默认值同为 2）。它只在测试的裸 `viper.New()` 路径上被执行。**这不改变 E5 的裁定**：显式配置的 0/-1 仍必须被拒（`trace_body_read.go:100` 的 `c < 1`）。
+  - **空串环境变量被 vendored viper 跳过（已核实）**：`vendor/github.com/spf13/viper/viper.go:444` 是 `return val, ok && (v.allowEmptyEnv || val != "")`，而 `allowEmptyEnv` 默认 false、仓库未调用 `AllowEmptyEnv`（`internal/controlplane/config/config.go:132-133` 只做 `SetEnvKeyReplacer` + `AutomaticEnv`）⇒ `TRACE_BODY_READ_MAX_CONCURRENT=""` **不覆盖** YAML/默认值（仍落到 2，与 E5 不冲突）。
+  - **`TRACE_BODY_ROOT=""` 无法覆盖 YAML 里的 `trace_body.root`（已核实，同属上一条的同一代码事实）** ⇒ **「功能关闭」在生产上只能由 YAML 一侧表达**（缺 `trace_body.root` 键 ⇒ 默认空串，或该键在 YAML 里显式留空；编排里把该变量**注释掉**——正是计划 4 任务 11 的补救动作写法；写成 `TRACE_BODY_ROOT=` 是**无效**的）。**推论（由上述代码事实推出、本轮未实测，标注为推论）**：`TRACE_BODY_ROOT=" "`（纯空白）**能**覆盖（非空 ⇒ 过 `getEnv`）且 `TrimSpace` 后得到禁用态——这是唯一「用环境变量关功能」的形式，但**不得**写进部署文档（易被当笔误），只作排障知识。
+  - **对 200/503 的影响**：「读侧禁用」的判据是 `Disabled()` ⟺ `Root == ""`（`trace_body_read.go:56-58`）。若 YAML 里**还留着** `trace_body.root`，则读侧**是启用的**：定位键全 NULL ⇒ 仍 200（jsonb）；定位键全非 NULL ⇒ **走归档**（既不是 503，也不是 jsonb-200）。⇒ **排查「设了空 root 但拿到的不是 503」时，先看 YAML，不要看 `.env`。**
 - **证据制度（本仓库 CI **完全不跑** `go test`，`.gitlab-ci.yml` 里只有三处 `CGO_ENABLED=0 go build` ⇒ 变异证据是唯一验证手段）**：沿用计划 1/2 的工具与判据（`tools/trace-mutate/README.md`、`tools/trace-mutate/trace_mutate.py`）。要点：
   1. 变异集合**必须 git-tracked**，本计划的集合命名 `tools/trace-mutate/sets/p3-task-<N>.py`（`p2-task-*` 是计划 2 的命名空间，已占用，**不得复用**）。
   2. 集合必须声明 10 个字段：`NAME` / `TARGET` / `PACKAGES` / `MANIFEST_FILES` / `MANIFEST_DERIVATION` / `SKIP_WHITELIST` / `MUTATIONS` / `CHECKS` / `REQUIREMENTS` / `EXPECTED_GREEN`。
@@ -236,7 +241,8 @@ git diff --stat <base>..HEAD -- go.mod go.sum                 # 必须为空（�
 
   // LoadTraceBodyReadConfig 从 viper 装配并校验。
   // 【订正 E4】返回 (TraceBodyReadConfig, error)：原稿写成单返回值，与本节
-  // :275（用例要求「相对路径与 "/" 都必须让 Load 返回 error」）及变异杀手
+  // :289（用例 TestTraceBodyReadConfigRootMustBeAbsoluteAndNotFilesystemRoot 的注释
+  //       「相对路径与 "/" 都必须让 Load 返回 error」）及变异杀手
   // m02/m03/m09 矛盾。调用侧按**网关侧同形先例**
   // （internal/gateway/config/config.go:198-206：`panic(fmt.Errorf("trace_body 配置非法: %w", err))`）
   // 处理 —— config.Load() 的签名不返回 error，非法配置在启动时响亮失败。
@@ -270,7 +276,7 @@ git diff --stat <base>..HEAD -- go.mod go.sum                 # 必须为空（�
 func TestTraceBodyReadConfigDefaults(t *testing.T) {
     v := viper.New()
     // 【订正 E4 的配套】原稿这里写成单值赋值 `cfg := LoadTraceBodyReadConfig(v)`，
-    // 与 :275「Load 必须返回 error」自相矛盾。
+    // 与 :289（用例 TestTraceBodyReadConfigRootMustBeAbsoluteAndNotFilesystemRoot）「Load 必须返回 error」自相矛盾。
     cfg, err := cpconfig.LoadTraceBodyReadConfig(v)
     require.NoError(t, err)
     require.Empty(t, cfg.Root)
@@ -435,7 +441,11 @@ CHECKS = [
 ```
 
 **映射表（`REQUIREMENTS`）**：每条要求 → 变异/检查，**有缺口（有要求无条目）整轮失败**：
-`禁用默认值` → m01/CHECKS#2；`root 取值收窄` → m02/m03；`并发上界` → m04；`dt 校验（N3）` → m05；`inst 白名单（N3）` → m06；`part/row 界（N3）` → m07/m08；`窗口下限` → m09；`不读写入侧参数` → CHECKS#1。
+`禁用默认值` → m01/CHECKS#2；`root 取值收窄` → m02/m03；**`并发上界` → m04（**只覆盖 `>16` 的一侧**）**；`dt 校验（N3）` → m05；`inst 白名单（N3）` → m06；`part/row 界（N3）` → m07/m08；`窗口下限` → m09；`不读写入侧参数` → CHECKS#1。
+
+**⚠️ 本映射表的两处已知缺口（诚实登记；订正 E7）——不得把它读成「左列要求已被全覆盖」**；本轮处置一律是「只订正措辞 / 登记，不新增变异」：
+1. **`c < 1`（显式 0/-1）目前只有测试承重、没有变异承重。** 守卫在 `trace_body_read.go:100`；集合 `tools/trace-mutate/sets/p3-task-1.py:179` 的 `REQUIREMENTS` note 已如实写明「0/-1 由 `c < 1` 守卫覆盖，本集合无对应变异（不在计划的 9 条内）」。**额外的一层遮蔽效应**：`TestTraceBodyReadConfigMaxConcurrentBounds` 是**共享断言环**（`bad := {-1, 0, 17, 64}` 同一个循环），m04 一旦被摘掉，整条用例会被 17/64 子例转红 ⇒ **从「整条红」里分辨不出 0/-1 子例是否承重**（全局约束第 6 条要求的就是这种隔离探针，此处没有）。**不得**据此新增 m10：`p3-task-1.py` 已随 HEAD `71766032` 提交，其变异权威表绑定该提交，动集合就必须重跑并重记绑定（属**下一轮**）。
+2. **环境变量覆盖键名的用例没有任何变异/CHECKS 承重。** `tests/controlplane/config/trace_body_read_test.go:123-138` 的 `TestTraceBodyReadConfigEnvOverridesReadKeys` 是本轮新增的**偏离用例**（本计划任务 1 的用例清单里原本没有它），它固定的是「viper 的 `.` → `_` 键名（`TRACE_BODY_ROOT` / `TRACE_BODY_READ_MAX_CONCURRENT` / `TRACE_BODY_READ_ZSTD_WINDOW_MB`）与网关侧同名同前缀」。**键名漂移只由它自己发现**（生产侧的 `SetEnvKeyReplacer` 是既有代码，没有第二个消费者）⇒ 它的证据等级**低于**同包其它用例：它**不计入**任何一条 `REQUIREMENTS` 条目，报告里**不得**写成「有变异/CHECKS 承重」。**同样不得**为它新增变异（理由同上）；若要把它升级为承重证据，须在下一轮连同 `p3-task-1.py` 一起重做，并在集合文件头写明改动。
 
 - [ ] **步骤 6：跑变异集合**
 
@@ -1144,6 +1154,8 @@ git commit -m "test(observability): 隔离件/兜底/越界/跨日边界回归�
 
   **⚠️ 403 vs 404 的裁定**：`ownOnly` 形态（`/my/*`）沿用既有端点的**404（不泄露存在性）**；但 `/api/v1/trace/:request_id/body` 是**全局**路由（不是 `/my/*`），按既有 `Trace` 端点的行为：**记录存在但提示词不可见 ⇒ 403**（既有 `MaskTracePrompt` 是「裁剪」，而本端点无法裁剪 ⇒ 必须 403 而不是返回空正文）。**不得**返回 200 + 空正文（那会让「无权看」与「正文为空」不可区分）。
 
+  **⚠️ 200/503 的判据依赖「读侧禁用」的唯一来源（已核实，订正 E6；见全局约束「读侧键的存在性 / 空串语义」）**：`Disabled()` ⟺ `Root == ""`，而生产上它**只能**由 YAML 一侧产生（缺 `trace_body.root` 键 ⇒ 默认空串，或该键显式留空）—— `TRACE_BODY_ROOT=""` **不会**覆盖 YAML（空串被 vendored viper 跳过，`viper.go:444`）。因此本任务的两条端点必须按下面三格分别断言，且**不得**把第三格混进前两格：① 定位键全 NULL + `body_missing=false` ⇒ **200 + jsonb 正文**（功能关闭下的**正常**路径）；② 定位键全非 NULL + 读侧禁用 ⇒ **503 `trace_body_disabled`**；③ YAML 里仍留着 `root`（读侧启用）+ 定位键全非 NULL ⇒ **走归档**（200 或归档类错误，**既不是 503**，也**不是** jsonb 回退）。
+
   **⚠️ 本任务不做的事**：不改既有 `/usage/logs/:request_id/trace` 的行为（那是任务 6）；不新建鉴权中间件；不改 `tests/contract/contracts.json`（新增端点不在前端契约里——**但必须在任务 5 步骤 4 里核实 `contracts.json` 是否含 trace 端点**，若含则同步，见下）。
 
 - [ ] **步骤 1：写失败的测试**
@@ -1589,6 +1601,14 @@ git commit -m "feat(cmd): trace-body 点读 CLI（计划 3/4 任务 7）
   4. **隔离件形态**（库层无此用例）；
   5. HTTP 表现与库层哨兵的对应。
 
+**⚠️ 跨计划耦合：读侧窗口上限 vs sealer 窗口 —— 残余缺口如实登记，不新增端到端用例（订正 E8；交接 H18；任务 1 的 `traceBodyWriteSideWindowMB` 的直接后果）**
+
+- **已核实的事实**：读侧的 `traceBodyWriteSideWindowMB = 512`（`internal/controlplane/config/trace_body_read.go:29`）是冻结包 `internal/tracearchive/defaults.go:57`（`defaultZstdWindowBytes = 512 << 20`）的**手抄副本**；**写侧（网关）目前没有窗口配置键**，而计划 4 的 sealer 走 `SealerOptions.ZstdWindowBytes` ⇔ `--zstd-window-mb`（计划 4 任务 1 的 `DefaultZstdWindowMB` 与 CLI flag，计划 4 `:349` / `:781`；unit 里的取值由计划 4 `:2112` 的静态检查钉住）。
+- **风险**：若 sealer 用 ≥1 GiB 窗口而读侧仍是 512 MiB，**每一次归档点读都会失败** —— **这是纯粹的配置错**，而读侧的窗口下限守卫存在的全部理由就是不让配置错伪装成产物问题。
+- **已核实的真实表现（比「报成 `ErrFooterCorrupt`」的描述更隐蔽，必须逐字登记）**：klauspost/compress 的**流式**解码在读完帧头后判 `frame.WindowSize > maxWindowSize` 并返回 `ErrDecoderSizeExceeded`（`vendor/github.com/klauspost/compress/zstd/decoder.go:861`；块层同族错误 `ErrWindowSizeExceeded` 见 `blockdec.go:149/181/346`），而冻结包在 `internal/tracearchive/reader.go:232-263` 把它包成 **「tracearchive: 解压读取失败」**且**不命中任何哨兵**（既不是 `ErrFooterCorrupt` / `ErrTrailerCorrupt`，也不是 `ErrNotArchived` / `ErrBodyMissing`）⇒ 任务 3 的映射表落到 `default` 臂，对外是 **500 `internal_error` + 固定文案**（只有 `ErrNotArchived` 臂保留 `err.Error()`）。**即：窗口不一致既没被报成「产物损坏」，也没被报成「配置错误」，而是一句无法归类的存储故障** —— 与「把配置错伪装成产物损坏」同向且更难排查。**本计划禁止**把任何窗口类失败（`ErrDecoderSizeExceeded` / `ErrWindowSizeExceeded`）映射成 `part_corrupt`、`not_archived` 或 404。
+- **本计划的处置（残余缺口，与 A5 的残余同形，必须写进报告）**：**「用 ≥512 MiB 窗口的真实产物驱动校验，或断言窗口不一致被报成明确的配置错误」这一条用例不在本计划**。三条理由：① 要让 zstd **帧头真的声明** >512 MiB 窗口，输入必须 >512 MiB（单遍压缩的窗口随输入大小收缩 ⇒ 小样本复现不出来；本任务 `n = 2000` 行的规模不够），代价与计划 4 的 A6 同量级；② 冻结包**不提供**帧头窗口的读取接口（`WithDecoderMaxWindow` 是唯一入口），「用产物实际声明的窗口驱动校验」需要新增代码 ⇒ 属受控变更（＋ R11 v4）；③ 手写一个「帧头声明大窗口」的假产物需要在测试里复制 trailer/footer 的编码布局 ⇒ 与「格式知识单一事实源」冲突（与 D60 同一纪律）。
+- **替代证据（本计划真正承担的部分，必须逐字写进报告）**：① **配置侧的显式错误已存在**：`TestTraceBodyReadConfigWindowMustNotBeSmallerThanWriteSide` 断言 `read_zstd_window_mb < 512` **在配置期**被拒，且错误文本含「必须 >= 512 MiB（与写入侧窗口一致）」（`tests/controlplane/config/trace_body_read_test.go:100-118`）；② 本任务新增一条 CHECKS 行（见步骤 3），钉住**冻结包默认窗口仍是 `512 << 20`** —— 任何把写入侧窗口提上去的受控变更都会让该行转红，从而强迫同一次改动回看读侧的手抄副本；③ 跨计划交接 **H18** 要求 sealer 的窗口参数与读侧上限**同源或对其可见**。**报告里不得**把这三点写成「窗口不一致的端到端行为已验收」。
+
 - [ ] **步骤 1：写 A2 用例**
 
 ```go
@@ -1640,6 +1660,8 @@ func TestAcceptanceA2ProductionRoundTrip(t *testing.T) {
 // 可以让四条都绿）⇒ 必须在同一个用例里做【互异性】断言。
 ```
 
+**⚠️ 上面四格里的「jsonb ⇒ 200」在生产上成立的前提（订正 E6，见全局约束「读侧键的存在性 / 空串语义」）**：禁用态只能由 YAML 一侧产生（缺 `trace_body.root` 键，或该键显式留空）—— `TRACE_BODY_ROOT=""` **不会**覆盖 YAML（vendored viper 跳过空串，`viper.go:444`）。若 YAML 里还留着 `root`，同样的数据会走**归档**路径而不是 jsonb ⇒ 验收数据集的构造必须显式使用 `Disabled()==true` 的配置（而不是「把环境变量设成空」），否则这一格会被静默地测成另一条路径。
+
 - [ ] **步骤 2：运行测试**
 
 ```bash
@@ -1688,6 +1710,15 @@ CHECKS = [
    "pattern": r"func \(r \*Reader\) GetBody\(ctx context\.Context, ref Ref\) \(\[\]byte, error\)",
    "expect": "present",
    "why": "A2 的全链路逐字节以这个复用点为前提；整目录零改动的权威判据是任务 9 的 git diff（D59）"},
+  # 【E8 / H18】读侧窗口上限是冻结包 defaultZstdWindowBytes 的手抄副本，而 sealer 的窗口
+  # 由计划 4 独立声明 ⇒ 读侧唯一能做的「同源」证据是钉住**冻结包侧的值**：一旦写入侧窗口
+  # 被提升（受控变更 + R11 v4），这一行必须转红，强迫同一次改动回看
+  # trace_body_read.go:26/29 的镜像常量与读侧配置（否则会出现「sealer 写得出、读侧解不开」
+  # 且被报成 500 internal_error 的静默不兼容）。这是**绊线**，不是「窗口一致」的证明 ——
+  # 报告不得把它写成端到端验收（见本任务「跨计划耦合」块的残余缺口）。
+  {"name": "冻结包默认窗口未被静默改动", "file": "internal/tracearchive/defaults.go",
+   "pattern": r"defaultZstdWindowBytes = 512 << 20", "expect": "present",
+   "why": "读侧 traceBodyWriteSideWindowMB=512（trace_body_read.go:29）是它唯一的手抄副本；改这个值而不动读侧 = 每一次归档点读都变成未分类的 500（E8）"},
 ]
 ```
 ```python
@@ -1822,6 +1853,7 @@ git log --oneline <base>..HEAD
 | **H15** | **P1/P2/P3 生产侧验收**（计划 1 §15.2 的清单）仍未被本计划覆盖：生产 zstd 版本探测、生产压缩比、512 MiB 窗口的**读侧**解码内存。**后者直接决定本计划的并发上限**（当前默认 2，按 600 MB/并发估）⇒ 实测后**必须**回填 `TRACE_BODY_READ_MAX_CONCURRENT` 的推荐值 | 规格 §8.4 C5、§15.2 P1–P3 |
 | **H16** | **「网关对外暴露点读」是可选项，不在本计划**。若下游决定要做，唯一合规链路是 `gateway 路由 → internal/gateway/binding（带 X-Internal-Token）→ GET /internal/v1/trace-body（本计划任务 5 已交付）`，**不得**让 gateway 直连 PG 或直读 `/datalog` 产物（`AGENTS.md` 明文 + 规格 §8.4 的内存归属）。**并且必须实测那一跳的延迟**（本计划的 CLI 与领域内直连路径可作对照基线），不得凭估算 | `AGENTS.md`「gateway 不要直连数据库」、全局约束 ③、D63 |
 | **H17** | **`AGENTS.md` 有两处过期表述需发起者订正**（本计划**只记录不改文档**，与 D46 同一纪律）：① 「数据库变更：新增 `migrations/NNN_*.sql`」——实际是 `atlas-migrations/<timestamp>_*.sql` + `atlas-db-migration` skill（**D62**）；② 「gateway 不要直连数据库」与 `cmd/gateway/main.go` 写入侧直连 PG 的矛盾（**D46**，计划 2 已登记）。①②都会让后续执行者走错路 | `AGENTS.md`、D46、D62 |
+| **H18** | **sealer 的窗口参数必须与读侧上限同源、或至少对读侧可见（窗口不一致 = 静默不兼容）**。计划 4（`docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md`，**只引用不改它**）的 sealer 通过 `SealerOptions.ZstdWindowBytes` ⇔ `--zstd-window-mb` **独立地**声明窗口（该计划任务 1 的 `DefaultZstdWindowMB = 512`（`:349`）与 CLI flag（`:781`）；unit 里的取值由该计划任务 5 的静态检查钉住（`:2112`）），而读侧的 `trace_body.read_zstd_window_mb`（默认 512；守卫下界 `traceBodyWriteSideWindowMB = 512` 是冻结包 `internal/tracearchive/defaults.go:57` 的 `defaultZstdWindowBytes` 的**手抄副本**，`trace_body_read.go:26/29`）**没有任何通道能看到它** ⇒ 若 sealer 提升到 ≥1 GiB 而读侧不动，**每一次归档点读都会失败**，且失败**不命中任何哨兵**、对外是 500 `internal_error` **固定文案**（详见任务 8 的「跨计划耦合」块与 E8），即把配置错伪装成存储故障。**要求**：① 两侧窗口值必须写进同一份部署文档 / 编排（H8 的 compose 与该计划的 systemd unit）并**逐字相等**；② **任何**把 sealer 窗口提到 >512 MiB 的变更**必须与提升 `TRACE_BODY_READ_ZSTD_WINDOW_MB` 在同一次改动内完成**，并**同时**复核本条与 E8；③ 计划 4 若新增 / 改动窗口默认值，**必须**在它的静态检查里同时钉住读侧键，或逐字声明「读侧默认随冻结包，不得独立提升」。**本条与任务 8 新增的 CHECKS 行（`p3-task-8.py` 的「冻结包默认窗口未被静默改动」）是同一耦合的两端** | `internal/tracearchive/defaults.go:57`、`trace_body_read.go:26/29`、全局约束「解码侧内存约束」、E8、计划 4 任务 1（`DefaultZstdWindowMB` / `--zstd-window-mb`）与任务 5 的 unit 静态检查 |
 
 ---
 
@@ -1855,6 +1887,16 @@ git log --oneline <base>..HEAD
 | **E2** | 全局约束「读侧的分层归属」/ 任务 2 原稿的 `DayOf` | 原稿要求服务从 router 拿到 control-plane 侧的日期换算函数（与写入侧同口径）。**但 `internal/controlplane/config` 里没有任何日期换算导出符号**（唯一实现在 `internal/gateway/config/trace_body.go:166`，而 control-plane **不 import** gateway/config）⇒ 无落点、接线片段不可编译；且它与任务 4 的 CHECKS「读侧不自算日期」**互斥**（一边禁止自算、一边要求注入一套换算） | **读侧零日期计算**（全局约束新增条目）：定位键的 `dt` **一律取自行内已存的 `body_ref_dt` 列**（写入侧算好），读侧**不做任何日期计算、不注入任何日期口径**。服务选项里的日期换算字段与接线里的注入写法**整体删除**；唯一保留的是 `trace.BodyRefDT.Format("2006-01-02")` 这一**布局格式化**（不是换算）。任务 4 的 CHECKS「读侧不自算日期」**保留**并改成「零日期计算」的口径（新增 `time.Now(` 到 pattern） |
 | **E3** | 计划 4 `:106` / H9 vs 本计划任务 8 的 A 表 | **跨计划归属缺口**：计划 4 的 A 表写「A1 / A2 / A4 / A5 ❌ 不在本计划（**属计划 3 读侧**）」，H9 同样写「A1/A2/A4/A5 归计划 3」；而本计划任务 8 的原 A 表**从未登记 A5**（登记了 A1/A2/A3/A6/A7/A8/A9），A4（读 1000 次目录占用零增量）则**已由计划 1 的 `constraints_test.go` 覆盖**。**已复核规格**：§14.2 第 960-961 行**确有 A4 与 A5**（A5 = 篡改 footer 一个字节 ⇒ 500 + 诊断，不返回「不存在」）——缺的是**计划 2 任务 8 的 A 表**（它没有 A5 行），于是计划 4 按「计划 2 的 A 表」把 A5 划给读侧、而本计划原 A 表又没有这一行 ⇒ **A5 实际无人承担**（下游若按字面理解会以为它已被计划 3 覆盖） | 任务 8 的 A 表**补上 A4/A5 两行**并逐字写明边界：A4 = **计划 1 已覆盖、本计划不重验不声称**；A5 = **本计划承担对外映射与分类**（任务 2 的哨兵透传 + 任务 3 的损坏 ⇒ 500 `part_corrupt` + 任务 4 的「隔离件不是损坏」断言），库层由计划 1 覆盖；**且逐字写明「真实产物篡改一字节的端到端用例不在本计划」这一残余缺口**。本计划承担 **A2 + A5（对外映射，非端到端）+ A1 的读回半部**。**建议**发起者把计划 4 的 `:106`/H9 订正为「A1（读回半部）/A2/A5 归计划 3；A4 由计划 1 覆盖」——订正属发起者决策 |
 
+### 追加登记（第二轮独立评审，2026-10-08：E6–E8）
+
+> 与 E1–E3 同一条纪律：**只登记与订正文本，不新增变异、不改动任何被提交的集合**。任务 1 的 `internal/controlplane/config/trace_body_read.go`、`config.go`、`tests/controlplane/config/trace_body_read_test.go` 与 `tools/trace-mutate/sets/p3-task-1.py` 已随 HEAD `71766032` 提交，其**变异权威表绑定在该提交上** ⇒ 任何对被测代码或集合的改动都必须重跑并重记绑定，属**下一轮**（本轮对上述四个文件**零改动**）。
+
+| 编号 | 位置 | 已核实的事实（本轮复核，不是推测） | 本计划的裁定 / 登记 |
+|---|---|---|---|
+| **E6** | `internal/controlplane/config/config.go:111-114` + `trace_body_read.go:97-99` + `vendor/github.com/spf13/viper/viper.go:444` vs 任务 3 / 5 / 8 的 200/503 判据 | 三个 `trace_body.*` 键都注册了 `SetDefault` ⇒ 生产路径上 `IsSet` **恒为 true**，`trace_body_read.go:97-99` 的回落分支在生产上是**死代码**（无害，默认值与回落值同为 2）；`viper.go:444`（`allowEmptyEnv` 默认 false）让**空串环境变量被跳过** ⇒ `TRACE_BODY_ROOT=""` **无法**覆盖 YAML 里的 `root`，「功能关闭」只能靠 **YAML 缺键**实现 | 语义逐字写进**全局约束**的新增条目「读侧键的存在性 / 空串语义（已核实的行为）」；任务 5 的 200/503 段下加了一条三格判据，任务 8 的互异性矩阵下加了一条依赖提示（「设了空 root 仍走归档 ⇒ 先查 YAML」）。**明确标注为「已核实」，不是推测**；**不影响 E5 的裁定**（显式 0/-1 仍必须被拒） |
+| **E7** | 任务 1 的 `REQUIREMENTS` 映射表左列 vs `trace_body_read.go:100` 的 `c < 1` 分支 | `c < 1`（显式 0/-1）**只有测试承重、没有变异承重**：集合 `tools/trace-mutate/sets/p3-task-1.py:179` 的 note 已如实登记「本集合无对应变异」；且 `TestTraceBodyReadConfigMaxConcurrentBounds` 是**共享断言环**（`{-1,0,17,64}` 同一循环）⇒ 0/-1 子例的承重无法从整条红里分辨（受 17/64 遮蔽）。原映射表左列 `并发上界 → m04` 读起来像已覆盖 | 映射表**措辞订正**为「`并发上界` → m04（**只覆盖 `>16` 的一侧**）」，并在表下增「已知缺口」第 1 条。**不新增 m10**（会改动已提交并绑定的集合，见本表表头） |
+| **E8** | 任务 8 的窗口耦合：读侧上限 vs 计划 4 的 sealer 窗口（`trace_body_read.go:29` / `internal/tracearchive/defaults.go:57` / 计划 4 `:349` / `:781`） | `traceBodyWriteSideWindowMB = 512` 是冻结包 `defaultZstdWindowBytes` 的**手抄副本**；写侧无窗口键，计划 4 的 sealer **独立**声明窗口。窗口不一致时 klauspost 流式解码在帧头返回 `ErrDecoderSizeExceeded`（`decoder.go:861`），冻结包在 `reader.go:232-263` 包成「解压读取失败」且**不命中任何哨兵** ⇒ 对外是 500 `internal_error` **固定文案**（**不是**评审假设的 `ErrFooterCorrupt`，因此也不能靠「不是 ErrFooterCorrupt」这种恒绿断言来覆盖） | 任务 8 新增「**跨计划耦合**」块：残余缺口（端到端窗口不一致用例不在本计划，理由三条，与 A5 的残余同形）＋ 替代证据（任务 1 的配置期用例、`p3-task-8.py` 新增 CHECKS 行「冻结包默认窗口未被静默改动」、交接 **H18**）；并在计划里**禁止**把窗口类失败归入 `part_corrupt` / `not_archived` / 404。跨计划契约写进 **H18**（只引用计划 4 的任务 1 / 任务 5，不改它） |
+
 ---
 
 ## 自检结果
@@ -1870,7 +1912,7 @@ git log --oneline <base>..HEAD
 | §8.1 两条端点 + 响应表 | 任务 5（端点）+ 任务 3（状态码/body_missing）；410 行按 D53 处置 |
 | §8.2 读取算法 1–5 步 | **库层已实现**（计划 1 `readFromPart`/`readFromSpool`，含 R10 三项）；本计划补第 2.5 步「jsonb 回退」（D55）与错误映射 |
 | §8.3 空间约束 C1–C4 | **库层已实现**（计划 1 的 A4 用例）；本计划不重验 |
-| §8.4 内存约束 C5/C6 | 任务 1（并发/窗口配置）+ H15（P3 实测回填） |
+| §8.4 内存约束 C5/C6 | 任务 1（并发/窗口配置）+ H15（P3 实测回填）+ **H18 / E8**（窗口与 sealer 的窗口参数必须同源或对其可见；端到端不一致用例**不在本计划**，登记为残余缺口） |
 | §9.1/§9.2 失败语义 | 任务 2（`body_missing` 判定）+ 任务 3（映射） |
 | §9.3 可观测性（明确信号） | 任务 6（hydrate 失败的响亮日志）；读侧本身不产生降级信号（那是写侧） |
 | §11.1 部署（control-plane 挂 `/datalog`） | **不实现**（计划 4 的 H8）；本计划实现 env 读取与禁用语义 |

@@ -72,6 +72,25 @@ PG 查询 → 优先级判定 → 归档取回 / jsonb 回退 → 错误分类�
 但步骤 5 的 7 条变异里**没有步骤 0（记录缺失 ⇒ 透传 `gorm.ErrRecordNotFound`）**这条。
 本集合补 **m08**（登记 E11）覆盖它——用静态检查代替不当（该行为是可测的行为，不是结构不变量）。
 
+## 本轮改动（2026-10-08，任务 2 独立评审后的修复轮）
+
+评审指出一个**跨任务缺口**（计划登记 E14）：任务 7 的 CLI `--ref` 被要求输出
+dt/inst/part/row 四分量并**复用 `TraceBodyService`**，但 `TraceBodyResult` 原先只有
+`{Body, Source}` —— 没有任何取回 `ta.Ref` 的导出途径 ⇒ CLI 只能自己查 `call_traces`
+的四列再拼，绕过服务层的定位键判据（正是 D59 警告的「同一判据两处实现」）。本轮随服务层
+新增 `Ref ta.Ref` 导出，集合做两处**必要**改动：
+
+1) **m04 的定位串随实现更新**（语义不变）：成功返回由
+   `return &TraceBodyResult{Body: body, Source: src}, nil` 变为
+   `return &TraceBodyResult{Body: body, Source: src, Ref: ref}, nil`；旧串在树里已不存在
+   ⇒ 不改就 `PATTERN-MISS`。替换后仍可编译（`ref` 在 `s.reader.GetBody(ctx, ref)` 处
+   仍被使用，`_, _ = body, src` 保住另外两个变量）。
+2) **补入 m09**（登记 E14）：把成功返回里的 `Ref: ref` 换成 `Ref: ta.Ref{}` ⇒
+   只杀新增的 `TestTraceBodyServiceExportsRequestRefOnHit` 的归档格（隔离探针），
+   既有的逐字节 / 哨兵 / 判定顺序断言全绿。
+
+**没有一条变异被静默丢弃**：m01/m02/m03/m05/m06/m07/m08 逐字保留。
+
 ## 相对计划的一处**用例改写**（不在本集合里，但与本集合的杀手对应）
 
 计划步骤 1 的 `TestTraceBodyServiceRejectsIllegalRefBeforeIO` 要求「行的 dt 值是
@@ -126,9 +145,11 @@ MUTATIONS["m03_部分NULL静默回退jsonb"] = [
 ]
 # m04 归档字节被换成 jsonb 序列化结果 ⇒ 逐字节保证丢失。
 #     替换串按本文件头第 3 条改写（计划原文留下未使用变量 ⇒ 编译红）。
+#     【本轮订正】定位串随任务 2 新增的 `Ref: ref` 导出一同更新（旧串
+#     `...Source: src}, nil` 已不存在 ⇒ 若不改会 PATTERN-MISS，见文件头「本轮改动」）。
 #     杀手：TestTraceBodyServiceReadsArchiveWhenRefsPresent（逐字节 + Source 断言）
 MUTATIONS["m04_归档结果被重新序列化"] = [
-    ("sub", "return &TraceBodyResult{Body: body, Source: src}, nil",
+    ("sub", "return &TraceBodyResult{Body: body, Source: src, Ref: ref}, nil",
             "_, _ = body, src\n\treturn s.fromJSONB(trace)"),
 ]
 # m05 读侧禁用不再报 503，而是回落 jsonb ⇒ 部署错误被伪装成「正文在 jsonb 列」
@@ -158,6 +179,16 @@ MUTATIONS["m07_吞掉reader哨兵"] = [
 MUTATIONS["m08_记录缺失被吞掉"] = [
     ("sub", "return nil, fmt.Errorf(\"tracebody: %s 无对应 call_traces 记录: %w\", requestID, gorm.ErrRecordNotFound)",
             "return nil, ta.ErrBodyMissing"),
+]
+# m09 成功路径不再导出本次实际使用的定位键（Ref 恒零值）⇒ 任务 7 的 CLI `--ref`
+#     拿不到四分量，只能自己查 call_traces 的四列再拼 ⇒ 定位键判据出现第二份实现
+#     （D59 的形态：同一判据两处实现）。**本轮补入**（登记 E14）：计划要求 CLI `--ref`
+#     输出 dt/inst/part/row 四分量并复用服务层，却没有任何导出途径 ⇒ 当时只能绕行。
+#     替换串只动导出的字段（`ref` 仍在 GetBody 调用处被使用 ⇒ 可编译），因此它只杀
+#     导出语义那一条断言（隔离探针），不波及逐字节/哨兵等既有断言。
+#     杀手：TestTraceBodyServiceExportsRequestRefOnHit（① 归档命中导出四分量）
+MUTATIONS["m09_成功路径不导出定位键"] = [
+    ("sub", "Source: src, Ref: ref}, nil", "Source: src, Ref: ta.Ref{}}, nil"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -214,7 +245,7 @@ CHECKS = [
     },
 ]
 
-# 没有登记的「允许的绿」：8 条全部应在原始侧转为断言红（实测见任务 2 报告）。
+# 没有登记的「允许的绿」：9 条全部应在原始侧转为断言红（实测见本轮修复报告）。
 EXPECTED_GREEN = {}
 
 # ---------------------------------------------------------------------------
@@ -262,6 +293,21 @@ REQUIREMENTS = [
         "mutations": ["m04_归档结果被重新序列化", "m07_吞掉reader哨兵"],
         "checks": ["冻结包哨兵语义未变"],
         "note": "杀手 = TestTraceBodyServiceReadsArchiveWhenRefsPresent（逐字节/Source）与 TestTraceBodyServicePassthroughSentinels（四类哨兵）。",
+    },
+    {
+        "plan": (
+            "跨任务前置（任务 7 的 CLI `--ref`）：成功路径必须导出本次实际使用的定位键"
+            "（`TraceBodyResult.Ref` 的 dt/inst/part/row 四分量），CLI 才能复用服务层"
+            "而不直查 `call_traces` 四列（计划登记 E14）"
+        ),
+        "mutations": ["m09_成功路径不导出定位键"],
+        "checks": [],
+        "note": (
+            "杀手 = TestTraceBodyServiceExportsRequestRefOnHit（① 归档命中导出四分量；"
+            "② jsonb 回退为零值）。jsonb 那一格无独立变异：实现里 ref 在全 NULL 形态下"
+            "本就保持零值，能改动它的入口只有 m01 的目标串（已被 m01 独占），"
+            "故按「至少测试承重」处理 —— 该断言确实可失败（若有人给 jsonb 路径拼半个 ref 即红）。"
+        ),
     },
     {
         "plan": "判定顺序 4：定位键部分 NULL（14 种非空真子集）⇒ 服务层不一致，绝不 jsonb 不回退",

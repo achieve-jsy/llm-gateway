@@ -239,6 +239,68 @@ func TestTraceBodyServiceReadsArchiveWhenRefsPresent(t *testing.T) {
 	}
 }
 
+// TestTraceBodyServiceExportsRequestRefOnHit ← m09 的杀手（任务 7 的 CLI `--ref` 的承重证据）
+//
+// 任务 7 的 `--ref` 必须输出 dt/inst/part/row【四分量】且**复用服务层**；若服务层不导出
+// 本次实际使用的定位键，CLI 只能自己查 call_traces 的四列再拼 —— 那正是 D59 警告的
+// 「同一判据两处实现」（本计划登记 E14）。本用例钉住导出字段 `TraceBodyResult.Ref` 的语义：
+//
+//	① 归档命中（含未封块 spool）⇒ Ref 四分量与请求行的四列一一对应（dt 是布局格式化），
+//	   且**就是**送给 Reader 的那一个（不得另建一个 ref）；
+//	② jsonb 回退（四列全 NULL）⇒ 没有定位键可报 ⇒ **零值**（不得拼出半个路径）。
+func TestTraceBodyServiceExportsRequestRefOnHit(t *testing.T) {
+	wantRef := ta.Ref{DT: "2026-09-24", Inst: "blue", Part: 0, Row: 3}
+
+	t.Run("归档命中导出四分量", func(t *testing.T) {
+		db := newTraceBodyTestDB(t)
+		row := fullRefRow("req-ref-archive")
+		require.NoError(t, db.Create(&row).Error)
+
+		root := t.TempDir()
+		paths := ta.NewPaths(root)
+		require.NoError(t, os.MkdirAll(paths.PartDir(wantRef.DT, wantRef.Inst), 0o755))
+		require.NoError(t, os.WriteFile(paths.PartFile(wantRef), []byte("part"), 0o644))
+
+		fake := &fakeReader{body: []byte(`{"request_body":{"i":1}}`)}
+		svc, err := obssvc.NewTraceBodyService(db, obssvc.TraceBodyServiceOptions{
+			Config: enabledReadConfig(root),
+			Reader: fake,
+		})
+		require.NoError(t, err)
+
+		res, err := svc.GetBody(context.Background(), "req-ref-archive")
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		require.Equal(t, wantRef, res.Ref, "归档命中路径必须导出与请求一致的定位键四分量")
+		require.Len(t, fake.refs, 1)
+		require.Equal(t, wantRef, fake.refs[0], "导出的 Ref 必须就是送给 Reader 的那一个")
+	})
+
+	t.Run("jsonb回退导出零值", func(t *testing.T) {
+		db := newTraceBodyTestDB(t)
+		require.NoError(t, db.Create(&obsmodel.CallTrace{
+			RequestID:   "req-ref-jsonb",
+			TS:          time.Now(),
+			RequestBody: datatypes.JSON([]byte(`{"i":1}`)),
+		}).Error)
+
+		fake := &fakeReader{err: errors.New("jsonb 回退不得访问归档")}
+		svc, err := obssvc.NewTraceBodyService(db, obssvc.TraceBodyServiceOptions{
+			Config: enabledReadConfig(t.TempDir()),
+			Reader: fake,
+		})
+		require.NoError(t, err)
+
+		res, err := svc.GetBody(context.Background(), "req-ref-jsonb")
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		require.Equal(t, obssvc.SourceJSONB, res.Source)
+		require.Zero(t, res.Ref, "jsonb 回退没有定位键（四列全 NULL）⇒ Ref 必须是零值")
+		require.Equal(t, ta.Ref{}, res.Ref, "不得拼出半个路径（例如 dt 空而 part 有值）")
+		require.Zero(t, fake.calls)
+	})
+}
+
 // TestTraceBodyServicePartialRefsAreInconsistent ← m03 的杀手
 //
 // 4 个定位键的**非空真子集**（单键 / 双键 / 三键，共 14 种）都必须 ErrTraceBodyInconsistent：
@@ -252,9 +314,23 @@ func TestTraceBodyServicePartialRefsAreInconsistent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// mask 的 4 个 bit 分别对应 dt / inst / part / row「非 NULL」；1..14 恰为全部非空真子集。
-	seen := 0
-	for mask := 1; mask < 15; mask++ {
+	// mask 的 4 个 bit 分别对应 dt / inst / part / row「非 NULL」。
+	// 【订正恒真断言】原稿用 `seen++` + `require.Equal(t, 14, seen)`：`seen` 与循环体同构
+	// （每轮恰加一），循环少跑/跳格都不会红 ⇒ 无证伪能力。这里改为两段式：
+	//   ① 期望集合由「4 个二值定位键的全部 16 种形态」显式推导（排除 0=全 NULL 与
+	//      15=全非 NULL，它们不是「部分 NULL」）；
+	//   ② 断言实际驱动的形态集合与期望集合**逐元素相等**（少跑、跳格、多跑都会红），
+	//      再用 Len 钉住总数 2^4-2 = 14（防止两段一起被改窄时静默通过）。
+	const refKeyCount = 4
+	const allMasks = 1 << refKeyCount
+	wantMasks := make([]int, 0, allMasks-2)
+	for mask := 0; mask < allMasks; mask++ {
+		if mask != 0 && mask != allMasks-1 {
+			wantMasks = append(wantMasks, mask)
+		}
+	}
+	seenMasks := make([]int, 0, len(wantMasks))
+	for _, mask := range wantMasks {
 		requestID := fmt.Sprintf("req-partial-%d", mask)
 		row := fullRefRow(requestID)
 		if mask&1 == 0 {
@@ -270,15 +346,17 @@ func TestTraceBodyServicePartialRefsAreInconsistent(t *testing.T) {
 			row.BodyRefRow = nil
 		}
 		require.NoError(t, db.Create(&row).Error)
-		seen++
 
 		res, err := svc.GetBody(context.Background(), requestID)
 		require.Nil(t, res, "mask=%d 不得回退成 jsonb", mask)
 		require.ErrorIs(t, err, obssvc.ErrTraceBodyInconsistent, "mask=%d", mask)
 		require.NotErrorIs(t, err, ta.ErrBodyMissing, "mask=%d", mask)
 		require.NotErrorIs(t, err, ta.ErrNotArchived, "mask=%d", mask)
+		seenMasks = append(seenMasks, mask)
 	}
-	require.Equal(t, 14, seen)
+	require.Equal(t, wantMasks, seenMasks,
+		"必须逐一驱动四个定位键的全部非空真子集（少跑/跳格即红）")
+	require.Len(t, seenMasks, 14, "非空真子集 = 2^4-2 = 14 种（断言实际驱动数，不再自计数）")
 	require.Zero(t, fake.calls, "部分 NULL 必须在任何存储访问之前被拦下")
 }
 
@@ -314,7 +392,7 @@ func TestTraceBodyServiceDisabledWithRefsIs503(t *testing.T) {
 //
 // 【可达的非法向量只有 inst / part / row】dt 列是 `*time.Time`（type:date），
 // `.Format("2006-01-02")` 恒产出合法日期 ⇒ 服务层**无法**构造非法 dt（计划文本的
-// 「dt 值是 2026-09-24/../..」在 *time.Time 列上不可构造，见登记 E11）。dt 的守卫
+// 「dt 值是 2026-09-24/../..」在 *time.Time 列上不可构造，见登记 E12）。dt 的守卫
 // 由任务 1 的配置层用例（ValidateRef 的 dt 子例）承担。
 //
 // 隔离探针：本用例只覆盖 ValidateRef 这一道守卫；把 ValidateRef 摘掉（m06）之后

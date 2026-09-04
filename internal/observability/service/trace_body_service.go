@@ -73,6 +73,18 @@ type TraceBody struct {
 type TraceBodyResult struct {
 	Body   []byte
 	Source TraceBodySource
+	// Ref 是本次取回**实际使用**的定位键（四个分量的唯一导出途径）。
+	//
+	// 【为什么必须有这个导出（登记 E14）】任务 7 的 CLI `--ref` 要输出 dt/inst/part/row
+	// 四分量且**必须复用本服务**；若没有这个字段，CLI 只能自己查 `call_traces` 的四列
+	// 再拼定位键 —— 那是「什么算合法定位键」的第二份实现，正是 D59 警告的形态。
+	//
+	// 【语义】只有「经 Reader.GetBody 命中归档/未封块 spool」的成功路径才有值，
+	// 且与请求行的四列一一对应（DT 是行内 body_ref_dt 的布局格式化，不是日期换算）。
+	// jsonb 回退路径（四个定位键全为 NULL）**没有定位键可报 ⇒ 零值**（不是拼半个路径）。
+	// 其余失败路径（记录缺失 / ErrBodyMissing / ErrTraceBodyInconsistent /
+	// ErrTraceBodyDisabled / ErrNotArchived / Err*Corrupt）一律**不返回结果** ⇒ 本字段无值可读。
+	Ref ta.Ref
 }
 
 // TraceBodyServiceOptions 是点读服务的装配选项。
@@ -204,7 +216,9 @@ func (s *TraceBodyService) GetBody(ctx context.Context, requestID string) (*Trac
 		return nil, err
 	}
 	src := sourceOf(s.paths, ref)
-	return &TraceBodyResult{Body: body, Source: src}, nil
+	// Ref: ref —— 把本次实际使用的定位键随结果导出（任务 7 的 CLI --ref 复用本服务，
+	// 不得自己查 call_traces 四列；见 TraceBodyResult.Ref 的语义注释）。
+	return &TraceBodyResult{Body: body, Source: src, Ref: ref}, nil
 }
 
 // ErrTraceBodyInconsistent 是【服务层】哨兵：PG 行的定位键/body_missing 组合在

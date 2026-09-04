@@ -510,6 +510,15 @@ git commit -m "feat(controlplane): 点读读侧配置与定位键入口校验（
   type TraceBodyResult struct {
       Body   []byte          // 归档路径下是【原字节】；jsonb 路径下是重新序列化的字节
       Source TraceBodySource
+      // Ref 是本次取回【实际使用】的定位键（dt/inst/part/row 四分量的唯一导出途径）。
+      // 【为什么必须有（任务 7 的前置，登记 E14）】任务 7 的 CLI `--ref` 要输出四分量
+      // 且必须复用本服务；没有这个字段时 CLI 只能自己查 call_traces 的四列再拼
+      // ⇒ 定位键判据出现第二份实现（D59 的形态）。
+      // 【语义】只有经 Reader.GetBody 命中【归档 / 未封块 spool】的成功路径才有值，
+      // 且与请求行四列一一对应（DT 是 body_ref_dt 的布局格式化，不是日期换算）；
+      // jsonb 回退（四列全 NULL）⇒ **零值**（没有定位键可报，不得拼半个路径）；
+      // 其余失败路径不返回结果 ⇒ 本字段无值可读。
+      Ref ta.Ref
   }
 
   type TraceBodyServiceOptions struct {
@@ -564,7 +573,7 @@ git commit -m "feat(controlplane): 点读读侧配置与定位键入口校验（
   4. 定位键【部分非 NULL】                              ⇒ 返回 ErrTraceBodyInconsistent
   ```
 
-  **`Source` 的判定（`archive` vs `spool`）——必须与 `GetBody` 的查找顺序一致**：`GetBody` 的顺序是**产物 → spool**（`reader.go:121-135`）。本服务在**调用前**用 `os.Stat` 判定：
+  **`Source` 的判定（`archive` vs `spool`）——必须与 `GetBody` 的查找顺序一致**：`GetBody` 的顺序是**产物 → spool**（`reader.go:121-135`）。本服务在**`Reader.GetBody` 成功返回之后**探测（`os.Stat`）；**⚠️ 订正**：原稿写「在**调用前**」，实现是成功后探测 —— 两者**语义等价**（该 `stat` 只决定 `Source` 这个诊断字段，不参与任何判定、不改变正文内容），订正为实际语义并把偏离登记在交付报告 §4「`Source` 判定」：
   ```
   PartFile(ref) 存在   ⇒ SourceArchive
   否则 SpoolFile(ref) 存在 ⇒ SourceSpool
@@ -604,6 +613,9 @@ git commit -m "feat(controlplane): 点读读侧配置与定位键入口校验（
 // TestTraceBodyServicePartialRefsAreInconsistent  ← m03 的杀手
 //   4 个键的非空子集（单键、双键、三键共 14 种）逐个断言
 //   ⇒ ErrTraceBodyInconsistent；【绝不】jsonb 回退、【绝不】404
+//   【覆盖的形态（订正 E17）】不得用「循环计数器 == 14」表达覆盖 —— 那是恒真断言。
+//   期望集合由「4 个二值键的全部 16 种形态」推导（排除 0=全 NULL 与 15=全非 NULL），
+//   并断言【实际驱动的 mask 集合】与期望集合逐元素相等（少跑/跳格/多跑即红）。
 
 // TestTraceBodyServiceDisabledWithRefsIs503  ← m05 的杀手
 //   Root 空 + 行带定位键 ⇒ ErrTraceBodyDisabled
@@ -623,7 +635,19 @@ git commit -m "feat(controlplane): 点读读侧配置与定位键入口校验（
 // TestTraceBodyServicePassthroughSentinels  ← m07 的杀手
 //   替身分别返回 ErrNotArchived / ErrBodyMissing / ErrFooterCorrupt / ErrTrailerCorrupt
 //   ⇒ 断言 errors.Is 原样成立（不得被换成别的哨兵、不得被吞掉）
+
+// TestTraceBodyServiceExportsRequestRefOnHit  ← m09 的杀手（任务 7 的前置，登记 E14）
+//   ① 归档命中（含未封块 spool）⇒ 结果里的 Ref 四分量与请求行四列一一对应，
+//      且**就是**送给 Reader 的那一个（不得另建 ref）；
+//   ② jsonb 回退（四列全 NULL）⇒ Ref 为零值（没有定位键可报，不得拼半个路径）。
+//   【为什么必须有】任务 7 的 CLI `--ref` 要输出四分量并复用服务层 ⇒ 服务层必须导出
+//   定位键，否则 CLI 只能自己查 call_traces 四列（D59 的第二份判据）。
 ```
+
+**⚠️ 用例清单的计数口径（订正 E14）**：原稿列 8 条核心用例；实现期另加
+`TestTraceBodyServiceConstructorRejectsUnusableOptions`（第 9 条，构造期两道否决）与
+`TestTraceBodyServiceExportsRequestRefOnHit`（第 10 条，本轮的导出途径）⇒ 本任务的
+清单由测试源码推导（`grep '^func Test'`），权威表按**实际 10 条**核对，不得写死 8。
 
 测试夹具（两份假实现，都放测试文件里）：
 ```go
@@ -651,7 +675,9 @@ func (f *fakeReader) GetBody(ctx context.Context, ref ta.Ref) ([]byte, error) {
    - `return nil, err` **只出现一次**，就是 `Reader.GetBody` 错误的原样透传（它保留冻结包的底层诊断文本，任务 3 要求不得替换成固定文案）；其余所有错误路径都要用带上下文的 `fmt.Errorf` 包装。**⚠️ 计数的口径（订正 E10）**：裸串 `return nil, err` 会被 `return nil, errors.New(...)` 这类构造期返回**顺带命中**（本实现 3 次）⇒ 变异/静态检查一律用**带缩进的精确行** `"\t\treturn nil, err\n"`（它在服务文件里唯一，且要求透传点位于**函数体第一层**，不得嵌进 `if` 块）。
    - `src := sourceOf(s.paths, ref)` **只出现一次**（`Source` 的来源判定），其返回语句 `return SourceSpool` 在**本文件里唯一**。
    - `return s.fromJSONB(trace)` **只出现一次**（判定顺序的 2a 与 2b 是同一结果 ⇒ 合并成**一处**返回；`fromJSONB` 内部**不得**再出现这一行，它自己要返回时用 `return &TraceBodyResult{Body: b, Source: SourceJSONB}, nil`）。**任务 2 的 `m01` 以它为变异目标**。
-   - 成功返回**只有一处**：`return &TraceBodyResult{Body: body, Source: src}, nil`。
+   - 成功返回**只有一处**：`return &TraceBodyResult{Body: body, Source: src, Ref: ref}, nil`
+     （其中 `Ref: ref` 是定位键的**唯一导出途径**，任务 7 的 CLI `--ref` 直接读它 ——
+     **不得**让 CLI 自己查 `call_traces` 四列，登记 E14）。
    - `Source` 判定用下面这个小函数（**任务 4 的 `m02` 以 `return SourceSpool` 为变异目标**）；它与 `GetBody` 的「产物 → spool」顺序一致，且**只影响诊断字段**（两次 stat 的窗口说明见上）：
      ```go
      // sourceOf 只用于诊断字段 Source；判定顺序与 Reader.GetBody 一致（产物 → spool）。
@@ -661,7 +687,7 @@ func (f *fakeReader) GetBody(ctx context.Context, ref ta.Ref) ([]byte, error) {
          return SourceArchive // 都不存在：GetBody 必返回 ErrNotArchived，Source 无语义
      }
      ```
-   - 定位键构造**原样**使用上面「`dt` 的来源」给出的 `ta.Ref` 字面量（**任务 4 的 `m04` 以 `DT: trace.BodyRefDT.Format("2006-01-02")` 为变异目标**）。
+   - 定位键构造**原样**使用上面「`dt` 的来源」给出的 `ta.Ref` 字面量（**任务 4 的 `m04` 以 `DT:   trace.BodyRefDT.Format("2006-01-02")` 为变异目标**；⚠️ 这里的分量缩进是 **`DT:` 后 3 个空格**，与任务 4 的集合草稿逐字一致 —— 计划原稿在此写成单空格，与集合/实际行不符，已订正）。
    - **前两步的硬形状**（判定顺序 1 / 1' 与「部分 NULL」的入口；**已按 E9 订正**——原稿把
      `body_missing` 无条件判在定位键之前，会让「带定位键的 `body_missing`」返回 404，
      与全局约束「该形态 ⇒ 500，绝不报 404」互斥；订正后三种形态共用**一处**「不一致」出口）：
@@ -697,6 +723,9 @@ func (f *fakeReader) GetBody(ctx context.Context, ref ta.Ref) ([]byte, error) {
      `refs` 的作用是让「全 NULL / 部分 NULL / 全非 NULL」三种形态共用**一次**判定，
      **不得**改成三段 `if`（那样「部分 NULL」的入口与归档入口会各判一次，`m02`/`m03`
      的变异目标也随之不存在 ⇒ `PATTERN-MISS`）。
+     **⚠️ 上面硬形状里的 `DT:` 是压缩写法**：实际实现必须逐字采用「`dt` 的来源」处的
+     **3 空格**字面量（`DT:   trace.BodyRefDT.Format("2006-01-02"),`，且**成功返回处只有
+     一处** `Ref: ref` 导出）—— 任务 4 的 `m04` 以该 3 空格串为定位串（见 E15）。
 
 - [ ] **步骤 4：运行测试确认通过**
 
@@ -729,9 +758,10 @@ MUTATIONS["m03_部分NULL静默回退jsonb"] = [
 # m04 归档字节被换成 jsonb 序列化结果 ⇒ 逐字节保证丢失
 #     **替换串已按 E10 订正**：原文会让 `src`/`body` 在替换后未被使用 ⇒ 编译红
 #     （实测 `declared and not used: body` / `: src`）
+#     **定位串已按 E14 随新增的 `Ref: ref` 导出更新**（旧串在树里已不存在 ⇒ 否则 PATTERN-MISS）
 #     杀手：TestTraceBodyServiceReadsArchiveWhenRefsPresent（逐字节断言那一条）
 MUTATIONS["m04_归档结果被重新序列化"] = [
-    ("sub", "return &TraceBodyResult{Body: body, Source: src}, nil",
+    ("sub", "return &TraceBodyResult{Body: body, Source: src, Ref: ref}, nil",
             "_, _ = body, src\n\treturn s.fromJSONB(trace)"),
 ]
 # m05 读侧禁用不再报 503，而是回落 jsonb ⇒ 部署错误被伪装成「正文在 jsonb 列」
@@ -763,6 +793,15 @@ MUTATIONS["m08_记录缺失被吞掉"] = [
     ("sub", "return nil, fmt.Errorf(\"tracebody: %s 无对应 call_traces 记录: %w\", requestID, gorm.ErrRecordNotFound)",
             "return nil, ta.ErrBodyMissing"),
 ]
+# m09 成功路径不再导出本次实际使用的定位键（Ref 恒零值）⇒ 任务 7 的 CLI `--ref`
+#     拿不到四分量，只能自己查 call_traces 四列再拼 ⇒ 定位键判据出现第二份实现
+#     （D59 的形态）。**按 E14 补入**：任务 7 要求 `--ref` 输出四分量并复用服务层，
+#     而任务 2 原先没有任何导出途径。替换串只动导出字段（`ref` 仍在 GetBody 调用处
+#     被使用 ⇒ 可编译）⇒ 只杀导出语义那一条断言（隔离探针）。
+#     杀手：TestTraceBodyServiceExportsRequestRefOnHit（① 归档命中导出四分量）
+MUTATIONS["m09_成功路径不导出定位键"] = [
+    ("sub", "Source: src, Ref: ref}, nil", "Source: src, Ref: ta.Ref{}}, nil"),
+]
 ```
 
 **CHECKS（变异测不到）：**
@@ -789,8 +828,9 @@ CHECKS = [
 ```
 
 - [ ] **步骤 6：跑变异集合**（命令同任务 1，换集合与清单）
-预期：**8 条断言红**（原稿写「7 条」；按 **E11** 补入 `m08` 覆盖判定顺序 0 ⇒ 8 条）、
-三断言过、无未登记绿、4 行静态检查全 PASS。
+预期：**9 条断言红**（原稿写「7 条」；按 **E11** 补入 `m08` 覆盖判定顺序 0 ⇒ 8 条；
+按 **E14** 补入 `m09` 覆盖新增的定位键导出 ⇒ **9 条**）、
+三断言过（清单 10 条）、无未登记绿、4 行静态检查全 PASS。
 
 - [ ] **步骤 7：提交**
 
@@ -1519,11 +1559,13 @@ body_missing 早已存在（call_trace.go:48，无 omitempty），本任务只�
     退出码：0 = 取到正文；3 = 正文缺失（body_missing）；4 = 未归档/需要人工介入；
             5 = 读侧未配置；1 = 用法/参数错误；2 = 其它错误
     输出：--raw（默认）逐字节写 stdout（可管道给 jq）；--json 输出
-          {"source":"archive","bytes":1234,"sha256":"..."}；--ref 只输出定位键
+          {"source":"archive","bytes":1234,"sha256":"..."}；--ref 输出定位键四分量
+          dt/inst/part/row（**取自服务导出的 `TraceBodyResult.Ref`**，见任务 2 的导出途径与 E14）
   ```
   **为什么要有 CLI**：① 规格 §4.2 明确要求；② **本计划的验收（任务 8）与生产排障需要一条不经过 HTTP/鉴权的直连路径**（否则「是归档读不出来」还是「是 HTTP 层的问题」无法分离）；③ 与既有 `cmd/trace-calib` 同一形态（仓库已有运维 CLI 先例）。
   **⚠️ CLI 的安全约束（必须写明）**：它**不做**任何归属/权限判定（它是运维工具，用 DSN 直连）⇒ **文档与 `--help` 必须写明「仅限运维/本机使用，不得暴露为服务」**；**不得**把 DSN 或正文写进日志。
   **⚠️ 实现约束**：CLI **必须复用 `TraceBodyService`**（同一判定顺序、同一哨兵映射），**不得**自己查库 + 自己拼路径（否则 CLI 会漂移成一个「第二个读实现」，验收就不再代表服务的行为）。这条由 CHECKS 钉死。
+  **⚠️ `--ref` 的定位键也必须来自服务层导出（订正 E14）**：任务 7 原本要求 `--ref` 输出 dt/inst/part/row 四分量，而任务 2 的 `TraceBodyResult` 当时**只有 `Body`/`Source`** ⇒ 没有导出途径时，CLI 唯一能写出四分量的办法是**自己查 `call_traces` 的四列**（`body_ref_dt` / `body_ref_inst` / `body_ref_part` / `body_ref_row`）再拼 —— 这会让「什么算合法定位键」出现**第二份实现**，正是 **D59** 警告的形态。⇒ 任务 2 增加了导出途径 **`TraceBodyResult.Ref`**（归档/spool 命中路径填充四分量，jsonb 回退为零值）；**`--ref` 必须只读这个字段**，**不得**在 CLI 里出现那四个列名或 `tracearchive.` 的路径拼接。**⚠️ `--ref` 的打印/取值留在 `cmd/trace-body/main.go`**（CHECKS 的作用域是单文件）；若执行者把 ref 格式化抽进 `internal/observability/service/trace_body_cli.go`，必须把下面两条 CHECKS 行**镜像**到该文件，否则检查会空转。
 
 - [ ] **步骤 1：写失败的测试**
 
@@ -1536,7 +1578,10 @@ body_missing 早已存在（call_trace.go:48，无 omitempty），本任务只�
 // TestTraceBodyCLIRawWritesExactBytes  ← m04 的杀手
 //   --raw 下 stdout 逐字节等于 service 返回的 Body（不额外加换行）。
 // TestTraceBodyCLIRefModePrintsAllFourComponents  ← m05 的杀手
-//   --ref 输出必须含 dt/inst/part/row【四个】分量（少一个就没法排障）。
+//   --ref 输出必须含 dt/inst/part/row【四个】分量（少一个就没法排障），
+//   且四分量**逐字等于服务返回的 `TraceBodyResult.Ref`**（订正 E14：设一份带非零
+//   Ref 的结果，断言 CLI 打印的就是它 —— 只关心「有四个分量」会漏掉「取自哪里」，
+//   而那正是绕行（自己查四列）会满足、却必须被拦住的部分）。
 ```
 
 - [ ] **步骤 2：运行测试确认失败**
@@ -1590,10 +1635,19 @@ MUTATIONS["m05_ref少输出分量"] = [
 **CHECKS（本任务最关键的静态要求）：**
 ```python
 CHECKS = [
-  # CLI 必须复用服务，不得自己查库/拼路径（否则会漂移成第二个读实现）
-  {"name": "CLI复用服务不自己拼路径", "file": "cmd/trace-body/main.go",
-   "pattern": r"tracearchive\." , "expect": "absent",
-   "why": "CLI 必须经 TraceBodyService 取正文；直接引用冻结包会绕过优先级判定与校验"},
+  # CLI 必须复用服务，不得自己查库/拼路径（否则会漂移成第二个读实现）。
+  # 【订正 E14】原行的 `tracearchive\.` 只拦得住「直接引用冻结包拼路径」，
+  # **拦不住** `--ref` 最可能走的旁路：自己查 call_traces 的四个定位键列再拼。
+  # 因此把两条旁路一起禁掉（命中任一项即 FAIL）。
+  {"name": "CLI复用服务不自己拼路径也不直查定位键列", "file": "cmd/trace-body/main.go",
+   "pattern": r"tracearchive\.|body_ref_dt|body_ref_inst|body_ref_part|body_ref_row|call_traces",
+   "expect": "absent",
+   "why": "CLI 必须经 TraceBodyService 取正文与定位键（`TraceBodyResult.Ref`）；直接引用冻结包、或自己查 call_traces 的四列再拼 ref，都会绕过服务层的优先级判定/ValidateRef ⇒ 出现第二份判据（D59 的形态）。可违反：正文写出任一列名或 `tracearchive.` 即 FAIL"},
+  # `--ref` 的四分量必须取自服务导出，而不是自己拼（与上一行互为补充：上一行禁旁路，
+  # 这一行钉住正途；只留禁行会让「打印一个随手构造的 ta.Ref」蒙混过关）。
+  {"name": "CLI的ref取自服务导出", "file": "cmd/trace-body/main.go",
+   "pattern": r"\.Ref\b", "expect": "present",
+   "why": "钉住「--ref 打印的是服务导出的 ta.Ref 四分量」（任务 2 的 `TraceBodyResult.Ref`）。可违反：把 ref 改成 CLI 自己构造的结构就会 FAIL；若 ref 格式化被抽到 `internal/observability/service/trace_body_cli.go`，本行与本页第一行必须镜像到该文件"},
   # 【原稿的 r'Print.*(dsn|DSN)|log.*(dsn|DSN)' 不合格】`fmt.Fprintln(os.Stderr, "usage: … --dsn …")`
   # 会同时命中 `Print` 与 `dsn` ⇒ 用法文本一写就恒 FAIL。改成只禁「把 dsn 的值送进日志」。
   {"name": "CLI不把DSN写进日志", "file": "cmd/trace-body/main.go",
@@ -1961,6 +2015,17 @@ git log --oneline <base>..HEAD
 | **E10** | 任务 2 步骤 5 的 `MUTATIONS`（m02 / m04 / m07） | 三条按原文逐字使用会让该集合**零产出**或产出**编译红**（都违反全局约束第 5 条「变异必须是断言红」）：① **m07** 的定位串 `return nil, err` 在服务文件里出现 **3** 次（构造期两条 `return nil, errors.New(...)` 也以它起手）⇒ 工具以 `count=3` 抛 **PATTERN-MISS**，整轮在跑变异之前就终止；② **m02** 的 `cut` 删掉 `if trace.BodyMissing {` … 其闭合 `}` … 与 **`if len(refs) > 0 {` 这个开括号**，却把后者的闭合 `}` 留下 ⇒ 括号失衡（**实测**：把该 cut 施于原硬形状片段后 `gofmt -e` 退出 2，`expected declaration, found 'return'`）；③ **m04** 的替换串把 `src`/`body` 的**唯一使用**换掉 ⇒ `go build` 退出 1，`declared and not used: body` + `: src` | 三条**改写为断言红**并逐字登记在集合头：m07 改用带缩进的精确行 `"\t\treturn nil, err\n"`（唯一；同时要求透传点位于函数体第一层）；m02 改为摘掉「`body_missing` 与定位键矛盾」这条判据（`!allRefs \|\| trace.BodyMissing` → `!allRefs`）；m04 的替换串用 `_, _ = body, src` 保留两个变量被引用。**m01/m03/m05/m06 逐字保留**（m06 的 `if false {` 实测**可编译**：它连 if-init 一起去掉，`err` 并未留下——与任务 1 的 m05「保留 init 而让判据恒假」是两种形态，别混为一谈） |
 | **E11** | 任务 2 的判定顺序 0 vs 步骤 5 的 7 条变异 | 任务 2 明文「判定顺序 **0..4** 逐条都是承重的，**任何一步**被摘掉或换序都必须有变异红」，但步骤 5 的 7 条变异**没有步骤 0**（记录缺失 ⇒ 透传 `gorm.ErrRecordNotFound`）⇒ 「每一条承重」对步骤 0 无证据；且 `REQUIREMENTS` 映射表若为它留行会因「既无变异也无静态检查」被判 **GAP**（工具整轮失败） | **补入 `m08_记录缺失被吞掉`**（把透传换成 `ta.ErrBodyMissing` ⇒ 杀手 `TestTraceBodyServiceRecordNotFound` 转红，实测断言红），并把步骤 6 的预期由「7 条断言红」改为「**8 条**」；另补一行静态检查「记录缺失保留gorm哨兵」钉住 `%w` 包装形态。集合头如实登记「相对计划的一处补入」 |
 | **E12** | 任务 2 步骤 1 的 `TestTraceBodyServiceRejectsIllegalRefBeforeIO` | 原稿要求「行的 dt 值是 `"2026-09-24/../.."`（模拟列被写坏）」。但 `body_ref_dt` 是 `*time.Time`（`type:date`；正是计划 2 为避免字符串往返有损而选定的类型，见 `call_trace.go` 的字段注释）⇒ `.Format("2006-01-02")` **恒**产出合法日期。**实测**：往该列写文本 `"2026-09-24/../.."`（raw INSERT 成功），读回来是**零值时间**、`.Format` 得 `"0001-01-01"`——仍是合法日期 ⇒ 服务层**不可能**构造出非法 dt，该子例不可能成立 | 该用例改用**可达**的非法向量（`inst` 穿越向量 / `inst` 空串 / `part` 超上界 / `part` 为负 / `row` 为负，共 5 格）并保留 `calls==0` 断言；**dt 的守卫由任务 1 的配置层用例承担**（`TestValidateRefRejectsIllegalComponents` 的 dt 子例）。**不得**为此改模型（把 `*time.Time` 换成 `*string` 会重新引入计划 2 已消除的往返有损） |
+
+### 追加登记（任务 2 修复轮，2026-10-08：E14–E17）
+
+> 编号续 E12。按派单口令**从 E14 起**（E13 在本计划正文中从未出现；为避让跨计划 / 跨轮编号，本计划不使用 E13）。与 E1–E3 同一条纪律：**只登记与订正文本**。本轮的**代码 / 测试 / 变异集合**改动随**单独提交**落盘（`fix(observability): 导出点读定位键并修正恒真断言`，3 文件），其变异权威表绑定在**该新提交**上（**已重跑并重记绑定**，旧表保留）；计划文本订正随**另一个提交**落盘（不混进代码提交）。依据是任务 2 的独立评审（可合并、无阻断项）与本轮实测。
+
+| 编号 | 位置 | 已核实的事实（本轮实测，不是推测） | 本计划的裁定 / 登记 |
+|---|---|---|---|
+| **E14** | 任务 7 的 `--ref` 输出要求 vs 任务 2 的 `TraceBodyResult`（跨任务缺口） | 任务 7 要求 CLI `--ref` 输出 dt/inst/part/row **四分量**且**复用 `TraceBodyService`**，但任务 2 的 `TraceBodyResult` 原先**只有 `{Body, Source}`** —— 服务层没有任何取回 `ta.Ref` 的导出途径。后果：CLI 若真要输出四分量，**只能自己查 `call_traces` 的 `body_ref_dt/inst/part/row` 四列再拼**，从而绕过服务层的定位键判据（`ValidateRef` 先于 IO / 部分 NULL ⇒ 不一致）⇒ 「什么算合法定位键」出现**第二份实现**，正是 **D59** 警告的「同一判据两处实现」形态（D59 本身登记的是冻结包 `GetBody` 与调用侧 `ValidateRef` 的重复，本条是它的第三种潜在重复） | ① 任务 2 增加**导出途径** `TraceBodyResult.Ref ta.Ref`：归档 / 未封块 spool **命中路径**填充本次实际使用的四分量，jsonb 回退（四列全 NULL）为**零值**，其余失败路径不返回结果（语义逐字写在字段注释里）；**不改动**任务 3/5/6 已依赖的既有签名。② 补承重用例 `TestTraceBodyServiceExportsRequestRefOnHit`（归档命中四分量一致 + jsonb 回退零值）。③ 变异集合补 **m09**（成功路径的 `Ref: ref` 换成零值 ⇒ 只杀该用例的归档格，隔离探针），并**随新返回串更新 m04 的定位串**（旧串已不存在）。④ 任务 7 的 `--ref` 措辞改为**点名** `TraceBodyResult.Ref`，CHECKS 由「只禁 `tracearchive.`」改为「同时禁四个定位键列名 / `call_traces`」并新增「ref 取自服务导出」的**正向**检查（详见任务 7）。⑤ 步骤 6 的预期由 8 条改为**9 条**断言红。**若将来执行者宁可不导出，则任务 7 的 `--ref` 必须降级为「只报服务层已有的信息」并在计划里显式删掉四分量要求** —— 不得两处各写一份定位键判据 |
+| **E15** | 任务 2 步骤 3 的变异目标字面量（`DT:` 的缩进） | 计划 `:664`（原行号）写 `DT: trace.BodyRefDT.Format("2006-01-02")`（**单空格**），而任务 4 的集合草稿（`:1111`）与实现行都是 `DT:   trace.BodyRefDT.Format("2006-01-02")`（**3 空格**）。若执行者照计划把实现写成单空格，任务 4 的 `m04`（定位串含 3 空格）会 **PATTERN-MISS**，集合零产出 | 计划字面量统一为**与实际行一致的 3 空格**（与任务 4 的集合逐字对齐），并在该处写明「**必须原样保留这一行**」。语义不变（只是缩进），但它是变异定位串的一部分 |
+| **E16** | 任务 2 的 `Source` 判定时机措辞 vs 实现 | 计划 `:567`（原行号）写「本服务在**调用前**用 `os.Stat` 判定」，实现是 `Reader.GetBody` **成功返回之后**再 `src := sourceOf(...)`（`Source` 与成功返回绑定在同一处更不易漂移）。**语义等价**：该 `stat` 只决定 `Source` 这个**诊断字段**，不参与任何判定、不改变正文内容；两次 `stat` 的窗口说明已写进代码注释（不得声称 `Source` 原子）。交付报告 §4 已如实登记该偏离 | 计划文本订正为**实际语义**（「`Reader.GetBody` 成功返回之后探测」），并保留「刻意不复用 `GetBody` 返回值判断来源」与窗口说明 |
+| **E17** | 任务 2 步骤 1 的 `TestTraceBodyServicePartialRefsAreInconsistent` 的覆盖断言 | 实现用 `seen++` + `require.Equal(t, 14, seen)`：`seen` 每轮恰加一、与循环体**同构** ⇒ 循环少跑 / 跳格 / 提前退出**都不会红**，是一条**恒真断言**（违反全局约束第 6 条要求的证伪能力）。计划步骤 1 只写「4 个键的非空子集（共 14 种）逐个断言」，**没有**要求把「实际覆盖了哪 14 种」断言出来 ⇒ 该措辞允许落成恒真形态。另：同一用例注释把「dt 向量不可构造」的登记号写成 **E11**（应为 **E12**） | 测试改为：① 期望集合由「4 个二值定位键的**全部 16 种形态**」显式推导（排除 `0`=全 NULL 与 `15`=全非 NULL），② 断言**实际驱动的 mask 集合与期望集合逐元素相等**（少跑 / 跳格 / 多跑都红），③ 再用 `Len(…,14)` 钉住 `2^4-2` 的总数。计划步骤 1 的措辞同步补上「断言实际覆盖的形态集合」这一形态要求；登记号订正为 E12。**该恒真断言不影响任何既存变异的判定**（m03 仍由本用例的 `ErrorIs` 断言杀死） |
 
 ---
 

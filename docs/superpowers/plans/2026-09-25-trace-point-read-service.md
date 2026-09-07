@@ -925,24 +925,47 @@ jsonb 回退解释「ref 全 NULL + body_missing=false」为「正文在 jsonb �
 //   分别断言仍映射到正确的 status/code。这条是 m02 的杀手。
 
 // TestMapTraceBodyErrorNotArchivedKeepsUnderlyingText —— 【承重】
-//   传入 fmt.Errorf("%w: %s（块内共 %d 行）", ta.ErrNotArchived, "2026-10-08/blue/part-000000#row=7", 3)
-//   ⇒ message 必须【包含】「行号越界」「块内共 3 行」（证明底层文本被保留、没被替换成固定文案）。
-//   这是「三种成因可分辨」的唯一可自动化的形态。
+//   **【订正 E20】原文的向量与断言互斥**：原稿写「传入
+//   `fmt.Errorf("%w: %s（块内共 %d 行）", ta.ErrNotArchived, "<ref>", 3)` ⇒ message 必须包含
+//   「行号越界」「块内共 3 行」」——但该向量产出的文本是
+//   `tracearchive: 产物与暂存均不存在: <ref>（块内共 3 行）`，**不含「行号越界」**
+//   （那四个字是本计划正文的诊断说明，不是冻结包的错误文本；`reader.go:183` 的实际拼装
+//   就是 `"%w: %s（块内共 %d 行）"`）⇒ 该断言恒红、不可满足。
+//   改为**按冻结包 reader.go 的真实拼装取三个向量**，各自断言其**可分辨子串**原样透出：
+//     ① `reader.go:139` 两副本都不存在   `fmt.Errorf("%w: %s", ta.ErrNotArchived, ref)` ⇒ 含 `产物与暂存均不存在`
+//     ② `reader.go:183` 行号越界          `fmt.Errorf("%w: %s（块内共 %d 行）", …, ref, 3)` ⇒ 含 `块内共 3 行`
+//     ③ `reader.go:266` 目标偏移未命中行首 `fmt.Errorf("%w: %s（偏移 %d 未命中行首）", …, ref, 4096)` ⇒ 含 `偏移 4096 未命中行首`
+//   语义不变（仍是「底层文本必须被保留、不得替换成固定文案」），只是向量可达；三是
+//   「三种成因可分辨」的可自动化形态（三格共用一处 `Message: err.Error(),`，由 m05 杀死）。
+
+// TestMapTraceBodyErrorSuccessCarriesNoPayload  ← 【E21 新增，承重用例】
+//   `MapTraceBodyError(nil)` ⇒ status 200 且返回的 resp 是**零值诊断体**：
+//   200 的 body 是服务层返回的**正文原字节**（由任务 5 的 handler 直接写出），
+//   映射层**不得**为成功路径产出任何诊断体/包壳。可失败：为 nil 臂填入任何响应体即红。
+// TestTraceBodyErrorResponseKeySet  ← 【E21 新增，承重用例】
+//   把一条错误行的响应 `json.Marshal` 后断言**键集合逐字固定**：
+//   顶层只有 `error`，内层只有 `{body_missing, code, message, type}` 四键，
+//   且**不存在** `ref`/`source`/`body`/`trace`/`dt`/`inst`/`part`/`row` 任一键
+//   （防任务 2 新增的 `TraceBodyResult.Ref` 经诊断体泄漏）。可失败：给诊断体加任一
+//   带 json tag 的字段（如 `ref`）即红。
 ```
 
 - [ ] **步骤 2：运行测试确认失败**（编译失败：`MapTraceBodyError` 不存在）
 - [ ] **步骤 3：实现 `MapTraceBodyError`**（按上表逐行；`errors.Is` 顺序：具体哨兵在前、`context` 与兜底在后）
 
 **实现形状是硬要求（变异可定位的前提，必须逐字遵守）：**
-- 用 **`switch { case …: }` + 每个臂直接 `return <status>, TraceBodyErrorResponse{…}`**，**不得**用 if-chain、也不得先赋值 `resp` 再统一 return（任务 3/8 的 7 条变异都以这个形态的字符串为变异目标）。
+- 用 **`switch { case …: }` + 每个臂直接 `return <status>, TraceBodyErrorResponse{…}`**，**不得**用 if-chain、也不得先赋值 `resp` 再统一 return（任务 3 的 **12** 条变异都以这个形态的字符串为变异目标；原稿写「7 条」，按 E21 补入后为 12 条）。
 - **`Message: err.Error(),` 只能出现在 `ta.ErrNotArchived` 这一个臂**（它是唯一必须保留底层三种成因文本的臂）；其余臂（记录不存在 / body_missing / 损坏 / 禁用 / 取消 / 超时 / 兜底）一律用**固定文案**，**不得**用 `err.Error()`（否则会泄漏内部细节，也让 `m05` 无法唯一定位）。
 - **`BodyMissing: true,` 只能出现在 `ta.ErrBodyMissing` 一个臂**（其余臂不写该字段或写 false）。
 - `http.StatusServiceUnavailable, TraceBodyErrorResponse{` 这一串**只能出现在 `ErrTraceBodyDisabled` 一个臂**。
+- **本文件（含注释）不得出现 CHECKS 的禁用标识符**（`os.` / `io.Read` / `gorm.DB` / `gin.` /
+  JSON 序列化调用 / 服务层结果类型名 / 响应写出调用）：两条「不存在性」CHECKS 是对**整个文件文本**
+  `re.search` ⇒ 注释里抄了标识符就会恒 FAIL、工具在跑变异**之前**终止（本轮实测踩过，见 E21）。
 
 - [ ] **步骤 4：运行测试确认通过**
 ```bash
-go test ./tests/observability/handler/ -run 'TestMapTraceBodyError' -v   # PASS
-go build ./...
+go test ./tests/observability/handler/ -run 'TestMapTraceBodyError|TestTraceBodyErrorResponseKeySet' -v   # PASS
+go build ./internal/... ./cmd/...   # 【订正】`go build ./...` 在本仓库基线上就失败于 test/bedrock_model_id_check.go
 ```
 
 - [ ] **步骤 5：写变异集合 `tools/trace-mutate/sets/p3-task-3.py`**
@@ -993,6 +1016,42 @@ MUTATIONS["m06_禁用状态码变成500"] = [
 MUTATIONS["m07_取消报成500"] = [
     ("sub", "case errors.Is(err, context.Canceled):", "case false:"),
 ]
+# ---------------------------------------------------------------------------
+# 以下 5 条为【E21 补入】：权威判据表有 12 行，原稿的 m01–m07 只覆盖 5 行；
+# 余下 5 行（nil 200 / 记录缺失 / 定位键不一致 / 超时 / 兜底）是**行为**要求，
+# 按全局约束第 7 条应当用变异而不是静态检查覆盖（同任务 2 的 E11 处置）。
+# ---------------------------------------------------------------------------
+# m08 成功路径不再返回 200（nil 落进兜底）⇒ 调用方会把「无错误」当成内部错误。
+#     杀手：TestMapTraceBodyError（nil 行）+ TestMapTraceBodyErrorSuccessCarriesNoPayload
+MUTATIONS["m08_成功路径不再返回200"] = [
+    ("sub", "case err == nil:", "case err == nil && false:"),
+]
+# m09 记录缺失不再单独分类 ⇒ 「没有这条 trace」与「正文从未落盘」混为一谈
+#     杀手：TestMapTraceBodyError（记录缺失行）
+MUTATIONS["m09_记录缺失不再分类"] = [
+    ("sub", "case errors.Is(err, gorm.ErrRecordNotFound):",
+            "case errors.Is(err, gorm.ErrRecordNotFound) && false:"),
+]
+# m10 定位键不一致（数据写坏）不再单独分类 ⇒ 运维无法从 code 看出该查数据还是该查代码
+#     杀手：TestMapTraceBodyError（定位键不一致行）
+MUTATIONS["m10_定位键不一致不再分类"] = [
+    ("sub", "case errors.Is(err, service.ErrTraceBodyInconsistent):",
+            "case errors.Is(err, service.ErrTraceBodyInconsistent) && false:"),
+]
+# m11 兜底臂被提前拦截（读超时臂的条件放宽成「一切非 nil」）⇒
+#     「其它 ⇒ 500/internal_error」与「ErrPartNotFound ⇒ 落到兜底」两行不再可达。
+#     选它而不是改 `Code: "internal_error",`：后者依赖 gofmt 的字段对齐（4 个空格），
+#     一旦有人加更长的字段名就漂移成 PATTERN-MISS。
+#     杀手：TestMapTraceBodyError（未知错误兜底行 / ErrPartNotFound 行）
+MUTATIONS["m11_兜底被提前拦截"] = [
+    ("sub", "case errors.Is(err, context.DeadlineExceeded):", "case err != nil:"),
+]
+# m12 读超时不再单独分类 ⇒ 大块解压超时被报成 500，客户端无从得知「等一等可能就好」
+#     杀手：TestMapTraceBodyError（读超时行）
+MUTATIONS["m12_超时不再分类"] = [
+    ("sub", "case errors.Is(err, context.DeadlineExceeded):",
+            "case errors.Is(err, context.DeadlineExceeded) && false:"),
+]
 ```
 
 **CHECKS：**
@@ -1009,10 +1068,21 @@ CHECKS = [
    "pattern": r'ErrBodyMissing = errors\.New\("tracearchive: 正文从未落盘"\)',
    "expect": "present",
    "why": "本任务把 ta.ErrBodyMissing 映射为 404 + body_missing=true，前提是哨兵定义不变；整目录零改动的权威判据是任务 9 的 git diff（D59）"},
+  # 【E21 补入的第 4 行】200 的 body 必须是正文 JSON 原字节（任务 5 的
+  # `c.Data(http.StatusOK, "application/json", result.Body)` 直接写出）⇒ 映射层
+  # **不得**把服务层结果序列化成包壳 —— 一旦包壳，任务 2 新增的 `TraceBodyResult.Ref`
+  # （定位键四分量）就会泄漏进响应。该要求没有对应变异（设计层不变量，不是可摘掉的判定），
+  # 由两条可失败用例承重：TestMapTraceBodyErrorSuccessCarriesNoPayload（零值诊断体）与
+  # TestTraceBodyErrorResponseKeySet（响应键集合逐字固定）。
+  # ⚠️ 该 pattern 会扫**整个文件文本（含注释）**：本文件注释里不得直接抄这些标识符
+  # （本轮实测踩坑：注释里的字样让本行与上一行恒 FAIL，工具在跑变异前终止 ⇒ 零证据）。
+  {"name": "映射层不包装正文结果", "file": "internal/observability/handler/trace_body_error.go",
+   "pattern": r"json\.Marshal|TraceBodyResult|result\.Body|json\.RawMessage", "expect": "absent",
+   "why": "200 的 body 由调用方直接写服务层返回的正文原字节；映射层不得序列化服务层结果、也不得引用其结果类型。可违反：本文件出现上述任一标识符即 FAIL"},
 ]
 ```
 
-- [ ] **步骤 6：跑变异集合** → 预期 7 条断言红、三断言过。
+- [ ] **步骤 6：跑变异集合** → 预期 **12 条断言红**（原稿写 7 条；按 **E21** 补入 m08–m12 ⇒ 12 条）、三断言过、静态检查 4 行全 PASS、映射表无缺口。
 - [ ] **步骤 7：提交**
 
 ```bash
@@ -1023,8 +1093,15 @@ git commit -m "feat(observability): 点读错误语义到 HTTP 表现的映射�
 
 ErrBodyMissing→404+body_missing=true；ErrNotArchived→500（保留底层三种成因文本）；
 ErrFooter/ErrTrailerCorrupt→500 part_corrupt；禁用→503；不一致→500；
-取消/超时→408/504。410 不可达（ErrPartNotFound 无生产者）⇒ 登记 D53。"
+取消/超时→408/504。410 不可达（ErrPartNotFound 无生产者）⇒ 登记 D53。
+nil ⇒ 200 + 零值诊断体：200 的 body 是正文 JSON 原字节，映射层不得包壳
+（防 TraceBodyResult.Ref 泄漏）。"
 ```
+
+**⚠️ 提交次序（本轮实测确立，与任务 1/2 一致）**：变异工具的 `git status --porcelain` 干净树门
+使「先跑工具再提交」在机制上不可能 ⇒ 次序是 **写集合 → 提交 → 出权威表**；若权威表因
+**CHECKS 恒 FAIL** 之类的原因中止（工具在跑变异**之前**就退出），修正后必须**新开一个提交**
+（不得 `--amend`）并**重跑并重记绑定**。
 
 ---
 
@@ -2078,6 +2155,15 @@ git log --oneline <base>..HEAD
 |---|---|---|---|
 | **E18** | 任务 7 步骤 5 的 `CHECKS`（`CLI复用服务不自己拼路径也不直查定位键列` + `CLI的ref取自服务导出`） | **两条都不足以拦住「用 GORM 模型字段绕行」。** 反例（逐字）：`var tr obsmodel.CallTrace` / `db.Where("request_id = ?", id).First(&tr)` / `return ta.Ref{DT: tr.BodyRefDT.Format("2006-01-02"), Inst: *tr.BodyRefInst, Part: *tr.BodyRefPart, Row: *tr.BodyRefRow}` —— **三处全不命中** E14 加强后的原正则：① 表名由模型推导，正文里没有 `call_traces` 字面量（`call_traces` 不命中）；② Go 字段名 `BodyRefDT` ≠ 列名 `body_ref_dt`（四个列名都不命中）；③ 别名 import（`obsmodel "…/internal/observability/model"`）之后既没有 `tracearchive.` 也没有 `tracearchive` 字样。**同时**，正向行 `pattern: r"\.Ref\b"` 会被**自造的** `ta.Ref{…}` 满足（`ta.Ref{` 里就含 `.Ref`）⇒ 它单独起来起不到「防随手构造」的作用；两条合起来仍允许一个**完全绕开服务层**的 CLI 通过全部 5 行静态检查 | **加强（不是重写）两条 CHECKS**：① 禁用项**增补** `obsmodel\.|BodyRefDT|BodyRefInst|BodyRefPart|BodyRefRow|ta\.Ref\{`（直接命中该反例的模型字段、别名限定符与复合字面量），并在 `why` 里逐字写明该 GORM 反例与「为什么原正则需要加强」；② **新增一条正向 present 检查** `NewTraceBodyService\(`（`CLI必须调用服务构造`）—— 禁用项只能证明「没用这些绕行写法」，只有正向构造检查能证明「真的走了服务层」；③ 原 `\.Ref\b` 行**保留**但 `why` 里写明其**效力边界**（会被 `ta.Ref{…}` 满足，承重的是新增的两行）。**残余如实登记**：改名字段（`tr.RefDT`）或拼接表名（`Table("call_"+"traces")`）仍可规避 → 属刻意规避，由正向检查兜底 |
 | **E19** | 任务 6 的用例清单 / `CHECKS`（`响应键集合不变` 从未被正面钉住） | 任务 2 新增了 `TraceBodyResult.Ref`（dt/inst/part/row 四分量，`call_trace.go` 的既有 `body_ref_*` 列已带 `omitempty` json tag ⇒ **定位键本来就会随行出现在既有端点响应里**，这是既有形状）。任务 6 若在**模型回填**时把 `res.Ref`（或 `res.Source`）并进 `CallTrace`、给模型加一个 `ref` json 键、或把 `c.JSON(http.StatusOK, trace)` 换成包壳结构，就会**把本计划新增的定位键/来源字段泄漏进既有 trace 端点的响应**（前端与 `tests/contract/contracts.json` 一起漂移）；而任务 6 原稿的 6 条用例与 3 条 CHECKS **都不能失败于**这种改动（m01–m06 全部打在其他判定上） | **补一条承重用例 + 两条 CHECKS**：① 步骤 1 新增 `TestUsageTraceResponseKeySetUnchanged`——两格固定输入（归档形态行 / 功能关闭形态行）**逐字断言 200 响应的顶层键集合**（完整键列表），并断言**不存在** `ref`/`source`/`body`/`trace` 这些本计划可能引入的包装键（该断言确实可失败：给模型加带 json tag 的字段、或换成包壳即红）；② `CHECKS` 补 `trace响应仍是模型整体`（`usage_handler.go` 的 `c\.JSON\(http\.StatusOK, trace\)` present）与 `模型未新增定位键泄漏字段`（`call_trace.go` 不得出现 `tracearchive` / `json:"(ref\|source\|body\|trace)"`）。**无对应变异**（泄漏来自设计层改动，且两处 200 返回点同串出现 2 次 ⇒ 无法做唯一目标的 `sub`），在步骤 5 的集合草稿里逐字注明 |
+
+### 追加登记（任务 3 实现轮，2026-10-08：E20–E21）
+
+> 编号续 E19。来源：任务 3 的实现与变异证据产出过程（**只登记与订正文本**；代码 / 测试 / 集合改动随**实现提交** `feat(observability): 点读错误语义到 HTTP 表现的映射` 与随后的**修复提交**落盘，计划文本订正随**另一个提交**落盘 —— 与 E4/E5、E9–E12、E14–E17 同一条纪律）。第一次权威表因**静态检查恒 FAIL**（断言无关的机械原因）中止，原始输出留档为 `p3-task-3-authoritative-aborted-checks-d0013852.txt`，修正后重跑并重记绑定。
+
+| 编号 | 位置 | 已核实的事实（本轮实测，不是推测） | 本计划的裁定 / 登记 |
+|---|---|---|---|
+| **E20** | 任务 3 步骤 1 的 `TestMapTraceBodyErrorNotArchivedKeepsUnderlyingText` | 原稿的**向量与断言互斥**（该用例按原文实现必然恒红）：原稿传入 `fmt.Errorf("%w: %s（块内共 %d 行）", ta.ErrNotArchived, "<ref>", 3)`，却要求 message 包含「行号越界」与「块内共 3 行」。该向量的实际文本是 `tracearchive: 产物与暂存均不存在: <ref>（块内共 3 行）` —— **不含「行号越界」**：那四个字是**计划正文的诊断说明**，不是冻结包的文本；`reader.go:183` 的真实拼装就是 `"%w: %s（块内共 %d 行）"`（另两处：`reader.go:139` `"%w: %s"`、`reader.go:266` `"%w: %s（偏移 %d 未命中行首）"`） | 该用例**按冻结包的真实拼装取三个向量**（两副本都不存在 / 行号越界 / 偏移未命中行首），各自断言其**可分辨子串**原样透出（`产物与暂存均不存在` / `块内共 3 行` / `偏移 4096 未命中行首`）。语义不变（「底层文本必须保留、不得替换成固定文案」），只是向量可达；计划步骤 1 的文本已逐字订正 |
+| **E21** | 任务 3 的**证据覆盖缺口**：步骤 5 的 7 条变异 vs 权威判据表 12 行；步骤 5 的 3 行 CHECKS vs 「200 的 body 是正文原字节」 | ① 判据表自己要求「**逐行实现、逐行有用例、逐行有变异或 CHECKS**」，而 m01–m07 只覆盖「未归档 / body_missing / 损坏 / 禁用 / 取消」五类，**nil(200) / 记录缺失(404) / 定位键不一致(500) / 读超时(504) / 兜底(500 internal_error)** 五行**既无变异也无 CHECKS**（原 3 行 CHECKS 全是结构不变量）⇒ 工具 `--mapping` 会出现 GAP（整轮失败）；这五行是**行为**要求 ⇒ 按全局约束第 7 条应当用变异覆盖（同任务 2 的 E11 处置）。② 任务 3 是**建响应类型的地方**，而全计划唯一钉住「200 = 正文 JSON 原字节、不包壳」的判据在**任务 5**（`c.Data` + m04）；任务 3 原稿对映射层的 200 路径**没有任何正面约束** ⇒ 若映射层把服务层结果序列化成包壳，任务 2 新增的 `TraceBodyResult.Ref`（定位键四分量）会**直接泄漏进响应**。③ 实测踩坑：两条「不存在性」CHECKS 是对**整个文件文本（含注释）**做 `re.search`，实现首版注释里写了 `gin.Context` / `result.Body` 等字样 ⇒ 两条恒 FAIL，工具在跑变异**之前**就以「静态检查失败」终止（整轮零证据） | ① 补入 **m08–m12**（成功路径不再返回 200 / 记录缺失不再分类 / 定位键不一致不再分类 / 兜底被提前拦截 / 超时不再分类），步骤 6 的预期由 **7 条改为 12 条**断言红，并在步骤 5 里逐字写明补入理由；`ErrPartNotFound ⇒ 落到兜底`（D53 的 410 不可达）随 m11 获得**可失败**形式。② 补两条承重用例 `TestMapTraceBodyErrorSuccessCarriesNoPayload`（nil ⇒ 零值诊断体）与 `TestTraceBodyErrorResponseKeySet`（响应键集合逐字固定、无 ref/source/body/trace 键），并补第 4 行 CHECKS `映射层不包装正文结果`（本文件不得出现 JSON 序列化调用 / 服务层结果类型名 / 响应写出调用）；**无对应变异**（属设计层不变量，与任务 6 的 E19 同形），在集合的 REQUIREMENTS 里如实登记为「静态检查 + 可失败断言」承重。③ 实现注释改为中文描述（**不是**放宽 CHECKS），并在步骤 3 的形状硬要求里新增一条「注释里也不得出现禁用标识符」；步骤 4 的 `go build ./...` 订正为 `go build ./internal/... ./cmd/...`（基线失败于 `test/bedrock_model_id_check.go`，见既有失败清单）。**残余**：`--ref`/映射层的「逐字节 Content-Length」断言仍只在任务 5（任务 3 是纯函数、无 HTTP 写出口）——不得声称任务 3 已覆盖字节级响应 |
 
 ---
 

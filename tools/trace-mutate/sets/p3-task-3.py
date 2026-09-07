@@ -45,11 +45,13 @@ PATTERN-MISS；`case err != nil:` 与对齐无关，且正是「放宽某个判�
 - 「不新增存储层哨兵」（规格 §7.1）与「纯函数不引入 IO/DB/协议类型」：**不存在性**
   断言，变异证明不了「没写」；
 - 「冻结包的哨兵定义未变」（前提条件，且 `internal/tracearchive/` **冻结、不可变异**）；
-- 「映射层不得把服务层结果包壳」（**本集合新增的一行**）：它是设计层不变量
+- 「映射层不得把服务层结果包壳」（**本集合新增的一行，登记 E21**）：它是设计层不变量
   （与任务 6 的 **E19** 同形 —— 泄漏来自「加字段 / 换包壳」这类设计改动，不是某条
   可摘掉的判定），没有对应变异 —— 但由两条**可失败**的用例共同承重：
   `TestMapTraceBodyErrorSuccessCarriesNoPayload`（nil ⇒ 零值诊断体）与
   `TestTraceBodyErrorResponseKeySet`（响应键集合逐字固定，无 ref/source/body/trace 键）。
+  这两条用例同样是 **E21 补入**（任务 3 是建响应类型的地方，而全计划原先把「200 = 正文
+  原字节」的判据只放在任务 5；映射层若包壳，任务 2 新增的定位键会直接泄漏）。
 - 「`Message: err.Error(),` / `BodyMissing: true,` /
   `http.StatusServiceUnavailable, TraceBodyErrorResponse{` 各自只出现一处」：
   由 m05 / m03 / m06 定位串的**唯一性**承重 —— 工具的 `--check` 与 `apply_mutation`

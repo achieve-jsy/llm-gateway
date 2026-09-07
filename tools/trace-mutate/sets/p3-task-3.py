@@ -54,6 +54,15 @@ PATTERN-MISS；`case err != nil:` 与对齐无关，且正是「放宽某个判�
   `http.StatusServiceUnavailable, TraceBodyErrorResponse{` 各自只出现一处」：
   由 m05 / m03 / m06 定位串的**唯一性**承重 —— 工具的 `--check` 与 `apply_mutation`
   要求 `count == 1`，多写一处即 PATTERN-MISS（该集合零产出），这是比静态正则更强的判据。
+
+## 一次实测踩坑（记以免重犯）
+
+CHECKS 的 `pattern` 是对**整个文件文本（含注释）**做 `re.search`。本实现的第一版
+在文件头注释里写了「没有 gin.Context」「……result.Body……」这类字样，于是
+`纯函数不引入IO` 与 `映射层不包装正文结果` 两条**恒 FAIL** ⇒ 工具在跑变异**之前**就以
+「静态检查失败」终止（整轮零证据 —— 该次中止的原始输出留档为
+`p3-task-3-authoritative-aborted-checks-d0013852.txt`）。修正是**改注释措辞**，
+不是放宽 CHECKS。⇒ 凡是「不存在性」CHECKS 覆盖的文件，注释里不得直接抄那些标识符。
 """
 
 NAME = "p3-task-3"

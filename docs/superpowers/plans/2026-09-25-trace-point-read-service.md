@@ -1441,6 +1441,22 @@ GET /internal/v1/trace-body（InternalAuth）。200 = 正文 JSON 原字节（�
 //   这一条是安全承重：正文来源换了，裁剪时机若被挪到取正文之前就会漏。
 // TestScopedTracePreservesScopeOnArchivedBody  ← m06 的杀手
 //   范围外记录 ⇒ 仍是 404（不泄露存在性），且【不发生】任何 reader 调用。
+// TestUsageTraceResponseKeySetUnchanged  ← 【E19 新增，承重用例】响应键集合不被改造动过
+//   两格固定输入，逐字断言 200 响应的**顶层键集合**（对固定输入断言完整键列表）：
+//     ① 归档形态行（jsonb 三列全 NULL + 定位键全非 NULL + 替身 reader 返回固定正文）⇒
+//        {request_id, ts, request_headers, request_body, response_body,
+//         body_ref_dt, body_ref_inst, body_ref_part, body_ref_row, body_missing}
+//     ② 功能关闭形态行（jsonb 三列有值 + 定位键全 NULL + body_missing=false）⇒
+//        {request_id, ts, request_headers, request_body, response_body, body_missing}
+//   两格都额外断言**不存在** `ref` / `source` / `body` / `trace` 这些本计划可能引入的包装键。
+//   判据：键集合只由 `obsmodel.CallTrace` 的既有 json tag 决定（omitempty 只决定「有值的键
+//   是否出现」），本任务只改**取值**（归档正文回填），不引入任何新键。
+//   【为什么必须有（登记 E19）】任务 2 新增了 `TraceBodyResult.Ref`（含 dt/inst/part/row
+//   定位键）。若本任务的模型回填把 `res.Ref` 并进 `CallTrace`、或给模型加了 `ref` 字段、
+//   或把响应换成包壳结构，定位键就会**泄漏进既有 trace 端点的响应**（前端与契约都会漂移）。
+//   可失败：给 `CallTrace` 加任何带 json tag 的字段（如 `Ref ta.Ref `json:"ref,omitempty"``）、
+//   把 `c.JSON(http.StatusOK, trace)` 换成包壳（`gin.H{"trace": trace}`）、或把 res.Ref/res.Source
+//   并进模型 ⇒ 本用例红。**无对应变异**（原因见步骤 5 的说明）。
 ```
 
 - [ ] **步骤 2：运行测试确认失败** → 断言红（现有实现返回的正文为空）
@@ -1522,6 +1538,17 @@ CHECKS = [
    "pattern": r"func \(r \*Reader\) GetBody\(ctx context\.Context, ref Ref\) \(\[\]byte, error\)",
    "expect": "present",
    "why": "回填经 TraceBodyService 调用冻结包 Reader；签名若变则接线失效。整目录零改动的权威判据是任务 9 的 git diff（D59）"},
+  # 【E19 新增的两行】响应键集合不变（防 `TraceBodyResult.Ref` / 定位键泄漏进既有端点）。
+  # 该要求**没有对应变异**：泄漏来自**设计层改动**（给模型加字段 / 换包壳结构），而不是某条
+  # 可摘掉的判定；且两处 200 返回点的串 `c.JSON(http.StatusOK, trace)` 在同一文件里出现
+  # **2 次**（`trace()` 与 `ScopedTrace()`）⇒ 无法做唯一目标的 `sub`。故只有静态检查 +
+  # `TestUsageTraceResponseKeySetUnchanged` 的完整键列表断言（该断言确实可失败）。
+  {"name": "trace响应仍是模型整体", "file": "internal/observability/handler/usage_handler.go",
+   "pattern": r"c\.JSON\(http\.StatusOK, trace\)", "expect": "present",
+   "why": "E19：200 的响应体是 `obsmodel.CallTrace` 本身（既有形态），**不得**换成包壳、也不得把 ref/source 并进去。可违反：改成 `gin.H{\"trace\": trace}` 或任何包装结构即 FAIL（两处返回点共用本行，命中一次即算通过）"},
+  {"name": "模型未新增定位键泄漏字段", "file": "internal/observability/model/call_trace.go",
+   "pattern": r"tracearchive|json:\"(ref|source|body|trace)\"", "expect": "absent",
+   "why": "E19：定位键的唯一合法来源是四个**既有**的 `body_ref_*` 列（json tag 早已存在且带 omitempty）；模型**不得**引用冻结包定位键类型，也不得新增 `ref`/`source` 之类的 json 键 —— 否则 `TraceBodyResult.Ref` 会经模型泄漏进既有 trace 端点的响应。可违反：加 `Ref *ta.Ref `json:\"ref,omitempty\"`` 或任何新 json 键即 FAIL"},
 ]
 ```
 
@@ -1638,16 +1665,32 @@ CHECKS = [
   # CLI 必须复用服务，不得自己查库/拼路径（否则会漂移成第二个读实现）。
   # 【订正 E14】原行的 `tracearchive\.` 只拦得住「直接引用冻结包拼路径」，
   # **拦不住** `--ref` 最可能走的旁路：自己查 call_traces 的四个定位键列再拼。
-  # 因此把两条旁路一起禁掉（命中任一项即 FAIL）。
+  # 【订正 E18·本行正则已被加强】E14 的禁用项仍拦不住「用 GORM 模型字段绕行」这一形态：
+  #   var tr obsmodel.CallTrace
+  #   db.Where("request_id = ?", id).First(&tr)
+  #   return ta.Ref{DT: tr.BodyRefDT.Format("2006-01-02"), Inst: *tr.BodyRefInst,
+  #                 Part: *tr.BodyRefPart, Row: *tr.BodyRefRow}
+  # 这四行**三处全不命中**原正则：① 表名由模型推导 ⇒ 正文里没有 `call_traces` 字面量；
+  # ② Go 字段名 `BodyRefDT` 与列名 `body_ref_dt` 不同形 ⇒ 四个列名也都命中不了；
+  # ③ 别名 import（`obsmodel "…/internal/observability/model"`）之后正文里既没有
+  #    `tracearchive.` 也没有 `call_traces`。它绕过了服务层的优先级判定 / ValidateRef，
+  # 是 D59「同一判据两处实现」的正宗形态。⇒ 把「模型字段 / 别名限定符 / 直接构造
+  # `ta.Ref{}`」一并列入禁用项。
   {"name": "CLI复用服务不自己拼路径也不直查定位键列", "file": "cmd/trace-body/main.go",
-   "pattern": r"tracearchive\.|body_ref_dt|body_ref_inst|body_ref_part|body_ref_row|call_traces",
+   "pattern": r"tracearchive\.|body_ref_dt|body_ref_inst|body_ref_part|body_ref_row|call_traces|obsmodel\.|BodyRefDT|BodyRefInst|BodyRefPart|BodyRefRow|ta\.Ref\{",
    "expect": "absent",
-   "why": "CLI 必须经 TraceBodyService 取正文与定位键（`TraceBodyResult.Ref`）；直接引用冻结包、或自己查 call_traces 的四列再拼 ref，都会绕过服务层的优先级判定/ValidateRef ⇒ 出现第二份判据（D59 的形态）。可违反：正文写出任一列名或 `tracearchive.` 即 FAIL"},
+   "why": "CLI 必须经 TraceBodyService 取正文与定位键（`TraceBodyResult.Ref`）；直接引用冻结包、自己查 call_traces 的四列、**用 `obsmodel.CallTrace` 的 `BodyRefDT/BodyRefInst/BodyRefPart/BodyRefRow` 字段取四分量、或在 CLI 里直接构造 `ta.Ref{…}`**，都会绕过服务层的优先级判定/ValidateRef ⇒ 出现第二份判据（D59 的形态）。可违反：正文出现上述任一标识符即 FAIL。**残余（如实登记）**：若有人把模型字段再改名（如 `tr.RefDT`）或用 `Table(\"call_\"+\"traces\")` 之类的拼接隐藏表名，本行仍拦不住——那已属刻意规避，由下面的正向检查兜底"},
+  # 【订正 E18·新增的正向检查】只留禁用项不够：下面的 `\.Ref\b` 会被自造的
+  # `return ta.Ref{...}` **满足**（`ta.Ref{` 里就含 `.Ref`），因此它单独起来起不到
+  # 「防随手构造」的作用。正途的唯一客观判据是「CLI 真的构造了服务」。
+  {"name": "CLI必须调用服务构造", "file": "cmd/trace-body/main.go",
+   "pattern": r"NewTraceBodyService\(", "expect": "present",
+   "why": "正向钉住「取正文与 `--ref` 真的走了服务层」（任务 7 步骤 3 的硬要求：复用 TraceBodyService，不得自己查库 + 自己拼路径）。**这一行是 E18 的承重项**：禁用项只能证明「没用这些绕行写法」，只有它要求服务被真正构造出来；两者合起来才排除「CLI 自造 ta.Ref」。可违反：删掉服务构造、改为直接查库即 FAIL"},
   # `--ref` 的四分量必须取自服务导出，而不是自己拼（与上一行互为补充：上一行禁旁路，
   # 这一行钉住正途；只留禁行会让「打印一个随手构造的 ta.Ref」蒙混过关）。
   {"name": "CLI的ref取自服务导出", "file": "cmd/trace-body/main.go",
    "pattern": r"\.Ref\b", "expect": "present",
-   "why": "钉住「--ref 打印的是服务导出的 ta.Ref 四分量」（任务 2 的 `TraceBodyResult.Ref`）。可违反：把 ref 改成 CLI 自己构造的结构就会 FAIL；若 ref 格式化被抽到 `internal/observability/service/trace_body_cli.go`，本行与本页第一行必须镜像到该文件"},
+   "why": "钉住「--ref 打印的是服务导出的 ta.Ref 四分量」（任务 2 的 `TraceBodyResult.Ref`）。**⚠️ 本行的效力边界（订正 E18）**：`\.Ref\b` 会被自造的 `ta.Ref{…}` 满足（`ta.Ref{` 里就含 `.Ref`）⇒ 它单独**不能**证明「ref 取自服务」；真正承重的是上面两行（加强后的禁用项 + `NewTraceBodyService(`）。若 ref 格式化被抽到 `internal/observability/service/trace_body_cli.go`，本页前三行都必须镜像到该文件"},
   # 【原稿的 r'Print.*(dsn|DSN)|log.*(dsn|DSN)' 不合格】`fmt.Fprintln(os.Stderr, "usage: … --dsn …")`
   # 会同时命中 `Print` 与 `dsn` ⇒ 用法文本一写就恒 FAIL。改成只禁「把 dsn 的值送进日志」。
   {"name": "CLI不把DSN写进日志", "file": "cmd/trace-body/main.go",
@@ -2026,6 +2069,15 @@ git log --oneline <base>..HEAD
 | **E15** | 任务 2 步骤 3 的变异目标字面量（`DT:` 的缩进） | 计划 `:664`（原行号）写 `DT: trace.BodyRefDT.Format("2006-01-02")`（**单空格**），而任务 4 的集合草稿（`:1111`）与实现行都是 `DT:   trace.BodyRefDT.Format("2006-01-02")`（**3 空格**）。若执行者照计划把实现写成单空格，任务 4 的 `m04`（定位串含 3 空格）会 **PATTERN-MISS**，集合零产出 | 计划字面量统一为**与实际行一致的 3 空格**（与任务 4 的集合逐字对齐），并在该处写明「**必须原样保留这一行**」。语义不变（只是缩进），但它是变异定位串的一部分 |
 | **E16** | 任务 2 的 `Source` 判定时机措辞 vs 实现 | 计划 `:567`（原行号）写「本服务在**调用前**用 `os.Stat` 判定」，实现是 `Reader.GetBody` **成功返回之后**再 `src := sourceOf(...)`（`Source` 与成功返回绑定在同一处更不易漂移）。**语义等价**：该 `stat` 只决定 `Source` 这个**诊断字段**，不参与任何判定、不改变正文内容；两次 `stat` 的窗口说明已写进代码注释（不得声称 `Source` 原子）。交付报告 §4 已如实登记该偏离 | 计划文本订正为**实际语义**（「`Reader.GetBody` 成功返回之后探测」），并保留「刻意不复用 `GetBody` 返回值判断来源」与窗口说明 |
 | **E17** | 任务 2 步骤 1 的 `TestTraceBodyServicePartialRefsAreInconsistent` 的覆盖断言 | 实现用 `seen++` + `require.Equal(t, 14, seen)`：`seen` 每轮恰加一、与循环体**同构** ⇒ 循环少跑 / 跳格 / 提前退出**都不会红**，是一条**恒真断言**（违反全局约束第 6 条要求的证伪能力）。计划步骤 1 只写「4 个键的非空子集（共 14 种）逐个断言」，**没有**要求把「实际覆盖了哪 14 种」断言出来 ⇒ 该措辞允许落成恒真形态。另：同一用例注释把「dt 向量不可构造」的登记号写成 **E11**（应为 **E12**） | 测试改为：① 期望集合由「4 个二值定位键的**全部 16 种形态**」显式推导（排除 `0`=全 NULL 与 `15`=全非 NULL），② 断言**实际驱动的 mask 集合与期望集合逐元素相等**（少跑 / 跳格 / 多跑都红），③ 再用 `Len(…,14)` 钉住 `2^4-2` 的总数。计划步骤 1 的措辞同步补上「断言实际覆盖的形态集合」这一形态要求；登记号订正为 E12。**该恒真断言不影响任何既存变异的判定**（m03 仍由本用例的 `ErrorIs` 断言杀死） |
+
+### 追加登记（任务 3 前的窄范围复审，2026-10-08：E18–E19）
+
+> 编号续 E17。来源：Task 2 窄范围复审的两项发现（**只登记与订正计划文本**，不碰任何 `.go` / 变异集合）。本轮的文本订正随**单独提交**落盘（与任务实现提交分离，沿用 E4/E5、E14–E17 的同一条纪律）。任务 3 实现轮的追加登记见 **E20–E21**。
+
+| 编号 | 位置 | 已核实的事实（本轮实测，不是推测） | 本计划的裁定 / 登记 |
+|---|---|---|---|
+| **E18** | 任务 7 步骤 5 的 `CHECKS`（`CLI复用服务不自己拼路径也不直查定位键列` + `CLI的ref取自服务导出`） | **两条都不足以拦住「用 GORM 模型字段绕行」。** 反例（逐字）：`var tr obsmodel.CallTrace` / `db.Where("request_id = ?", id).First(&tr)` / `return ta.Ref{DT: tr.BodyRefDT.Format("2006-01-02"), Inst: *tr.BodyRefInst, Part: *tr.BodyRefPart, Row: *tr.BodyRefRow}` —— **三处全不命中** E14 加强后的原正则：① 表名由模型推导，正文里没有 `call_traces` 字面量（`call_traces` 不命中）；② Go 字段名 `BodyRefDT` ≠ 列名 `body_ref_dt`（四个列名都不命中）；③ 别名 import（`obsmodel "…/internal/observability/model"`）之后既没有 `tracearchive.` 也没有 `tracearchive` 字样。**同时**，正向行 `pattern: r"\.Ref\b"` 会被**自造的** `ta.Ref{…}` 满足（`ta.Ref{` 里就含 `.Ref`）⇒ 它单独起来起不到「防随手构造」的作用；两条合起来仍允许一个**完全绕开服务层**的 CLI 通过全部 5 行静态检查 | **加强（不是重写）两条 CHECKS**：① 禁用项**增补** `obsmodel\.|BodyRefDT|BodyRefInst|BodyRefPart|BodyRefRow|ta\.Ref\{`（直接命中该反例的模型字段、别名限定符与复合字面量），并在 `why` 里逐字写明该 GORM 反例与「为什么原正则需要加强」；② **新增一条正向 present 检查** `NewTraceBodyService\(`（`CLI必须调用服务构造`）—— 禁用项只能证明「没用这些绕行写法」，只有正向构造检查能证明「真的走了服务层」；③ 原 `\.Ref\b` 行**保留**但 `why` 里写明其**效力边界**（会被 `ta.Ref{…}` 满足，承重的是新增的两行）。**残余如实登记**：改名字段（`tr.RefDT`）或拼接表名（`Table("call_"+"traces")`）仍可规避 → 属刻意规避，由正向检查兜底 |
+| **E19** | 任务 6 的用例清单 / `CHECKS`（`响应键集合不变` 从未被正面钉住） | 任务 2 新增了 `TraceBodyResult.Ref`（dt/inst/part/row 四分量，`call_trace.go` 的既有 `body_ref_*` 列已带 `omitempty` json tag ⇒ **定位键本来就会随行出现在既有端点响应里**，这是既有形状）。任务 6 若在**模型回填**时把 `res.Ref`（或 `res.Source`）并进 `CallTrace`、给模型加一个 `ref` json 键、或把 `c.JSON(http.StatusOK, trace)` 换成包壳结构，就会**把本计划新增的定位键/来源字段泄漏进既有 trace 端点的响应**（前端与 `tests/contract/contracts.json` 一起漂移）；而任务 6 原稿的 6 条用例与 3 条 CHECKS **都不能失败于**这种改动（m01–m06 全部打在其他判定上） | **补一条承重用例 + 两条 CHECKS**：① 步骤 1 新增 `TestUsageTraceResponseKeySetUnchanged`——两格固定输入（归档形态行 / 功能关闭形态行）**逐字断言 200 响应的顶层键集合**（完整键列表），并断言**不存在** `ref`/`source`/`body`/`trace` 这些本计划可能引入的包装键（该断言确实可失败：给模型加带 json tag 的字段、或换成包壳即红）；② `CHECKS` 补 `trace响应仍是模型整体`（`usage_handler.go` 的 `c\.JSON\(http\.StatusOK, trace\)` present）与 `模型未新增定位键泄漏字段`（`call_trace.go` 不得出现 `tracearchive` / `json:"(ref\|source\|body\|trace)"`）。**无对应变异**（泄漏来自设计层改动，且两处 200 返回点同串出现 2 次 ⇒ 无法做唯一目标的 `sub`），在步骤 5 的集合草稿里逐字注明 |
 
 ---
 

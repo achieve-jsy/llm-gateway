@@ -13,10 +13,14 @@
 计划给 7 条变异（m01–m07），本集合**逐字保留**，另**补入** 5 条（m08–m12，登记 E21）
 并**改写 0 条**。补入的理由：计划任务 3 的权威判据表自己要求
 「**逐行实现、逐行有用例、逐行有变异或 CHECKS**」，但 m01–m07 只覆盖
-「未归档 / body_missing / 损坏 / 禁用 / 取消」五类，**没有覆盖** nil(200)、
-记录缺失(404)、定位键不一致(500)、读超时(504)、兜底(500 internal_error) 五行；
-计划自己的 CHECKS 只有 3 行（不新增哨兵 / 无 IO / 冻结包哨兵未变），也不含这五行。
-按全局约束第 7 条「变异（行为）与静态检查（结构不变量）分开记」，这五行都是**行为**
+「未归档 / body_missing / 损坏 / 禁用 / 取消」五类（十二行里的 **6 行**：
+body_missing / 读侧禁用 / 未归档 / footer 损坏 / trailer 损坏 / 客户端取消），
+**没有覆盖** nil(200)、记录缺失(404)、定位键不一致(500)、ErrPartNotFound（落到兜底）、
+读超时(504)、兜底(500 internal_error) **六行**（原文写「五行」且漏了 ErrPartNotFound
+那一行，已按 **E22** 订正；算式 6 + 6 = 12 自洽）；
+计划自己的 CHECKS 原稿只有 3 行（不新增哨兵 / 无 IO / 冻结包哨兵未变）——它们全是
+**结构不变量**，同样不含这六行（第 4 行「映射层不包装正文结果」是 E21 ② 补入的）。
+按全局约束第 7 条「变异（行为）与静态检查（结构不变量）分开记」，这六行都是**行为**
 要求 ⇒ 用变异而不是静态检查覆盖（与任务 2 的 E11 同一处置）。
 
 m11 的形态说明：计划没有为「兜底 arm」给变异。本集合用
@@ -42,7 +46,7 @@ PATTERN-MISS；`case err != nil:` 与对齐无关，且正是「放宽某个判�
 
 ## 变异测不到、但有静态检查行（CHECKS）
 
-- 「不新增存储层哨兵」（规格 §7.1）与「纯函数不引入 IO/DB/协议类型」：**不存在性**
+- 「不新增存储层哨兵」（规格 §7.1）与「纯函数不引入 IO/DB/gin 上下文」：**不存在性**
   断言，变异证明不了「没写」；
 - 「冻结包的哨兵定义未变」（前提条件，且 `internal/tracearchive/` **冻结、不可变异**）；
 - 「映射层不得把服务层结果包壳」（**本集合新增的一行，登记 E21**）：它是设计层不变量
@@ -65,6 +69,26 @@ CHECKS 的 `pattern` 是对**整个文件文本（含注释）**做 `re.search`�
 「静态检查失败」终止（整轮零证据 —— 该次中止的原始输出留档为
 `p3-task-3-authoritative-aborted-checks-d0013852.txt`）。修正是**改注释措辞**，
 不是放宽 CHECKS。⇒ 凡是「不存在性」CHECKS 覆盖的文件，注释里不得直接抄那些标识符。
+
+## 本轮改动（2026-10-08，任务 3 独立评审订正轮：E22–E25）
+
+**含集合改动 ⇒ 已按全局约束第 8 条重跑权威表并重记绑定（旧表保留）。**
+`MUTATIONS` 一条未动（12 条），改的是**注释文字**与**静态检查的覆盖面/措辞**：
+
+1. **E22（头注计数）**：「没有覆盖 … 五行」⇒ **六行**并补 `ErrPartNotFound`（落到兜底）；
+   同时如实写明 m01–m07 覆盖的 6 行（12 = 6 + 6）。**只改注释**。
+2. **E24（覆盖提升）**：`映射层不包装正文结果` 的 pattern **增补**
+   `json.NewEncoder|ResponseWriter|WriteHeader` —— 原正则拦不住
+   `json.NewEncoder(w).Encode(...)` / `w.WriteHeader(...)` / `ResponseWriter` 这几族写法。
+   既然是**不存在性**检查、扫全文（含注释），必须确认**干净树上仍 PASS**：
+   本轮实测 4 行静态检查**全部 PASS**（见本轮权威表）。
+3. **E25（措辞订正）**：`纯函数不引入IO` 的 `why` 与 REQUIREMENTS 左列把
+   「无协议类型」订正为「**无 gin 上下文**」—— 该文件**合法引用 `net/http` 的状态码常量**
+   （`http.StatusOK` 等），`net/http` 就是协议包，原措辞与事实不符；被禁的只是
+   `gin.` 这一类**请求上下文**（pattern 本身没变）。
+4. **E23（失效边界写进 why）**：静态检查只能证明「没抄这些字样」，**证明不了「没有包壳」**
+   —— 手拼 JSON、换别名绕过正则都不命中。真正承重的是两条**可失败**用例：
+   `TestMapTraceBodyErrorSuccessCarriesNoPayload` 与 `TestTraceBodyErrorResponseKeySet`。
 """
 
 NAME = "p3-task-3"
@@ -121,7 +145,7 @@ MUTATIONS["m07_取消报成500"] = [
     ("sub", "case errors.Is(err, context.Canceled):", "case false:"),
 ]
 # ---------------------------------------------------------------------------
-# 以下 5 条为**补入**（登记 E21）：覆盖计划权威判据表里「没有变异」的五行
+# 以下 5 条为**补入**（登记 E21）：覆盖计划权威判据表里「没有变异」的六行
 # ---------------------------------------------------------------------------
 # m08 成功路径不再返回 200（nil 落进兜底）⇒ 调用方会把「无错误」当成内部错误。
 #     替换串保留 `err == nil` 的引用 ⇒ 不产生未使用变量、可编译。
@@ -181,7 +205,10 @@ CHECKS = [
         "pattern": r"os\.|io\.Read|gorm\.DB|gin\.",
         "expect": "absent",
         "why": (
-            "映射表必须可在无文件系统 / 无 DB / 无 HTTP 的情况下逐行测。"
+            "映射表必须可在无文件系统 / 无 DB / 无 gin 上下文 的情况下逐行测："
+            "gorm.ErrRecordNotFound 是纯哨兵、net/http 只用于状态码常量（http.StatusOK 等）"
+            "⇒ 两者都是**合法引用**；被禁的是 gin 请求上下文、文件操作与 *gorm.DB 句柄。"
+            "【措辞订正 E25】原 why 写成「无协议类型」与事实不符（该文件合法引用 net/http）。"
             "可违反：引入任意文件操作或 gin 上下文即 FAIL。"
         ),
     },
@@ -198,15 +225,19 @@ CHECKS = [
     {
         "name": "映射层不包装正文结果",
         "file": "internal/observability/handler/trace_body_error.go",
-        "pattern": r"json\.Marshal|TraceBodyResult|result\.Body|json\.RawMessage",
+        "pattern": r"json\.Marshal|TraceBodyResult|result\.Body|json\.RawMessage|json\.NewEncoder|ResponseWriter|WriteHeader",
         "expect": "absent",
         "why": (
             "200 的 body 必须是**正文 JSON 原文**（任务 5 的 "
             "c.Data(http.StatusOK, \"application/json\", result.Body) 直接写出）⇒ 映射层"
             "不得 json.Marshal 服务层结果、也不得引用 TraceBodyResult —— 一旦包壳，"
             "任务 2 新增的 Ref/Source 字段（无 json tag，字段名照原样）就会泄漏进响应。"
-            "**该要求没有对应变异**（属设计层不变量，不是可摘掉的判定），"
-            "由两条可失败用例承重：TestMapTraceBodyErrorSuccessCarriesNoPayload 与 "
+            "【E24 增补】原正则拦不住流式/直接写响应这一族：json.NewEncoder(w).Encode(...)、"
+            "ResponseWriter、w.WriteHeader(...) 都不命中 ⇒ 增补这三项（本轮反正因 E22 重跑，"
+            "加检查是免费的覆盖提升；已实测干净树仍 PASS）。"
+            "【效力边界 E23】**该要求没有对应变异**（属设计层不变量，不是可摘掉的判定），"
+            "而且它只证明「没抄这些字样」，**证明不了「没有包壳」**（手拼 JSON / 换别名可绕过）"
+            "⇒ 真正承重的是两条**可失败**用例：TestMapTraceBodyErrorSuccessCarriesNoPayload 与 "
             "TestTraceBodyErrorResponseKeySet。可违反：本文件引用上述任一标识符即 FAIL。"
         ),
     },
@@ -338,7 +369,7 @@ REQUIREMENTS = [
         "note": "不存在性要求 ⇒ 只有静态证据。",
     },
     {
-        "plan": "纯函数：无 IO / 无 DB / 无协议类型（可逐行测、可注入替身）",
+        "plan": "纯函数：无 IO / 无 DB / 无 gin 上下文（可逐行测、可注入替身；net/http 只用于状态码常量 ⇒ 合法引用）",
         "mutations": [],
         "checks": ["纯函数不引入IO"],
         "note": "不存在性要求 ⇒ 只有静态证据。",

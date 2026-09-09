@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -157,20 +158,37 @@ type traceSubject struct {
 
 // traceSubject 从 call_logs 反查 request_id 的归属信息。
 // 返回 (归属, 是否查到)；查不到或归属为空时，调用方按 fail closed 处理。
+//
+// 【单一实现】具体判据在包级 LookupTraceSubject 里：点读端点（trace_body_handler.go）
+// 与既有 trace 端点必须用**同一套**归属判据（全局约束「判据与既有端点同一套，
+// 不得各写一套」）⇒ 本方法只做形状适配，不再自己写一份查询。
 func (h *UsageHandler) traceSubject(c *gin.Context, rid string) (traceSubject, bool) {
-	var sub traceSubject
-	if err := h.db.WithContext(c.Request.Context()).
+	userID, keyType, found := LookupTraceSubject(c.Request.Context(), h.db, rid)
+	return traceSubject{UserID: userID, KeyType: keyType}, found
+}
+
+// LookupTraceSubject 从 call_logs 反查 request_id 的归属（既有 trace 端点与点读端点共用）。
+//
+// 判据（fail closed，与既有端点逐字一致）：按 request_id 取 user_id / key_type；
+// 查询失败或 user_id 为空一律按「没查到」返回 ⇒ 调用方必须按不存在处理，
+// 绝不把归属未知当成「归属为空串」继续走。
+func LookupTraceSubject(ctx context.Context, db *gorm.DB, requestID string) (userID string, keyType string, found bool) {
+	var row struct {
+		UserID  string `gorm:"column:user_id"`
+		KeyType string `gorm:"column:key_type"`
+	}
+	if err := db.WithContext(ctx).
 		Table("call_logs").
 		Select("user_id, key_type").
-		Where("request_id = ?", rid).
+		Where("request_id = ?", requestID).
 		Limit(1).
-		Scan(&sub).Error; err != nil {
-		return sub, false
+		Scan(&row).Error; err != nil {
+		return "", "", false
 	}
-	if sub.UserID == "" {
-		return sub, false
+	if row.UserID == "" {
+		return "", "", false
 	}
-	return sub, true
+	return row.UserID, row.KeyType, true
 }
 
 // ScopedTrace GET /api/v1/usage/scoped/logs/:request_id/trace

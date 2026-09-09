@@ -27,6 +27,7 @@ import (
 	orghandler "github.com/example/llm-gateway/internal/orgservice/handler"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	orgrepo "github.com/example/llm-gateway/internal/orgservice/repository"
+	ta "github.com/example/llm-gateway/internal/tracearchive"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -774,6 +775,38 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/my/video/tasks/:id", videoTaskHandler.MyGet)
 	}
 
+	// 点读两条端点（规格 §8.1；计划 3/4 任务 5）
+	// ① 构造：读侧禁用（trace_body.root 为空）时**不构造** Reader —— NewReader 对空 Root
+	//    直接报错，而「读侧未配置」是合法状态（正文仍在 jsonb 列）。此时 opts.Reader 必须
+	//    保持「接口值为 nil」：**不得**把 nil 的 *ta.Reader 装进接口字段，装进去后 != nil，
+	//    服务会真的去调它并 panic。
+	// ② *ta.Reader 天然满足服务里的未导出窄接口，直接赋值即可；读侧禁用 + 行带定位键
+	//    会在触碰任何存储之前返回 ErrTraceBodyDisabled ⇒ 503。
+	tbOpts := obssvc.TraceBodyServiceOptions{Config: cfg.TraceBodyRead}
+	if !cfg.TraceBodyRead.Disabled() {
+		tbReader, tbReaderErr := ta.NewReader(ta.ReaderOptions{
+			Root:            cfg.TraceBodyRead.Root,
+			ZstdWindowBytes: cfg.TraceBodyRead.ZstdWindowBytes,
+			MaxConcurrent:   cfg.TraceBodyRead.MaxConcurrent,
+		})
+		if tbReaderErr != nil {
+			// Setup 的签名不返回 error（与既有 panic 风格一致）：构造失败必须响亮失败，
+			// 静默忽略会让归档路径无声失效。
+			panic("构造 tracearchive.Reader 失败: " + tbReaderErr.Error())
+		}
+		tbOpts.Reader = tbReader
+	}
+	tbSvc, tbErr := obssvc.NewTraceBodyService(db, tbOpts)
+	if tbErr != nil {
+		panic("构造 TraceBodyService 失败: " + tbErr.Error())
+	}
+	// 注入既有实现：归属反查与既有 trace 端点同一套判据（LookupTraceSubject），
+	// 可见性用既有的 rbac.CanViewPrompt；不新建鉴权机制（规格 §2.2）。
+	tbH := obshandler.NewTraceBodyHandler(tbSvc, func(ctx context.Context, requestID string) (string, string, bool) {
+		return obshandler.LookupTraceSubject(ctx, db, requestID)
+	}, rbac.CanViewPrompt)
+	adminGroup.GET("/trace/:request_id/body", guard(rbac.PermUsageViewAll), tbH.TraceBody)
+
 	// 内部接口组（内部 Token 认证）
 	internalGroup := r.Group("/internal/v1")
 	internalGroup.Use(middleware.InternalAuth())
@@ -785,6 +818,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
 		internalGroup.GET("/keys/:id/groups", internalHandler.GetKeyGroups)
 		internalGroup.GET("/groups/model-info", modelInfoHandler.GetGroupModelInfo)
+		// 点读内部端点（规格 §8.1）：服务间调用，鉴权由本组既有的 InternalAuth 负责。
+		internalGroup.GET("/trace-body", tbH.InternalTraceBody)
 	}
 
 	// 组织架构服务（org-service）

@@ -194,7 +194,7 @@ git diff --stat <base>..HEAD -- go.mod go.sum                 # 必须为空（�
 | `internal/controlplane/config/trace_body_read.go` | **新建**：`TraceBodyReadConfig` + `LoadTraceBodyReadConfig` + `ValidateRef`（N3 调用侧收口） | ~170 行 |
 | `internal/controlplane/config/config.go` | **修改**：新增 `Config.TraceBodyRead` 字段 + `trace_body.root` / `trace_body.read_max_concurrent` / `trace_body.read_zstd_window_mb` 三个默认值 | +20 行 |
 | `internal/observability/service/trace_body_service.go` | **新建**：`TraceBodyService`（PG 查询 → 优先级判定 → 归档取回 / jsonb 回退 → 错误分类）+ `TraceBody` 响应形状 + `tracearchiveReader` 窄接口 | ~260 行 |
-| `internal/observability/handler/trace_body_handler.go` | **新建**：`TraceBodyHandler`（两条端点的 gin handler）+ `ErrTraceBodyRecordNotFound` 等 handler 层哨兵 | ~180 行 |
+| `internal/observability/handler/trace_body_handler.go` | **新建**：`TraceBodyHandler`（两条端点的 gin handler）。**不含 handler 层哨兵** —— 原稿的 `ErrTraceBodyRecordNotFound` 等**已作废**（全局约束逐字「**不得新增哨兵**」，见 `:61`；全仓无消费者，新增即死代码；404/403/400 由 handler 直接出响应。见 **E35**） | ~180 行 |
 | `internal/observability/handler/trace_body_error.go` | **新建**：`MapTraceBodyError(err) (status int, code string, message string)`（纯函数，最易测） | ~110 行 |
 | `internal/observability/handler/usage_handler.go` | **修改**：`trace()` / `ScopedTrace()` 在 jsonb 为 NULL 且有定位键时，用 `TraceBodyService` 填充正文（回归修复） | +70/-10 行 |
 | `internal/controlplane/router/router.go` | **修改**：注册 `GET /api/v1/trace/:request_id/body`（JWTAuth 组）与 `GET /internal/v1/trace-body`（InternalAuth 组）；构造并注入 `TraceBodyService` / `TraceBodyHandler` | +35 行 |
@@ -1431,6 +1431,10 @@ MUTATIONS["m03_缺参数不报400"] = [
 ]
 # m04 成功响应被包一层 {"body": ...} ⇒ 不再是原字节（逐字节契约破裂）
 #     杀手：TestTraceBodyHandlerAdminRoute 的逐字节断言
+#     ⚠️【字节级三断言的效力边界，登记 E31】m04 只替换 `c.Data` 那一行；紧邻的
+#     `c.Header("Content-Length", strconv.Itoa(len(result.Body)))` 未动 ⇒ 断言①
+#     （Content-Length == len 服务层返回值）**仍绿**，真正红的是「实际写出的字节数」
+#     + 逐字节相等 + 顶层键集合三处 ⇒ **不得**把本条读成「三条字节级断言都被覆盖」。
 MUTATIONS["m04_成功响应包一层"] = [
     ("sub", "c.Data(http.StatusOK, \"application/json\", result.Body)",
             "c.JSON(http.StatusOK, gin.H{\"body\": json.RawMessage(result.Body)})"),
@@ -1446,6 +1450,12 @@ MUTATIONS["m05_错误一律500"] = [
 #     （`grep -rln "router.Setup" tests/` ⇒ 0 命中），没有可点名**顶层测试函数**的杀手
 #     （工具的「杀死用例」列只到顶层用例名）。**不得**为造一条变异而新建 DB/Redis/rbac
 #     全栈路由测试包（本任务不起真实 control-plane 进程）。
+#
+# ⚠️【登记 E34】上面 m01 / m02 / m04 三条的**替换串**已在实现轮按 E10 形态订正
+#    （草稿的 `if false {` 会让 found / userID / keyType 变成「声明未使用」⇒ 编译红；
+#     m04 草稿的 `json.RawMessage` 需要给「不序列化」的 handler 加 `encoding/json` 空引用）。
+#    **目标串 / 变异名 / 语义一字未动**；实际集合以 `tools/trace-mutate/sets/p3-task-5.py`
+#    头部逐字为准（m03 / m05 逐字采用草稿）。
 ```
 
 **CHECKS：**
@@ -1542,6 +1552,21 @@ GET /internal/v1/trace-body（InternalAuth）。200 = 正文 JSON 原字节（�
 //   可失败：给 `CallTrace` 加任何带 json tag 的字段（如 `Ref ta.Ref `json:"ref,omitempty"``）、
 //   把 `c.JSON(http.StatusOK, trace)` 换成包壳（`gin.H{"trace": trace}`）、或把 res.Ref/res.Source
 //   并进模型 ⇒ 本用例红。**无对应变异**（原因见步骤 5 的说明）。
+// TestLookupTraceSubjectRejectsUnknownOrEmptyOwner  ← 【E32 承接，m07 的杀手】
+//   归属反查 `LookupTraceSubject` 的 **fail closed** 行为证据（此前**零用例零变异**：
+//   `grep -rn "traceSubject\|LookupTraceSubject\|\.Trace(\|ScopedTrace" tests/` ⇒ 0 命中）。
+//   两格 + 一条阳性对照：
+//     ① call_logs 无该 request_id 行 ⇒ 既有端点（`MyTrace`，以全局 actor 走到底）404，
+//        且 **hydrate 服务调用次数 == 0**（拒绝发生在取正文之前）；
+//     ② call_logs 有行但 `user_id` 为空 ⇒ 同上（这是 fail closed 的第二个分支）；
+//     ③ 阳性对照：call_logs 行完整（`user_id` 非空且等于 actor）⇒ `MyTrace` 200
+//        且 hydrate 服务**恰被调用一次**（证明 ①② 的 404 来自归属判据，
+//        而不是「该端点永远不 200」这种恒真形态）。
+//   点读端点一侧用**生产装配**验证同一个判据：`subject` 注入
+//   `func(ctx, id) { return obshandler.LookupTraceSubject(ctx, db, id) }`（与 router.go 逐字同形）
+//   ⇒ 归属不满足时同样 404，且替身 reader 调用次数 == 0。
+//   可失败：摘掉 `row.UserID == ""` 这条 fail-closed 判据（m07）⇒ ① 在有 call_logs 行时
+//   转为 200、② 在全局 actor 下转为 200/200，本用例红。
 ```
 
 - [ ] **步骤 2：运行测试确认失败** → 断言红（现有实现返回的正文为空）
@@ -1812,6 +1837,14 @@ git commit -m "feat(cmd): trace-body 点读 CLI（计划 3/4 任务 7）
 - 新建：`tests/observability/service/trace_body_acceptance_test.go`（B 层）
 - 不改任何生产代码
 
+**⚠️ 【E33 承接，与 A2 并列的新增项】真实 `router.Setup` 装配的行为验收（两态）**：任务 5 交付报告 §6.5 的三条「只有静态证据」项此前**既无行为证据、也无承接方**（任务 9 只做冻结包 `git diff` + 集合重跑；本任务原稿只做服务层验收）。⇒ **本任务承接**：
+- **真实 `router.Setup` 装配，`trace_body.root` 启用 / 禁用两态**：读侧**启用**时，带定位键的行经装配后的路由拿到归档正文；读侧**禁用**时（YAML 缺 `trace_body.root`），同样的行得到 **503 `trace_body_disabled`**（不是 500、不是 jsonb 回退、不是 404）。
+- **权限门 `PermUsageViewAll`**：装配后的路由上，「有 token 但无该权限」的 actor 被既有 `guard` 拒绝（**不得**更宽松）；「无 token」被既有 `JWTAuth` 拒绝。
+- **不新建鉴权中间件**：其**不存在性**仍由任务 5 的 CHECKS 承重（本项只补行为侧：认证/授权结果与既有中间件一致，不出现第二套凭据解析）。
+- **验收形式**：新增用例（文件与规模由本任务自行决定，仍**不改任何生产代码**）；`trace_body.root` 的两态由**注入的配置**分别驱动。
+- **兜底 = 任务 9**：若本任务因 DB/Redis 依赖不可得而**未**产出该用例，任务 9 **必须**把该缺口逐条写进 `R11-v1.md` 的「覆盖缺口」，**不得静默**。⚠️ 本条**不是**复核任务 5 的 m06 降级裁定 —— m06 降级的是「为一个断言造变异」的**变异**形态，本条要的是**行为验收**。
+- **残余（如实写进报告）**：本项**不**覆盖真实 PG/Redis（内存 sqlite 或注入替身），也**不**声称覆盖「未新建鉴权中间件」的不存在性（那只有 CHECKS）。
+
 **验收范围（**本计划只承担 A2，其余显式排除**）：**
 
 | 规格 §14.2（**按计划 2 Task 8 的 A 表**，见 D56） | 内容 | 归属 |
@@ -2058,6 +2091,8 @@ grep -c '^task-.* exit=0$' /tmp/p3-task-all.out   # 必须 = 9
    - `TraceBodyResult.Source` 的判定与 `GetBody` 内部查找是**两次 stat**（非原子），窗口内 `Source` 可能不符（正文内容仍正确）；
    - 隔离件的部分变异目标在冻结包内 ⇒ 已按要求转为 `CHECKS`，**该要求当前只有静态证据**（逐条列出是哪几条）；
    - 需要真实 zstd 的用例在本机无 zstd 时 SKIP（逐条列出用例名与 `SKIP_WHITELIST` 依据）。
+   - **【E36，本轮承接】`p3-task-3` 的「测试文件 sha256」段**：任务 5 的提交 `eda06420` 在 `tests/observability/handler/` 新增了 `trace_body_handler_test.go`，而该集合的 `PACKAGES = ["./tests/observability/handler/"]` 是**目录级枚举**（工具 `test_files_of` 打印该目录下每个 `*_test.go` 的 sha256）⇒ 本轮重跑的 `p3-task-3` 权威表**必须出现第三行**测试文件哈希（旧表 `-at-e0d32ce4.txt` / `-at-9c4fd450.txt` 都只有 `prompt_mask_test.go` 与 `trace_body_error_test.go` 两行）；缺第三行即说明绑定没有覆盖当前树。
+   - **【E33 兜底】任务 8 的「真实 `router.Setup` 装配（`trace_body.root` 启用/禁用两态）」用例**：若任务 8 已产出，抄其文件与结论；**若未产出**，逐条登记三条要求各自缺什么证据（**权限门 `PermUsageViewAll`** / **不新建鉴权中间件** / **真实装配两态**），**不得**留下无承接方的条目，也不得把「只有静态证据」写成已覆盖。
 6. **与计划 1/2 证据的关系**：本计划**未修改** `internal/tracearchive/` 下任何文件（用命令输出为证，见步骤 4）⇒ R11 v3（142 条，冻结提交 `ea962a70`）的被测文件哈希未变，**其绑定仍然有效，无需重跑**；`tools/trace-mutate/sets/task-*.py` 与 `p2-task-*.py` 同样未被修改。
    **⚠️ 必须写明的限定**：R11 v3 报告头部记录的 `git rev-parse HEAD` 是**旧提交** `ea962a70`；本计划合入后**该字段本身已经失效**（HEAD 变了）。R11 v3 之所以仍然有效，**唯一依据是「被测文件哈希未变」**（它绑定的是文件 sha256，不是分支位置）——报告必须**照此措辞**，**不得**写成「R11 v3 的 HEAD 仍是当前 HEAD」（那是错的，且会让人误以为无需核对文件哈希）。
 
@@ -2199,6 +2234,21 @@ git log --oneline <base>..HEAD
 | **E28** | 任务 4 交付报告 §1③ 的行号；E24 的「补强正则」三处落点 | 任务 4 交付报告 §1③ 写「1080（CHECKS 第 4 行）→ 1087；集合 **201 → 201**」，**两处都不准**（实测，逐条给出）：① **旧集合**（`tools/trace-mutate/sets/p3-task-3.py` @ `f0376c4a`）该正则在 **`:201`**（`"pattern": r"json\.Marshal\|TraceBodyResult\|result\.Body\|json\.RawMessage",`）；② **新集合**（同文件 @ `9c4fd450` 起）同一行在 **`:228`**（已增补 `\|json\.NewEncoder\|ResponseWriter\|WriteHeader`）—— 报告写「201 → 201」漏掉了 **+27 行**的位移；③ **计划正文**（`docs/superpowers/plans/2026-09-25-trace-point-read-service.md`）该正则在 **`:1088`**（旧 `:1080`，即 E24 的 `"pattern": r"...\|json\.NewEncoder\|ResponseWriter\|WriteHeader", "expect": "absent",`）—— 报告写的「1087」既不是旧行号也不是新行号 | **登记三处落点，后续引用一律以此为准**：**旧集合 `:201` / 新集合 `:228` / 计划正文 `:1088`**。任务 4 交付报告是**留档产物**，其错误行号**不追改**；纠正在本条。⇒ 任何人再引用「E24 的补强正则在哪」时，**不得**沿用报告 §1③ 的 `1080/1087/201→201` 这套数字 |
 | **E29**（欠账承接） | `tools/trace-mutate/sets/p3-task-4.py:45`（SKIP_WHITELIST 段的最后一句「权威表须注明本机版本」） | 该行要求把**本机 zstd 版本**写进**权威表**，但**工具生成的表里没有这一行**：`tools/trace-mutate/trace_mutate.py` 的输出是固定段落（`print_binding` / `print_checks` / `print_mapping` / `selftest`），集合模块里**可被打印**的只有 git-tracked 的静态字符串（`CHECKS[].why` / `REQUIREMENTS[].note` / `RETIRED` / `EXPECTED_GREEN`），**没有「运行时探测并打印」的出口**。实测：`p3-task-4-authoritative-at-e0d32ce4.txt` 全文 `grep -n "zstd\|版本"` 只命中 2 行**用例名与说明文字**（`（不需要 zstd）` / `需要真实 zstd`），**没有任何**「本机版本」行 ⇒ 该要求按字面**机制上无法满足**。两条「满足」路径都不可接受：① 改共享工具 `trace_mutate.py` 加探测段 ⇒ **所有集合**（R11 / p2 / p3 全部）的权威表绑定与留档表一起失效；② 把**机器相关**的版本号写进 git-tracked 集合的 `why`/`note` ⇒ 把宿主机状态提交进仓库。任务 4 实际把本机版本记在**交付报告 §3**（`zstd --version` = v1.5.7，与冻结包 `defaultZstdVersion = 1.4.8` 不同），**不是**权威表 | 登记为**遗留欠账**，**留给任务 9 分支级证据重跑统一处理**。任务 9 可在**不变量**之间二选一（由发起者裁定）：① 在权威表的**采集命令**里把 `zstd --version` 与表**一起**落盘成同名旁证文件（如 `<表名>.zstd-version`），**不改工具、不重跑任何既有绑定**；② 给共享工具加**可选的**运行时探测段，但**必须**同时评估「R11 + p2 + p3 全部绑定失效并全部重跑」的代价。**本轮不改 `p3-task-4.py`**：改集合会触发 p3-task-4 的**重跑与重绑**，为一句注释单开一轮不值得。⇒ 在任务 9 处置之前，**不得**声称该要求已满足，也**不得**把它计入「证据链完整」 |
 | **E30** | `tools/trace-mutate/sets/p3-task-4.py` 的 `m04_dt分量换成inst` 与权威表 `p3-task-4-authoritative-at-e0d32ce4.txt` 的 m04 行（覆盖质量） | 权威表逐字：`\| m04_dt分量换成inst \| 红 \| names=8 ran=8 diff=0 PASS=0 SKIP=0 FAIL=8 \| …（8 条用例全列）`。该变异把 `DT: trace.BodyRefDT.Format("2006-01-02")` 换成 `DT: *trace.BodyRefInst` ⇒ **8 条用例全部变红（PASS=0）**。它证明的只是「定位键的 dt 分量被拼错 ⇒ 必读错文件」，**区分度最低**：它**不能**把「dt 与 inst 两个分量被互相调换」这一条语义从其余 7 条用例的行为里**隔离**出来（原稿的隔离形态是冻结包内 `Paths.SpoolFile` 的 dt/inst 调换，已按第一硬约束降级为 CHECKS）。⇒ 该条**不满足**「dt-vs-inst 隔离语义」所要求的**隔离**证明（它满足的是更弱的「三分量任一拼错都会读到别的文件」，计划 `:1182` 的措辞） | **不构成阻断**：计划对该条只要求「杀手必须是**具体顶层测试函数名**」——`m04` 已达标（点名 `TestTraceBodyServiceCrossDayAndCrossPart`，且该用例**确实**红，权威表逐字可查）。登记为**覆盖质量注记**：`PASS=0` 是「**广谱红**」而不是「**隔离红**」⇒ **不得**用它声称「dt-vs-inst 的隔离语义已被单独固定」。若后续要补真正的隔离证据，须新增一条**只让 `TestTraceBodyServiceCrossDayAndCrossPart` 红、其余 7 条仍绿**的变异（目标仍是同一个服务文件，代价很小），承接方 = **任务 9 或分支收尾轮**；在补出之前，本条的强度**以「广谱红」为准** |
+
+---
+
+### 追加登记（任务 5 独立评审订正轮，2026-10-08：E31–E36）
+
+> 编号续 E30（**本计划不使用 E13**，沿用正文既有的避让）。来源：**任务 5 的独立评审**与本轮实测（E31/E32 是**报告的事实性订正**；E33/E36 是**承接方指派**；E34/E35 是**补登与失效文本订正**）。与 E1–E3、E9–E12、E14–E17、E18–E21、E22–E27、E28–E30 同一条纪律：**只登记与订正文本**；本轮**只改本计划文本**（不碰任何 `.go`、不碰任何变异集合与清单）。⚠️ **本轮不重跑任何权威表**：六条都没有改动集合 / 清单 / 被测文件 / 测试文件 —— E36 登记的是**任务 5 的提交 `eda06420` 已经造成**的绑定覆盖变化，其重跑承接方是**任务 9**，不在本轮。任务 5 交付报告（`.superpowers/sdd/2026-09-25-trace-point-read-service/task-5-report.md`）是**留档产物**，其不实表述**不追改**，纠正在本表。
+
+| 编号 | 位置 | 已核实的事实（本轮实测，不是推测） | 本计划的裁定 / 登记 |
+|---|---|---|---|
+| **E31** | 任务 5 交付报告 §5「字节级响应（m04 的承重）」；任务 5 步骤 5 的 m04 草稿（本计划正文）与 `tools/trace-mutate/sets/p3-task-5.py` 的 `m04_成功响应包一层` | 报告 §5 称 m04「实测**同时打红 ①②③**」；按「三条字节级断言都被这一条变异覆盖」读，**不实**。**实测**（`internal/observability/handler/trace_body_handler.go:127-130` 的 `writeTraceBodyResult` + `p3-task-5.py` 的 m04）：m04 **只替换** `c.Data(http.StatusOK, "application/json", result.Body)` 这一行，紧邻的**上一行** `c.Header("Content-Length", strconv.Itoa(len(result.Body)))` **未被替换** ⇒ 响应头仍是「服务层返回值的长度」⇒ `TestTraceBodyHandlerAdminRoute` 的**断言①**（`Content-Length == strconv.Itoa(len(tbWantBody))`）**仍然绿**。真正变红的是：该用例里 `require.Equal(t, len(tbWantBody), w.Body.Len())`（**实际写出的字节数**变长）＋ 断言②（逐字节相等）＋ 断言③（顶层键集合多出 `body`）；`TestTraceBodyHandlerInternalRouteNeedsToken` 里红的也只是它自己的逐字节相等那条（它自己的 `Content-Length` 断言**同样仍绿**） | 登记为**「字节级三断言的效力边界」注记**，并在任务 5 步骤 5 的 m04 草稿下加同义提示（已加）：**断言① 只固定「响应头由服务层返回值的长度算出」，不固定「实际写出的字节数」** ⇒ **单靠 Content-Length 一条不足以覆盖「包壳 / 改写响应体」这一类**。⇒ 后续任何人引用任务 5 的三条字节级断言时，**不得**写成「三条都被 m04 覆盖」。**结论不变**（逐字节契约由断言②承重）；报告**不追改** |
+| **E32** | 任务 5 交付报告 §6.1 的「**行为逐字不变**（既有端点用例全绿）」；`LookupTraceSubject`（`internal/observability/handler/usage_handler.go:175` @ `eda06420`）的覆盖 | 报告 §6.1 的「既有端点用例全绿」**不实** —— 不是「绿」，而是**根本没有用例**。**实测**：① `grep -rn "traceSubject\|LookupTraceSubject\|\.Trace(\|ScopedTrace" tests/` ⇒ **0 命中**；② `tests/observability/handler/` 只有 `prompt_mask_test.go` / `trace_body_error_test.go` / `trace_body_handler_test.go`，无一触及 `UsageHandler.Trace/MyTrace/ScopedTrace` 或 `traceSubject`；③ 全仓唯一在测试里构造 `NewUsageHandler` 的是 `tests/integration/usage_dashboard_service_split_test.go:161`（`NewUsageHandler(nil, db)`），它**只调 `GetDashboard`**。⇒ 任务 5 的归属判据抽取目前**只有逐行等价的文本证据**（`traceSubject` 委托给包级 `LookupTraceSubject`，`git show eda06420 -- internal/observability/handler/usage_handler.go` 可查）⇒ **`LookupTraceSubject` 零用例、零变异** | 表述订正为「**无既有用例、仅逐行等价**」（**不得**再写「既有端点用例全绿」）。**覆盖缺口指派给任务 6**：**零用例零变异，须由任务 6 补** —— 至少一条**能失败**的行为用例（归属不满足 ⇒ 既有端点与点读端点**都拒绝**，且**拒绝发生在取正文之前**；含 fail-closed 的「查不到 / `user_id` 为空」两格与一条**阳性对照**；点读一侧的 `subject` 必须注入**生产实现** `LookupTraceSubject`），**并在集合纪律允许时为它补一条变异**（`LookupTraceSubject` 就在 `p3-task-6` 的 `TARGET` 文件内 ⇒ 该变异**落在目标文件里**，不构成新集合）。任务 6 落地后须在 `p3-task-6` 的权威表里逐字出现该变异的「**红** + 顶层杀手用例名」。任务 6 步骤 1 已按此补入 `TestLookupTraceSubjectRejectsUnknownOrEmptyOwner`（用例名以落地实现为准） |
+| **E33** | 任务 5 交付报告 §6.5 的三条「只有静态证据」项；任务 8 / 任务 9 的范围 | 三条要求此前**既无行为证据、也无承接方**：① 管理面权限门 `PermUsageViewAll`（实测 `grep -rln "router.Setup" tests/` ⇒ **0 命中**，仓库没有任何 `router.Setup` 测试包）；② 不新建鉴权中间件（**不存在性**，只有 `p3-task-5.py` 的 CHECKS）；③ **真实 `router.Setup` 装配**（`trace_body.root` 启用/禁用两态）。**范围核对**：任务 9 只承接「冻结包零改动 + 集合重跑 + 分支级证据」（`git diff` 与 `trace_mutate.py`，不起真实进程）；任务 8 原稿明确「不改任何生产代码」且文件只有 `tests/observability/service/trace_body_acceptance_test.go`（服务层验收，**不碰路由 / Setup**）⇒ 按原文两条**都不承接**，三条会**静默悬空** | **逐条指派，不得留下无承接方的条目**：**「真实 `router.Setup` 装配（`trace_body.root` 启用 / 禁用两态）」= 任务 8（生产形态验收）承接，任务 9（分支级验收）兜底**；**权限门 `PermUsageViewAll` 与「不新建鉴权中间件」同挂任务 8**（同一条装配用例即可覆盖：装配后的路由上「无 token ⇒ 被既有 `JWTAuth` 拒」「有 token 但无 `PermUsageViewAll` ⇒ 被 `guard` 拒」「两态各自的点读表现」；「不新建鉴权中间件」的**不存在性**仍由任务 5 的 CHECKS 承重，装配用例补的是**行为侧**）。任务 8 的该承接项与 A2 **并列**（不是 A2 的子项），其文件与规模由任务 8 自行决定；**若任务 8 因 DB/Redis 依赖不可得而未产出该用例，任务 9 必须把该缺口逐条写进 `R11-v1.md` 的「覆盖缺口」**，不得静默。⚠️ **不得**把本条解释为「复核任务 5 的 m06 降级裁定」—— m06 降级的是「为一条断言造**变异**」的形态，本条要的是**行为验收**。任务 8 与任务 9 的正文已分别补入承接块与兜底条目 |
+| **E34** | `tools/trace-mutate/sets/p3-task-5.py` 头部「相对计划的改动」段 vs 任务 5 步骤 5 的 `MUTATIONS` 草稿（本计划正文） | 任务 5 集合的 m01 / m02 / m04 三条**替换串**被订正过（**目标串、变异名、语义一字未动**），理由与 **E10** 同形（草稿按字面使用会产出**编译红**，违反全局约束第 5 条「变异必须是断言红」）：① **m01** 草稿 `("sub", "if !found {", "if false {")` 在实现上让 `found` 只剩这一处引用 ⇒ `declared and not used: found` ⇒ 编译红；实际用 `if !found && false {`（`found` 仍被引用 ⇒ 可编译，分支永不执行 ⇒ 语义不变）。② **m02** 草稿 `"if false {"` 同理让 `userID` / `keyType` 未被使用 ⇒ 编译红；实际用「原条件 `&& false`」。③ **m04** 草稿 `c.JSON(http.StatusOK, gin.H{"body": json.RawMessage(result.Body)})` 需要给 handler 文件引入 `encoding/json`，而该文件的设计约束是**不序列化、不包壳**（没有合法用点）⇒ 只能加空引用，属为工具而生的代码；实际改用**不需要新增 import** 的 `append` 拼出 `{"body":<原字节>}`。**m03 / m05 逐字采用草稿** | **补登**（此前只在集合头与任务 5 报告 §4 登记，**未进计划**）：实际集合以 `tools/trace-mutate/sets/p3-task-5.py` 头部**逐字为准**；**目标串 / 变异名 / 语义未动**，只订正替换串。任务 5 步骤 5 的草稿代码块**保留原样**（它是历史草稿），其后已加一行指向本条与集合头的提示 |
+| **E35** | 本计划 `## 文件结构` 表的 handler 行（原 `:197`） | 该行写 handler 文件含「`ErrTraceBodyRecordNotFound` 等 handler 层哨兵」—— **已成失效文本**：① 全局约束逐字写「**不得新增哨兵**」；② 全仓**无任何消费者**（实测 `grep -rn "ErrTraceBodyRecordNotFound" --include=*.go .` ⇒ **0 命中**）；③ 任务 5 的两条端点语义表（404/403/400 各自由 handler 直接出响应）**不需要**它 ⇒ **不实现是正确的** | **订正该行**为「**不含** handler 层哨兵」（已改，并写明原因为全局约束的禁令 + 无消费者 ⇒ 新增即死代码），避免后续执行者照文件结构表去补一个被禁令排除的符号。**不得**为了对齐这张表而新增未使用的导出哨兵 |
+| **E36** | `tools/trace-mutate/sets/p3-task-3.py` 的 `PACKAGES = ["./tests/observability/handler/"]` 与 `p3-task-3` 权威表的「测试文件 sha256」段 | 工具按 `PACKAGES` **目录级枚举**该包下全部 `*_test.go` 并逐个打印 sha256（`trace_mutate.py` 的 `test_files_of` + `print_binding`，实际是 `os.walk` 全目录）；**实测**旧表 `p3-task-3-authoritative-at-e0d32ce4.txt` 与 `…-at-9c4fd450.txt` 各只有 **2 行**测试文件哈希（`prompt_mask_test.go` / `trace_body_error_test.go`）。任务 5 的提交 `eda06420` 在该目录新增 `trace_body_handler_test.go` ⇒ 当前树上该集合的测试文件集合是 **3 个**，**旧的「测试文件 sha256」段不再覆盖当前树** ⇒ 按严格口径该集合**需要重跑并重记绑定** | **承接方 = 任务 9**：任务 9 步骤 2 的全量重跑**本来就包含 `p3-task-3`** ⇒ 其新权威表的「测试文件 sha256」段**必须出现第三行**（`trace_body_handler_test.go`），这就是本条的验收形式。**本轮不重跑**（第 1 步只改计划文本）；在任务 9 交付前**不得**声称 `p3-task-3` 的绑定覆盖了当前树。任务 9 步骤 3 的「覆盖缺口」清单已补入对应条目 |
 
 ---
 

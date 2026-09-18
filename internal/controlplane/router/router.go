@@ -470,6 +470,37 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	videoTaskSvc := service.NewVideoTaskService(videoTaskRepo)
 	videoTaskHandler := handler.NewVideoTaskHandler(videoTaskSvc)
 
+	// 点读服务与 Reader 的构造（规格 §8.1；计划 3/4 任务 5 构造、任务 6 接入既有 trace 端点）。
+	//
+	// 【为什么必须在 adminGroup 之前构造】既有 trace 端点（任务 6）与两条点读端点（任务 5）
+	// 必须用**同一个**服务实例：再构造第二个 Reader 会让读侧并发上限
+	// （`trace_body.read_max_concurrent`）随实例数翻倍。
+	//
+	// ① 读侧禁用（trace_body.root 为空）时**不构造** Reader —— NewReader 对空 Root
+	//    直接报错，而「读侧未配置」是合法状态（正文仍在 jsonb 列）。此时 opts.Reader 必须
+	//    保持「接口值为 nil」：**不得**把 nil 的 *ta.Reader 装进接口字段，装进去后 != nil，
+	//    服务会真的去调它并 panic。
+	// ② *ta.Reader 天然满足服务里的未导出窄接口，直接赋值即可；读侧禁用 + 行带定位键
+	//    会在触碰任何存储之前返回 ErrTraceBodyDisabled ⇒ 503。
+	tbOpts := obssvc.TraceBodyServiceOptions{Config: cfg.TraceBodyRead}
+	if !cfg.TraceBodyRead.Disabled() {
+		tbReader, tbReaderErr := ta.NewReader(ta.ReaderOptions{
+			Root:            cfg.TraceBodyRead.Root,
+			ZstdWindowBytes: cfg.TraceBodyRead.ZstdWindowBytes,
+			MaxConcurrent:   cfg.TraceBodyRead.MaxConcurrent,
+		})
+		if tbReaderErr != nil {
+			// Setup 的签名不返回 error（与既有 panic 风格一致）：构造失败必须响亮失败，
+			// 静默忽略会让归档路径无声失效。
+			panic("构造 tracearchive.Reader 失败: " + tbReaderErr.Error())
+		}
+		tbOpts.Reader = tbReader
+	}
+	tbSvc, tbErr := obssvc.NewTraceBodyService(db, tbOpts)
+	if tbErr != nil {
+		panic("构造 TraceBodyService 失败: " + tbErr.Error())
+	}
+
 	// 管理接口组（JWT 认证）
 	adminGroup := r.Group("/api/v1")
 	adminGroup.Use(middleware.JWTAuth())
@@ -756,6 +787,9 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		usageSvc := obssvc.NewRollupService(db)
 		usageH := obshandler.NewUsageHandler(usageSvc, db)
 		usageH.SetRedis(rdb)
+		// 既有 trace 端点（Trace / MyTrace）的归档正文回填（计划 3/4 任务 6）：
+		// 复用同一个点读服务实例（不注入时端点行为与改造前逐字相同）。
+		usageH.SetTraceBodyService(tbSvc)
 		adminGroup.GET("/usage/logs", guard(rbac.PermUsageViewAll), usageH.Logs)
 		adminGroup.GET("/usage/logs/:request_id/trace", guard(rbac.PermUsageViewAll), usageH.Trace)
 		adminGroup.GET("/usage/options", usageH.Options)
@@ -776,30 +810,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	}
 
 	// 点读两条端点（规格 §8.1；计划 3/4 任务 5）
-	// ① 构造：读侧禁用（trace_body.root 为空）时**不构造** Reader —— NewReader 对空 Root
-	//    直接报错，而「读侧未配置」是合法状态（正文仍在 jsonb 列）。此时 opts.Reader 必须
-	//    保持「接口值为 nil」：**不得**把 nil 的 *ta.Reader 装进接口字段，装进去后 != nil，
-	//    服务会真的去调它并 panic。
-	// ② *ta.Reader 天然满足服务里的未导出窄接口，直接赋值即可；读侧禁用 + 行带定位键
-	//    会在触碰任何存储之前返回 ErrTraceBodyDisabled ⇒ 503。
-	tbOpts := obssvc.TraceBodyServiceOptions{Config: cfg.TraceBodyRead}
-	if !cfg.TraceBodyRead.Disabled() {
-		tbReader, tbReaderErr := ta.NewReader(ta.ReaderOptions{
-			Root:            cfg.TraceBodyRead.Root,
-			ZstdWindowBytes: cfg.TraceBodyRead.ZstdWindowBytes,
-			MaxConcurrent:   cfg.TraceBodyRead.MaxConcurrent,
-		})
-		if tbReaderErr != nil {
-			// Setup 的签名不返回 error（与既有 panic 风格一致）：构造失败必须响亮失败，
-			// 静默忽略会让归档路径无声失效。
-			panic("构造 tracearchive.Reader 失败: " + tbReaderErr.Error())
-		}
-		tbOpts.Reader = tbReader
-	}
-	tbSvc, tbErr := obssvc.NewTraceBodyService(db, tbOpts)
-	if tbErr != nil {
-		panic("构造 TraceBodyService 失败: " + tbErr.Error())
-	}
+	// 服务与 Reader 已在 adminGroup 之前构造（任务 6 让既有 trace 端点复用同一实例，
+	// 见上文「点读服务与 Reader 的构造」的注释）。
 	// 注入既有实现：归属反查与既有 trace 端点同一套判据（LookupTraceSubject），
 	// 可见性用既有的 rbac.CanViewPrompt；不新建鉴权机制（规格 §2.2）。
 	tbH := obshandler.NewTraceBodyHandler(tbSvc, func(ctx context.Context, requestID string) (string, string, bool) {
@@ -1025,6 +1037,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		// ── 用量看板：dashboard/scoped-logs 需 Guard 注入 Actor ─────────────
 		// usageH2 复用同一 DB，仅在此处注册带 Guard 的路由
 		usageH2 := obshandler.NewUsageHandler(obssvc.NewRollupService(db), db)
+		// ScopedTrace 同样需要归档正文回填（任务 6）：与 usageH 共用同一个点读服务实例。
+		usageH2.SetTraceBodyService(tbSvc)
 		// 方案X 异常反馈闭环（真人工反馈）：写路径 CRUD 落在 control-plane（anomaly_records 由其 GORM model 管理），
 		// 独立于 observability 的只读报告聚合 handler，故单独构造 AnomalyFeedbackHandler（轻量：直接持 *gorm.DB）。
 		anomalyFeedbackH := handler.NewAnomalyFeedbackHandler(db)

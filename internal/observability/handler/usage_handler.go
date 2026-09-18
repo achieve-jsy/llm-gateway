@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,12 +13,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
 	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	"github.com/example/llm-gateway/internal/observability/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/example/llm-gateway/internal/orgservice/rbac/policy"
+	ta "github.com/example/llm-gateway/internal/tracearchive"
 )
 
 // DashboardSummary 汇总卡片
@@ -78,11 +81,23 @@ type DashboardResponse struct {
 	PageSize  int                      `json:"page_size"`
 }
 
+// TraceBodyHydrator 是既有 trace 端点回填归档正文所需的点读服务窄接口。
+//
+// 生产实现是唯一的 `*service.TraceBodyService`（任务 2）。声明成**窄接口**而不是具体类型，
+// 是为了让 B 层用例能注入**计数替身**：没有计数，「功能关闭形态不得调用点读服务」
+// 「拒绝先于取正文」只能靠内容比对，而两路内容等价会让断言退化成恒真。
+type TraceBodyHydrator interface {
+	GetBody(ctx context.Context, requestID string) (*service.TraceBodyResult, error)
+}
+
 // UsageHandler 用量与成本查询接口
 type UsageHandler struct {
 	svc *service.RollupService
 	db  *gorm.DB
 	rdb *redis.Client
+	// tbSvc 是**可选**的点读服务：既有 trace 端点在「正文在归档」形态下用它回填正文
+	// （计划 3/4 任务 6）。为 nil 时端点行为与本任务之前**逐字相同**（正文只来自 jsonb）。
+	tbSvc TraceBodyHydrator
 }
 
 // NewUsageHandler 创建 UsageHandler
@@ -92,6 +107,14 @@ func NewUsageHandler(svc *service.RollupService, db ...*gorm.DB) *UsageHandler {
 		h.db = db[0]
 	}
 	return h
+}
+
+// SetTraceBodyService 注入点读服务（可选依赖；不注入时归档形态的正文留空）。
+//
+// 【为什么用 setter 而不是改 NewUsageHandler 签名】既有 2 处调用点
+// （router.go 的管理面用量组与 rollup 组）不该为此改动；这条偏离由评审裁定。
+func (h *UsageHandler) SetTraceBodyService(svc TraceBodyHydrator) {
+	h.tbSvc = svc
 }
 
 // SetRedis 注入可选 Redis 缓存，用于全站百分位等低频统计。
@@ -145,7 +168,11 @@ func (h *UsageHandler) trace(c *gin.Context, ownOnly bool) {
 	}
 	// 提示词正文只对 admin 或记录本人（且非程序 Key 调用）下发；
 	// 调用记录其余内容（响应、耗时、token、费用）正常展示。
-	MaskTracePrompt(&trace, canViewPrompt)
+	//
+	// 【正文来源替换（计划 3/4 任务 6）】写侧功能开启后新行的 jsonb 三列恒为 NULL
+	// （正文只进 /datalog）⇒ 先经点读服务回填归档正文，再按可见性裁剪。
+	// 顺序不可颠倒：裁剪只清 request_body，先裁后填会让归档提示词绕过裁剪。
+	h.hydrateThenMaskTrace(c, &trace, canViewPrompt)
 	c.JSON(http.StatusOK, trace)
 }
 
@@ -189,6 +216,98 @@ func LookupTraceSubject(ctx context.Context, db *gorm.DB, requestID string) (use
 		return "", "", false
 	}
 	return row.UserID, row.KeyType, true
+}
+
+// hydrateThenMaskTrace 是既有 trace 端点「正文来源替换」的**唯一出口**
+// （Trace / MyTrace / ScopedTrace 共用）：先把归档正文回填进返回模型，再按提示词
+// 可见性裁剪。
+//
+// 【顺序是安全承重：不得颠倒】`MaskTracePrompt` 只清 `request_body`（提示词）。
+// 归档形态下模型里本来就没有提示词（jsonb 列为 NULL）⇒ 若先裁剪再回填，裁剪无内容
+// 可裁，回填随后把**未裁剪的提示词**写回响应 ⇒ 越权读到归档提示词。
+//
+// 【正文取不到时的行为】不改变状态码（本端点的用途是「看一条 trace 的全部信息」，
+// 元数据仍有价值），但必须留下**一条响亮的日志**——那是唯一可观测信号。
+// 需要精确语义（404 / 500 / 503）的调用方必须走
+// `GET /api/v1/trace/:request_id/body`（任务 5，那里严格映射）。
+func (h *UsageHandler) hydrateThenMaskTrace(c *gin.Context, trace *obsmodel.CallTrace, canViewPrompt bool) {
+	if err := h.hydrateTraceBody(c.Request.Context(), trace); err != nil {
+		warnHydrateTraceBodyFailed(trace, err)
+	}
+	MaskTracePrompt(trace, canViewPrompt)
+}
+
+// warnHydrateTraceBodyFailed 是回填失败的唯一日志出口（WARN 级 + request_id + 定位键 + 根因）。
+func warnHydrateTraceBodyFailed(trace *obsmodel.CallTrace, err error) {
+	slog.Warn("trace body hydrate failed",
+		"request_id", trace.RequestID,
+		"ref_dt", nullableRefText(trace.BodyRefDT),
+		"ref_inst", nullableRefText(trace.BodyRefInst),
+		"ref_part", nullableRefText(trace.BodyRefPart),
+		"ref_row", nullableRefText(trace.BodyRefRow),
+		"error", err)
+}
+
+// nullableRefText 把可空的定位键分量转成日志文本（NULL ⇒ "NULL"）。
+//
+// 【只用于日志】不参与任何判定、不用于定位文件 —— 「什么算合法定位键」的唯一判据
+// 仍在点读服务（`cpconfig.ValidateRef` + `TraceBodyService.GetBody`）。
+func nullableRefText[T any](v *T) any {
+	if v == nil {
+		return "NULL"
+	}
+	return *v
+}
+
+// hydrateTraceBody 在「三个 jsonb 列全为 NULL」且「四个定位键全非 NULL」时，
+// 用点读服务把归档正文回填进返回模型；其余形态（功能关闭 / 历史行）**不触碰**点读服务。
+//
+// 【判据与点读服务的关系】本判据只决定「要不要去取归档正文」；「这条行到底处于哪种
+// 状态」的最终裁定仍在 `TraceBodyService.GetBody` 的优先级判定里（不在本文件重写一套）。
+func (h *UsageHandler) hydrateTraceBody(ctx context.Context, trace *obsmodel.CallTrace) error {
+	if h.tbSvc == nil {
+		return nil
+	}
+	if !traceHasArchiveRef(trace) {
+		return nil
+	}
+	res, err := h.tbSvc.GetBody(ctx, trace.RequestID)
+	if err != nil {
+		if errors.Is(err, ta.ErrBodyMissing) {
+			// 正文在写入时即失败、从未落盘：正文留空，并把**既有**的 body_missing
+			// 字段置真（不是新增字段；该字段无 omitempty，既有响应每条都带它）。
+			trace.BodyMissing = true
+			return nil
+		}
+		return err
+	}
+	var shape service.TraceBody
+	if err := json.Unmarshal(res.Body, &shape); err != nil {
+		return fmt.Errorf("解析归档正文失败: %w", err)
+	}
+	// 只回填归档正文里**确实存在**的键：源形状的三个键都带 omitempty，
+	// 缺失的键必须保持模型原值（NULL），不得写成空串或 `null`。
+	if len(shape.RequestHeaders) > 0 {
+		trace.RequestHeaders = datatypes.JSON(shape.RequestHeaders)
+	}
+	if len(shape.RequestBody) > 0 {
+		trace.RequestBody = datatypes.JSON(shape.RequestBody)
+	}
+	if len(shape.ResponseBody) > 0 {
+		trace.ResponseBody = datatypes.JSON(shape.ResponseBody)
+	}
+	return nil
+}
+
+// traceHasArchiveRef 判定一行是否「正文在归档（或未封块 spool）」形态：
+// 三个 jsonb 列全 NULL 且四个定位键全非 NULL。
+//
+// 【为什么不用「定位键是否非 NULL」单独判】部分 NULL 是不一致形态（服务层 500）；
+// jsonb 与定位键同时有值属写入缺陷——两种都不该在这里静默回填。
+func traceHasArchiveRef(trace *obsmodel.CallTrace) bool {
+	return len(trace.RequestHeaders) == 0 && len(trace.RequestBody) == 0 && len(trace.ResponseBody) == 0 &&
+		trace.BodyRefDT != nil && trace.BodyRefInst != nil &&
+		trace.BodyRefPart != nil && trace.BodyRefRow != nil
 }
 
 // ScopedTrace GET /api/v1/usage/scoped/logs/:request_id/trace
@@ -238,7 +357,8 @@ func (h *UsageHandler) ScopedTrace(c *gin.Context) {
 	// QueryScope 只保证「这条记录在 actor 管辖范围内、看得到」；
 	// 提示词正文另按归属裁剪：admin 可见全部；其余角色只看得到自己的、
 	// 且非程序（服务）Key 发起的记录的提示词（lg.UserID / lg.KeyType）。
-	MaskTracePrompt(&trace, rbac.CanViewPrompt(c, lg.UserID, lg.KeyType == obsmodel.KeyTypeService))
+	// 正文回填与裁剪共用同一出口（顺序与 Trace 相同，见 hydrateThenMaskTrace）。
+	h.hydrateThenMaskTrace(c, &trace, rbac.CanViewPrompt(c, lg.UserID, lg.KeyType == obsmodel.KeyTypeService))
 	c.JSON(http.StatusOK, trace)
 }
 

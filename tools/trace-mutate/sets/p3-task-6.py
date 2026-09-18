@@ -227,11 +227,21 @@ REQUIREMENTS = [
         "checks": [],
         "note": (
             "杀手 = TestUsageTraceMarksBodyMissing（行本身 body_missing=false，只有该赋值能让"
-            "响应出现 true）。**覆盖边界（诚实登记）**：真实 `TraceBodyService.GetBody` 只在"
-            "「body_missing=true 且四个定位键全 NULL」时返回 ErrBodyMissing，而本任务的回填"
-            "触发条件恰是「定位键全非 NULL」⇒ 该分支在**真实服务下不可达**，是用例用替身"
-            "服务驱动的一条**防御性**分支；它仍是可失败的（不是恒真断言），但不得被读成"
-            "「生产路径已覆盖」。"
+            "响应出现 true）。**覆盖边界（诚实登记）**：原注记称「真实 `TraceBodyService.GetBody` "
+            "只在 body_missing=true 且四键全 NULL 时返回 ErrBodyMissing ⇒ 该分支在真实服务下"
+            "不可达」，**与事实相反，本轮订正为下述表述** —— 该分支**可经真实服务命中**："
+            "① `internal/observability/service/trace_body_service.go:211-216` 把 Reader 的 "
+            "`ErrBodyMissing` **原样透传**（不按「body_missing 是否为真」重判）；"
+            "② `internal/tracearchive/reader.go:252/338` 对**被精确定位的行**遇到标记行即返回 "
+            "`ErrBodyMissing`（标记行契约见 `writer.go:295-330`）；"
+            "③ 本仓 `tests/observability/service/trace_body_quarantine_test.go:69-83,370-381` "
+            "正是「四个定位键全非 NULL + `body_missing=false`」的 PG 行 + 标记行，并断言 "
+            "`ErrorIs(ErrBodyMissing)`；④ ⇒ 服务的返回条件与回填触发条件**并不互斥**。"
+            "只是今日写路径失败走的是 refs 全 NULL 路径"
+            "（`internal/gateway/observability/trace_event.go:733-748`：`body_missing=true` 且"
+            "四键全 NULL）⇒ 该组合在生产上罕见。**不得**再写成「不可达 / 死代码」。"
+            "分支若触发，其「200 + `body_missing=true`」行为本身是正确的 ⇒ 本项修复**只改文字、"
+            "不改代码**。"
         ),
     },
     {

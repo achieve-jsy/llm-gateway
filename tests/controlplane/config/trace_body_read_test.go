@@ -182,7 +182,7 @@ func TestValidateRefRejectsIllegalComponents(t *testing.T) {
 // TestValidateRefDoesNoFilesystemWork 是 m05 的**隔离探针**载体：只让 dt 非法
 // （inst/part/row 全合法），因此它不会因其它守卫在位而通过。
 // 它证明的是「非法 dt 被拒 + 合法 ref 被接受」这一**行为**（可被 m05 杀掉）。
-// 【E26 / E46】「校验不触碰文件系统」**不是**本用例能证明的：本条原先的
+// 【E26】「校验不触碰文件系统」**不是**本用例能证明的：本条原先的
 // `os.Stat(root)` 断言恒真、不可能失败（见文件末尾的详细说明），已按 E26 降级删除，
 // 该性质改由 p3-task-1.py 的静态检查行「校验不触碰文件系统」承重。
 // 保留的结构性事实（解释「为什么校验必须先于拼路径」）：冻结包的 Paths 不做校验，
@@ -205,7 +205,7 @@ func TestValidateRefDoesNoFilesystemWork(t *testing.T) {
 	require.False(t, strings.HasPrefix(escaped, root),
 		"非法 dt 拼出的目录 %q 逃出 root %q —— 这正是校验必须在校验期发生的原因", escaped, root)
 
-	// 【E26 / E46：本条被降级删除，**不得**把它当成「校验不触碰文件系统」的证据】
+	// 【E26：本条被降级删除，**不得**把它当成「校验不触碰文件系统」的证据】
 	// 这里原本还有一条 `_, statErr := os.Stat(root); require.True(t, os.IsNotExist(statErr))`，
 	// 声称「校验不得创建任何文件系统对象」。它**恒真、不可能失败**：`root` 是
 	// t.TempDir() 下**从未被创建**的子目录，而 `ValidateRef(ref)` 的签名里**根本没有

@@ -146,9 +146,11 @@ func TestAcceptanceA2ProductionRoundTrip(t *testing.T) {
 	//
 	//   计划把这一条写成「索引正确的承重断言」。本轮实测（隔离探针 R7：把服务导出的
 	//   `Ref.Part` 单独写死为 0、正文路径不动）得到的是**上面那条 `require.Equal(…, res.Ref)`
-	//   转红**，本行**没有被触到** —— 因为 `partsSeen` 正是从那个已被逐字钉住的
-	//   `res.Ref.Part` 取的，逻辑上被上一条蕴含（典型的遮蔽效应）。
-	//   ⇒ 本行的真实身份是**守卫测试夹具本身**（防止后人把 `parts` 改成 1、让「跨 part」
+	//   转红**，本行**没有被触到** —— 原因**不是**「被上一条蕴含」，而是本行的取值
+	//   **根本不来自 `res.Ref`**：`partsSeen` 的键取自**夹具变量** `locPart[]`
+	//   （它就由夹具算术 `i / linesPerPart` 生成，见 :94/:107/:142），与 TARGET 的行为无关。
+	//   ⇒ 本行是**夹具自证** ⇒ **任何** TARGET（`trace_body_service.go`）变异都杀不掉它；
+	//      它的真实身份是**守卫测试夹具本身**（防止后人把 `parts` 改成 1、让「跨 part」
 	//      这一命题悄悄退化）。**不得**把它记成「索引正确」的独立证据：
 	//      索引正确的独立证据是上面的**逐字节**断言（R1 已实测可红）。
 	require.GreaterOrEqual(t, len(partsSeen), 2,

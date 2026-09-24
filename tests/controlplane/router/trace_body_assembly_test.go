@@ -36,7 +36,10 @@ import (
 //	② 权限门 `PermUsageViewAll`：装配后的路由上「有 token 但无该权限」被既有 `guard` 拒绝（403），
 //	   「无 token」被既有 `JWTAuth` 拒绝（401）。
 //	③ 「不新建鉴权中间件」的行为侧：认证/授权结果与既有中间件一致，
-//	   **不出现第二套凭据解析**（管理面只认 `Authorization: Bearer`，内部端点只认 `X-Internal-Token`）。
+//	   **不出现第二套凭据解析**（管理面只认 `Authorization: Bearer`；内部端点走**既有**
+//	   `InternalAuth`，它接受 `X-Internal-Token`，**也**接受以 `Authorization: Bearer`
+//	   形式携带的**内部 token** —— 这是同一中间件的两条读取路径（`middleware.go:219-222`），
+//	   不是第二套凭据解析）。
 //
 // 【本文件的性质】`router.Setup(lifecycleCtx, db, rdb)` 是**生产入口**（`cmd/control-plane/main.go`
 // 调它）。本文件直接调它 —— 这是本仓库第一处 `router.Setup` 的测试（此前
@@ -370,10 +373,11 @@ func TestTraceBodyRouterSetupPermissionGate(t *testing.T) {
 // 只有任务 5 的静态 CHECKS `不新建鉴权中间件` 能承重）。它只补行为侧：两条点读端点的
 // 认证入口与既有中间件**完全一致**，没有多出任何一种凭据通道：
 //
-//	管理面端点：只有 `Authorization: Bearer <jwt>` 有效
+//	管理面端点：只有 `Authorization: Bearer <管理面 JWT>` 有效
 //	            ⇒ `X-Internal-Token` 不能把它放行（否则就是第二套凭据解析）
-//	内部端点：  只有 `X-Internal-Token` 有效
-//	            ⇒ 一枚合法的管理面 JWT 不能把它放行（同上）
+//	内部端点：  走**既有** `InternalAuth`，接受 `X-Internal-Token` 与
+//	            `Authorization: Bearer <内部 token>` 两条读取路径（`middleware.go:219-222`）
+//	            ⇒ 一枚合法的**管理面 JWT** 不能把它放行（同上；JWT ≠ 内部 token）
 func TestTraceBodyRouterSetupReusesExistingAuthMiddleware(t *testing.T) {
 	const dt, inst, part, row = "2026-10-08", "blue", 1, 0
 
@@ -407,6 +411,13 @@ func TestTraceBodyRouterSetupReusesExistingAuthMiddleware(t *testing.T) {
 		code, body := assemblyGet(engine, "/internal/v1/trace-body?request_id=req-assembly-auth", "",
 			map[string]string{"X-Internal-Token": assemblyInternalToken})
 		require.Equal(t, http.StatusOK, code, "既有 InternalAuth 通过后必须能取到正文，实际 %d，响应体 %s", code, body)
+		require.True(t, bytes.Equal(line, body), "内部端点返回的必须仍是正文原字节")
+	})
+
+	t.Run("内部端点也认Bearer携带的内部token", func(t *testing.T) {
+		code, body := assemblyGet(engine, "/internal/v1/trace-body?request_id=req-assembly-auth", assemblyInternalToken, nil)
+		require.Equal(t, http.StatusOK, code,
+			"既有 InternalAuth 允许以 Authorization: Bearer 携带内部 token（middleware.go:219-222），实际 %d，响应体 %s", code, body)
 		require.True(t, bytes.Equal(line, body), "内部端点返回的必须仍是正文原字节")
 	})
 

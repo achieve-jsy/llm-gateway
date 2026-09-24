@@ -40,6 +40,29 @@ undefined: err` + `[build failed]`）。因此改成只摘掉**判据**、保留
 - 「默认值在 config.go」：默认值住在 `config.go`，不在 TARGET 里 ⇒ 变异覆盖不到。
 - 「冻结包 GetBody 签名未变」：结构不变量（任务 2 的窄接口依赖它），且
   `internal/tracearchive/` **冻结、不可变异**（改了会让 R11 证据断绑定）⇒ 静态检查。
+
+## E26 修订轮（2026-10-08）：把一条**恒真断言**降级为**静态检查**
+
+任务 1 的 `TestValidateRefDoesNoFilesystemWork` 末尾原有一条
+
+    _, statErr := os.Stat(root)
+    require.True(t, os.IsNotExist(statErr), "校验不得创建任何文件系统对象")
+
+声称「校验不触碰文件系统」。它**恒真、不可能失败**：`root` 是 `t.TempDir()` 下**从未被创建**
+的子目录，而 `ValidateRef(ref)` 的签名里**根本没有 root** ⇒ 不存在任何一条「放宽 / 删除某个
+判定」的变异能让它转红（全局约束证据制度第 5 条的变异形态空间 + 第 6 条的证伪能力要求都不成立）。
+登记为 **E26**；本轮按 E26 的裁定处置 —— **降级**（本层无法构造可失败的形态，理由逐字写在
+用例注释里）：
+
+- **测试侧**：删除该恒真断言（连同随之不再使用的 `os` import），并在用例注释里逐字写明
+  「本用例证明的是什么 / 不证明什么」。**8 条顶层用例名与 m05 的杀手均不变**（m05 仍由
+  `TestValidateRefDoesNoFilesystemWork` 与 `TestValidateRefRejectsIllegalComponents` 的
+  `require.Error` 断言杀死，与那条被删的恒真断言无关）。
+- **集合侧**：新增第 **4** 行静态检查「校验不触碰文件系统」，与第 **9** 条 `REQUIREMENTS`
+  （「校验是纯内存判定」**没有**变异承重 —— 它是不存在性 / 结构性要求，按全局约束第 7 条
+  只能用静态检查）。**新增检查不改变任何既有变异的匹配串与语义**，也不放宽任何既有 CHECKS。
+- **⚠️ 本行与其它 CHECKS 一样扫整个文件文本（含注释）**：`internal/controlplane/config/trace_body_read.go`
+  的**注释里**也不得出现 `os.` / `ioutil.` / `syscall.` 这三类限定符（同任务 3 的 E21③ 踩过的坑）。
 """
 
 NAME = "p3-task-1"
@@ -82,6 +105,9 @@ MUTATIONS["m04_并发上界放宽"] = [
 # m05 【隔离探针载体】ValidateRef 的 dt 校验被摘掉（替换串已按文件头第 1 条改动，
 #     否则是编译红）。杀手：TestValidateRefRejectsIllegalComponents 的 dt 子例
 #     （7 条）与 TestValidateRefDoesNoFilesystemWork；inst/part/row 子例仍绿。
+#     【E26 修订轮】后者的转红来自两条 require.Error（非法 dt 必须被拒），
+#     **不**来自那条已按 E26 删除的恒真 os.Stat 断言 —— 别把「用例红」读成
+#     「不触碰文件系统已被证明」（那只有本集合第 4 行静态检查）。
 MUTATIONS["m05_不校验dt"] = [
     ("sub", "if err := validateReadDT(ref.DT); err != nil {",
             "if err := validateReadDT(ref.DT); false {"),
@@ -151,6 +177,21 @@ CHECKS = [
             "（另见全局约束与 D59）。本行不参与任务 1 的 8 条映射（它是任务 2 的结构前提）。"
         ),
     },
+    # 【E26 修订轮新增】校验是纯内存判定（不触碰文件系统）
+    # 三条是**字面**限定符（不是「文件系统调用」这类描述性类别），扫整个文件文本（含注释）。
+    {
+        "name": "校验不触碰文件系统",
+        "file": "internal/controlplane/config/trace_body_read.go",
+        "pattern": r"\bos\.|\bioutil\.|\bsyscall\.",
+        "expect": "absent",
+        "why": (
+            "`ValidateRef(ref)` 不接收 root、必须是纯内存判定（计划 1 的 N3：校验先于任何文件系统"
+            "访问）。这是**不存在性**要求 ⇒ 不存在能证明它的变异形态（删/放宽判定都不会让"
+            "TARGET 产生文件系统调用），只能静态钉住。**该要求原由测试末尾的 os.Stat 断言承载，"
+            "但那条断言恒真、不可能失败（登记 E26）⇒ 本轮降级删除、改由本行承重**。"
+            "注意本行扫**整个文件文本（含注释）**：TARGET 的注释里也不得写这三个限定符。"
+        ),
+    },
 ]
 
 # 没有登记的「允许的绿」：9 条全部应在原始侧转为断言红（实测见任务 1 报告）。
@@ -182,7 +223,7 @@ REQUIREMENTS = [
         "plan": "dt 校验（计划 1 的 N3，调用侧收口）",
         "mutations": ["m05_不校验dt"],
         "checks": [],
-        "note": "隔离探针：TestValidateRefRejectsIllegalComponents 的 dt 子例（7 条）与 TestValidateRefDoesNoFilesystemWork；inst/part/row 子例仍绿。替换串按文件头第 1 条改动（否则编译红）。",
+        "note": "隔离探针：TestValidateRefRejectsIllegalComponents 的 dt 子例（7 条）与 TestValidateRefDoesNoFilesystemWork（其红来自 require.Error，与已按 E26 删除的恒真 os.Stat 断言无关）；inst/part/row 子例仍绿。替换串按文件头第 1 条改动（否则编译红）。",
     },
     {
         "plan": "inst 白名单（计划 1 的 N3）",
@@ -207,5 +248,16 @@ REQUIREMENTS = [
         "mutations": [],
         "checks": ["读侧不读写入侧参数"],
         "note": "不存在性无法用变异证明 ⇒ 只能静态检查（计划全局约束第 7 条：两类证据分开记）。",
+    },
+    {
+        "plan": "校验是纯内存判定（不触碰文件系统 / 无 IO）",
+        "mutations": [],
+        "checks": ["校验不触碰文件系统"],
+        "note": (
+            "E26 修订轮新增：该要求原由 TestValidateRefDoesNoFilesystemWork 末尾的 os.Stat 断言承载，"
+            "但那条断言恒真、不可能失败（ValidateRef 不接收 root，本层也没有「先校验后拼路径」的"
+            "调用方）⇒ **无任何变异形态能证明它**，按全局约束第 7 条降级为静态检查（不存在性要求）。"
+            "该检查已实测在干净树上 PASS（否则工具会在跑变异前以「静态检查失败」终止、整轮零证据）。"
+        ),
     },
 ]

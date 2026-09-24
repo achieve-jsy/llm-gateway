@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -182,8 +181,12 @@ func TestValidateRefRejectsIllegalComponents(t *testing.T) {
 
 // TestValidateRefDoesNoFilesystemWork 是 m05 的**隔离探针**载体：只让 dt 非法
 // （inst/part/row 全合法），因此它不会因其它守卫在位而通过。
-// 校验必须是纯内存判定：不得触碰文件系统，且必须发生在**拼路径之前** ——
-// 冻结包的 Paths 不做校验，非法 dt 会让 PartDir 逃出 root（计划 1 的 N3）。
+// 它证明的是「非法 dt 被拒 + 合法 ref 被接受」这一**行为**（可被 m05 杀掉）。
+// 【E26 / E46】「校验不触碰文件系统」**不是**本用例能证明的：本条原先的
+// `os.Stat(root)` 断言恒真、不可能失败（见文件末尾的详细说明），已按 E26 降级删除，
+// 该性质改由 p3-task-1.py 的静态检查行「校验不触碰文件系统」承重。
+// 保留的结构性事实（解释「为什么校验必须先于拼路径」）：冻结包的 Paths 不做校验，
+// 非法 dt 会让 PartDir 逃出 root（计划 1 的 N3）。
 func TestValidateRefDoesNoFilesystemWork(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "trace-archive-v4")
 	p := tracearchive.NewPaths(root)
@@ -196,12 +199,24 @@ func TestValidateRefDoesNoFilesystemWork(t *testing.T) {
 		DT: "2026-09-24", Inst: "blue", Part: 0, Row: 0,
 	}), "合法 ref 必须通过（否则上面的断言可由「一律拒绝」的假实现满足）")
 
-	// 为什么校验必须先于拼路径：非法 dt 让产物目录逃出 root（用不存在的 root 证明，
-	// 因此本断言不产生任何磁盘副作用）。
+	// 为什么校验必须先于拼路径：非法 dt 让产物目录逃出 root（root 只参与拼路径、
+	// 这里不创建任何路径，因此本断言不产生任何磁盘副作用）。
 	escaped := p.PartDir("2026-09-24/../..", "blue")
 	require.False(t, strings.HasPrefix(escaped, root),
 		"非法 dt 拼出的目录 %q 逃出 root %q —— 这正是校验必须在校验期发生的原因", escaped, root)
 
-	_, statErr := os.Stat(root)
-	require.True(t, os.IsNotExist(statErr), "校验不得创建任何文件系统对象")
+	// 【E26 / E46：本条被降级删除，**不得**把它当成「校验不触碰文件系统」的证据】
+	// 这里原本还有一条 `_, statErr := os.Stat(root); require.True(t, os.IsNotExist(statErr))`，
+	// 声称「校验不得创建任何文件系统对象」。它**恒真、不可能失败**：`root` 是
+	// t.TempDir() 下**从未被创建**的子目录，而 `ValidateRef(ref)` 的签名里**根本没有
+	// root** ⇒ 不存在任何一条「放宽 / 删除某个判定」的变异能让它转红（计划全局约束
+	// 证据制度第 5/6 条要求的证伪能力不成立）⇒ 它不构成证据。
+	// 处置（E26 的裁定，本轮执行）：「ValidateRef 是纯内存判定」这一要求**无法在本层
+	// 构造出可失败的断言形态**（函数不接收 root，本层也没有「先校验后拼路径」的调用方
+	// —— 那是任务 2 服务层的接线），因此**如实降级**：删掉恒真断言，改由**静态检查**承重
+	// （`tools/trace-mutate/sets/p3-task-1.py` 的 CHECKS「校验不触碰文件系统」钉住
+	//  `internal/controlplane/config/trace_body_read.go` 不引用 os. / ioutil. / syscall.；
+	// 不存在性 / 结构性要求只能用静态检查，见计划全局约束第 7 条）。
+	// 上面那条 `escaped` 断言只说明「校验为什么必须发生在拼路径之前」这一**结构性事实**
+	//（冻结包 `Paths.PartDir` 的拼路径行为），它同样不能被本集合的变异杀掉，不是行为证据。
 }

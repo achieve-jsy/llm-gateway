@@ -1875,7 +1875,7 @@ git commit -m "feat(cmd): trace-body 点读 CLI（计划 3/4 任务 7）
 
 | 规格 §14.2（**按计划 2 Task 8 的 A 表**，见 D56） | 内容 | 归属 |
 |---|---|---|
-| A1 | 写 1,000,000 条 → 随机抽 1,000 条读回 → 逐字节一致 | **写入半部 = 计划 2 已完成**；**读回半部 = 本计划** |
+| A1 | 写 1,000,000 条 → 随机抽 1,000 条读回 → 逐字节一致 | **写入半部 = 计划 2 已完成**；**读回半部 = 本计划未做（见 E49②）**：本计划的 A2 用例只有 **n = 2000**（规格 A1 是 1,000,000）⇒ **百万级读回既无证据也无承接方**，承接方 = **计划 4 任务 9**（环境 = 生产宿主，真实 PG + 真实 zstd v1.4.8），条件见 E49②。⚠️ 计划 4 的 `:101` 与 H9 把 A1 划给读侧 ⇒ 该分工冲突须由发起者裁定。**不得**写成「本计划已承担」或「已覆盖」 |
 | **A2** | **封块产物可点读、索引正确** | **本计划** |
 | A3 | 把 `/datalog` 填满 ⇒ 退化到 `body_missing`、网关继续服务 | 计划 2（注入式）+ 计划 4（真实盘满） |
 | **A4** | 读取 1000 次后目录占用增量 == 0 | **计划 1 已覆盖**（`tests/tracearchive/constraints_test.go`）；本计划**不重验、不声称**（见 E3） |
@@ -1926,9 +1926,14 @@ func TestAcceptanceA2ProductionRoundTrip(t *testing.T) {
     // ③ 随机抽 K = 200 行（固定 seed 保证可复现）：
     //    调 svc.GetBody(ctx, requestID)
     //    断言：bytes.Equal(got.Body, wantLine)；Source == SourceArchive
-    // ④ 【索引正确的承重断言】抽样必须覆盖 ≥ 2 个不同的 part，且每个被抽 part 内
-    //    的行序与写入序一致 —— 否则「索引正确」这个命题没有被测到。
-    //    用 require.True(t, partsSeen >= 2) 固定它。
+    // ④ 【覆盖守卫 —— **不是**索引正确的承重断言（就地订正 E48；依据 = 本轮隔离探针 R7）】
+    //    抽样必须覆盖 ≥ 2 个不同的 part，且每个被抽 part 内的行序与写入序一致 —— 否则
+    //    「跨 part 索引正确」这个命题会悄悄退化。但这一行读的是**夹具变量** `locPart[]`
+    //    （由夹具算术 `i / linesPerPart` 生成，与 TARGET 的行为无关）⇒ 它是**夹具自证**，
+    //    **任何** TARGET（`trace_body_service.go`）变异都**杀不掉它** ⇒ **不得**把它记成
+    //    「索引正确」的独立证据。索引正确的独立证据是**逐字节**断言（R1 已实测可红）。
+    //    实现用 require.GreaterOrEqual(t, len(partsSeen), 2) 固定它（草稿原写的
+    //    require.True(t, partsSeen >= 2) 不是落地形态）。
 }
 ```
 
@@ -1974,11 +1979,18 @@ TARGET = "internal/observability/service/trace_body_service.go"
 PACKAGES = ["./tests/observability/service/"]
 MANIFEST_FILES = ["tests/observability/service/trace_body_acceptance_test.go"]
 MANIFEST_DERIVATION = "grep -h '^func Test' tests/observability/service/trace_body_acceptance_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\\1/' | sort"
-SKIP_WHITELIST = ["TestAcceptanceA2ProductionRoundTrip", "TestAcceptanceA2IndexBoundaries"]
+SKIP_WHITELIST = ["TestAcceptanceA2ProductionRoundTrip", "TestAcceptanceA2IndexBoundaries", "TestAcceptanceA2StateMatrixMutuallyExclusive"]
+# ⚠️ 上行为 3 条（就地订正 E48，原稿只写 2 条）：三条用例都需要真实封块（都调
+# `requireZstdCLI`，定义在 tests/observability/service/trace_body_quarantine_test.go）⇒
+# 无 zstd 的机器上三条**整条 SKIP**，不逐条登记会让三断言的第 3 条（全层级 SKIP == 0）失败、
+# 整轮判无效。集合 `tools/trace-mutate/sets/p3-task-8.py` 的作者已按 3 条登记（其头部「相对
+# 计划的改动」把这条差异记为「由 2 条扩到 3 条」）；本行订正后计划与集合口径一致。
 
 MUTATIONS = {}
 # m01 定位键的 part 分量被写死为 0 ⇒ 跨 part 串文件（索引正确性破裂）
-#     杀手：TestAcceptanceA2ProductionRoundTrip（partsSeen >= 2 与逐字节断言）
+#     杀手：TestAcceptanceA2ProductionRoundTrip 的**逐字节**断言（就地订正 E48：该用例的
+#     「抽样覆盖 >= 2 个 part」那一行读的是**夹具变量** `locPart[]` ⇒ 夹具自证，**任何**
+#     TARGET 变异都杀不掉它 ⇒ **不得**把它记成杀手；索引正确的独立证据只有逐字节断言）
 #     【与任务 2 的 m04 同族，但杀手不同：这里由 A2 的跨 part 抽样固定】
 MUTATIONS["m01_part分量写死为0"] = [
     ("sub", "Part: *trace.BodyRefPart,", "Part: 0,"),
@@ -2357,6 +2369,15 @@ git log --oneline <base>..HEAD
 | 编号 | 位置 | 已核实的事实（本轮实测，不是推测） | 本计划的裁定 / 登记 |
 |---|---|---|---|
 | **E47** | 本计划 `:2274`（E26 那一行「处置段」的表格单元文本，即从 `**【E26 修订轮处置（2026-10-08）＝ 降级，不是改造成可失败】**` 起的那一格） | **条目序号的书写次序与编号不一致：`⑤` 被插在 `④` 之前。**实测偏移（Python `str.find`，同一行、行长 3168）：`①`=705、`②`=1047、`③`=1341、**`⑤`=2168**、**`④`=2956** ⇒ 视觉顺序是 ③→⑤→④，而编号语义要求 ④（残余如实登记）在 ⑤（后续重绑）之前。成因是 **E26 非阻断项合批修复轮**追加 ⑤ 时把它插在了 ③ 与 ④ 之间（⑤ 是后写的，却占用了 ④ 前面的位置）。**影响仅限可读性**：两段内容本身完整、互不矛盾，也不影响任何被绑定的文件（E26 行是纯文档，其三个 sha256 与计数绑定的是测试文件与集合，不是本行文本） | **重排为 `④ → ⑤`（`③` 之后紧跟 `④`，`⑤` 收尾）——纯文本订正、无需重跑任何权威表**：重排后偏移为 `①`=705、`②`=1047、`③`=1341、`④`=2168、`⑤`=2378，行长仍为 3168（**未增删一个字符**，只是两段互换位置）。**不得**借这次重排改动 ④/⑤ 的任何字面内容（尤其是 ⑤ 里的三个 sha256、计数 `合计: 9 = 9 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿` 与提交哈希 `56b8d0f7`）——它们是被重跑重记过的绑定事实 |
+
+> 编号续 E47。**来源：任务 8 的两处事实错误订正轮**（实现提交 `907a0cdb`）。与 E1–E47 同一条纪律：**只登记与订正文本、不改代码**。本轮的两处**事实错误**（R7 机制句、内部端点凭据）已就地修正在其载体里（用例注释 / 集合 `REQUIREMENTS` / 交付报告），计划文本另按本节就地订正。**重跑重绑（本轮已完成，不是计划）**：`p3-task-8` 与 `p3-task-8-handler` 两张权威表已在实现提交后重跑，**旧表保留**、新表为 `p3-task-8-authoritative-at-907a0cdb.txt` 与 `p3-task-8-handler-authoritative-at-907a0cdb.txt`；分类计数仍**全为断言红**（3 / 1），无崩溃/超时/编译红、无未登记绿、无无效证据。
+
+| 编号 | 位置 | 已核实的事实（本轮实测，不是推测） | 本计划的裁定 / 登记 |
+|---|---|---|---|
+| **E48** | 本计划任务 8 步骤 1 的 ④ 草稿注释（订正前 `:1929-1931`）、步骤 3 的 m01 杀手注释（订正前 `:1981`）、以及 `SKIP_WHITELIST` 行（订正前 `:1977`） | ① **R7 机制句失实**：覆盖守卫 `partsSeen[locPart[i]] = true`（`tests/observability/service/trace_body_acceptance_test.go:142`）读的是**夹具变量** `locPart[]`（由夹具算术 `i / linesPerPart` 生成），**不是** `res.Ref.Part` ⇒ 它是**夹具自证**，**任何** TARGET（`trace_body_service.go`）变异都**杀不掉它**。原稿「它被上一条 `require.Equal(…, res.Ref)` 蕴含（遮蔽效应）」这个**机制**不成立（探针 R7 实测转红的确实只有上一条，但原因是**两行不相干**，不是蕴含）。② `SKIP_WHITELIST` 原写 **2 条**，而三条用例（`TestAcceptanceA2ProductionRoundTrip` / `TestAcceptanceA2IndexBoundaries` / `TestAcceptanceA2StateMatrixMutuallyExclusive`）的封块格都调 `requireZstdCLI`（定义在 `tests/observability/service/trace_body_quarantine_test.go`）⇒ 无 zstd 的机器上三条**整条 SKIP**，2 条不成立 | ① 就地订正 ④ 草稿注释为「**覆盖守卫，不是索引正确的承重断言**」，逐字保留结论「夹具自证 ⇒ **任何** TARGET 变异都杀不掉它 ⇒ **不得**记成索引正确证据（索引正确＝**逐字节**断言，R1 实测可红）」，并把草稿里的 `require.True(t, partsSeen >= 2)` 记为**非落地形态**（实现为 `require.GreaterOrEqual(t, len(partsSeen), 2)`）。② m01 的杀手由「partsSeen >= 2 与逐字节断言」改为**逐字节断言**。③ `SKIP_WHITELIST` 由 2 条改为 **3 条**（与集合逐字一致）。**载体侧同步（实现提交 `907a0cdb`）**：用例注释、集合 `REQUIREMENTS`、交付报告 §3 R7 与 §4.2-4 四处同错文字均改为「取自夹具 `locPart[]`」。**旧权威表不手改**：本轮已重跑重记（集合 sha256 `88154013…` → `e32d2e1a…`；测试文件 `88186a9e…` → `ab01dc76…`；清单 `95971e93…` 与被测文件 `036b47e5…` 未变，后者与 R1–R3/R7 的还原点一致）。集合头部那条「`SKIP_WHITELIST` 相对计划由 2 条扩到 3 条」的改动记录**保留**（它是提改动时的历史记录，不静默丢弃）；本行订正后计划与集合口径一致 |
+| **E49** | 交付报告 §4.1-1（`AutoMigrate` 建表）与 §4.1-8（规模）；本计划 `:1878`（A1 行）与任务 8 步骤 5 的提交信息草稿（「A1 读回半部…均不在本计划」） | ① 任务 8 步骤 6 在真实 PG 上的 5 行**不是**由 `atlas-migrations` 注入的，而是一次性 fixture 的 `AutoMigrate(&obsmodel.CallTrace{})` ⇒ **迁移 DDL 与 GORM 推导的 DDL 是否逐字一致（生产 PG 上的定位键四列）未核实**；报告已登记为未核实项，但本计划正文**没有**这一条、任务 9 也不做 DB 对账 ⇒ **既无证据也无承接方**。② 规格 A1 的百万级读回：本计划只有 **n = 2000**（A2 用例）⇒ **既无证据也无承接方**；计划 4 的 `:101` 与 H9 把 A1 划给读侧，而本计划（读侧）没做 ⇒ **两边都没做**。（`:1878` 的「读回半部 = 本计划」与提交信息草稿的「A1 读回半部…不在本计划」**自相矛盾**，已按③订正） | 逐条指派（**不得留空、不得写成已覆盖**）：① **承接方 = 计划 4 任务 7（蓝绿切换与回滚剧本）的生产启用硬门**，**环境 = 生产宿主 + 生产 PG**；条件 = 在既有三条硬门之后增补第 ④ 条：核对 `atlas-migrations` 已 apply 的 `call_traces` 六列（`body_ref_dt/inst/part/row` + `body_missing`/`body_bytes`）与 `obsmodel.CallTrace` 的 GORM 推导**逐字一致**（用 `information_schema.columns` 列出生产库列定义与迁移 SQL **逐列**对照；差异即停止点），命令与输出抄进计划 4 任务 12 的交付报告。**本轮不产出该证据**（报告 §4.1-1 的未核实状态不变）。② **承接方 = 计划 4 任务 9（A6 压缩比复测与 C5 解码内存预算）的真实测量环节**，**环境 = 生产宿主（真实 PG + 真实 zstd v1.4.8）**；条件 = 用 ≥ 1e6 行的真实数据集做 1,000 行随机抽样读回并**逐字节**比对（复用任务 8 的 A2 用例形态放大规模），结论抄进计划 4 任务 12 的交付报告。**⚠️ 与计划 4 既有分工的冲突须由发起者裁定**（本计划**不得**单方面改计划 4 —— H18 的「只引用不改」纪律，且计划 4 `:2858` 自己规定「不一致以发起者裁定为准」）：计划 4 的 `:101` 与 H9 逐字写「本计划不承担 A1」「A1/A2/A4/A5 归计划 3」⇒ 若由计划 4 承接，计划 4 的这两处必须由发起者订正；在订正之前，本条以「**承接方已指派、计划 4 文本未对齐 ⇒ 仍未承接**」登记。③ **就地订正 `:1878`**：读回半部改为「**本计划未做**（本计划只做 n = 2000 的 A2；百万级读回见 E49②）」 |
+| **E50** | `tools/trace-mutate/sets/p3-task-2.py:114` 与 `p3-task-4.py:52` 的 `PACKAGES = ["./tests/observability/service/"]`（**目录级**枚举），以及 `p3-task-2-authoritative-at-40521037.txt` / `p3-task-4-authoritative-at-e0d32ce4.txt` 的「测试文件 sha256」段 | 工具按 `PACKAGES` 目录级 `os.walk` 枚举该目录下**全部** `*_test.go` 并逐个打印 sha256；既有权威表分别只有 **1 行**（`trace_body_service_test.go`）与 **2 行**（+ `trace_body_quarantine_test.go`）。任务 8 的提交 `61bec0d0` 在本目录新增 `tests/observability/service/trace_body_acceptance_test.go` ⇒ **本轮实测**（新 `p3-task-8-authoritative-at-907a0cdb.txt`）该目录的「测试文件 sha256」段为 **3 行**：`trace_body_acceptance_test.go` / `trace_body_quarantine_test.go` / `trace_body_service_test.go` ⇒ 两张旧表的绑定**不再覆盖当前树** | **承接方 = 任务 9 的分支级全量重跑**（步骤 2 的全量重跑本来就包含 `p3-task-2` / `p3-task-4`）；验收形式 = 重跑表的「测试文件 sha256」段出现 **3 行**。**⚠️ 订正原稿口径**：原稿写「应出现 **4 行**」**不成立** —— `tests/observability/service/` 当前只有 **3** 个 `*_test.go`（本轮实测逐目录列举与 `p3-task-8` 新表的 3 行哈希双重佐证）；「4 行」是 `tests/observability/handler/` 那一组（E36/E38）的计数，**两者不可混用**。少于 3 行即说明绑定没有覆盖当前树。**本轮不重跑这两张表**（只重跑了 `p3-task-8` / `p3-task-8-handler`）；在任务 9 产出 3 行表之前**不得**声称这两张表的绑定覆盖当前树 |
+| **E51** | `task-8-report.md:80`（§2.1 的产物名）与 `:107`（§3 的标题） | `:80` 引用的产物名 `p3-task-8-authoritative-at-3bf7ab88.txt` **不存在**（`3bf7ab88` 是步骤 6 构建二进制时的中间提交；权威表实际产在 `61bec0d0` ⇒ 应为 `p3-task-8-authoritative-at-61bec0d0.txt`；本轮重绑后另添 `-at-907a0cdb.txt`）。`:107` 写「RED 证明（**6** 次临时破坏…）」，实有 **7** 次（`red-1-*.txt` … `red-7-*.txt`，正文表格列到 R7；`:119` 自己写的是「7 次全部为断言红」） | 按**「报告留档不追改」口径**登记：**不改 `:80` / `:107`**（留档文本；订正只在**本行**与产物目录的实际文件名 / `red-{1..7}` 里体现），任何后续引用一律以**产物目录的实际文件名**与 `red-{1..7}` 为准。**⚠️ 口径边界（防止被读成「报告的一切都不许动」）**：本口径只适用于此类**文字瑕疵**（文件名笔误、计数笔误，**不改变任何结论**）；本轮的**事实错误**（R7 机制句、内部端点凭据）则按前述**就地修正在报告与用例/集合**里，**不属**本条 |
 
 ---
 

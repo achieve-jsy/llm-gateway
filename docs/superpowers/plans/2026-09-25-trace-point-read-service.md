@@ -1853,6 +1853,11 @@ git commit -m "feat(cmd): trace-body 点读 CLI（计划 3/4 任务 7）
 - **兜底 = 任务 9**：若本任务因 DB/Redis 依赖不可得而**未**产出该用例，任务 9 **必须**把该缺口逐条写进 `R11-v1.md` 的「覆盖缺口」，**不得静默**。⚠️ 本条**不是**复核任务 5 的 m06 降级裁定 —— m06 降级的是「为一个断言造变异」的**变异**形态，本条要的是**行为验收**。
 - **残余（如实写进报告）**：本项**不**覆盖真实 PG/Redis（内存 sqlite 或注入替身），也**不**声称覆盖「未新建鉴权中间件」的不存在性（那只有 CHECKS）。
 
+**⚠️ 【本轮承接·评审阻断项：任务 7 CLI 的「真实验收」此前无人承接】** 任务 7 报告 §9 逐字写「退出码 0/3/4/5 的端到端形态只有 B 层用例证据 …… 属**任务 8 的验收**」「`--raw` 对**真实归档行**的逐字节取回属任务 8」，而本任务**原文本**对这些**零提及**（实测：本节原文整段 `grep -n "trace-body\|trace_body_cli\|退出码"` **零命中**），且本任务自述「不覆盖真实 PG/Redis，用注入配置/替身」（见上面 E33 块的残余）⇒ 三类验收**二进制级证据与承接方双缺**，而任务 9 的「分支级证据完整」会把它们读成**已承接**。⇒ **本任务承接**（与 E33 块并列，**不是** A2 的子项，也**不是**复核 E33）：
+- **落点 = 步骤 6（本轮新增）**：A 组（退出码 0/3/4 的二进制级真实路径）／B 组（`--raw` 对真实归档行逐字节 + stdout 纯度）／C 组（`CLIReadConfig` 三向量冒烟，呼应 **E44**）／D 组（**退出码 5 在 CLI 上不可达**的裁定——「不可取证」不是「没跑」）。
+- **验证者与条件（不得含糊）**：验证者 = **任务 8 的执行者**；条件 = 一台**同时具备真实 PostgreSQL 与至少一份真实封块产物**的机器（CLI 硬编码 `postgres.Open` ⇒ 本任务 A2 用例的内存 sqlite **驱动不了它**，这是与 A2 **并列**的第二条环境要求）。
+- **受限口径**：环境不可得时，A/B/C 三组**逐条**登记为「受限：仅 B 层证据（用例名逐条列出）」，D 组照常给出**不可达裁定**；**同时**必须在任务 9 步骤 3 的「覆盖缺口」里出现（本轮已在该处补入对应清单项）。**不得**沉默略过、**不得**写成已覆盖、**不得**留在无承接状态。
+
 **验收范围（**本计划只承担 A2，其余显式排除**）：**
 
 | 规格 §14.2（**按计划 2 Task 8 的 A 表**，见 D56） | 内容 | 归属 |
@@ -2031,6 +2036,30 @@ task-7/task-8-reader + TestEndToEndRoundTripByteExact），本用例不重验；
 A1 读回半部、A3 真实盘满、A6/A7/A8/A9 均不在本计划。"
 ```
 
+- [ ] **步骤 6（本轮新增·承接任务 7 的 CLI 真实验收）：`bin/trace-body` 的二进制级端到端（退出码 0/3/4/5、`--raw` 逐字节、`CLIReadConfig` 三向量）**
+
+**为什么单开一步**：见本节顶部的承接块。三类验收在任务 7 的报告里被**指名**「属任务 8 的验收」，而本任务原先既不承接、也（自述不含真实 PG）无承接条件 ⇒ 没有这一步，它们**永远只有 B 层函数级证据**（`ExitCodeFor` / `WriteRawBody` 的单测），「二进制真的这样退出、真的逐字节写出」**无人证明**。本步骤**不产出 git-tracked 文件**（命令与输出进交付报告 / `.superpowers/sdd/…`）⇒ 不改动步骤 5 的提交集合；若选下面的 **C②** 形态，则另按集合纪律处理。
+
+**验证者 / 环境 / 受限口径（三句必须照写进报告）**：验证者 = **任务 8 的执行者**；环境 = **真实 PostgreSQL + 至少一份真实封块产物**（`ta.Sealer` 产出，或复用任务 4/8 已造的真实产物；`--root` 指向真实 `<root>`）；受限时 = 逐条写「受限：仅 B 层证据（用例名逐条列出），二进制级未产出」，缺哪一条写哪一条，并让任务 9 的「覆盖缺口」原样承接。
+
+**A 组：退出码 0 / 3 / 4 的二进制级真实路径**
+- **fixture（脚本化即可，不新增 git-tracked 文件）**：① 用 `ta.Sealer` 把 ≥2 行封成 `<root>/dt=<D>/inst=blue/part-000000.jsonl.zst`，把每行的**原字节**另存为参照文件；② 在真实 PG 的 `call_traces` 写三行：命中归档（四键非 NULL、`body_missing=false`）／`body_missing=true` 且四键全 NULL／四键非 NULL 但行号越界（或产物不存在）。
+- **断言（逐条抄命令 + 退出码 + 输出）**：① 命中行 ⇒ **退出码 0**，且 `bin/trace-body … --raw > /tmp/got` 与参照文件 `cmp` **逐字节相等**；② 第二行（`body_missing=true`）⇒ **退出码 3**；③ 第三行（越界 / 产物缺失）⇒ **退出码 4**。
+- **同一轮的 `--json` 要求**：命中行的 `source` 必须是 `archive`、`bytes` 等于正文长度、`sha256` 与 `sha256sum <参照文件>` 相等（这是「拿到的到底是哪一份」的凭据；B 层只钉了形状与来源，不钉真实归档行的字节）。
+
+**B 组：`--raw` 对真实归档行的逐字节取回（stdout 纯度）**
+- 除 A① 的 `cmp` 外，还必须显式证明**无额外换行 / 无日志混入**：`wc -c` 与原字节数相等、stdout 不含任何 gorm / 日志字样、stderr 不含 DSN 或其派生信息（`user=` / `database=`）。
+- **回归点**：HEAD `f8d1d54b` 之前 gorm 默认 logger 往 **stdout** 打连接/查询日志（`vendor/gorm.io/gorm/logger/logger.go:75` 的 `os.Stdout`）⇒ 本组是那次修复的**二进制级回归证据**（单元用例测不到——`cmd/trace-body/main.go` 是 `package main`，不可导入）。
+- 无真实产物 ⇒ 受限登记；**不得**用截断/伪造产物或替身冒充这一组。
+
+**C 组：`CLIReadConfig`（`internal/observability/service/trace_body_cli.go:149`）三向量冒烟（呼应 E44）**
+- 三向量（**本轮已在本机实测，命令与输出可逐字抄**）：`--root " "` / `--root rel` / `--root /` ⇒ **退出码 1**，stderr 以 `参数错误:` 起头且**不含 DSN**；参照组：不可达 DSN（如 `postgres://u@127.0.0.1:1/db?sslmode=disable`）⇒ **退出码 2**、stdout 为空、stderr 只有通用文案「连接 PostgreSQL 失败（连接串不回显）」（与 **E45** 同一条）。
+- **固化形态二选一（必须在报告里写明选了哪种）**：**① 二进制冒烟**（默认；零新增文件）；**② B 层用例**（在 `tests/tools/trace_body_cli/` 新增一条表驱动用例钉住三向量 ⇒ error）。选 **②** 会改动该目录的测试文件集合 ⇒ **必须**同步 `tools/trace-mutate/sets/p3-task-7.py` 的 `MANIFEST_FILES` 与清单派生（`MANIFEST_DERIVATION`），并在任务 9 重跑 `p3-task-7` 后**重记绑定**（E36 / E38 的同一纪律）。
+
+**D 组：退出码 5 的可达性（结论必须逐字进报告：二进制级 5 不可取证）**
+- **已核实的事实**：`CLIReadConfig`（`trace_body_cli.go:149-160`）对**空白**（`TrimSpace` 后为空 ⇒ 函数自己报错）/ 相对 / `/` 的 `--root` 一律**先返回 error** ⇒ `main.go:74-78` 退出 **1**；而通过校验时 `LoadTraceBodyReadConfig` 返回的 `Root` **必非空** ⇒ `cfg.Disabled()==false` ⇒ 服务层的 `ErrTraceBodyDisabled`（`trace_body_service.go:208-210`）在 CLI 路径上**永不产生**。
+- **因此**：5 的二进制级证据**不存在且不可获得** —— 报告只许写「**B 层 `ExitCodeFor` 单测 + 不可达论证**」，**不得**写「二进制级 5 已覆盖」，**不得**为凑这一格改生产代码（本轮**零 `.go` 改动**）。若发起者要求 CLI 真的能报 5（例如允许 `--root` 留空表示「读侧未配置」、把 1 与 5 分开），那是**任务 7 的口径变更**（改 `main.go` / `trace_body_cli.go`，并重跑重记 `p3-task-7` 绑定），**不在本任务**。
+
 ---
 
 ### Task 9：分支级证据重跑（R11 式）
@@ -2101,6 +2130,7 @@ grep -c '^task-.* exit=0$' /tmp/p3-task-all.out   # 必须 = 9
    - 需要真实 zstd 的用例在本机无 zstd 时 SKIP（逐条列出用例名与 `SKIP_WHITELIST` 依据）。
    - **【E36，本轮承接】`p3-task-3` 的「测试文件 sha256」段**：任务 5 的提交 `eda06420` 在 `tests/observability/handler/` 新增了 `trace_body_handler_test.go`，任务 6 的提交 `d2bea971` 又新增 `usage_trace_archive_test.go`，而该集合的 `PACKAGES = ["./tests/observability/handler/"]` 是**目录级枚举**（工具 `test_files_of` 打印该目录下每个 `*_test.go` 的 sha256）⇒ 本轮重跑的 `p3-task-3` 权威表**必须出现 4 行**测试文件哈希（旧表 `-at-e0d32ce4.txt` / `-at-9c4fd450.txt` 都只有 `prompt_mask_test.go` 与 `trace_body_error_test.go` 两行；**原写「第三行」不成立，见 E38**）；少于 4 行即说明绑定没有覆盖当前树。
    - **【E33 兜底】任务 8 的「真实 `router.Setup` 装配（`trace_body.root` 启用/禁用两态）」用例**：若任务 8 已产出，抄其文件与结论；**若未产出**，逐条登记三条要求各自缺什么证据（**权限门 `PermUsageViewAll`** / **不新建鉴权中间件** / **真实装配两态**），**不得**留下无承接方的条目，也不得把「只有静态证据」写成已覆盖。
+   - **【本轮承接·CLI 二进制级验收（任务 7 报告指名的「属任务 8 验收」项，见任务 8 顶部承接块与步骤 6）】**：**若任务 8 步骤 6 已产出** ⇒ 逐字抄其 **A/B/C** 三组的命令、退出码、`cmp` / `sha256sum` 对照与 `CLIReadConfig` 三向量冒烟结论，并抄 **D 组**的裁定；**若未产出**（无真实 PG / 无真实封块产物）⇒ **逐条**登记缺什么证据：二进制级退出码 **0/3/4（真实路径）**、**`--raw` 对真实归档行的逐字节与 stdout 纯度**、**`CLIReadConfig` 三向量冒烟**。**退出码 5 一律写「二进制级不可达 ⇒ 仅 B 层 `ExitCodeFor` 证据 + 不可达论证」，不得写「已覆盖」，也不得留空**。**不得**把这三类挂到 A2 或 E33 名下——它们承接方就是任务 8 步骤 6。**缺失登记后立即跳到下一项，不阻塞本报告的其余部分。**
 6. **与计划 1/2 证据的关系**：本计划**未修改** `internal/tracearchive/` 下任何文件（用命令输出为证，见步骤 4）⇒ R11 v3（142 条，冻结提交 `ea962a70`）的被测文件哈希未变，**其绑定仍然有效，无需重跑**；`tools/trace-mutate/sets/task-*.py` 与 `p2-task-*.py` 同样未被修改。
    **⚠️ 必须写明的限定**：R11 v3 报告头部记录的 `git rev-parse HEAD` 是**旧提交** `ea962a70`；本计划合入后**该字段本身已经失效**（HEAD 变了）。R11 v3 之所以仍然有效，**唯一依据是「被测文件哈希未变」**（它绑定的是文件 sha256，不是分支位置）——报告必须**照此措辞**，**不得**写成「R11 v3 的 HEAD 仍是当前 HEAD」（那是错的，且会让人误以为无需核对文件哈希）。
 
@@ -2281,6 +2311,19 @@ git log --oneline <base>..HEAD
 | **E40** | 本计划 Task 7 步骤 5 的 `m03` 草稿（`MUTATIONS["m03_缺参数panic"]`） | 草稿的替换串是 `if *requestID == "" {\n\t\tpanic("missing")`，即用 **panic** 制造红。而全局约束第 5 条逐字写「**变异必须是「断言红」：编译失败、panic、30s 超时都算**（不算通过）」，工具的 `classify()` 也把它归入「红(崩溃/中止)」而不是「红」⇒ 步骤 6 的「**预期 5 条断言红**」在草稿的字面实现下**不可能成立**（会得到 4 断言红 + 1 崩溃红）。这与 **E10 / E34** 是同一形态（草稿按字面使用会产出非断言红），只是红的形式是 panic 而不是编译失败 | **订正机制、语义一字不变**：实际集合 `tools/trace-mutate/sets/p3-task-7.py` 的 `m03` 改为**摘掉必填项校验**（`if *requestID == "" {` → `if false {`）——「缺 `--request-id` 不再返回用法错误 ⇒ 退出码不再是 1」这一语义与草稿完全一致，但红来自用例断言（`TestTraceBodyCLIParsesFlags` 的「缺 request-id ⇒ 期望 error」那一格失败）。**变异条数不变（仍 5 条）**，计划步骤 5 的草稿代码块**保留原样**（历史草稿），其上方已加一行指向本条与集合头的提示。实际内容一律**以集合头部逐字为准** |
 | **E41** | 本计划 Task 7 的 `--ref` 条（「若 ref 格式化抽进 `trace_body_cli.go`，必须把下面**两条** CHECKS 行镜像到该文件」）与 **E18** 末尾的「若 ref 格式化被抽到 `trace_body_cli.go`，本页**前三行**都必须镜像到该文件」 | 两条镜像要求在「ref 格式化在 `trace_body_cli.go`、服务构造留在 `main.go`」这一形态下**第三条没有落点**：① m05 的目标串（那句 `fmt.Fprintf(w, "%s/%s/part-%06d#row=%d\n", …)`）必须落在集合的 `TARGET = internal/observability/service/trace_body_cli.go` 里，否则工具在跑变异之前就以 `PATTERN-MISS` 终止（整轮零证据）⇒ **ref 格式化必然被抽进该文件**，镜像要求被触发；② 镜像第 1 条（禁用标识符）与第 3 条（`.Ref`）在该文件里都有真实落点；③ 但第 2 条 `NewTraceBodyService\(` 的落点是**服务构造点**，而按本任务的正向钉住（`cmd/trace-body/main.go` 必须出现该构造调用），构造点必须留在 `main.go`；把第 2 条镜像到 `trace_body_cli.go` 的唯一办法是在那里再写一个构造调用，而该文件里**没有任何调用者** ⇒ 死代码 / 重复构造，与全局约束「不得新增无消费者的导出符号」（新增哨兵那条的理由）同一纪律 | **镜像第 1、3 条到 `internal/observability/service/trace_body_cli.go`，第 2 条留在 `cmd/trace-body/main.go`**（它的承重证据就是那一行调用）。集合里两行镜像 `CHECKS` 的 `why` 逐字写成本条。**不得**为了「凑齐三行镜像」而在任一文件里加一个无调用者的构造调用。⇒ 三条正向/禁用要求**全部有落点**，没有一条空转：禁用标识符两处、`NewTraceBodyService(` 一处（`main.go`）、`.Ref` 两处 |
 | **E42** | 本计划 Task 7 步骤 3 的对外形态（`--json` 输出 `{"source":…,"bytes":…,"sha256":…}`）vs 步骤 5 的 `MUTATIONS` 草稿（只有 m01–m05）、步骤 6 的预期句（原写「5 条断言红」） | **覆盖缺口（实测触发，不是推测）**：草稿的 5 条变异**没有任何一条**覆盖 `--json` 摘要（`WriteSummaryJSON` 的 source / bytes / sha256 三处取值），而 `--json` 是计划自己要求的对外形态 ⇒ 按全局约束第 3 条「每个任务的 `REQUIREMENTS` 映射表无缺口（有要求无条目 ⇒ 整轮失败）」，实现者**必须**为它补条目；本轮实测就是工具以 `!!! 映射表存在缺口 !!!  - --json 输出 … → 没有任何对应条目（GAP）` 把整轮判失败（退出码 1，零有效证据）。同时步骤 6 的「5 条」在这条缺口闭合后必然不成立 | **补入 m06（变异承重）+ 就地订正步骤 6 的计数为 6**（E32 的承接形态：优先用**能红的变异**而不是静态检查，因为摘要计算是可变异的行为、不是结构不变量）：`tools/trace-mutate/sets/p3-task-7.py` 新增 `m06_摘要不以正文计算` = 把 `sum := sha256.Sum256(res.Body)` 改成对空输入求摘要 ⇒ 摘要与正文不符而 `source`/`bytes` 仍对 ⇒ 杀手是**具体顶层用例** `TestTraceBodyCLIJSONSummaryMatchesServiceResult`（它的 sha256 比对格失败，属**断言红**）。**不得**用「删掉这条计划要求」或「加一条恒真静态检查」来闭合缺口。集合头部的「覆盖边界」段同步改写（`--json` 不再是无变异条目；形状三键另由该用例的 `json.Unmarshal` 行为侧钉住） |
+
+---
+
+### 追加登记（任务 7 独立评审订正轮，2026-10-08：E43–E45）
+
+> 编号续 E42（**本计划不使用 E13**，沿用正文既有的避让）。来源：**任务 7 的独立评审**。与 E1–E3、E9–E12、E14–E17、E18–E21、E22–E27、E28–E30、E31–E36、E37–E39、E40–E42 同一条纪律：**只登记与订正文本**；本轮**只改本计划文本**（不碰任何 `.go`、不碰任何 `tools/trace-mutate/sets/*.py`、不碰任何清单）。⚠️ **本轮不重跑任何权威表**：三条登记与阻断项处置都没有改动被测文件、测试文件、集合或清单 ⇒ 既有绑定（含 `p3-task-7` 绑定在任务 7 实现提交上的权威表）**全部原样有效**。
+> **本轮唯一的阻断项**（任务 7 CLI 的**真实验收无承接方**）**不新开 E 编号**——它是「**承接方缺失**」而不是需要避让的规格 / 计划缺陷 ⇒ 处置是**就地补出承接方**：任务 8 顶部新增承接块 + **步骤 6**（A/B/C 三组验收 + D 组「退出码 5 不可达」裁定），任务 9 步骤 3 的「覆盖缺口」新增对应清单项。**E44 是它的证据缺口面**（同一函数的零用例 + 退出码 5 不可达的同一根因）。
+
+| 编号 | 位置 | 已核实的事实（本轮实测，不是推测） | 本计划的裁定 / 登记 |
+|---|---|---|---|
+| **E43** | `tests/tools/trace_body_cli/trace_body_cli_test.go:1` 的包名 vs `tests/README.md:190`（该行规定「包名 = `package <被测模块>_test`，如 `package scheduler_test`」） | 该文件用 **`package trace_body_cli`**（**不带** `_test` 后缀）。**实测（本轮）**：`tests/` 下含 `*_test.go` 的目录共 **41** 个；199 个 `*_test.go` 里 **193** 个文件的包名以 `_test` 结尾，其余 **6** 个 = 本目录 `trace_body_cli`（**1** 个）+ `tests/integration` **既有**的 5 个 `package integration`（**非本计划引入**）；按**目录**看，`tests/tools/trace_body_cli` 是**唯一**一个「整包都不带后缀」的目录；与它同层的 `tests/tools/usage_report_client` 用的是 `usage_report_client_test` | **登记为后续清理项（本轮不改测试）**：该目录**没有任何源码**（只有这一个 `_test.go`）⇒ 包名后缀**不影响** `go test`、不影响任何用例名、不影响 `p3-task-7` 的 `MANIFEST_DERIVATION` 与清单 ⇒ **功能无影响**，只是与 `tests/README.md:190` 的规范不一致。**不得**为这一个词单独翻动该测试文件（改它会改 `p3-task-7` 的测试文件 sha256 ⇒ 须按 E36 / E38 重跑重记绑定）；承接方 = **分支收尾轮**（与同批样式清理一起做，并在同一次改动里重跑 `p3-task-7`）。`tests/integration` 的 5 个非后缀文件是**既有例外**，**不属**本计划引入，本轮不处置 |
+| **E44** | `internal/observability/service/trace_body_cli.go:149` 的 `CLIReadConfig`（`cmd/trace-body/main.go:74-78` 是它**唯一**调用点） | 该函数的**三条错误出口零用例**（实测：`grep -rn "CLIReadConfig" tests/` ⇒ **0 命中**；`tests/tools/trace_body_cli/trace_body_cli_test.go` 的 5 条顶层用例只测 `ParseTraceBodyCLIOptions` / `ExitCodeFor` / 四个写出函数）：① 空白 root（`LoadTraceBodyReadConfig` 返回禁用 ⇒ 函数自己报「`--root` 去空白后为空」）；② 相对路径；③ `/`。⇒ 「空白 / 相对 / `/` ⇒ 退出码 1」目前**只有静态推理**（读函数源码），既无 B 层用例、也无二进制级证据。**同一函数的可见后果**：`--root` 通过校验 ⇒ 返回的 `Root` 必非空 ⇒ `cfg.Disabled()==false` ⇒ 服务层 `ErrTraceBodyDisabled` 在 CLI 路径上**永不产生** ⇒ **CLI 的退出码 5 不可达**（见任务 8 步骤 6 的 D 组） | **承接方 = 任务 8 步骤 6 的 C 组**（三向量冒烟；**本轮已在本机实测**：`--root " "` / `rel` / `/` 均 **退出码 1**、stderr 为 `参数错误:` 前缀；`--dsn` 不可达 ⇒ **退出码 2**、stdout 为空），并**必须**在报告里写明选了哪种固化形态（二进制冒烟 ／ B 层新增用例；后者按 E36 / E38 更新 `p3-task-7` 的 `MANIFEST_FILES` + 清单并重跑重记绑定）。**退出码 5 的不可达**在同一处（D 组）逐字登记：二进制级 5 **不可取证**（不是「没跑」），只保留 B 层 `ExitCodeFor` 单测证据。**本轮不改任何 `.go`** |
+| **E45** | `cmd/trace-body/main.go:99` 的 `Logger: logger.Default.LogMode(logger.Silent)`（配合 `main.go:103` 的通用文案）；`vendor/gorm.io/gorm/gorm.go:236-244`；`vendor/gorm.io/gorm/logger/logger.go:75` | **取舍已核实（不是缺陷）**：gorm 默认 logger 的输出目标是 **`os.Stdout`**（`logger.go:75`），而连接失败时 gorm 在 `gorm.go:242-244` 调 `config.Logger.Error(…, "failed to initialize database, got error %v", err)` —— 那个 `err` 里**含连接串派生信息**（`user=… database=…`），且写的是 **stdout** ⇒ 既破坏 `--raw` 的逐字节契约、又与「不回显 DSN 派生信息」冲突。`Silent` 把这条日志一并丢掉 ⇒ 用户只剩 `main.go:103` 的通用文案。**实测（本轮）**：不可达 DSN ⇒ 退出码 2、stderr 只有「连接 PostgreSQL 失败（连接串不回显）」、stdout 为空。**错误没有被吞**：ping 错误在 `gorm.go:236-240` 无条件赋给 `err`、`gorm.go:246` 无条件 `return` ⇒ `gorm.Open` 真的报错、CLI 真的以 2 退出（rc 与 stderr 都正确） | **维持现状（本轮不改代码）**：这是「**不回显 DSN 派生信息**」的**有意取舍**，**不得**为了「看得见原因」把 logger 调回默认（会同时破坏 stdout 纯度与凭据承诺）。**建议（属发起者 / 后续轮）**：在 `--help` / `usageText`（`main.go:44-58`）里补一句「连接失败只报通用文案，详细原因请用 `pg_isready` / `psql` 或服务端日志复核（本工具刻意不回显连接串派生信息）」；若将来要既保留原因又守住承诺，唯一合规做法是**自建 logger 把 Error 写到 stderr 并脱敏**（`logger.Config` + 自有 `LogWriter`，**不得**贴回 `Default`）——**那是任务 7 的代码变更**，须与 `p3-task-7` 的重跑重记绑定一起做。⇒ 任务 9 报告里本条以「**有意的诊断取舍**」列出，**不得**记成缺陷或未承接项 |
 
 ---
 

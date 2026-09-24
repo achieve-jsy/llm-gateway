@@ -34,6 +34,7 @@ import (
 	"github.com/example/llm-gateway/internal/observability/service"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // usageText 是 `--help` 与用法错误时的唯一文案来源。
@@ -88,7 +89,15 @@ func main() {
 	}
 	defer func() { _ = reader.Close() }()
 
-	db, err := gorm.Open(postgres.Open(opts.DSN), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(opts.DSN), &gorm.Config{
+		// 【必须静音 gorm 的默认 logger】它的默认输出目标是 **os.Stdout**
+		// （vendored `gorm.io/gorm/logger/logger.go:75`：`New(log.New(os.Stdout, "\r\n", log.LstdFlags), …)`）
+		// ⇒ 连接失败信息与查询日志会与 `--raw` 的正文**混进同一个 stdout 流**，直接破坏
+		// 「逐字节、可管道给 jq / sha256sum」的契约；且它在连接失败时打印连接串的派生信息
+		// （`user=… database=…`），与本工具「不回显凭据」的承诺冲突。
+		// 诊断由本文件的 stderr 文案 + 服务层返回的错误承担。
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
 	if err != nil {
 		// 【不得回显 DSN】连接串含凭据。
 		fmt.Fprintln(os.Stderr, "连接 PostgreSQL 失败（连接串不回显）")

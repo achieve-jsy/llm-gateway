@@ -20,7 +20,17 @@ CI、将来若改 oneshot/timer 形态的运维脚本都依赖它），因此它
 
 NAME = "p4-task-1-exit"
 TARGET = "internal/tracesealer/exit.go"
-PACKAGES = ["./tests/tracesealer/"]
+# PACKAGES 的第 2 项是**薄壳包** `./cmd/trace-sealer/`（该包没有 `*_test.go`）。它把
+# 「退出码契约的静态检查对象」拉进**同一个 `go test` 批次**：薄壳一旦破编译，整轮 `go test`
+# 失败 ⇒ 三断言不成立 ⇒ 本表拿不到「全部转红」的结论。
+#
+# **工具边界（如实登记，不是本行的疏漏）**：`trace_mutate.py` 的证据头只印两种文件的 sha256 ——
+# `print_binding()` 对 `TARGET` 印「被测文件 sha256」（`trace_mutate.py:308`），
+# `test_files_of()` 只收 `*_test.go`（`trace_mutate.py:283` 的 `f.endswith("_test.go")`，
+# 对文件路径 `os.walk` 返回空 ⇒ 把文件写进 PACKAGES 不会多出任何行）。因此 `main.go` 自身的
+# sha256 **不可能**由工具印出，只能与 `table_exit=` 一样在表末附录行给出（见本轮
+# `p4-task-1-exit-authoritative-at-*.txt` 末尾的 `main_go_sha256=` 行）。
+PACKAGES = ["./tests/tracesealer/", "./cmd/trace-sealer/"]
 MANIFEST_FILES = ["tests/tracesealer/exit_test.go"]
 # 推导命令：工具会在 pristine 树里实际执行它，并与 --manifest 逐条比对
 MANIFEST_DERIVATION = (

@@ -80,6 +80,19 @@ func AuthorizeGroupAccess(ctx context.Context, id *gwmodel.UserIdentity, client 
 		if !containsString(id.UsableGroups, groupName) {
 			return gwmodel.ErrModelGroupUnauthorized
 		}
+		// 天花板（usable_groups）通过后，仍须收窄到 Key 显式绑定的模型组子集：
+		// access_all_groups=false 的 Service Key 只能调用已绑定的组，与个人 Key
+		// 双层鉴权语义一致。缺少这一步会让绑定子集形同虚设，Service Key 可越权
+		// 调用部门天花板内任何未绑定的模型组（越权调用无法被拦截）。
+		if !id.AccessAllGroups && client != nil {
+			groups, err := client.GetKeyGroups(ctx, id.KeyID)
+			if err != nil {
+				return gwmodel.ErrModelGroupUnavailable
+			}
+			if !binding.ContainsGroup(groups, groupName) {
+				return gwmodel.ErrModelGroupUnauthorized
+			}
+		}
 		return nil
 	}
 

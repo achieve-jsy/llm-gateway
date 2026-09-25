@@ -33,9 +33,16 @@ func TestNewRunnerRejectsMinAgeAtOrBelowGatewayRollUpperBound(t *testing.T) {
 
 // TestNewRunnerRejectsNonPowerOfTwoWindow 窗口要换算成 zstd 的 --long=<log2>，
 // 非 2 的幂没有对应参数 ⇒ 必须在这里（启动时）拒绝，而不是几小时后封块时才炸。
+//
+// 【MinAge 必须显式给值，不能留零值去继承 DefaultMinAge】normalize 里 min-age 下界
+// 的判定在窗口 2 的幂判定**之前**，所以若本用例让 MinAge 留零值，它就同时依赖两条
+// 互不相干的契约：把 DefaultMinAge 从 3h 改小（变异 D-m02）会让它在 min-age 那一关
+// 先失败 ⇒ 这条「窗口」用例被连带杀红，集合 D 的 m02 就不再只杀点名的
+// TestNewRunnerDefaultsMinAgeToThreeHours，而多出一个非点名的连带牺牲者（实测 FAIL=2）。
+// 显式给 3h（> MinAgeFloor）把本用例钉回「只测窗口的 2 的幂」这一件事上。
 func TestNewRunnerRejectsNonPowerOfTwoWindow(t *testing.T) {
 	_, err := tracesealer.NewRunner(tracesealer.Options{
-		Root: t.TempDir(), ZstdWindowMB: 300, NewSealer: stubSealer,
+		Root: t.TempDir(), ZstdWindowMB: 300, MinAge: 3 * time.Hour, NewSealer: stubSealer,
 	})
 	require.ErrorContains(t, err, "2 的幂")
 }

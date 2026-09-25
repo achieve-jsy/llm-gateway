@@ -121,7 +121,7 @@ python3 -c "import sys;ns=[l.strip() for l in sys.stdin];bad=[(a,b) for a in ns 
 **文件：**
 - 新建：`internal/tracesealer/options.go`、`internal/tracesealer/classify.go`、`internal/tracesealer/exit.go`、`internal/tracesealer/runner.go`（本轮只实现 `Round`，不含 `Loop`/锁/护栏）
 - 新建：`cmd/trace-sealer/main.go`（薄壳：flag → `Round` → `ExitCode`）
-- 测试：`tests/tracesealer/classify_test.go`、`tests/tracesealer/round_test.go`、`tests/tracesealer/exit_test.go`（B 层）
+- 测试：`tests/tracesealer/classify_test.go`、`tests/tracesealer/round_test.go`、`tests/tracesealer/exit_test.go`、`tests/tracesealer/options_test.go`（B 层）
 
 **接口：**
 - 依赖输入：冻结包公开 API `NewSealer(SealerOptions) (*Sealer, error)`、`(*Sealer).ListPendingSeals() ([]SealTask, error)`、`(*Sealer).Seal(ctx, SealTask) error`、`SealerOptions{Root, ZstdBinary, ZstdLevel, ZstdWindowBytes, MinAge, ExpectedZstdVersion}`、`SealTask{DT, Inst, Part, SpoolPath, Rows, UncompressedBytes}`。
@@ -930,9 +930,16 @@ func TestNewRunnerRejectsMinAgeAtOrBelowGatewayRollUpperBound(t *testing.T) {
 
 // TestNewRunnerRejectsNonPowerOfTwoWindow 窗口要换算成 zstd 的 --long=<log2>，
 // 非 2 的幂没有对应参数 ⇒ 必须在这里（启动时）拒绝，而不是几小时后封块时才炸。
+//
+// 【MinAge 必须显式给值，不能留零值去继承 DefaultMinAge】normalize 里 min-age 下界
+// 的判定在窗口 2 的幂判定**之前**，所以若本用例让 MinAge 留零值，它就同时依赖两条
+// 互不相干的契约：把 DefaultMinAge 从 3h 改小（变异 D-m02）会让它在 min-age 那一关
+// 先失败 ⇒ 这条「窗口」用例被连带杀红，集合 D 的 m02 就不再只杀点名的
+// TestNewRunnerDefaultsMinAgeToThreeHours，而多出一个非点名的连带牺牲者（实测 FAIL=2）。
+// 显式给 3h（> MinAgeFloor）把本用例钉回「只测窗口的 2 的幂」这一件事上。
 func TestNewRunnerRejectsNonPowerOfTwoWindow(t *testing.T) {
 	_, err := tracesealer.NewRunner(tracesealer.Options{
-		Root: t.TempDir(), ZstdWindowMB: 300, NewSealer: stubSealer,
+		Root: t.TempDir(), ZstdWindowMB: 300, MinAge: 3 * time.Hour, NewSealer: stubSealer,
 	})
 	require.ErrorContains(t, err, "2 的幂")
 }
@@ -1013,11 +1020,11 @@ EXPECTED_GREEN = {}
 | 编号 | 变异 | 杀手（顶层用例） |
 |---|---|---|
 | m01 | `KindPartExists` 分支把 `res.PartExists++` 改成 `res.SealFailed++` | `TestRoundTreatsPartExistsAsIdempotentNoop` |
-| m02 | `KindSealFailed` 分支后补一句 `return res, err`（一个坏块中断整轮） | `TestRoundSealsEveryEligiblePart` |
+| m02 | `KindSealFailed` 分支的**自有语句之后、该分支日志之前**补一句 `return res, err`（匹配串是 `res.SealFailed++` 紧接 `r.opts.Logf(`，插入点在两者之间；实现里该分支的日志是三处 `res.Xxx++` 分支共用同一形态，故用这两段做唯一定位；语义 = 一个坏块中断整轮） | `TestRoundSealsEveryEligiblePart` |
 | m03 | 把 `if err := ctx.Err(); err != nil {` 改成 `if false {`（忽略取消） | `TestRoundCancellationStopsBeforeNextSeal` |
 | m04 | `return res, fmt.Errorf("列举待封块失败: %w", err)` 改成 `return res, nil` | `TestRoundDoesNotSwallowListError` |
 | m05 | `KindTooManyRows` 分支的 `res.TooManyRows++` 改成 `res.RowMismatch++`（永久与可重试混在一起） | `TestRoundSeparatesPermanentFromRetryable` |
-| m06 | `Failed()` 的求和里删掉 `+ res.UnknownFailed` | `TestRoundCountsUnknownFailuresAsFailures` |
+| m06 | `Failed()` 的求和里删掉 `+ r.UnknownFailed`（**接收者名是 `r` 不是 `res`**：`func (r RoundResult) Failed() int`，`runner.go:32-34`；实现里求和写在**一行**上 —— `r.RowMismatch + r.SealFailed + r.TooManyRows + r.UnknownFailed`） | `TestRoundCountsUnknownFailuresAsFailures` |
 
 `REQUIREMENTS`：上表逐条 + 「一个坏块不得中断整轮」（m02）+ 「ctx 取消后不得再开新块」（m03）+ 「未分类失败也计入失败」（m06）；
 `CHECKS`：`internal/tracesealer/runner.go` 内 `\bMkdir[A-Za-z]*\s*\(` **absent**（理由见下文全局约束的 D70 条；承重证据是 Task 3 的 `TestRootGuardNeverCreatesRoot`，这里只是启发式旁证）。
@@ -2972,4 +2979,25 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
   8. 运行手册的其余条目与任务 12 的收尾。
 - **注意次序的方向**：把任务 11 的观察部分排在写侧启用之前，得到的是一条**永远绿、什么都没证明**的验收（见「验收项归属」表下方的前置条件说明）。因此若第 5 步的读侧迟迟不就绪，本计划就**如实**只交付任务 11 的运行手册文本，并把该验收登记为「读侧就绪后的启用门禁」，**不得**宣称它已通过。
 - 任务 12 必须**在最终 HEAD 上**执行，且在它之后再有任何提交 ⇒ 全部变异绑定失效，必须重跑重记。
+
+---
+
+## 过程失误登记（E57–E58；**只登记与订正文本，不改代码**）
+
+> 编号续计划 3（`docs/superpowers/plans/2026-09-25-trace-point-read-service.md`）的 **E56**（下一份计划的 E 编号从 **E59** 起）。本表与 D 表（D64–D74）同一纪律：逐条写清「位置 / 问题 / 处置」，并写明本轮对**证据承载文件**的实际改动面。
+>
+> **本轮改动面（已核实）**：对 `internal/**`、`cmd/**`、`tools/trace-mutate/sets/**`、`atlas-migrations/**`、`migrations/**`、`internal/tracearchive/**`、`go.mod`、`go.sum` 的改动**全部为零**；`tests/**` 只改了 `tests/tracesealer/options_test.go` 一处（测试隔离，见文末「测试隔离」栏）⇒ 按全局约束「变异证据绑定提交」，`p4-task-1` 的**四个集合全部重跑重出**，绑定提交 **`651d7c2b`**，四张权威表落盘于 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/`；**上一轮的绑定（若有）一律作废、不得引用**。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E57** | 上一轮任务 1 的交付报告（其结论为「4 张 `p4-task-1` 权威表 exit=0」）；评审的独立复核（遍历 5 个工作树的 `.superpowers/sdd/*/`、全仓 `find -name '*authoritative*'`、`git status --ignored`、`TMPDIR`） | **报告声称的产物在磁盘上不存在**：`grep -rl p4-task-1` 只命中本计划与台账里的**一段摘要**，该摘要**不含** `names=… ran=… diff=… SKIP=…` 自证串，也**不含**清单 / 被测文件 / 测试文件的 sha256 ⇒ 变异这个**结论**虽被评审独立复算为真（`--check` 7/6/2/3 = 18 条唯一定位；18 个杀手具体且用例名互不为子串），但**证据没有落盘成可复核工件**。而全局约束写明 CI **完全不跑** `go test`、**变异证据是唯一验证手段** ⇒ 证据不可复核时，任务 1 在制度上等于没有证据。**这是过程失误，不是技术结论错误**（变异本身为真） | ① **本轮把四张权威表原样落盘**到 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/`，文件名 `p4-task-1-<classify\|round\|exit\|options>-authoritative-at-651d7c2b.txt`，内容 = 工具的**完整 stdout 原样**（证据绑定头 `git rev-parse HEAD` / `git status --porcelain` / 工具·集合·清单·被测文件·测试文件 sha256、清单推导命令与比对、映射表、静态检查、逐条自证串、分类计数口径），**不得删改、不得只留摘要**；与表**同目录**另有四份名字清单 `p4-task-1-<集合>-names.txt`（使表头的「名字清单 sha256」在磁盘上有可 `sha256sum` 的对应文件）与四份 `--check` 定位校验输出 `p4-task-1-<集合>-check-at-651d7c2b.txt`。② **新立一条硬规则（今后所有轮次适用）**：**任何声称的产物必须先在磁盘上可 `ls`、可复算，报告里必须逐字给出其确切路径**（相对仓库根、可直接粘贴）；只在下游结论里写「已完成 / `exit=0`」而不给路径的，**视为未完成**。③ 该规则同时约束「抄进报告」这一动作：全局约束第 5 条要求的「把工具头部原样抄进报告」是**报告内的副本**，它**不替代**磁盘上的表 —— **两者都要有**。④ **已核实的事实（本轮实测，可重跑）**：`ls -l` 见 12 个文件；四张权威表逐一 `exit=0`；分类计数 **7 / 6 / 2 / 3 = 18**，**全部为断言红**，0 崩溃/超时/编译红、0 允许的绿（`EXPECTED_GREEN` 为空）、未登记的绿 0 条、**证据无效 0 条**；`--check` 因本轮**未改任何被测实现文件**而保持 A=7 / B=6 / C=2 / D=3 |
+| **E58** | 本计划 **`:124`**、**`:1023`**、**`:1027`**、**`:931-945`**（行号为本轮订正**之后**的实时值，见本行 ⑥ 的行号位移栏）；`tools/trace-mutate/sets/p4-task-1-round.py` 的 `## 与计划文本的一致性` 文档串 | **四处「计划文本 ≠ 实现」的文本事实性缺陷**（评审点了 ②③，① 是评审同批指出的清单漏列，④ 由本轮测试隔离修正**新引入**）：① **`:124`** 任务 1 顶部文件清单只列 `classify_test.go` / `round_test.go` / `exit_test.go`，**漏列** `tests/tracesealer/options_test.go` —— 而 `:895` 的正文明确要求该文件（任务 1 步骤 7）⇒ 清单与正文自相矛盾。② **`:1023`**（集合 B 的 m02）计划只写「`KindSealFailed` 分支后补一句 `return res, err`」，**未给插入点** ⇒ 与集合里实际的匹配串**非逐字一致**（集合用 `res.SealFailed++` 紧接 `r.opts.Logf(` 做唯一定位，插入点在两者之间）。③ **`:1027`**（集合 B 的 m06）计划写 `+ res.UnknownFailed`，而实现 `runner.go:32-34` 的接收者是 **`r`**（`func (r RoundResult) Failed() int`）⇒ 计划里的串 `res.UnknownFailed` 在实现中**根本不存在**，照计划抄会「定位到 0 处」。④ **`:931-945`** 是本轮**自己造成**的：为修测试隔离给 `TestNewRunnerRejectsNonPowerOfTwoWindow` 补了 `MinAge: 3 * time.Hour`，若不同步计划里的该用例代码块，就会**新造**一处文本与实现不一致（与 ②③ 同类，只是方向相反） | ① **`:124` 就地补上** `tests/tracesealer/options_test.go`（**行数不变**）。② **`:1023` 就地写清插入点与匹配串**（`res.SealFailed++` 紧接 `r.opts.Logf(`，插入点在两者之间；并注明该分支日志与另两处 `res.Xxx++` 分支共用同一形态，故用这两段做唯一定位），使计划文本与集合**逐字一致**。③ **`:1027` 就地订正接收者**为 `r`，并把实现的**单行**求和式逐字写入（`r.RowMismatch + r.SealFailed + r.TooManyRows + r.UnknownFailed`），并注明 `Failed()` 在 `runner.go:32-34`。④ **`:931-945` 的用例代码块与本轮实现逐字同步**（补「MinAge 必须显式给值」的注释并补字段）；已实测该块与 `tests/tracesealer/options_test.go` **逐字节相同**（`diff` 为空）—— 这是**测试隔离修正在计划文本侧的必然同步**，不是新要求。⑤ **`tools/trace-mutate/sets/p4-task-1-round.py` 本轮一字未改（故意）**：它文档串里记的「两处**如实**改动（m02 插入点 / m06 匹配串）」在本行 ②③ 把计划订正为逐字一致之后**已变成历史陈述**；但该集合是**证据承载文件** —— 它的 sha256（`f0b0c059dc737039…`）正被本轮四张表绑定，改它就必须连带重跑四张表。⇒ **本轮保持该集合逐字节不变**，并把这条口径留在**此处**（而非集合内）：该文档串描述的分歧已由本计划文本订正**关闭**；后续轮次若因故重写该文档串，**必须**重跑并重记 `p4-task-1` 的全部四个集合。⑥ **行号位移（E54/E55 同一纪律）**：本轮在 `:931` 处插入 7 行注释 ⇒ **其后所有行号 `+7`**：评审所引的集合 B **m02 `:1016` → `:1023`**、**m06 `:1020` → `:1027`**；本表引用的一律是**订正后的实时行号**。已核实本计划**不含任何指向自身的行号引用**（`grep -cE '本计划 ?:[0-9]'` = **0**）⇒ 本次 `+7` 位移**不产生**新的行号自引用欠账（其余 `:NNN` 引用全部指向 `.go` / `.sh` / `deploy/` 等**其它文件**，本轮未改那些文件，故不受影响）。**⚠️ 一处需登记的例外**：`:1027` 行内引用的 `runner.go:32-34` 是**被实现文件**的行号（`runner.go` 本轮未改）⇒ 同样不受本次 `+7` 影响 |
+
+### 测试隔离（E58 ④ 的技术内容，独立成栏以免与文本订正混淆；**本轮唯一的 `tests/**` 改动**）
+
+- **缺陷**：`TestNewRunnerRejectsNonPowerOfTwoWindow` 原先只给 `Root` / `ZstdWindowMB` / `NewSealer`，让 `MinAge` 留零值去继承 `DefaultMinAge`。而 `Options.normalize` 里 **min-age 下界的判定（`options.go:99`）在窗口 2 的幂判定（`options.go:108`）之前** ⇒ 该用例**同时**依赖两条互不相干的契约，违反「每个承重属性一个顶层用例」的隔离要求。
+- **实测（修前，HEAD `12c8bd65`；命令 = 集合 D 加 `--only m02`）**：`m02_默认min-age缩到30m` 判定 = 红，自证 **`names=3 ran=3 diff=0 PASS=1 SKIP=0 FAIL=2`**，杀死的用例 = `TestNewRunnerDefaultsMinAgeToThreeHours, TestNewRunnerRejectsNonPowerOfTwoWindow` ⇒ **多出一个非点名的连带牺牲者**，与集合 D 的 `REQUIREMENTS`「m02 的杀手 = `TestNewRunnerDefaultsMinAgeToThreeHours`」（单一点名）**不符**，违反全局约束第 4 条「杀手必须是具体的顶层测试函数名，不允许不点名」。
+- **修法**：给该用例显式加 `MinAge: 3 * time.Hour`（严格大于 `MinAgeFloor = 1h`），把它钉回「只测窗口的 2 的幂」这一件事上。
+- **实测（修后，HEAD `651d7c2b`；权威表 `p4-task-1-options-authoritative-at-651d7c2b.txt`）**：`m02` 自证 **`names=3 ran=3 diff=0 PASS=2 SKIP=0 FAIL=1`**，杀死的用例 = **`TestNewRunnerDefaultsMinAgeToThreeHours`**（**FAIL 2 → 1，只剩点名杀手**）；同表的 `m03_不校验2的幂` 仍是**红**且杀手仍是 `TestNewRunnerRejectsNonPowerOfTwoWindow` ⇒ **隔离没有把 m03 的杀手弄丢**，集合 D 仍是 `3 = 3 断言支撑`。
+- **重绑**：`tests/tracesealer/options_test.go` 是**证据承载文件** ⇒ 四张 `p4-task-1-*` 权威表**全部重出**（表头「测试文件 sha256」四项中该项变为 `64d07b52eb0b863d…`；另三项与上一轮相同），旧表**作废、不得引用**。
 

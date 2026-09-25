@@ -1,0 +1,9 @@
+定位校验（基于 HEAD:internal/tracesealer/classify.go，sha256=261fa923c60c5971）
+OK  m01_不识别TooManyRows
+OK  m02_改用相等比较
+OK  m03_未分类吞成PartExists
+OK  m04_不识别RowMismatch
+OK  m05_不识别PartExists
+OK  m06_Permanent恒false
+OK  m07_Retryable漏掉RowMismatch
+全部 7 条变异的模式都在 HEAD 上唯一定位 ✓

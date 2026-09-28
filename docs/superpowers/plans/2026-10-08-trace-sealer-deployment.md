@@ -1020,7 +1020,7 @@ EXPECTED_GREEN = {}
 | 编号 | 变异 | 杀手（顶层用例） |
 |---|---|---|
 | m01 | `KindPartExists` 分支把 `res.PartExists++` 改成 `res.SealFailed++` | `TestRoundTreatsPartExistsAsIdempotentNoop` |
-| m02 | `KindSealFailed` 分支的**自有语句之后、该分支日志之前**补一句 `return res, err`（匹配串是 `res.SealFailed++` 紧接 `r.opts.Logf(`，插入点在两者之间；实现里该分支的日志是三处 `res.Xxx++` 分支共用同一形态，故用这两段做唯一定位；语义 = 一个坏块中断整轮） | `TestRoundSealsEveryEligiblePart` |
+| m02 | `KindSealFailed` 分支的**自有语句之后、该分支日志之前**补一句 `return res, err`（匹配串是 `case KindSealFailed:` 紧接 `res.SealFailed++`，插入点在这两行之后 —— 这两行是该分支的起始两行、各自唯一；**E61③**：任务 2 已把该分支的日志从 `r.opts.Logf(` 换成 slog，故不再用日志行做锚点；语义 = 一个坏块中断整轮） | `TestRoundSealsEveryEligiblePart` |
 | m03 | 把 `if err := ctx.Err(); err != nil {` 改成 `if false {`（忽略取消） | `TestRoundCancellationStopsBeforeNextSeal` |
 | m04 | `return res, fmt.Errorf("列举待封块失败: %w", err)` 改成 `return res, nil` | `TestRoundDoesNotSwallowListError` |
 | m05 | `KindTooManyRows` 分支的 `res.TooManyRows++` 改成 `res.RowMismatch++`（永久与可重试混在一起） | `TestRoundSeparatesPermanentFromRetryable` |
@@ -1099,7 +1099,8 @@ done
 ### Task 2：轮次汇总与告警（结构化日志、心跳、永久失败的上报面）
 
 **文件：**
-- 修改：`internal/tracesealer/runner.go`（把 `r.opts.Logf` 换成 `slog` 结构化字段；新增 `Summarize`）
+- 修改：`internal/tracesealer/runner.go`（把 `r.opts.Logf` 换成 `slog` 结构化字段；接入 `Summarize` —— 它的本体在新建的 `alert.go`）
+- 修改：`internal/tracesealer/options.go`（新增 `Options.Slog *slog.Logger` —— 字段只能落在 `Options` 所在的文件；**E61①**：原清单漏列本文件）
 - 新建：`internal/tracesealer/alert.go`（把 `RoundResult` 映射成「该不该告警、告警级别、稳定字段」）
 - 测试：`tests/tracesealer/alert_test.go`
 
@@ -1190,7 +1191,7 @@ func TestSummarizeFieldsAreStable(t *testing.T) {
 
 `internal/tracesealer/alert.go`：`Summarize` 用 `res.TooManyRows > 0 ⇒ SeverityError/too_many_rows`，否则 `res.UnknownFailed > 0 ⇒ SeverityError/unknown_failure`，否则 `res.RowMismatch+res.SealFailed > 0 ⇒ SeverityWarn/round_failed`，否则 `SeverityNone`。`Fields` 恒含上面 10 个键（用 `map[string]any` 显式字面量，不用反射）。
 
-`runner.go` 的日志换成 `slog`（`slog.Info`/`Warn`/`Error`，`"reason"` 用 `Alert.Reason`），**保留** `opts.Logf` 供测试注入：实现方式是新增 `Options.Slog *slog.Logger`（nil ⇒ `slog.Default()`），`Logf` 仅在 `Slog == nil` 时使用。**Round 每轮结束必须打**一条 `slog.Info("trace-sealer round", ...)`——这条是**心跳**：运维侧的告警规则是「>3 × poll-interval 没有看到这条」⇒ 进程挂了/被 mask 了。
+`runner.go` 的日志换成 `slog`（`slog.Info`/`Warn`/`Error`，`"reason"` 用 `Alert.Reason`），**保留** `opts.Logf` 供测试注入：实现方式是新增 `Options.Slog *slog.Logger`（与 `Logf` 都缺省 ⇒ `slog.Default()`；`Logf` 由 `normalize` 默认成 `log.Printf` ⇒ 正常路径上 `Slog == nil` 就是走 `Logf` —— **E61②**：三级优先级 `Slog > Logf > slog.Default()`），`Logf` 仅在 `Slog == nil` 时使用。**Round 每轮结束必须打**一条 `slog.Info("trace-sealer round", ...)`——这条是**心跳**：运维侧的告警规则是「>3 × poll-interval 没有看到这条」⇒ 进程挂了/被 mask 了。
 
 - [ ] **步骤 4：跑测试**
 
@@ -1217,8 +1218,8 @@ func TestSummarizeFieldsAreStable(t *testing.T) {
 - [ ] **步骤 6：提交 → 跑证据（次序同 Task 1 步骤 10/11）**
 
 ```bash
-git add internal/tracesealer/alert.go internal/tracesealer/runner.go tests/tracesealer/alert_test.go \
-        tools/trace-mutate/sets/p4-task-2-alert.py
+git add internal/tracesealer/alert.go internal/tracesealer/options.go internal/tracesealer/runner.go \
+        tests/tracesealer/alert_test.go tools/trace-mutate/sets/p4-task-2-alert.py
 git commit -m "feat(trace): sealer 轮次汇总与告警分级（计划 4/4 任务 2）
 
 PartExists 幂等无害不告警；可重试失败 WARN；TooManyRows/未分类 ERROR。
@@ -3014,3 +3015,14 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 | **E59** | 本计划 **`:49`**（本轮订正**前**的实时值；订正为**原地改写**——该行仍是 1 行 ⇒ 订正**后**的实时值同样是 `:49`） | **绑定口径自相矛盾**：`:49` 原文的加粗句「**任何后续新提交都会使此前所有绑定失效**」与计划 3（`docs/superpowers/plans/2026-09-25-trace-point-read-service.md`）的 **E56** 直接冲突 —— E56 的口径是「绑定跟**内容**走：绑定的实质是**内容哈希**、表头 `git rev-parse HEAD` 只记**产出时点**、**纯计划文档 / 纯证据文本提交不使绑定失效**」。按 `:49` 的字面口径，本计划从 E54 起那些「只改计划文本的提交」都会把上一轮的绑定判成失效（而实际执行口径是**不失效**），且会推出「证据表永远无法在任何 tip 上成立」的结论（表落盘本身也是提交）。触发点 = 任务 1 独立复审的非阻断项 ③ | **把 `:49` 的「提交」改写为「实现 / 测试 / 集合内容的变更」**，并把「纯文档/纯证据提交不使绑定失效」写进同一句，与计划 3 **E56** 显式对齐。**改前**（逐字）：`**任何后续新提交都会使此前所有绑定失效** ⇒ ①…`；**改后**（逐字）：`**任何后续「实现 / 测试 / 集合」内容的变更都会使此前所有绑定失效**（绑定的实质是**内容哈希**，表头的 \`git rev-parse HEAD\` 只记**产出时点**；**纯计划文档或纯证据文本的新提交不使绑定失效** —— 见计划 3 的 **E56** 与本计划 **E59**）⇒ ①…`。该行末尾的 ①②③ 三条执行纪律与其余字面**未动**。**无行号级联（已实测）**：改前 `grep -cE '本计划 ?:[0-9]' docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md` = **0**；且本轮只在 `:49` 原地改写、在文件末尾追加本节 ⇒ 全部既有行号引用（E58 的 `:124` / `:1023` / `:1027` / `:931-945` 等）**零位移** |
 | **E60** | 本计划的证据制度（全局约束第 8 条 + 任务 1 步骤 11 的命令块）与四张 `p4-task-1-*` 权威表；触发证据 = 本轮实测 `grep -rc 'table_exit\|check_exit' .superpowers/sdd/2026-10-08-trace-sealer-deployment/` ⇒ **12 个文件全为 0**（`TOTAL=0`） | **报告里的数字在工件里查不到**（同族于 E57「声称的产物未落盘」）：`trace_mutate.py` 的 stdout **不自印退出码**（它只保证「0 = 全部转红 + 静态检查通过 + 清单推导一致 + 证据有效」）。原先四张表（`-at-651d7c2b`）里 `table_exit=` / `check_exit=` **一次都没出现**，而交付报告声称「四表 `table_exit=0` / `check_exit=0`」⇒ 这句话**无法由工件自证**，读者只能选择相信报告。这不是工具缺陷，而是**表落盘时的记录口径缺失** | **新增约定（此后每张权威表、每份 `--check` 输出都必须遵守）**：① **权威表的表末必须记录 `table_exit=`、`--check` 输出的表末必须记录 `check_exit=`**，取的是**工具进程的真实退出码**、紧跟在工具命令之后写：`python3 tools/trace-mutate/trace_mutate.py --repo . --manifest <清单> --mutation-set <集合> > <表>.txt 2>&1; echo "table_exit=$?" >> <表>.txt`（`--check` 同理记 `check_exit=$?`）；② **报告里引用的任何退出码或计数都必须能在工件（表）内查到** —— 退出码 = 表末的 `table_exit=` / `check_exit=` 行，计数 = 表内「自证串」/「计数口径」/「合计」段；**查不到就不得声称**。③ **表内其余段一律原样保留**（逐条自证串、映射表、静态检查、sha256 段），本约定**只追加、不改写**工具输出。④ **不改工具**：`trace_mutate.py` 是被权威表绑定的**证据承载文件**，「字段名不许自创」的纪律同样适用于集合 ⇒ 本条只用 `echo` 追加，不新增字段、不改工具代码。⑤ **本轮已按此执行**：四张 `p4-task-1-*-authoritative-at-<sha>.txt` 与四份 `p4-task-1-*-check-at-<sha>.txt` 全部重出，表末均带 `table_exit=` / `check_exit=`。**已知残余（如实登记）**：任务 1 步骤 11 的命令块**仍是没有 `echo` 的旧形态** —— 本轮**未**改它（避免把「新增约定」扩写成对执行步骤的重写）；执行者以本条为准，后续轮次若重排步骤 11，应把 `echo` 一并补进命令块 |
 
+## 过程失误登记与新增约定（E61；**Task 2 收口轮**）
+
+> 编号续本计划 **E60**。与 E57–E58、E59–E60、D 表（D64–D74）同一纪律：逐条写清「位置 / 问题 / 处置」，并如实登记本轮对**证据承载文件**与**计划文本**的实际改动面。
+>
+> **本轮改动面（已核实）**：`internal/tracearchive/**`（冻结包）、`migrations/**`、`go.mod`、`go.sum`、`tools/trace-mutate/trace_mutate.py` 的改动**全部为零**；实现面只动 `internal/tracesealer/{alert.go(新建),options.go,runner.go}` 与 `tests/tracesealer/alert_test.go(新建)`；集合面新增 `tools/trace-mutate/sets/p4-task-2-alert.py`、并按本表 ③ 重新锚定 `tools/trace-mutate/sets/p4-task-1-round.py` 的 m02。本轮共跑 5 个集合（`p4-task-2-alert` + `p4-task-1` 全部四个）的 `--check` 与权威表，**5 个 `check_exit=0` / 5 个 `table_exit=0`**，25 条变异**全部断言红**（0 崩溃/超时/编译红、0 未登记的绿、0 证据无效）。**③ 的连带后果**：按 E58⑤ 的口径，改 `p4-task-1-round.py` 必须重跑并重记 `p4-task-1` 的**全部四个**集合 ⇒ 本轮已重出四表四 check（`-at-e73a3091`），上一轮的 `-at-d05978f6` 版本按全局约束第 49 条作废（绑定是内容哈希）。**E60 口径的本轮执行**：五张表与五份 check 的表末都带 `table_exit=` / `check_exit=`。**行号位移（E54/E55/E58⑥ 同一纪律）**：本轮在 **`:1102`** 之前净增 1 行（把一个「修改：」拆成两行）⇒ **其后所有行号 `+1`**：任务 2 步骤 3 正文 **`:1193` → `:1194`**、步骤 6 的 `git add` 块 **`:1220-1221` → `:1221-1222`**；本表引用的一律是**订正后的实时行号**（并在括号里给出订正前的值）。已复核本计划**不含任何指向自身的行号引用**（`grep -cE '本计划 ?:[0-9]'` = **0**）⇒ 本次 `+1` 位移不产生新的自引用欠账；任务 1 的 `:1023`（集合 B 的 m02）在本轮**之前**，不受位移影响。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E61①** | 本计划 **`:1102`**（任务 2 的文件清单）与 **`:1221-1222`**（步骤 6 的 `git add` 命令块；订正前为 `:1220-1221`，见本节行号位移栏） | 两处都**漏列** `internal/tracesealer/options.go`，而 **`:1194`**（步骤 3 正文；订正前为 `:1193`，见本节行号位移栏）明确要求「新增 `Options.Slog *slog.Logger`」—— Go 的字段只能声明在 `Options` 所在的文件里 ⇒ 照清单执行**无法**产出要求的 `Options.Slog`（清单与正文自相矛盾，与 **E58①** 同族）。同一行还有一处措辞不实：`runner.go` 的改动写作「新增 `Summarize`」，而 `Summarize` 按本任务的接口块与 `alert.go` 的定义**只能是新建文件**，`runner.go` 只是它的调用方 | **`:1102` 就地补一行**「修改：`internal/tracesealer/options.go`（新增 `Options.Slog`）」，并把 `runner.go` 那句的「新增 `Summarize`」订正为「接入 `Summarize` —— 它的本体在新建的 `alert.go`」（**净增 1 行**，其后行号 `+1`）；**`:1220-1221` 的命令块就地补上** `internal/tracesealer/options.go`。本轮提交 `959f5441` 已按订正后的清单落盘（`git show --name-only` 含该文件） |
+| **E61②** | 本计划 **`:1194`**（任务 2 步骤 3；订正前为 `:1193`） | **口径自相矛盾**：「（nil ⇒ `slog.Default()`）」与同一句的「`Logf` 仅在 `Slog == nil` 时使用」**不能同时按字面成立**：`Options.normalize`（任务 1）把 `Logf` 默认成 `log.Printf` ⇒ 正常路径上 `Logf` 恒非 nil ⇒ 若 `Slog == nil` 就回落 `Logf`，则 `slog.Default()` 永远到不了；若 `Slog == nil` 就回落 `slog.Default()`，则 `Logf` 永远用不上（等于删掉了任务 1 的注入面）。**实测**：本轮实现按三级优先级取值，`resolveLogger` 的第三级确实是**防御分支**（走 `NewRunner` 的正常路径到不了，因为 normalize 已保证 `Logf` 非 nil） | **`:1194` 的就地订正**：把「（nil ⇒ `slog.Default()`）」改写为「（与 `Logf` 都缺省 ⇒ `slog.Default()`；`Logf` 由 `normalize` 默认成 `log.Printf` ⇒ 正常路径上 `Slog == nil` 就是走 `Logf` —— **E61②**：三级优先级 `Slog > Logf > slog.Default()`）」，使计划文本与本轮实现（`runner.go` 的 `resolveLogger`）**逐字一致**；实现侧把第三级的「正常路径到不了」这一事实写在 `resolveLogger` 的注释里，并为它加了两条静态检查（`Slog优先于Logf` / `缺省回落slog.Default`） |
+| **E61③** | 本计划 **`:1023`**（任务 1 集合 B 的 m02）与 `tools/trace-mutate/sets/p4-task-1-round.py` | **跨任务耦合**：任务 1 的 m02 用「`res.SealFailed++` 紧接 `r.opts.Logf(`」做唯一定位，而任务 2 步骤 3 要求把**同一个分支**的日志从 `r.opts.Logf(...)` 换成 slog ⇒ 该匹配串在任务 2 的实现里**不再存在**（本轮实测 `grep -c 'r.opts.Logf(' internal/tracesealer/runner.go` = **0**）⇒ 集合 B 会以 `PATTERN-MISS`（`定位到 0 处`）失败，且任务 12 的「最终 HEAD 全量重跑」必然踩到。原集合文档串里那句「匹配串 `res.SealFailed++` 紧接 `r.opts.Logf(`」也随之失真 | **集合 B 的 m02 就地重新锚定**（**语义一字未改**）：匹配串改为「`case KindSealFailed:` 紧接 `res.SealFailed++`」（该分支的起始两行、各自唯一，在任务 2 **前后**的实现上都唯一、都红成 `TestRoundSealsEveryEligiblePart`——两侧均已实测），并在集合文档串里按 E58⑤ 的纪律如实登记这次改动与「必须重跑四个集合」的后果；本计划 **`:1023` 同步订正**为新的匹配串描述并指向本条。**如实登记**：改集合即改证据承载文件 ⇒ 本轮重跑了 `p4-task-1` 全部四个集合（见本轮改动面） |

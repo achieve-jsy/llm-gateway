@@ -7,14 +7,24 @@ round_test.go` 的 6 个顶层用例一一对应（每个承重属性一个顶�
 
 编号一经发布不再改动；匹配一律用字符串（不用行号）。
 
-## 与计划文本的一致性（两处**如实**改动，理由逐字给出）
+## 与计划文本的一致性（如实改动的登记）
 
 1. **m02 的插入点**：计划只写「`KindSealFailed` 分支后补一句 `return res, err`」。
-   本集合把插入点定在**该分支的自有语句之后、日志之前**（匹配串 `res.SealFailed++`
-   在 runner.go 里唯一），语义与计划完全一致：一个坏块立刻中断整轮。
+   本集合把插入点定在**该分支的自有语句之后**（匹配串 `case KindSealFailed:` 紧接
+   `res.SealFailed++` —— 这两行是该分支的起始两行，各自在 runner.go 里唯一），
+   语义与计划完全一致：一个坏块立刻中断整轮。
 2. **m06 的匹配串**：计划的 `Failed()` 求和式在本实现里跨两行，因此匹配串写成
    `r.RowMismatch + r.SealFailed + r.TooManyRows + r.UnknownFailed`（单行、唯一），
    替换为去掉 `+ r.UnknownFailed` 的形态。语义与计划一致。
+3. **【任务 2 的重新锚定，如实登记】** 任务 2 把 `KindSealFailed` 分支的日志从
+   `r.opts.Logf(...)` 换成 slog（`r.logPartFailure(...)`）⇒ 原先的匹配串
+   `res.SealFailed++` 紧接 `r.opts.Logf(` **在任务 2 之后不再存在**（实测
+   `grep -c 'r.opts.Logf(' internal/tracesealer/runner.go` = 0）。因此 m02 的匹配串
+   改成上面第 1 条的形态：它在任务 2 **之前与之后**的实现里都唯一定位、都红成
+   `TestRoundSealsEveryEligiblePart`（实测两侧都红）。**语义一字未改**，改动只落在
+   匹配串上；按 **E58⑤** 的口径，改本文件必须重跑并重记 `p4-task-1` 的全部四个集合
+   —— 本轮已重跑（见 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/` 的
+   `p4-task-1-*-authoritative-at-0805759d` 之后的在册版本）。
 
 ## 变异测不到、但有静态检查行（CHECKS）
 
@@ -49,9 +59,10 @@ MUTATIONS["m01_PartExists计入失败"] = [
 ]
 # m02 一个坏块中断整轮（后面所有健康块被无限期拖延）
 #     杀手：TestRoundSealsEveryEligiblePart（断言 calls == [0,1,2,3]）
+#     任务 2 重新锚定：原匹配串 `res.SealFailed++` 紧接 `r.opts.Logf(` 因日志改 slog 而消失
 MUTATIONS["m02_坏块中断整轮"] = [
-    ("sub", "res.SealFailed++\n\t\t\tr.opts.Logf(",
-            "res.SealFailed++\n\t\t\treturn res, err\n\t\t\tr.opts.Logf("),
+    ("sub", "case KindSealFailed:\n\t\t\tres.SealFailed++",
+            "case KindSealFailed:\n\t\t\tres.SealFailed++\n\t\t\treturn res, err"),
 ]
 # m03 ctx 取消被忽略 ⇒ 关机时会「封到一半被杀」，留下 .tmp（并可能落在被删 spool 之后）
 #     杀手：TestRoundCancellationStopsBeforeNextSeal（断言 calls == [0]）

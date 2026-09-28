@@ -1,0 +1,6 @@
+TestSummarizeCleanRoundIsSilent
+TestSummarizeFieldsAreStable
+TestSummarizePartExistsAloneIsSilent
+TestSummarizeRetryableFailureIsWarn
+TestSummarizeTooManyRowsIsErrorAndNamed
+TestSummarizeUnknownFailureIsError

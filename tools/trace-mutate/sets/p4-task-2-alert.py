@@ -55,6 +55,10 @@ MUTATIONS = {}
 
 # m01 全绿轮次也报 WARN ⇒ 每天 288 条恒定告警，真故障被埋掉
 #     杀手：TestSummarizeCleanRoundIsSilent
+#     **连带杀死** TestSummarizePartExistsAloneIsSilent（如实登记）：两条用例的输入
+#     都走到同一个 `SeverityNone` 返回处，改那一个取值必然同时打中它们。这不是遮蔽：
+#     PartExists 有自己的专属杀手 m02（它只杀那一条），而「全绿」这条的唯一杀手就是
+#     本变异 —— 计划映射表点名的杀手与实测一致。
 MUTATIONS["m01_全绿也报WARN"] = [
     ("sub", "return Alert{Severity: SeverityNone, Fields: fields}",
             "return Alert{Severity: SeverityWarn, Fields: fields}"),
@@ -171,7 +175,7 @@ REQUIREMENTS = [
         "plan": "全绿轮次不得产生任何告警（SeverityNone）",
         "mutations": ["m01_全绿也报WARN"],
         "checks": [],
-        "note": "杀手 = TestSummarizeCleanRoundIsSilent。",
+        "note": "杀手 = TestSummarizeCleanRoundIsSilent（实测连带杀死 PartExistsAlone —— 两者共用同一个 None 返回处；PartExists 的专属杀手是 m02）。",
     },
     {
         "plan": "PartExists 幂等无害：单独出现不得告警",

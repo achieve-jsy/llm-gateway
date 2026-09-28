@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"path/filepath"
 	"time"
 
@@ -49,7 +50,14 @@ type Options struct {
 	LockFile            string
 	Now                 func() time.Time
 	Logf                func(format string, args ...any)
-	NewSealer           func(ta.SealerOptions) (Sealer, error)
+	// Slog 是本进程结构化日志的落地面（任务 2）。优先级与退回见 runner.go 的
+	// resolveLogger：Slog > Logf > slog.Default()。
+	// 【为什么 Slog 与 Logf 并存】Logf 是任务 1 已有的注入面（normalize 的默认值是
+	// log.Printf），删掉它会让既有测试与运维脚本的注入点消失；而日志形态要统一成
+	// slog（结构化字段），所以 Logf 只作为 slog 的一个 sink 存在 —— 且**只在
+	// Slog == nil 时**被使用，两条并行的打印路径不会同时生效。
+	Slog      *slog.Logger
+	NewSealer func(ta.SealerOptions) (Sealer, error)
 }
 
 // Sealer 是本包对冻结包 (*tracearchive.Sealer) 的窄需求面。

@@ -1605,7 +1605,7 @@ func (g *RootGuard) Baseline() string { return g.baseline }
 // 就出现在日志里，而不是等一个 poll 周期（默认 5 分钟）之后。
 //
 // 【为什么环境级失败不退出】退出会被 systemd 按 RestartSec 反复拉起，形成更密的重试；
-// 而根目录不可用是环境问题，重启不会修好它。心（每轮一条汇总）才是它的告警面。
+// 而根目录不可用是环境问题，重启不会修好它。心跳（每轮一条汇总）才是它的告警面。
 func (r *Runner) Loop(ctx context.Context) error {
 	ticker := time.NewTicker(r.opts.PollInterval)
 	defer ticker.Stop()
@@ -1614,7 +1614,7 @@ func (r *Runner) Loop(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil // 收到 SIGTERM：干净退出，封到一半的那块由 ctx 取消路径处理
 			}
-			r.logf("[trace-sealer] ERROR 本轮失败，%s 后重试: %v", r.opts.PollInterval, err)
+			r.logger.Error("trace-sealer 本轮失败，下一个周期重试", "err", err, "poll_interval", r.opts.PollInterval.String())
 		}
 		select {
 		case <-ctx.Done():
@@ -1637,7 +1637,7 @@ func (r *Runner) Loop(ctx context.Context) error {
 - [ ] **步骤 5：跑测试**
 
 运行：`go test ./tests/tracesealer/ -count=1 -v`
-预期：PASS（新增 6 + 5 = 11 个顶层用例；整批仍在 30s 之内）。
+预期：PASS（新增 7 + 7 = 14 个顶层用例；整批仍在 30s 之内）。
 **顺便验证 `--once` 与常驻两种形态都还在**：`go run ./cmd/trace-sealer --root /tmp/does-not-exist --once; echo $?` ⇒ 期望 `1`（根目录不存在 + 启动期致命），这正是「不创建目录」的外部可见行为。
 
 - [ ] **步骤 6：写变异集合（两个）**
@@ -1649,15 +1649,18 @@ func (r *Runner) Loop(ctx context.Context) error {
 | m01 | 去掉 `filepath.Clean(root) == "/"` 的拒绝（`if filepath.Clean(root) == "/" {` → `if false {`） | `TestRootGuardRejectsFilesystemRoot` |
 | m02 | 去掉绝对路径校验（`if !filepath.IsAbs(root) {` → `if false {`） | `TestRootGuardRejectsRelativePath` |
 | m03 | `Check()` 的身份比较改成 `if false && id != g.baseline {`（撤挂载不再被发现） | `TestRootGuardCheckDetectsIdentityChange` |
-| m04 | `covers` 去掉 `mp == "/"` 特判（根挂载点覆盖不到任何路径） | `TestRootGuardCheckDetectsIdentityChange`、`TestRootGuardBaselineIsNonEmpty`（见 note） |
-| m05 | `NewRootGuard` 的身份取失败时不再报错（`return nil, fmt.Errorf(...)` → `return &RootGuard{...}, nil`） | `TestRootGuardBaselineIsNonEmpty` |
+| m04 | `covers` 去掉 `mp == "/"` 特判（根挂载点覆盖不到任何路径） | 无（**本机 darwin 读不到 `/proc/self/mountinfo` ⇒ 真实 `Identity` 走 `fallbackIdentity`，`covers` 在任何在册用例里都不可达 ⇒ 本行原点的两个杀手都**不经过**它（它们注入 identity 闭包）⇒ 按 E63③ **登记进 `EXPECTED_GREEN`**，并加静态检查行 `covers必须特判根挂载点` 钉住该分支的存在性） |
+| m05 | `NewRootGuard` 的身份取失败时不再报错（`return nil, fmt.Errorf(...)` → `return &RootGuard{...}, nil`） | `TestRootGuardRejectsWhenBaselineCannotBeTaken`（E63④ 新增：本行原点名的 `TestRootGuardBaselineIsNonEmpty` 注入的 identity **成功**返回 ⇒ 走不到本变异动的分支） |
 | m06 | **（唯一允许的「建目录」变异，用来证明杀手真的能看见）** 在 `os.Stat(root)` 失败分支前插入 `_ = os.MkdirAll(root, 0o755)` | `TestRootGuardNeverCreatesRoot` |
+| m07 | **（E63⑤ 新增）** `Check()` 的 stat 失败被静默放行（`return fmt.Errorf("%w: %w", ErrRootUnavailable, err)` → `return nil`） | `TestRootGuardCheckReportsVanishedRoot`（本行原点名它却没有杀手：m03 只动身份比对） |
+| m08 | **（E63⑤ 新增）** `Baseline()` 返回 `g.root` 而不是 `g.baseline`（排障抄下来的「启动基线」永远是根路径） | `TestRootGuardBaselineIsNonEmpty`（本行原点名它是 m04 的杀手，实测 m04 杀不到它） |
 
 > **m06 的说明（重要）**：这是本计划唯一一处**故意**把违规代码作为变异注入，用来证明「护栏不得建目录」这条要求真的被测到了（否则那条断言只是「碰巧没过那段代码」）。它的变异串必须包含 `os.MkdirAll`，而这恰好也是本集合 `CHECKS` 里那条 `absent` 正则要抓的形态 —— 变异是在 pristine 树的**临时副本**上做的，所以 `CHECKS` 仍然对 `HEAD` 原文生效，两者不冲突。
 
 `CHECKS`（本集合）：
 - `internal/tracesealer/rootguard.go` 内 `\bMkdir[A-Za-z]*\s*\(` **absent**（理由同上；承重证据是 `TestRootGuardNeverCreatesRoot`）。
 - `internal/tracesealer/options.go` 内 `Identity *func` / `Identity func` **present**（护栏的可注入点是它可测的前提）。
+- `internal/tracesealer/rootguard.go` 内 `(?m)^\tif mp == "/" \{$` **present**（E63③：`covers` 的根挂载点特判在 darwin 上不可达 ⇒ 由本行承载它的**存在性**；删掉特判即红，已实测）。
 
 **`p4-task-3-loop.py`**（`TARGET = "internal/tracesealer/runner.go"`，`MANIFEST_FILES = ["tests/tracesealer/loop_test.go"]`）：
 
@@ -1666,8 +1669,10 @@ func (r *Runner) Loop(ctx context.Context) error {
 | m01 | `Loop` 改成先等再跑（把 `select` 挪到 `Round` 之前） | `TestLoopRunsFirstRoundImmediately` |
 | m02 | 环境级失败改成 `return err`（退出而不是继续） | `TestLoopKeepsRunningWhenRootIsUnavailable` |
 | m03 | `Round` 的护栏失败分支不再 `return`（继续往下走 ⇒ 根目录不可用时仍会 Seal） | `TestLoopKeepsRunningWhenRootIsUnavailable` |
-| m04 | `Round` 内的 `ctx.Err()` 检查删掉（取消后仍开新块 —— Task 1 已有杀手，这里钉住 `Loop` 侧） | `TestLoopStopsOnContextCancel`（配合 Task 1 的 `TestRoundCancellationStopsBeforeNextSeal`） |
-| m05 | `Round` 去掉 `res.RootUnavailable = true` | 无（**登记进 `EXPECTED_GREEN`**：该字段目前只被日志与将来的看板消费，无用例断言 ⇒ 如实登记，不假装覆盖） |
+| m04 | `Round` 内的 `ctx.Err()` 检查删掉（取消后仍开新块 —— Task 1 已有杀手，这里钉住 `Loop` 侧） | `TestLoopStopsSealingAfterCancel`（E63⑦ 新增：本行原点名的 `TestLoopStopsOnContextCancel` 实测在 m04 下**仍绿**，且 Task 1 的 `TestRoundCancellationStopsBeforeNextSeal` **不在本集合的名字清单里**） |
+| m05 | `Round` 去掉 `res.RootUnavailable = true` | `TestLoopReportsRootUnavailable`（E63⑧：补了在册行为用例后，本行原登记的 `EXPECTED_GREEN` **取消** ⇒ 本集合没有任何允许的绿） |
+| m06 | **（E63⑥ 新增）** `Loop` 跑完一轮就退出（删掉 `select`/`ticker` 那一段，`return nil`） | `TestLoopRepeatsRoundsOnPollInterval`（本行原点名的杀手都没有：m01 只是「先等再跑」，5ms 周期照样跑很多轮） |
+| m07 | **（E63⑥ 新增）** `Loop` 每轮用 goroutine 启动（轮次并行：同一 `(dt,inst,part)` 会被并发 Seal） | `TestLoopNeverOverlapsRounds`（本行原点名它却有杀手：串行是冻结包对同一三元组的硬要求） |
 
 - [ ] **步骤 7：提交 → 跑两个集合（次序同 Task 1 步骤 10/11）**
 
@@ -2948,7 +2953,7 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 
 - **能否在不开写侧的情况下交付**：**代码与产品部分能**：任务 1–5 与任务 8–10 的自动化部分**完全不需要**触碰 `/datalog` 与生产；任务 6/7 的挂载与 sealer 就位也刻意在**功能关闭**下完成。开启写侧被收敛成任务 7 硬门之后的一个显式人工动作。**但有一项例外必须如实说明**：任务 11 的「撤掉挂载 ≤1 tick 闩锁」**观察**部分在功能关闭时恒真（sink 为 nil ⇒ `TraceSpooler` 不构造 ⇒ 期望的 ERROR 永不出现），因此它**不是**功能关闭阶段可交付的验收 —— 计划 4 在不开写侧时只交付它对应的**运行手册文本**，并把该验收登记为「读侧就绪后的启用门禁」。
 - **本计划零未决的设计选择**：sealer 形态（simple 常驻）、锁（flock）、根护栏（mountinfo 身份）、A3 的安全做法（回环 ext4）、A6 的门槛来源（规格 + 标定注释）、A8 的决策门（阈值 + 三级处置）、挂载矩阵（gateway 读写 / cp 只读）、旧定时器处置（隔离脚本 + 回滚）—— 全部在本计划内定完。
-- **已知的、被如实登记的弱覆盖**：① 「A7 的次序不变量」与「心跳每轮必打」只有静态检查（被测对象是冻结包与日志，本计划不能变异冻结包）；② `RoundResult.RootUnavailable` 无用例断言，登记进 `EXPECTED_GREEN`；③ 真实 zstd 路径的证据依赖本机是否装了 zstd，缺失时以 A3 环境的真实产物补；④ 生产门槛值（压缩比、水位换算）必须逐字取自规格，本计划不代抄；⑤ 「撤掉挂载 ≤1 tick」在写侧启用之前**不可执行**（见上一条与「验收项归属」表下方的说明）。
+- **已知的、被如实登记的弱覆盖**：① 「A7 的次序不变量」与「心跳每轮必打」只有静态检查（被测对象是冻结包与日志，本计划不能变异冻结包）；② `Identity` 里 `covers` 的根挂载点特判在本机（darwin，无 `/proc/self/mountinfo`）不可达 ⇒ 变异 `m04` 登记为 `EXPECTED_GREEN`、存在性由静态检查 `covers必须特判根挂载点` 承载（E63③；`RoundResult.RootUnavailable` 已由 E63⑧ 新增的行为用例 `TestLoopReportsRootUnavailable` 承载，**不再是**弱覆盖）；③ 真实 zstd 路径的证据依赖本机是否装了 zstd，缺失时以 A3 环境的真实产物补；④ 生产门槛值（压缩比、水位换算）必须逐字取自规格，本计划不代抄；⑤ 「撤掉挂载 ≤1 tick」在写侧启用之前**不可执行**（见上一条与「验收项归属」表下方的说明）。
 - **已知风险（不隐藏）**：① 换盘/换挂载点后网关会**永久**闩锁到重启为止（已写进运行手册，未修）；② `RequiresMountsFor=` 在「手工 umount」时是否可靠地停掉 unit 属纵深防御、未验证，主防线是进程内护栏；③ 容器 uid 与 `/datalog` 属主未实测（首轮用 root，已登记 D74）；④ **隔离旧 timer 期间 `/datalog` 没有任何 retention**（R1，必须量化增长速率）；⑤ **A3 的 1 GiB 镜像落在 `/srv` 所在 FS，不受 `GuardScratchTarget` 保护**（R2，必须补容量/设备护栏）。
 
 ## 执行顺序与依赖
@@ -3044,3 +3049,15 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 1. **行为要求必须由在册行为测试承载**：任何描述「运行时会打出什么 / 会调用什么 / 会返回什么」的要求，必须在某张权威表的**名字清单**里找得到承载它的顶层用例；只有静态检查、没有用例的要求，视为**未被验证**。
 2. **禁止以「临时测试已验」作为证据**：未进提交、因而不在任何权威表名字清单里的测试，等于没有证据；写进报告或集合 docstring 的「人工核验过」不改变这一判定（同族于 **E57**「声称的产物必须可复算」）。
 3. **静态检查只承载「存在 / 不存在」类要求**：结构不变量、字面量取值、产物文本可以用 `CHECKS` 钉住；但**行为**要求不得用静态检查替代 —— 静态检查通过只证明「这行文字在」，不证明「这条路径真的会被走到」。**例外（本轮已用）**：当被要求的行为与某个结构不变量**逐字等价**（例如「心跳恰好一次」≡「消息串出现一次且不在任何 `if` 内」）时，`CHECKS` 可以承载该要求，但必须同时给出该检查**可失败**的证明（改动缩进 / 重命名 / 新增第二次即红）。
+
+---
+
+## 过程失误登记与新增约定（E63；**Task 3 收口轮**）
+
+> 编号续 **E62**。与 E57–E62 同一纪律：逐条写清「位置 / 问题 / 处置」。
+
+> **本轮改动面（已核实）**：实现面 `internal/tracesealer/{rootguard.go(新建),options.go,runner.go}` 与 `cmd/trace-sealer/main.go`；测试面 `tests/tracesealer/{rootguard_test.go,loop_test.go}(均新建)`；集合面新增 `tools/trace-mutate/sets/p4-task-3-rootguard.py` 与 `p4-task-3-loop.py`。`internal/tracearchive/**`（冻结包）、`migrations/**`、`go.mod`、`go.sum`、`tools/trace-mutate/trace_mutate.py` 的改动**全部为零**。**跨任务连带（E59③ 的执行）**：共享测试目录 `tests/tracesealer/` 新增两个 `*_test.go` ⇒ 工具证据头里的「测试文件 sha256」段对**所有**把该目录列入 `PACKAGES` 的集合都变了 ⇒ `p4-task-1` 的四个集合与 `p4-task-2-alert` **一并重跑重出**（`p4-task-1-round`/`options` 另因 TARGET `runner.go`/`options.go` 变更、`p4-task-1-exit` 另因 `main.go` 变更而必须重出）。本轮共跑 **7 个集合**（两个新集合 + `p4-task-1` 四个 + `p4-task-2-alert`）的 `--check` 与权威表：**7 个 `check_exit=0` / 7 个 `table_exit=0`**，40 条变异 = **39 断言红 + 1 允许的绿 + 0 崩溃/超时/编译红 + 0 未登记的绿 + 0 证据无效**。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E63** | 本计划 Task 3 的文本（`:1608`、`:1617`、`:1640`、`:1652-1656`、`:1660-1663`、`:1672-1675`、`:2956`）与两个新集合 `tools/trace-mutate/sets/p4-task-3-{rootguard,loop}.py`；触发 = Task 3 实现与变异收口实测 | **八处「计划文本 ≠ 实测」的缺陷**：① `:1617` 的 `r.logf("[trace-sealer] ERROR 本轮失败，%s 后重试: %v", …)` 在实现里**不存在这个符号**（Task 2 把日志统一成 slog 后 `Runner` 没有 `logf` 方法）⇒ 照抄**编译不过**；② `:1608` 错字「心（每轮一条汇总）」缺「跳」；③ `:1640` 的「新增 6 + 5 = 11 个顶层用例」与实测 **7 + 7 = 14** 不符；④ `:1652`（m04）点名的两个杀手 `TestRootGuardCheckDetectsIdentityChange` 与 `TestRootGuardBaselineIsNonEmpty` **都注入 identity 闭包**、根本不经过 `covers`，且本机是 darwin（无 `/proc/self/mountinfo`）⇒ 真实 `Identity` 走 `fallbackIdentity` ⇒ m04 **没有任何杀手**；⑤ `:1653`（m05）点名的 `TestRootGuardBaselineIsNonEmpty` 注入的 identity **成功**返回 ⇒ 走不到 m05 动的那个错误分支，同时 `TestRootGuardCheckReportsVanishedRoot` 与 `TestRootGuardBaselineIsNonEmpty` 在原六条变异里**没有杀手**（m03 只动身份比对）；⑥ `:1672`（loop m04）点名的 `TestLoopStopsOnContextCancel` 实测在该变异下**仍绿**，而 Task 1 的 `TestRoundCancellationStopsBeforeNextSeal` **不在本集合的名字清单里**（该集合的 `-run` 只跑 `loop_test.go` 的用例）⇒ m04 在本集合里没有杀手；`TestLoopRepeatsRoundsOnPollInterval` 与 `TestLoopNeverOverlapsRounds` 在原五条变异里同样**没有杀手**；⑦ `:1673`（loop m05）登记 `EXPECTED_GREEN` 的理由是「`RoundResult.RootUnavailable` 无用例断言」—— 按 **E62** 的口径这正是「行为要求无在册证据」，应当补用例而不是登记弱覆盖；⑧ `:2956` 的弱覆盖清单 ② 与 ⑦ 同源，且 `:1660-1662` 的 `CHECKS` 只有两行 ⇒ m04 那条不可达分支连**存在性**旁证都没有 | ① 就地改写 `:1617` 为 `r.logger.Error("trace-sealer 本轮失败，下一个周期重试", "err", err, "poll_interval", r.opts.PollInterval.String())`（**行数不变**，与 Task 2 的单一 slog 路径一致；该行语义 —— 轮次级失败打 ERROR —— 未变）；②③ 就地改写（行数不变）；④ 就地订正 `:1652` 的杀手栏为「无，登记 `EXPECTED_GREEN`」并写明 darwin 不可达的理由，另在 `:1663` **新增一行 `CHECKS`** `covers必须特判根挂载点`（`(?m)^\tif mp == "/" \{$` present）承载该分支的**存在性**；并在**临时克隆**（`/tmp/p4t3-chk`，工具 `--repo` 指向它）里把三行静态检查各改坏一次（补 `os.MkdirAll` / 特判条件恒假 / 改 `Options.Identity` 字段名），实测三行**各自转红**且工具以「静态检查失败 ⇒ 整轮失败」退出 **1**；⑤⑥ 就地订正两处杀手栏，并在两张表里**各新增两行变异**（rootguard：m07 `Check()` 的 stat 失败静默放行、m08 `Baseline()` 返回 `g.root`；loop：m06 跑完一轮就退出、m07 轮次并行）⇒ 其后实时行号 `+5`，但本计划不含指向 `:1233` 之后行号的任何自引用（改前 `grep -cE '本计划 ?:[0-9]'` = **0**，改后复测仍为 **0**）⇒ **零级联**，且 `:1233` 之前的行本轮**一行未动**；⑦⑧ 在 `tests/tracesealer/rootguard_test.go` 新增 `TestRootGuardRejectsWhenBaselineCannotBeTaken`、在 `tests/tracesealer/loop_test.go` 新增 `TestLoopStopsSealingAfterCancel` 与 `TestLoopReportsRootUnavailable`（三条都是**在册行为用例**，进各自名字清单）⇒ `p4-task-3-rootguard` 的 m05 与 `p4-task-3-loop` 的 m04/m05 三个变异都拿到在册杀手，loop 集合的 `EXPECTED_GREEN` **清空**；`:2956` 就地改写。**如实登记（残余弱覆盖，唯一一处）**：`p4-task-3-rootguard` 的 **m04** 是唯一登记进 `EXPECTED_GREEN` 的变异（darwin 不可达；在 Linux 上它会杀掉依赖真实 `Identity` 的用例），其存在性由静态检查行承载 ⇒ 本轮 40 条变异 = **39 断言红 + 1 允许的绿 + 0 崩溃/超时/编译红 + 0 未登记的绿 + 0 证据无效**。**如实登记（隔离探针）**：`TestLoopStopsOnContextCancel` 仍**没有变异杀手**（它断言「取消后干净返回」与「返回后没有遗留后台轮次」，而 m07 的泄漏 goroutine 不保证在 50ms 采样窗内留下痕迹）⇒ 按「隔离探针」口径登记，其两半的**可失败性**已人工实测：把 `Loop` 的 `case <-ctx.Done():` 分支改成 `return context.Canceled` ⇒ 该用例在 `require.NoError` 处转红；在该分支注入 `go func() { for { r.Round(ctx) } }()` ⇒ 该用例在 `require.Equal(t, n, r.rounds())` 处转红（实测 `expected: 11 / actual: 25305`）；两次都按 `cp` 还原，`internal/tracesealer/runner.go` 还原后 sha256 = `d9f6630b475aab00e3020459f96aaf289795e342b5a0c59e39efbe87dbd4c5e5`（与提交版本逐字节一致），`git status --porcelain` 为空。**如实登记（文本一致性）**：步骤 3 的 `rootguard.go` 代码块与本轮实现**逐字节相同**（`diff` 为空）；步骤 1 的 `loop_test.go` 代码块**未逐字同步**（计划的示意块自己写着测试辅助要执行者自建，本轮按 E63④ 的理由把轮次计数改挂在 `loopHarness` 的身份探针上 —— 计划的 `f.rounds()` 计法在「根目录不可用」那一轮恒为 0）；**在册源以 `tests/tracesealer/{rootguard,loop}_test.go` 与两个集合文件 @ `0240d4b5` 为准**。 |

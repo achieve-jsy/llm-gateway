@@ -44,7 +44,8 @@
 
 ## 零变异覆盖的**用例**登记（`COVERAGE_GAPS`，E64②；**工具读不到、不参与任何判定**）
 
-`TestLoopStopsOnContextCancel` 在册、承重，但本集合 7 条变异**没有一条**能杀它 ⇒
+`TestLoopStopsOnContextCancel` 在册、承重，但本集合 7 条变异**没有一条能可靠地**杀它
+（m07 只在竞态下**偶发**把它打红，实测 5 次里 1 次 —— 见 `COVERAGE_GAPS` 里的如实登记）⇒
 按「隔离探针」口径登记进下面的 `COVERAGE_GAPS`（位置 / 断言什么 / 为什么没有杀手 /
 可失败性由谁承载 / 谁来补）。**为什么单列一个结构而不是写进 `EXPECTED_GREEN`**：
 后者的键被工具当作**变异名**处理（`classify` 按变异名查它、`print_mapping` 列它、
@@ -120,6 +121,10 @@ MUTATIONS["m06_跑一轮就退出"] = [
 # m07 【本轮新增】每轮用 goroutine 启动 ⇒ 轮次并行：并发的两个 Round 会对同一
 #     (dt,inst,part) 同时 Seal，而冻结包要求同一个三元组串行（共用同一个 .tmp）
 #     杀手：TestLoopNeverOverlapsRounds
+#     附注（如实登记）：本变异**偶发**也会把 TestLoopStopsOnContextCancel 一起打红
+#     （竞态下「取消之后才开跑」的那一轮被它多带出来一个，实测 5 次里 1 次，
+#     expected 10 / actual 11 @loop_test.go:174）⇒ 权威表的「杀死的用例」列偶尔出现
+#     两个名字属正常；**不得**据此把那条用例登记成 m07 的杀手（见 COVERAGE_GAPS）。
 MUTATIONS["m07_轮次并行"] = [
     ("sub",
      "\tfor {\n\t\tif _, err := r.Round(ctx); err != nil {\n\t\t\tif ctx.Err() != nil {\n"
@@ -158,9 +163,10 @@ EXPECTED_GREEN = {}
 # ---------------------------------------------------------------------------
 COVERAGE_GAPS = [
     {
-        "id": "gap-1-TestLoopStopsOnContextCancel-无变异杀手",
+        "id": "gap-1-TestLoopStopsOnContextCancel-无可依赖的变异杀手",
         "title": ("TestLoopStopsOnContextCancel（tests/tracesealer/loop_test.go:165-175）"
-                  "在册、承重，但本集合的 7 条变异**没有一条**能杀它"),
+                  "在册、承重，但本集合 7 条变异**没有一条能可靠地**杀它"
+                  "（m07 只在竞态下偶发把它打红）"),
         "where": [
             "tests/tracesealer/loop_test.go:166-175  TestLoopStopsOnContextCancel",
             "断言一：取消后 Loop **干净返回**（loop_test.go:171 的 require.NoError）",
@@ -168,14 +174,20 @@ COVERAGE_GAPS = [
         ],
         "reachable": (
             "**可达**：它是「关机路径」在 Loop 侧的在册行为证据（SIGTERM → ctx 取消）。"
-            "但**本集合 7 条变异里没有一条能同时改变它的两半**："
-            "m04（取消后仍开新块）杀的是 TestLoopStopsSealingAfterCancel —— 它钉住「取消后"
-            "不再**开始**封下一块」，与「取消后循环还在不在转、返回是否干净」是两件事；"
-            "m07（轮次并行）泄漏出的 goroutine **不保证**在 50ms 采样窗内留下痕迹。"
+            "但本集合 7 条变异里没有一条**可靠地**改变它：m04（取消后仍开新块）杀的是 "
+            "TestLoopStopsSealingAfterCancel —— 它钉住「取消后不再**开始**封下一块」，"
+            "与「取消后循环还在不在转、返回是否干净」是两件事；m07（轮次并行）只在竞态下"
+            "偶发多出一个「取消之后才开跑」的轮次（实测 5 次里 1 次红于 loop_test.go:174，"
+            "expected 10 / actual 11）。"
         ),
         "no_killer": (
-            "**按「隔离探针」口径登记（E64②）：该用例在册、无变异杀手，可失败性由人工实测"
-            "承载。** 注意本用例实际走的退出路径是 `if ctx.Err() != nil { … return nil }`"
+            "**按「隔离探针」口径登记（E64②）：该用例在册、没有可依赖的变异杀手，"
+            "可失败性由人工实测承载。** ⚠️ 如实登记一处**竞态**：本轮权威表里 m07 的"
+            "「杀死的用例」列**恰好**含本用例（红于 loop_test.go:174），而上一轮 "
+            "`-at-0240d4b5` 的表里 m07 只杀 TestLoopNeverOverlapsRounds —— 同一变异、"
+            "同一名字清单，两次结论不同 ⇒ 那是**竞态**，不是「杀手」；**不得**据此把本"
+            "用例登记成 m07 的杀手（本集合的 m07 条目仍只点名 TestLoopNeverOverlapsRounds）。"
+            "另需注意：本用例实际走的退出路径是 `if ctx.Err() != nil { … return nil }` "
             "这一条（`Round` 在取消后立刻返回 ctx 错误），**不是** `select` 里的 "
             "`case <-ctx.Done():` 那条 —— 只改后者不会让它转红（前者遮蔽后者，实测 PASS），"
             "因此下面的探针都打在**前者**上。"
@@ -229,7 +241,9 @@ REQUIREMENTS = [
                  "p4-task-1-round 的名字清单里（本集合的 -run 清单不含它）。"
                  "**另如实登记（E64②）**：本要求相邻的另一条关机行为 —— 在册用例 "
                  "TestLoopStopsOnContextCancel（断言「取消后 Loop 干净返回」+「返回后不再有"
-                 "新轮次」）**没有变异杀手**，按隔离探针口径登记在本集合的 COVERAGE_GAPS"
+                 "新轮次」）**没有可依赖的变异杀手**（m07 只在竞态下偶发把它打红：本轮权威表"
+                 "m07 的杀手列恰好含它，上一轮 -at-0240d4b5 的表不含 ⇒ 竞态，**不**登记为"
+                 "杀手），按隔离探针口径登记在本集合的 COVERAGE_GAPS"
                  "（工具读不到该字段，故此处复述其实测结论）：① inner 退出分支的 `return nil` "
                  "改成 `return ctx.Err()` ⇒ 该用例在 loop_test.go:171 `require.NoError` 处 FAIL"
                  "（Received unexpected error: context canceled）；② 同一分支注入 "

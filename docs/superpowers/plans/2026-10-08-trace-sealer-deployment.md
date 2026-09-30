@@ -1125,7 +1125,7 @@ done
 
 - [ ] **步骤 1：写失败的测试**
 
-新建 `tests/tracesealer/alert_test.go`，每个属性一个顶层用例：
+新建 `tests/tracesealer/alert_test.go`：下面是 `Summarize` 的 6 个顶层用例；`Round` 的**运行时告警线**另有 3 条行为用例（注入 `Options.Slog` 捕获 sink，钉具体级别与 reason 串），见 **E62**：
 
 ```go
 package tracesealer_test
@@ -1196,7 +1196,7 @@ func TestSummarizeFieldsAreStable(t *testing.T) {
 - [ ] **步骤 4：跑测试**
 
 运行：`go test ./tests/tracesealer/ -count=1 -v`
-预期：PASS（新增 6 个顶层用例）。
+预期：PASS（新增 9 个顶层用例 = `Summarize` 6 条 + 运行时告警线 3 条，见 **E62**）。
 
 - [ ] **步骤 5：写本任务的变异集合**
 
@@ -1213,7 +1213,7 @@ func TestSummarizeFieldsAreStable(t *testing.T) {
 | m07 | 未分类失败不再报 ERROR | `TestSummarizeUnknownFailureIsError` |
 
 `CHECKS`：`reason` 字面量必须是 `too_many_rows`/`unknown_failure`/`round_failed` 三个稳定串（正则 present）；`internal/tracesealer/alert.go` 不得出现 `fmt.Sprintf` 拼 reason。
-`REQUIREMENTS`：每条计划要求 → 上表变异；「心跳日志每轮必打」→ CHECKS（正则断言 `runner.go` 里 `trace-sealer round` 出现一次且不在任何 `if` 内 —— 这条只能靠静态检查，已如实登记）。
+`REQUIREMENTS`：每条计划要求 → 上表变异；「心跳日志每轮必打」→ CHECKS（正则断言 `runner.go` 里 `trace-sealer round` 出现一次且不在任何 `if` 内）+ 运行时「每轮恰好一次」由行为用例 `TestRoundCleanRoundEmitsOnlyHeartbeat` 承载；「告警线级别随 `Severity`、reason 取自 `Alert.Reason`」→ `m01/m03/m04/m05`（两者见 **E62**）。
 
 - [ ] **步骤 6：提交 → 跑证据（次序同 Task 1 步骤 10/11）**
 
@@ -3026,3 +3026,21 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 | **E61①** | 本计划 **`:1102`**（任务 2 的文件清单）与 **`:1221-1222`**（步骤 6 的 `git add` 命令块；订正前为 `:1220-1221`，见本节行号位移栏） | 两处都**漏列** `internal/tracesealer/options.go`，而 **`:1194`**（步骤 3 正文；订正前为 `:1193`，见本节行号位移栏）明确要求「新增 `Options.Slog *slog.Logger`」—— Go 的字段只能声明在 `Options` 所在的文件里 ⇒ 照清单执行**无法**产出要求的 `Options.Slog`（清单与正文自相矛盾，与 **E58①** 同族）。同一行还有一处措辞不实：`runner.go` 的改动写作「新增 `Summarize`」，而 `Summarize` 按本任务的接口块与 `alert.go` 的定义**只能是新建文件**，`runner.go` 只是它的调用方 | **`:1102` 就地补一行**「修改：`internal/tracesealer/options.go`（新增 `Options.Slog`）」，并把 `runner.go` 那句的「新增 `Summarize`」订正为「接入 `Summarize` —— 它的本体在新建的 `alert.go`」（**净增 1 行**，其后行号 `+1`）；**`:1220-1221` 的命令块就地补上** `internal/tracesealer/options.go`。本轮提交 `959f5441` 已按订正后的清单落盘（`git show --name-only` 含该文件） |
 | **E61②** | 本计划 **`:1194`**（任务 2 步骤 3；订正前为 `:1193`） | **口径自相矛盾**：「（nil ⇒ `slog.Default()`）」与同一句的「`Logf` 仅在 `Slog == nil` 时使用」**不能同时按字面成立**：`Options.normalize`（任务 1）把 `Logf` 默认成 `log.Printf` ⇒ 正常路径上 `Logf` 恒非 nil ⇒ 若 `Slog == nil` 就回落 `Logf`，则 `slog.Default()` 永远到不了；若 `Slog == nil` 就回落 `slog.Default()`，则 `Logf` 永远用不上（等于删掉了任务 1 的注入面）。**实测**：本轮实现按三级优先级取值，`resolveLogger` 的第三级确实是**防御分支**（走 `NewRunner` 的正常路径到不了，因为 normalize 已保证 `Logf` 非 nil） | **`:1194` 的就地订正**：把「（nil ⇒ `slog.Default()`）」改写为「（与 `Logf` 都缺省 ⇒ `slog.Default()`；`Logf` 由 `normalize` 默认成 `log.Printf` ⇒ 正常路径上 `Slog == nil` 就是走 `Logf` —— **E61②**：三级优先级 `Slog > Logf > slog.Default()`）」，使计划文本与本轮实现（`runner.go` 的 `resolveLogger`）**逐字一致**；实现侧把第三级的「正常路径到不了」这一事实写在 `resolveLogger` 的注释里，并为它加了两条静态检查（`Slog优先于Logf` / `缺省回落slog.Default`） |
 | **E61③** | 本计划 **`:1023`**（任务 1 集合 B 的 m02）与 `tools/trace-mutate/sets/p4-task-1-round.py` | **跨任务耦合**：任务 1 的 m02 用「`res.SealFailed++` 紧接 `r.opts.Logf(`」做唯一定位，而任务 2 步骤 3 要求把**同一个分支**的日志从 `r.opts.Logf(...)` 换成 slog ⇒ 该匹配串在任务 2 的实现里**不再存在**（本轮实测 `grep -c 'r.opts.Logf(' internal/tracesealer/runner.go` = **0**）⇒ 集合 B 会以 `PATTERN-MISS`（`定位到 0 处`）失败，且任务 12 的「最终 HEAD 全量重跑」必然踩到。原集合文档串里那句「匹配串 `res.SealFailed++` 紧接 `r.opts.Logf(`」也随之失真 | **集合 B 的 m02 就地重新锚定**（**语义一字未改**）：匹配串改为「`case KindSealFailed:` 紧接 `res.SealFailed++`」（该分支的起始两行、各自唯一，在任务 2 **前后**的实现上都唯一、都红成 `TestRoundSealsEveryEligiblePart`——两侧均已实测），并在集合文档串里按 E58⑤ 的纪律如实登记这次改动与「必须重跑四个集合」的后果；本计划 **`:1023` 同步订正**为新的匹配串描述并指向本条。**如实登记**：改集合即改证据承载文件 ⇒ 本轮重跑了 `p4-task-1` 全部四个集合（见本轮改动面） |
+
+---
+
+## 过程失误登记与新增约定（E62；**Task 2 行为证据收口轮**）
+
+> 编号续 **E61**。与 E57–E58、E59–E60、E61 同一纪律：逐条写清「位置 / 问题 / 处置」，并如实登记本轮对**证据承载文件**与**计划文本**的实际改动面。
+
+> **本轮改动面（已核实）**：`internal/**`（含冻结包 `internal/tracearchive/**`）与 `cmd/**` **零改动**；`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum` **零改动**；`tools/trace-mutate/trace_mutate.py` **未动**（sha256 仍是 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）；测试面只改 `tests/tracesealer/alert_test.go`（新增三条 `Round` 的**行为**用例）；集合面只改 `tools/trace-mutate/sets/p4-task-2-alert.py`（docstring 订正 + `REQUIREMENTS` 新增第 10 条）；清单 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-2-alert-names.txt` **6 → 9**。因改了**测试与集合内容** ⇒ 按 **E59**（绑定跟内容哈希走）**重跑重绑**：新表 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-2-alert-authoritative-at-df0b9d06.txt`（表末 `table_exit=0`）与 `p4-task-2-alert-check-at-df0b9d06.txt`（表末 `check_exit=0`）；`-at-e73a3091` 版本按内容哈希口径**作废**，但**留档不删**。分类计数 **7 = 7 断言支撑红 + 0 崩溃/超时/编译红 + 0 允许的绿**，未登记的绿 0、证据无效 0；pristine 侧 `names=9 ran=9 diff=0 PASS=9 SKIP=0 FAIL=0`。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E62** | `tools/trace-mutate/sets/p4-task-2-alert.py` 的 docstring（原句：「承重的运行时证据是 Task 2 的人工核验……该核验用的是**临时**测试文件，未进提交，故不在此作为杀手登记」）与它的 `REQUIREMENTS`；触发 = 计划 4 任务 2 的独立评审（结论「可合并」）留下的那条实质缺口，发起者裁定**成立、必须修** | `runner.go` 的「按 `Alert.Severity` 打 WARN/ERROR 告警线、`reason` 取自 `Alert.Reason`」是一条**运行时行为**要求，而原 9 条 `REQUIREMENTS` 只覆盖 `Summarize`、心跳（静态）、`Slog`/`Logf` 接线（静态）⇒ 这条行为在册**没有任何证据**；集合 docstring 自述靠**未进提交的临时测试**核验。按全局约束第 7 条「有要求无条目 ⇒ 整轮不合格」，这必须升级为修复项（「临时测试已验」不构成证据：它不在任何权威表的名字清单里，第三方无法复算） | ① 在 `tests/tracesealer/alert_test.go` 新增三条注入 `Options.Slog` 捕获 sink 的**行为**用例：`TestRoundTooManyRowsEmitsErrorAlertLine`（`slog.LevelError` + `reason=too_many_rows`）、`TestRoundRetryableFailureEmitsWarnAlertLine`（`slog.LevelWarn` + `reason=round_failed`）、`TestRoundCleanRoundEmitsOnlyHeartbeat`（**零**告警线 + 心跳恰好一次）⇒ 断言的是**具体级别与具体 reason 串**，不是「有输出」；② 它们**不需要新增变异**：现有变异逐条杀死它们（`m01` ⇒ 全绿轮出现告警线、`m03` ⇒ 可重试线变 ERROR、`m04`/`m05` ⇒ 永久失败的级别/reason 变），实测 `FAIL` 分布与重出表一致（3/1/2/2/2/1/1）；③ 集合 docstring 删去「临时测试」口径并新增「运行时告警线的在册行为证据」一节，`REQUIREMENTS` 新增第 10 条（运行时行为 → `m01/m03/m04/m05`）；④ 名字清单 6 → 9；⑤ 按 E60 重出表与 `--check`（见本轮改动面）。**如实登记**：唯一**没有变异杀手**的断言是「心跳恰好一次」（它需要 `runner.go` 的变异，而该集合 `TARGET` 是 `alert.go`）⇒ 它由该集合的两行静态检查 + 一次人工实测承载（新增第二次心跳 ⇒ 该用例在 `require.Len(beats, 1)` 处转红，已实测 `--- FAIL`；`internal/tracesealer/runner.go` 还原后 sha256 与改前逐字节一致）；该集合的两行静态检查**本身可失败**亦已实测：改动缩进（把心跳挪进 `if`）或重命名消息串 ⇒ 顶层锚定由命中变未命中；新增第二次心跳 ⇒「至多一次」由未命中变命中 —— 按本轮裁定**不另建元测试**。**行号纪律**：本节**追加在文件末尾**，任务 2 步骤 1/4/5 的三处订正**逐行原地改写、行数不变** ⇒ 既有行号引用**零位移**；改前 `grep -cE '本计划 ?:[0-9]' docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md` = **0**，改后复测仍为 **0**。**如实登记（文本一致性）**：任务 2 步骤 1 的用例代码块仍只抄录 6 条 `Summarize` 用例（上面已就地改成「另有 3 条行为用例，见 E62」），步骤 4 的「新增 6 个顶层用例」已就地改为 9 条 —— **代码块未逐字抄录那三条是有意的**：逐字抄进去会让其后所有行号 `+100` 以上，冲掉 E61 记的 `:1102`/`:1194`/`:1221-1222`；因此**在册源以 `tests/tracesealer/alert_test.go` @ `df0b9d06` 为准** |
+
+### 新增约定（E62 起，**今后所有轮次适用**）
+
+1. **行为要求必须由在册行为测试承载**：任何描述「运行时会打出什么 / 会调用什么 / 会返回什么」的要求，必须在某张权威表的**名字清单**里找得到承载它的顶层用例；只有静态检查、没有用例的要求，视为**未被验证**。
+2. **禁止以「临时测试已验」作为证据**：未进提交、因而不在任何权威表名字清单里的测试，等于没有证据；写进报告或集合 docstring 的「人工核验过」不改变这一判定（同族于 **E57**「声称的产物必须可复算」）。
+3. **静态检查只承载「存在 / 不存在」类要求**：结构不变量、字面量取值、产物文本可以用 `CHECKS` 钉住；但**行为**要求不得用静态检查替代 —— 静态检查通过只证明「这行文字在」，不证明「这条路径真的会被走到」。**例外（本轮已用）**：当被要求的行为与某个结构不变量**逐字等价**（例如「心跳恰好一次」≡「消息串出现一次且不在任何 `if` 内」）时，`CHECKS` 可以承载该要求，但必须同时给出该检查**可失败**的证明（改动缩进 / 重命名 / 新增第二次即红）。

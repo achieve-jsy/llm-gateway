@@ -3,10 +3,33 @@
 被变异文件 `internal/tracesealer/alert.go`。主题：**告警分级是对外契约**
 （systemd/看板/告警规则按 `Alert.Severity` 与 `Alert.Reason` 匹配，不按错误文本），
 因此它必须是纯函数、可被顶层用例逐条钉死。七个承重性质 ↔ `tests/tracesealer/
-alert_test.go` 的六个顶层用例（m04 与 m05 共用同一个杀手：永久失败的「级别」与
-「名字」是两件事，任一件坏了都必须响）。
+alert_test.go` 的六个 `Summarize` 顶层用例（m04 与 m05 共用同一个杀手：永久失败的
+「级别」与「名字」是两件事，任一件坏了都必须响）。
 
 编号一经发布不再改动；匹配一律用字符串（不用行号）。
+
+## 运行时告警线的在册行为证据（runner.go 的 Round）—— 本轮补入
+
+`Summarize` 只回答「该不该告警」；把它落成**运维采集面上的那条线**还有另一半职责在
+`runner.go`：`Alert.Severity` ⇒ 日志级别、`Alert.Reason` ⇒ `reason` 字段（告警规则
+按这条线匹配）。评审裁定「这条运行时行为在册没有任何证据」成立 ⇒ 本轮在
+`tests/tracesealer/alert_test.go` 补了三条注入 `Options.Slog` 捕获 sink 的行为用例
+（`TestRoundTooManyRowsEmitsErrorAlertLine` / `TestRoundRetryableFailureEmitsWarnAlertLine`
+/ `TestRoundCleanRoundEmitsOnlyHeartbeat`），断言的是**具体 slog 级别与具体 reason 串**
+（不是「有输出」—— 心跳总会打，只有钉住级别与串才能区分三件事）。
+
+它们**不需要新增变异**：本集合现有变异已经逐条杀死它们（改 `alert.go` 的分级/名字 ⇒
+`Round` 打出的级别/reason 跟着变）：
+
+| 行为用例 | 杀手 | 方向 |
+|---|---|---|
+| TooManyRows 轮 = ERROR + `too_many_rows` | m04（级别）/ m05（reason 串） | 分级降成 WARN、reason 拼细节 ⇒ 转红 |
+| 纯可重试轮 = WARN + `round_failed` | m03 | 可重试升级成 ERROR ⇒ 转红 |
+| 全绿轮零告警线 | m01 | 全绿也报 WARN ⇒ 告警线出现 ⇒ 转红 |
+
+唯一**没有变异杀手**的断言是「心跳恰好一次」（它需要 `runner.go` 的变异，而本集合的
+TARGET 是 `alert.go`）：它由下面两行静态检查 + **一次人工实测**承载（新增第二次心跳 ⇒
+该用例在 `require.Len(beats, 1)` 处转红，已实测；同理删掉心跳行亦转红）。
 
 ## 与计划文本的一致性（一处**如实**改动，理由逐字给出）
 
@@ -26,16 +49,18 @@ alert_test.go` 的六个顶层用例（m04 与 m05 共用同一个杀手：永�
 - **`alert.go` 不得用 `fmt.Sprintf` 拼 reason**：**不存在性**要求（「这里没写」无法
   用变异证明）。
 - **心跳每轮必打（runner.go）**：本集合的 TARGET 是 `alert.go`（工具一次只能变异
-  一个文件），而心跳在 `runner.go`；更要紧的是**它没有可被杀死的用例** —— 计划已
-  如实登记「这条只能靠静态检查」。两行静态检查合起来等价于「出现一次且不在任何
-  `if` 内」：① 顶层锚定（行首恰好一个制表符 = 函数体最外层，不在任何 if / switch
-  case / 闭包里）present；② 全文件不超过一次 absent（两条合起来 ⇒ 恰好一次）。
-  承重的运行时证据是 Task 2 的人工核验（注入 `Slog` 抓输出：全绿轮 1 条心跳 0 条
-  告警线、永久失败轮 1 条心跳 + 1 条 ERROR 告警线、纯可重试轮 1 条 WARN 线）——
-  该核验用的是**临时**测试文件，未进提交，故不在此作为杀手登记。
+  一个文件），而心跳行在 `runner.go` ⇒ 本集合**没有**能杀死「心跳恰好一次」这条
+  断言的变异。两行静态检查合起来等价于「出现一次且不在任何 `if` 内」：① 顶层锚定
+  （行首恰好一个制表符 = 函数体最外层，不在任何 if / switch case / 闭包里）present；
+  ② 全文件不超过一次 absent（两条合起来 ⇒ 恰好一次）。**这两行静态检查本身可失败
+  （已实测：三种改写各自转红）**：改动缩进（把心跳挪进 `if`）⇒ ① 由命中变未命中；
+  重命名消息串 ⇒ ① 由命中变未命中；新增第二次心跳 ⇒ ② 由未命中变命中 —— 按本轮
+  裁定，这条**不另建元测试**。运行时那半边（每轮恰好一条）由
+  `TestRoundCleanRoundEmitsOnlyHeartbeat` 在册承载（见上面「运行时告警线」一节）。
 - **`Options.Slog` 优先、`Logf` 只在 `Slog == nil` 时使用、都缺省回落
-  `slog.Default()`（runner.go）**：接线要求，同样是「不存在性能/取值」形态 ⇒
-  静态检查（本集合唯一能覆盖 runner.go 的手段）。
+  `slog.Default()`（runner.go）**：接线要求，同样是「不存在性/取值」形态 ⇒
+  静态检查（本集合对 `runner.go` 的**接线**要求只能静态检查；它的**运行时**行为
+  由上面三条行为用例承载）。
 """
 
 NAME = "p4-task-2-alert"
@@ -175,7 +200,7 @@ REQUIREMENTS = [
         "plan": "全绿轮次不得产生任何告警（SeverityNone）",
         "mutations": ["m01_全绿也报WARN"],
         "checks": [],
-        "note": "杀手 = TestSummarizeCleanRoundIsSilent（实测连带杀死 PartExistsAlone —— 两者共用同一个 None 返回处；PartExists 的专属杀手是 m02）。",
+        "note": "杀手 = TestSummarizeCleanRoundIsSilent（实测连带杀死 PartExistsAlone 与运行时用例 TestRoundCleanRoundEmitsOnlyHeartbeat —— 三者共用同一个 None 返回处；PartExists 的专属杀手是 m02）。",
     },
     {
         "plan": "PartExists 幂等无害：单独出现不得告警",
@@ -187,13 +212,13 @@ REQUIREMENTS = [
         "plan": "可重试失败（行数不符 / 封块失败）= SeverityWarn，等下一轮",
         "mutations": ["m03_可重试升级成ERROR"],
         "checks": [],
-        "note": "杀手 = TestSummarizeRetryableFailureIsWarn。",
+        "note": "杀手 = TestSummarizeRetryableFailureIsWarn（实测连带杀死运行时用例 TestRoundRetryableFailureEmitsWarnAlertLine：分级被改成 ERROR ⇒ `Round` 打出的线不再是 WARN）。",
     },
     {
         "plan": "永久失败 TooManyRows = SeverityError，reason = too_many_rows",
         "mutations": ["m04_永久降级成WARN", "m05_Reason拼细节"],
         "checks": [],
-        "note": "杀手 = TestSummarizeTooManyRowsIsErrorAndNamed（m04 打级别断言、m05 打 reason 断言）。",
+        "note": "杀手 = TestSummarizeTooManyRowsIsErrorAndNamed（m04 打级别断言、m05 打 reason 断言）；m04 与 m05 同时是**运行时**用例 TestRoundTooManyRowsEmitsErrorAlertLine 的杀手（分级与名字变了 ⇒ `Round` 打出的级别/reason 一起变）。",
     },
     {
         "plan": "未分类失败 = SeverityError，reason = unknown_failure",
@@ -218,7 +243,23 @@ REQUIREMENTS = [
         "plan": "Round 每轮结束必须打一条 trace-sealer round 心跳（供「>3×poll 无心跳」规则使用）",
         "mutations": [],
         "checks": ["心跳每轮必打且在最外层", "心跳全文件至多一次"],
-        "note": "计划已如实登记：心跳没有可被杀死的用例 ⇒ CHECKS（顶层锚定 + 至多一次 ⇒ 恰好一次）。",
+        "note": ("CHECKS 承载**结构存在性**（顶层锚定 + 至多一次 ⇒ 恰好一次）；运行时那半边"
+                 "（每轮恰好一条）由 TestRoundCleanRoundEmitsOnlyHeartbeat 在册承载。"
+                 "**静态检查本身可失败（已实测：三种改写各自转红）**：改动缩进（把心跳挪进 `if`）"
+                 "或重命名消息串 ⇒ 顶层锚定由命中变未命中；新增第二次心跳 ⇒「至多一次」由未命中"
+                 "变命中 —— 按本轮裁定不另建元测试。"),
+    },
+    {
+        "plan": ("告警线的运行时行为：级别随 Alert.Severity（永久失败/未分类 ⇒ ERROR、纯可重试 ⇒ WARN、"
+                 "全绿 ⇒ 不打线），reason 字段取自 Alert.Reason"),
+        "mutations": ["m01_全绿也报WARN", "m03_可重试升级成ERROR", "m04_永久降级成WARN",
+                      "m05_Reason拼细节"],
+        "checks": [],
+        "note": ("杀手 = 三条注入 Options.Slog 捕获 sink 的行为用例（断言的是**具体 slog 级别与具体"
+                 "reason 串**，不是「有输出」）：TestRoundTooManyRowsEmitsErrorAlertLine（m04 打级别、"
+                 "m05 打 reason）/ TestRoundRetryableFailureEmitsWarnAlertLine（m03 打级别）/ "
+                 "TestRoundCleanRoundEmitsOnlyHeartbeat（m01 打「全绿不得有线」）。本集合的 TARGET 是"
+                 " `alert.go`，但「改分级/改名字 ⇒ 打出的线跟着变」正是这条运行时行为的在册证据。"),
     },
     {
         "plan": "保留 Logf 注入面：新增 Options.Slog，Slog 优先、Logf 仅在 Slog == nil 时使用、都缺省 ⇒ slog.Default()",

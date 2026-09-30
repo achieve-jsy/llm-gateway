@@ -8,7 +8,7 @@
 
 编号一经发布不再改动；匹配一律用字符串（不用行号）。
 
-## 与计划文本的一致性（如实登记：三处**加强**，零处削弱）
+## 与计划文本的一致性（如实登记：三处**加强**、一处**改写**、一处**零覆盖登记**，零处削弱）
 
 1. **新增 m06**（跑完一轮就退出，不再等下一个周期）。计划给的 m01–m05 里没有一条能让
    `TestLoopRepeatsRoundsOnPollInterval` 转红（m01 只是「先等再跑」，5ms 周期照样跑很多轮）
@@ -41,6 +41,17 @@
 本集合**没有**静态检查行：上表每条计划要求都有可转红的变异（含本轮新增的三条）。
 `runner.go` 的「零建目录调用」由集合 A（`p4-task-3-rootguard`）与任务 1 的集合 B
 （`p4-task-1-round`）各自静态检查；本集合不重复登记。
+
+## 零变异覆盖的**用例**登记（`COVERAGE_GAPS`，E64②；**工具读不到、不参与任何判定**）
+
+`TestLoopStopsOnContextCancel` 在册、承重，但本集合 7 条变异**没有一条**能杀它 ⇒
+按「隔离探针」口径登记进下面的 `COVERAGE_GAPS`（位置 / 断言什么 / 为什么没有杀手 /
+可失败性由谁承载 / 谁来补）。**为什么单列一个结构而不是写进 `EXPECTED_GREEN`**：
+后者的键被工具当作**变异名**处理（`classify` 按变异名查它、`print_mapping` 列它、
+计数口径还要核对「每个键都落在『允许的绿』里」）—— 把「没有变异杀手的用例」塞进去，
+会让那张清单出现一个永远对不上的键（这正是 `task-5.py` / `task-6.py` 分开存放的理由）。
+`REQUIREMENTS` 也不行：工具对「mutations 与 checks 都为空」的条目直接判 **GAP ⇒ 整轮失败**。
+⇒ 复用**既有字段名** `COVERAGE_GAPS`（不新造字段名）。
 """
 
 NAME = "p4-task-3-loop"
@@ -65,12 +76,20 @@ MUTATIONS["m01_先等再跑"] = [
             "\t\tselect {\n\t\tcase <-ctx.Done():\n\t\t\treturn nil\n\t\tcase <-ticker.C:\n\t\t}\n"
             "\t\tif _, err := r.Round(ctx); err != nil {"),
 ]
-# m02 环境级失败改成「退出」⇒ 根目录不可用时进程反复退出/被 systemd 更密地拉起，
-#     而重启不会把挂载变回来；告警面（每轮一条的心跳）也随之消失
+# m02 **删掉「失败后继续」这道判定**：环境级失败（根目录不可用）不再「记一条日志、
+#     继续等下一个周期」，而是直接返回错误 ⇒ 进程退出、被 systemd 按 RestartSec 反复
+#     拉起，而重启不会把挂载变回来；告警面（每轮一条的心跳）也随之消失。
 #     杀手：TestLoopKeepsRunningWhenRootIsUnavailable
+#     【E64/N2 改写】旧形态是在 logger 调用**之前插入** `return err`，于是 logger 那一行
+#     变成**不可达语句** —— Go 编译器放行、`go test` 的默认 vet 子集（不含 `unreachable`）
+#     也放行，属侥幸写法（一旦 CI 或本地跑全量 vet 就会红）。现形态把「记日志后继续」
+#     这**一条语句**整条替换成 `return err`：语义完全不变（仍是「环境级失败 ⇒ 退出，
+#     而不是继续下一个周期」），且不留任何不可达代码。匹配串是被测实现里那一处
+#     两行的 logger 调用（`runner.go` 的 `Loop`），唯一且逐字可解释。
 MUTATIONS["m02_环境失败退出"] = [
-    ("sub", '\t\t\tr.logger.Error("trace-sealer 本轮失败，下一个周期重试",',
-            '\t\t\treturn err\n\t\t\tr.logger.Error("trace-sealer 本轮失败，下一个周期重试",'),
+    ("sub", '\t\t\tr.logger.Error("trace-sealer 本轮失败，下一个周期重试",\n'
+            '\t\t\t\t"err", err, "poll_interval", r.opts.PollInterval.String())',
+            '\t\t\treturn err'),
 ]
 # m03 护栏失败分支不再 return ⇒ 继续 ListPendingSeals 并 Seal：挂载没了却照样封块，
 #     正文被写进宿主根 FS 上那个「长得像挂载点」的目录里
@@ -124,6 +143,62 @@ CHECKS = []
 # 该标记为真 + 不 Seal）⇒ m05 有了在册杀手，登记随之取消（E63⑧）。
 EXPECTED_GREEN = {}
 
+# ---------------------------------------------------------------------------
+# 零变异覆盖的**用例**登记（E64②；**只是给人看的登记，工具读不到、不参与任何判定**）
+#
+# 为什么单列一个结构、而不是写进 EXPECTED_GREEN / REQUIREMENTS（复用既有字段名
+# COVERAGE_GAPS，见 tools/trace-mutate/sets/task-5.py 与 task-6.py 的 PENDING）：
+#   - EXPECTED_GREEN 的键被工具当作**变异名**处理（classify 按变异名查它、
+#     print_mapping 列它、计数口径核对「每个键都落在允许的绿里」）⇒ 塞进一个
+#     「没有变异杀手的用例名」会让那张清单出现永远对不上的键。
+#   - REQUIREMENTS 对「mutations 与 checks 都为空」的条目直接判 GAP ⇒ 整轮失败。
+# 登记口径（沿用 task-5.py 的 COVERAGE_GAPS）：位置 / 断言的什么 / 为什么没有杀手 /
+# 可失败性由谁承载 / 谁来补。E64② 的要求就是：**「无变异杀手」必须落在集合工件内，
+# 不能只写在计划文本里**（本条自计划 E63 的「如实登记（隔离探针）」搬进集合）。
+# ---------------------------------------------------------------------------
+COVERAGE_GAPS = [
+    {
+        "id": "gap-1-TestLoopStopsOnContextCancel-无变异杀手",
+        "title": ("TestLoopStopsOnContextCancel（tests/tracesealer/loop_test.go:165-175）"
+                  "在册、承重，但本集合的 7 条变异**没有一条**能杀它"),
+        "where": [
+            "tests/tracesealer/loop_test.go:166-175  TestLoopStopsOnContextCancel",
+            "断言一：取消后 Loop **干净返回**（loop_test.go:171 的 require.NoError）",
+            "断言二：返回后**不再**有新轮次（loop_test.go:172-174：两次 r.rounds() 相等）",
+        ],
+        "reachable": (
+            "**可达**：它是「关机路径」在 Loop 侧的在册行为证据（SIGTERM → ctx 取消）。"
+            "但**本集合 7 条变异里没有一条能同时改变它的两半**："
+            "m04（取消后仍开新块）杀的是 TestLoopStopsSealingAfterCancel —— 它钉住「取消后"
+            "不再**开始**封下一块」，与「取消后循环还在不在转、返回是否干净」是两件事；"
+            "m07（轮次并行）泄漏出的 goroutine **不保证**在 50ms 采样窗内留下痕迹。"
+        ),
+        "no_killer": (
+            "**按「隔离探针」口径登记（E64②）：该用例在册、无变异杀手，可失败性由人工实测"
+            "承载。** 注意本用例实际走的退出路径是 `if ctx.Err() != nil { … return nil }`"
+            "这一条（`Round` 在取消后立刻返回 ctx 错误），**不是** `select` 里的 "
+            "`case <-ctx.Done():` 那条 —— 只改后者不会让它转红（前者遮蔽后者，实测 PASS），"
+            "因此下面的探针都打在**前者**上。"
+        ),
+        "falsifiability": (
+            "**两半各自人工实测，均可复现、均按 `cp` 还原**（被改文件 "
+            "internal/tracesealer/runner.go 还原后 sha256 = "
+            "d9f6630b475aab00e3020459f96aaf289795e342b5a0c59e39efbe87dbd4c5e5，与提交逐字节一致）："
+            "① 把退出分支的 `return nil` 改成 `return ctx.Err()` ⇒ 该用例在 "
+            "loop_test.go:171 `require.NoError` 处 FAIL（`Received unexpected error: context canceled`）"
+            "—— 断言一非恒真；"
+            "② 在同一分支注入 `go func() { for { r.Round(ctx) } }()` ⇒ 该用例在 "
+            "loop_test.go:174 `require.Equal(t, n, r.rounds())` 处 FAIL"
+            "（连跑 3 次：expected 11 / actual 25341、25816、25735）—— 断言二非恒真。"
+        ),
+        "owner": (
+            "本轮（E64②）**只登记、不新增变异**（发起者口径：登记落到工件内即可）。"
+            "后续若要让本条升格为断言红，需要一条直取「Loop 的取消返回语义」的变异，"
+            "例如把退出分支的 `return nil` 改为 `return ctx.Err()`（见上面 ① 的实测形态）。"
+        ),
+    },
+]
+
 REQUIREMENTS = [
     {
         "plan": "启动即跑第一轮（不是先等一个 poll 周期）",
@@ -151,7 +226,18 @@ REQUIREMENTS = [
         "checks": [],
         "note": ("杀手 = TestLoopStopsSealingAfterCancel（本轮按 E63⑦ 新增的 Loop 侧用例）；"
                  "Round 侧的同名杀手 TestRoundCancellationStopsBeforeNextSeal 在 "
-                 "p4-task-1-round 的名字清单里（本集合的 -run 清单不含它）。"),
+                 "p4-task-1-round 的名字清单里（本集合的 -run 清单不含它）。"
+                 "**另如实登记（E64②）**：本要求相邻的另一条关机行为 —— 在册用例 "
+                 "TestLoopStopsOnContextCancel（断言「取消后 Loop 干净返回」+「返回后不再有"
+                 "新轮次」）**没有变异杀手**，按隔离探针口径登记在本集合的 COVERAGE_GAPS"
+                 "（工具读不到该字段，故此处复述其实测结论）：① inner 退出分支的 `return nil` "
+                 "改成 `return ctx.Err()` ⇒ 该用例在 loop_test.go:171 `require.NoError` 处 FAIL"
+                 "（Received unexpected error: context canceled）；② 同一分支注入 "
+                 "`go func() { for { r.Round(ctx) } }()` ⇒ 该用例在 loop_test.go:174 "
+                 "`require.Equal(n, r.rounds())` 处 FAIL（expected 11 / actual 25341，连跑 3 次"
+                 "分别为 25341 / 25816 / 25735）。两次都按 `cp` 还原，"
+                 "internal/tracesealer/runner.go 还原后 sha256 = "
+                 "d9f6630b475aab00e3020459f96aaf289795e342b5a0c59e39efbe87dbd4c5e5（与提交逐字节一致）。"),
     },
     {
         "plan": "轮次必须**严格串行**（同一时刻只有一轮在跑）",

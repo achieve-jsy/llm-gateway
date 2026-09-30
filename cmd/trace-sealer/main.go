@@ -51,9 +51,15 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// --once 是「跑一轮就退出」的离线形态（排障与标定用），退出码由 ExitCode 决定；
+	// 缺省是 systemd 下的常驻形态：Loop 每 PollInterval 跑一轮，环境级失败不退出
+	// （退出会被 systemd 按 RestartSec 更密地重试，而重启不会把挂载变回来）。
 	if !*once {
-		fmt.Fprintln(os.Stderr, "trace-sealer: 常驻循环在计划 4/4 任务 3 落地；当前只支持 --once")
-		os.Exit(tracesealer.ExitFatal)
+		if err := r.Loop(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "trace-sealer: %v\n", err)
+			os.Exit(tracesealer.ExitFatal)
+		}
+		return
 	}
 	res, err := r.Round(ctx)
 	if err != nil {

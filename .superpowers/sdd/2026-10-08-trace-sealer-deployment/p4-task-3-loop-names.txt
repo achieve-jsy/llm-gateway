@@ -1,0 +1,7 @@
+TestLoopKeepsRunningWhenRootIsUnavailable
+TestLoopNeverOverlapsRounds
+TestLoopRepeatsRoundsOnPollInterval
+TestLoopReportsRootUnavailable
+TestLoopRunsFirstRoundImmediately
+TestLoopStopsOnContextCancel
+TestLoopStopsSealingAfterCancel

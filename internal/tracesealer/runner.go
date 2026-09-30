@@ -26,6 +26,11 @@ type RoundResult struct {
 	MinBytesPerRow                                                  int64
 	MinRatio                                                        float64
 	Duration                                                        time.Duration
+	// RootUnavailable = true ⇒ 本轮因**根目录不可用**而完全没有调用 Seal（护栏在发现
+	// 阶段之前就拦下了它）。它与「本轮没有可封块」是两件事：前者是环境级故障、要人去看
+	// 挂载；后者是正常的空轮次。两者若共用零值/同一个字段，看板会把「盘掉了」读成
+	// 「今天没活干」。
+	RootUnavailable bool
 }
 
 // Failed 是「需要人看一眼」的失败数：可重试的（行数不符 / 封块失败 / 未分类）
@@ -38,6 +43,8 @@ func (r RoundResult) Failed() int {
 type Runner struct {
 	opts   Options
 	sealer Sealer
+	// guard 是根目录护栏（任务 3）：构造期建立启动基线，每轮复检。
+	guard *RootGuard
 	// logger 在构造期由 resolveLogger 定好。它不是第二个配置源：Options.Slog /
 	// Options.Logf 的优先级只在那一个函数里有定义。
 	logger *slog.Logger
@@ -108,6 +115,12 @@ func NewRunner(opts Options) (*Runner, error) {
 	if opts.NewSealer == nil {
 		opts.NewSealer = func(so ta.SealerOptions) (Sealer, error) { return ta.NewSealer(so) }
 	}
+	// 护栏在**构造期**建立启动基线：配错根目录（不存在 / 是 "/" / 是相对路径 / 挂载
+	// 身份取不到）必须在启动那一秒就响亮失败，而不是等第一个 poll 周期之后。
+	guard, err := NewRootGuard(opts.Root, opts.Identity)
+	if err != nil {
+		return nil, fmt.Errorf("构造根目录护栏失败: %w", err)
+	}
 	s, err := opts.NewSealer(ta.SealerOptions{
 		Root:                opts.Root,
 		ZstdBinary:          opts.ZstdBinary,
@@ -119,7 +132,49 @@ func NewRunner(opts Options) (*Runner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("构造封块器失败: %w", err)
 	}
-	return &Runner{opts: opts, sealer: s, logger: resolveLogger(opts)}, nil
+	return &Runner{opts: opts, sealer: s, guard: guard, logger: resolveLogger(opts)}, nil
+}
+
+// logRootUnavailable 打护栏失败的那条 ERROR。reason 是**稳定串**
+// （root_unavailable / root-identity-mismatch，与网关侧 spooler.go 的同一套命名
+// 一致）：运维的采集规则与看板按 reason 匹配，不按错误文本。
+func (r *Runner) logRootUnavailable(err error) {
+	reason := "root_unavailable"
+	if errors.Is(err, ErrRootIdentityMismatch) {
+		reason = "root-identity-mismatch"
+	}
+	r.logger.Error("trace-sealer 根目录护栏未通过，本轮**不封任何块**（也不补目录）",
+		"reason", reason, "root", r.opts.Root, "err", err)
+}
+
+// Loop 常驻循环：跑一轮 → 等一个周期 → 再跑一轮。**轮次严格串行**。
+//
+// 【为什么先跑一轮再等】启动即处理积压；更重要的是让「根目录配错了」在启动那一秒
+// 就出现在日志里，而不是等一个 poll 周期（默认 5 分钟）之后。
+//
+// 【为什么轮次不能并发】并发的两个 Round 会对同一 (dt,inst,part) 同时 Seal，而冻结包
+// 明确要求同一个三元组串行（两块共用同一个 .tmp）。
+//
+// 【为什么环境级失败不退出】退出会被 systemd 按 RestartSec 反复拉起，形成更密的重试；
+// 而根目录不可用是环境问题，重启不会修好它。心跳（每轮一条汇总）才是它的告警面。
+func (r *Runner) Loop(ctx context.Context) error {
+	ticker := time.NewTicker(r.opts.PollInterval)
+	defer ticker.Stop()
+	for {
+		if _, err := r.Round(ctx); err != nil {
+			if ctx.Err() != nil {
+				// 收到 SIGTERM/SIGINT：干净退出，封到一半的那块由 ctx 取消路径处理。
+				return nil
+			}
+			r.logger.Error("trace-sealer 本轮失败，下一个周期重试",
+				"err", err, "poll_interval", r.opts.PollInterval.String())
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
 }
 
 // logPartFailure 打印**单个块**的失败。一块失败绝不中断整轮（见 Round 的注释），
@@ -134,7 +189,12 @@ func (r *Runner) logPartFailure(kind FailureKind, note string, task ta.SealTask,
 		"err", err)
 }
 
-// Round 跑一轮：发现 → 逐个封块 → 分类计数 → 汇总 → 打日志。
+// Round 跑一轮：护栏复检 → 发现 → 逐个封块 → 分类计数 → 汇总 → 打日志。
+//
+// 【为什么护栏是本轮的第一件事】根目录不可用时「发现」这一步看到的是一片空（挂载点
+// 目录还在、只是背后换了文件系统），若照常往下走就会把正文封到**错的那块盘**上。
+// 因此护栏失败 ⇒ res.RootUnavailable = true、打一条带稳定 reason 的 ERROR、直接返回，
+// 既不 ListPendingSeals 更不 Seal。**绝不**用「补一个目录」来修它。
 //
 // 【为什么一个 part 失败不能中断整轮】冻结包的发现路径是纯目录扫描、天然幂等；
 // 一个坏块（例如超限块）应当只影响它自己。若在第一个失败处 return，
@@ -146,6 +206,13 @@ func (r *Runner) logPartFailure(kind FailureKind, note string, task ta.SealTask,
 func (r *Runner) Round(ctx context.Context) (RoundResult, error) {
 	start := r.opts.Now()
 	var res RoundResult
+
+	if err := r.guard.Check(); err != nil {
+		res.RootUnavailable = true
+		res.Duration = r.opts.Now().Sub(start)
+		r.logRootUnavailable(err)
+		return res, err
+	}
 
 	tasks, err := r.sealer.ListPendingSeals()
 	if err != nil {

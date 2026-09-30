@@ -56,7 +56,13 @@ type Options struct {
 	// log.Printf），删掉它会让既有测试与运维脚本的注入点消失；而日志形态要统一成
 	// slog（结构化字段），所以 Logf 只作为 slog 的一个 sink 存在 —— 且**只在
 	// Slog == nil 时**被使用，两条并行的打印路径不会同时生效。
-	Slog      *slog.Logger
+	Slog *slog.Logger
+	// Identity 是**根目录身份探针**（任务 3）：给一个路径，返回它背后那个挂载的
+	// 身份串。nil ⇒ 包级 Identity（读 /proc/self/mountinfo，取最长前缀覆盖的挂载点）。
+	// 【为什么必须可注入】真实身份是「这台机器当前的挂载表」的函数：测试无法为同一
+	// 路径复现「撤掉挂载」这一事件（umount 要 root，且会把整台机器卷进来）。注入让
+	// 「启动基线 → 运行中身份变化」这条时序变成确定的、可重复的。
+	Identity  func(string) (string, error)
 	NewSealer func(ta.SealerOptions) (Sealer, error)
 }
 

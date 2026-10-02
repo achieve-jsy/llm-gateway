@@ -278,14 +278,22 @@ COVERAGE_GAPS = [
         ),
         "falsifiability": (
             "**三条各自人工探针，均可复现、均按 `cp` 还原**（被改文件 "
-            "tests/tracesealer/concurrent_test.go 还原后 sha256 与提交逐字节一致）："
+            "tests/tracesealer/concurrent_test.go @ `0864c519` 还原后 sha256 = "
+            "6ec687db153fbdeb… 与提交逐字节一致，`git status --porcelain` 为空）："
             "① 把 `sealOnce` 里的 `w.MarkSealed(task.DT, task.Part)` 删掉（= 交接前不关 fd，"
-            "D7 的形态）⇒ TestA7WriterNeverAppendsToAHandedOffPart 在 "
-            "`require.False(t, sealed[ref.Part], ...)` 处 FAIL；"
+            "D7 的形态）⇒ TestA7WriterNeverAppendsToAHandedOffPart 在 concurrent_test.go:161 "
+            "的 `require.False(t, sealed[ref.Part], ...)` 处 FAIL（Should be false / "
+            "「part 0 已交接给 sealer，不得再被追加（D7）」）；"
             "② 把 `handoff` 里的 `os.WriteFile(art, ...)` 删掉（= 产物没落盘、spool 也删了）"
-            "⇒ TestA7NoRefPointsToNothing 在 `require.NoError(t, hs.assertRefsLand(refs))` 处 "
-            "FAIL（「Ref 丢了」），TestA7RestartAfterSealStartsAtNextPart 在 "
-            "`require.FileExists(t, p.PartFile(zero))` 处 FAIL。"
+            "⇒ TestA7NoRefPointsToNothing 在 concurrent_test.go:141 的 "
+            "`require.Len(t, hs.handed, 4)` 处 FAIL（只发生了 1 次交接 —— 产物缺失让冻结包的"
+            "目录扫描把序号 0 **又分配了一次**，这本身就是同一个失效面），"
+            "TestA7RestartAfterSealStartsAtNextPart 在 concurrent_test.go:188 的 "
+            "`require.FileExists(t, p.PartFile(zero), ...)` 处 FAIL；"
+            "③ 「Ref 丢了」这条判定单独探针：交接全部完成后把产物目录整体删掉再调 "
+            "`assertRefsLand` ⇒ TestA7NoRefPointsToNothing 在 concurrent_test.go:146 的 "
+            "`require.NoError(t, hs.assertRefsLand(refs))` 处 FAIL"
+            "（`Ref 2026-10-08/blue/part-000000#row=0 丢了：产物与 spool 都不在`）。"
         ),
         "owner": (
             "本轮（Task 4）**只登记、不新增变异**：要让它升格为断言红，需要允许变异冻结包"

@@ -239,11 +239,14 @@ COVERAGE_GAPS = [
         ),
         "falsifiability": (
             "**两半各自人工探针，均可复现、均按 `cp` 还原**（被改文件 internal/tracesealer/"
-            "runner.go 与 tests/tracesealer/concurrent_test.go 还原后 sha256 与提交逐字节一致）："
+            "runner.go 与 tests/tracesealer/concurrent_test.go @ `0864c519` 还原后 sha256 分别 = "
+            "dd80de132255fafb… / 6ec687db153fbdeb… 与提交逐字节一致，`git status --porcelain` 为空）："
             "① 在 `Round` 的循环里把 `err := r.sealer.Seal(sealCtx, task)` 之后**再重复调用一次** "
-            "⇒ 该用例在 `require.Equal(t, 1, n, ...)` 处 FAIL（perPart=2）—— 断言一非恒真；"
-            "② 在用例里把 `r.Round(context.Background())` 改成两个 goroutine 并发跑 "
-            "`r.Round` ⇒ 该用例在 `require.Equal(t, 1, f.maxInFlight, ...)` 处 FAIL —— 断言二非恒真。"
+            "⇒ 该用例在 concurrent_test.go:277 的 `require.Equal(t, 1, n, ...)` 处 FAIL"
+            "（perPart=2：「part 0 在一个轮次内被封了 2 次」）—— 断言一非恒真；"
+            "② 在用例里把单次 `r.Round(...)` 换成两个 goroutine 并发调用 ⇒ 该用例在 "
+            "concurrent_test.go:281 的 `require.Equal(t, 1, f.maxInFlight, ...)` 处 FAIL"
+            "（Not equal: expected 1）—— 断言二非恒真。"
         ),
         "owner": (
             "本轮只登记、不加变异（发起者口径：登记落到工件内即可）。升格路径：在 "

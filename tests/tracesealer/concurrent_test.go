@@ -248,10 +248,11 @@ func (s *a7RecordingSealer) Seal(_ context.Context, task ta.SealTask) error {
 // TestA7NoPartIsSealedTwiceConcurrently 一个轮次内对同一 part 只能有一次 Seal 调用
 // （冻结包要求同一个 (dt,inst,part) 串行：它们共用同一个 <partPath>.tmp）。
 //
-// 【零变异杀手，如实登记】本集合两个 TARGET（lock.go / runner.go）的变异都不改变
-// Round 的串行性 ⇒ 本用例没有变异杀手；可失败性由人工探针承载（在 runner.go 的
-// Round 里把 Seal 改成 `go func` 启动 ⇒ 本条在 maxInFlight 断言处转红，见集合
-// p4-task-4-runner 的 COVERAGE_GAPS）。
+// 【零变异杀手，如实登记】两个 TARGET（lock.go / runner.go）的变异都不改变 Round 的
+// 串行编排 ⇒ 本用例没有变异杀手；可失败性由两条人工探针承载（见集合 p4-task-4-runner
+// 的 COVERAGE_GAPS）：① 在 Round 里对同一 task 重复调用一次 Seal ⇒ perPart=2，
+// 在下面的 require.Equal(1, n) 处转红；② 用例侧并发跑两个 Round ⇒ maxInFlight=2，
+// 在下面的 require.Equal(1, f.maxInFlight) 处转红。
 func TestA7NoPartIsSealedTwiceConcurrently(t *testing.T) {
 	root := t.TempDir()
 	f := &a7RecordingSealer{}

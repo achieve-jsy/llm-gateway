@@ -48,6 +48,9 @@ type Runner struct {
 	// logger 在构造期由 resolveLogger 定好。它不是第二个配置源：Options.Slog /
 	// Options.Logf 的优先级只在那一个函数里有定义。
 	logger *slog.Logger
+	// lock 是跨进程单实例锁（任务 4）：同一个 root 只允许一个 sealer。systemd 只
+	// 保证**它自己**起一个，挡不住运维手工 --once 与常驻循环撞车（见 lock.go）。
+	lock *Lock
 }
 
 // Options 返回一份配置副本。Options 里有函数字段，调用方拿到的是同一批函数值
@@ -121,6 +124,16 @@ func NewRunner(opts Options) (*Runner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("构造根目录护栏失败: %w", err)
 	}
+	// 【装配次序本身是契约】normalize() → NewRootGuard()（会 stat 根目录、**不建目录**）
+	// → AcquireLock()。锁文件必须落在 root 之内（默认 <root>/.sealer.lock，由
+	// normalize 填好）：root 之外没有可写保证（`ProtectSystem=strict` +
+	// `ReadWritePaths=/datalog`），而且放在 root 里才能被「同一个 root 只有一个写者」
+	// 这条语义覆盖。反过来（先取锁再 stat 根目录）也不可：root 不存在时锁文件会先
+	// 失败成「打开锁文件失败」这种把运维指向错误方向的信息。
+	lock, err := AcquireLock(opts.LockFile)
+	if err != nil {
+		return nil, err
+	}
 	s, err := opts.NewSealer(ta.SealerOptions{
 		Root:                opts.Root,
 		ZstdBinary:          opts.ZstdBinary,
@@ -130,9 +143,25 @@ func NewRunner(opts Options) (*Runner, error) {
 		ExpectedZstdVersion: opts.ExpectedZstdVersion,
 	})
 	if err != nil {
+		// 装配失败必须把已取得的资源释放干净，否则一次配错会把锁一直握到进程退出。
+		_ = lock.Release()
 		return nil, fmt.Errorf("构造封块器失败: %w", err)
 	}
-	return &Runner{opts: opts, sealer: s, guard: guard, logger: resolveLogger(opts)}, nil
+	return &Runner{opts: opts, sealer: s, guard: guard, logger: resolveLogger(opts), lock: lock}, nil
+}
+
+// Close 释放单实例锁。**进程退出前必须调用**（`cmd/trace-sealer` 的 `defer r.Close()`）；
+// 幂等 —— defer 与显式调用两条路径都会走到，第二次调用无害。
+//
+// 注意：进程被杀死时内核会关闭 fd、flock 随之释放，因此 Close 不是「锁的最后防线」，
+// 而是**可控退出**路径上的确定性释放。
+func (r *Runner) Close() error {
+	if r == nil || r.lock == nil {
+		return nil
+	}
+	l := r.lock
+	r.lock = nil
+	return l.Release()
 }
 
 // logRootUnavailable 打护栏失败的那条 ERROR。reason 是**稳定串**

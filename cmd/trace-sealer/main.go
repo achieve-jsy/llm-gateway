@@ -46,7 +46,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "trace-sealer: %v\n", err)
 		os.Exit(tracesealer.ExitFatal)
 	}
-	// 单实例锁与 Close 在计划 4/4 的任务 4 落地；本任务还没有 Close。
+	// 单实例锁由 NewRunner 在装配期取得（任务 4）：同一个 root 只允许一个 sealer。
+	// Close 幂等；正常退出路径（Loop 返回）会走到它。即使 os.Exit 越过 defer，
+	// 内核也会在进程终止时关掉 fd、释放 flock —— Close 是可控退出上的确定性释放。
+	defer r.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

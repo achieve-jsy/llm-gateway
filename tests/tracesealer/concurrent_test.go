@@ -267,8 +267,12 @@ func TestA7NoPartIsSealedTwiceConcurrently(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, res.Sealed)
 	require.Len(t, f.perPart, 3)
+	// 【断言次序】先证「同一时刻只有一块在封」再证「每个 part 只封一次」：两者由同一条
+	// 用例承载，但它们**各自**可被不同的失效形态打红（前者 = 轮次/封块并行，后者 =
+	// 对同一 part 重复调用 Seal）⇒ 两半都必须能被单独观察到（见集合 p4-task-4-runner
+	// 的 COVERAGE_GAPS 里两条探针）。
+	require.Equal(t, 1, f.maxInFlight, "同一个三元组必须串行：不得有两块同时在封")
 	for part, n := range f.perPart {
 		require.Equal(t, 1, n, "part %d 在一个轮次内被封了 %d 次（同一三元组必须只封一次）", part, n)
 	}
-	require.Equal(t, 1, f.maxInFlight, "同一个三元组必须串行：不得有两块同时在封")
 }

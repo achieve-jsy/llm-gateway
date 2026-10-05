@@ -1,0 +1,73 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = d1716d217db84ed03ea4249e8350997ab43ffd23
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 4b91289a024d534019c1f6b25d5ad2f64d7df4bddf0cfe43c8db7687bf78a8ed  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-1-classify.py)
+名字清单 sha256          = 8236d2db64647853b0b780c5f87f54959553a8c0af1a28bd85b61067fe4b68f5  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-1-classify-names.txt)
+名字清单条数             = 6
+清单推导命令             = grep -h '^func Test' tests/tracesealer/classify_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 6 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-7u02hdu7
+被测文件 sha256          = 261fa923c60c5971def90f61d0c2b1eee0ee3a8976d0ffe94702b46cd36161e4  internal/tracesealer/classify.go
+测试文件 sha256          = 22f21e27b31f645d06c288ec796b38da0c8a2c8f12fb3165b8cff81a8abf0406  tests/tracesealer/alert_test.go
+测试文件 sha256          = 0e36d92d813eb0af6d4caa658c1bd0fb235be03362bf690f4f54afed5be56515  tests/tracesealer/classify_test.go
+测试文件 sha256          = 6ec687db153fbdebe474d5c9280a68f0d21f28cb2069b52d607438b748a178b5  tests/tracesealer/concurrent_test.go
+测试文件 sha256          = f3bfdacf089c1cf0acf0706d54e8a58de454414f2e99880b852ad508152d077f  tests/tracesealer/exit_test.go
+测试文件 sha256          = 7bd98c1223b58280f9a6b88ad8561f7d5812e6dd7ae7b2f3d2aeab578f91137f  tests/tracesealer/lock_test.go
+测试文件 sha256          = 142965aca3858955488752e512f1f418ece44e129b7d2b384e81b0bba3a72099  tests/tracesealer/loop_test.go
+测试文件 sha256          = 64d07b52eb0b863dfa5d417471bf3ab3b83b79f8f16f8a3e2c76cc3714abe7c1  tests/tracesealer/options_test.go
+测试文件 sha256          = 451ce4de0d1e563c1548e9ff85ea7eb03b6d68f1d113938997fb9c6e9cb1c58c  tests/tracesealer/rootguard_test.go
+测试文件 sha256          = af3af343207b05f43948abe79a136be3795bea101259949e7e46dedd4e677c67  tests/tracesealer/round_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] 分类只认哨兵常量，不认裸字面量
+      文件=internal/tracesealer/classify.go  正则=KindTooManyRows\s*FailureKind\s*=\s*\"too_many_rows\"  期望=present  实际=命中 'KindTooManyRows FailureKind = "too_many_rows"'
+      理由=这些串会被写进日志与看板/告警规则（轮次汇总里的 kind=…），是**跨进程契约**；改成任意串就等于把告警规则悄悄打断。它是「取值」要求（不存在能让用例转红的删除形态）⇒ 只能静态检查。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 冻结包 errors.go：ErrPartExists 幂等无害（不告警） | `m05_不识别PartExists` | — |  |
+| 冻结包 errors.go：ErrRowCountMismatch 可重试、需告警 | `m04_不识别RowMismatch`, `m07_Retryable漏掉RowMismatch` | — |  |
+| 冻结包 errors.go：ErrSealFailed 可重试、需告警 | `m02_改用相等比较` | — |  |
+| 冻结包 errors.go + N5：ErrTooManyRows 永久拒绝、需人工介入 | `m01_不识别TooManyRows`, `m06_Permanent恒false` | — |  |
+| 计划 4 全局约束：未分类错误不得被吞 | `m03_未分类吞成PartExists` | — |  |
+| 计划 4 全局约束：FailureKind 字符串是日志/告警的稳定面 | — | `分类只认哨兵常量，不认裸字面量` |  |
+
+计划要求总数 = 6；引用到的变异 = 7；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=6 ran=6 diff=0 PASS=6 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_不识别TooManyRows | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestClassifyTooManyRowsIsPermanent |
+| m02_改用相等比较 | 红 | names=6 ran=6 diff=0 PASS=4 SKIP=0 FAIL=2 | TestClassifySealFailedIsRetryable, TestClassifyUsesErrorsIsNotEquality |
+| m03_未分类吞成PartExists | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestClassifyUnknownIsLoudAndRetryable |
+| m04_不识别RowMismatch | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestClassifyRowMismatchIsRetryable |
+| m05_不识别PartExists | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestClassifyPartExistsIsIdempotent |
+| m06_Permanent恒false | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestClassifyTooManyRowsIsPermanent |
+| m07_Retryable漏掉RowMismatch | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestClassifyRowMismatchIsRetryable |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 7
+集合里的变异总数          = 7（本次运行 == 全集 ✓）
+断言支撑的红             = 7 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 7 = 7 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

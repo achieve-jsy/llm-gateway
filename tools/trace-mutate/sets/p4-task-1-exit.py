@@ -16,6 +16,13 @@ CI、将来若改 oneshot/timer 形态的运维脚本都依赖它），因此它
 「`main` 不自己决定退出码」是**不存在性**要求：退出码只能来自 `ExitCode`，`main`
 里出现字面量就意味着契约被复制成了两份（改一处漏一处）。没有任何变异能让
 「这里没有字面量」变成假 ⇒ 只能静态检查。
+
+**`main.go` 不得建目录**：`\bMkdir[A-Za-z]*\s*\(` absent（**E66③ 补齐**）。D70 的
+全局约束第 27 条点名 `internal/tracesealer/` **与** `cmd/trace-sealer/`；本集合的
+`PACKAGES` 已经含薄壳包 `./cmd/trace-sealer/`，把这一行挂在同一处最省。它**不可能**由
+变异承载（工具只在 pristine 树求值 `CHECKS`，`trace_mutate.py:574`），可失败性由
+**E66③ 的临时仓库探针**实测。该行同时不改变本集合的「测试文件 sha256」段（`main.go`
+不是 `*_test.go`，工具不会为它印哈希 —— 见上面的「工具边界」栏）。
 """
 
 NAME = "p4-task-1-exit"
@@ -64,6 +71,20 @@ CHECKS = [
                 "ExitFailed）。main 里出现字面量就等于把契约复制成两份，改一处漏一处。"
                 "这是**不存在性**要求 ⇒ 只能静态检查（变异无法证明「没写」）。"),
     },
+    {
+        "name": "main不得建目录",
+        "file": "cmd/trace-sealer/main.go",
+        "pattern": r"\bMkdir[A-Za-z]*\s*\(",
+        "expect": "absent",
+        "why": ("**D70 的「整包零建目录」**（**E66③** 补齐）：全局约束第 27 条明确点名 "
+                "`internal/tracesealer/` **与** `cmd/trace-sealer/` 两个目录都不得出现建目录"
+                "调用形态；原先只有 `runner.go`（`p4-task-1-round.py:93`）与 `rootguard.go`"
+                "（`p4-task-3-rootguard.py:133`）两行，薄壳 `main.go` 缺 —— 而「启动时 root"
+                "不在就先建出来」正是这类事故最自然的入口。**不存在性**要求 ⇒ 静态检查；"
+                "**工具只在 pristine 树求值**（`trace_mutate.py:574`）⇒ 变异不可能让它变红，"
+                "可失败性由 **E66③ 的临时仓库探针**实测（插入 `os.MkdirAll(*root, 0o755)` 并提交"
+                "⇒ 本行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 1）。"),
+    },
 ]
 
 EXPECTED_GREEN = {}
@@ -84,7 +105,8 @@ REQUIREMENTS = [
     {
         "plan": "main 是薄壳：退出码只由 ExitCode 决定（不存在性要求）",
         "mutations": [],
-        "checks": ["main不自己决定退出码"],
-        "note": "不存在性无法用变异证明 ⇒ 静态检查。",
+        "checks": ["main不自己决定退出码", "main不得建目录"],
+        "note": ("不存在性无法用变异证明 ⇒ 静态检查。「不得建目录」是 D70 在薄壳上的落点"
+                 "（**E66③** 补齐），可失败性由 E66③ 的临时仓库探针承载。"),
     },
 ]

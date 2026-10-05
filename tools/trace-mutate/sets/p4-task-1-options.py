@@ -20,6 +20,12 @@
 看到这句话才知道是哪个契约（R8，sealer↔网关的次序不变量）被违反了，而不是看到一个
 「配置非法」的泛泛提示。它是「文案必须是某个字面量」的**取值**要求，不存在能删除
 它的变异形态（用例只断言了 `ErrorContains` 的片段）⇒ 按全局约束第 6/7 条静态检查。
+
+**`options.go` 自己不得建目录**：`\bMkdir[A-Za-z]*\s*\(` absent（**E66③ 补齐**）。D70
+「整包零建目录」原先只有 `runner.go`（`p4-task-1-round.py:93`）与 `rootguard.go`
+（`p4-task-3-rootguard.py:133`）两行；`options.go` 的 `normalize()` 恰是最容易被顺手加上
+「root 不存在就先建出来」的地方 ⇒ 补这一行。它**不可能**由变异承载（工具只在 pristine 树
+求值 `CHECKS`，`trace_mutate.py:574`），可失败性由 **E66③ 的临时仓库探针**实测。
 """
 
 NAME = "p4-task-1-options"
@@ -65,6 +71,20 @@ CHECKS = [
                 "用例只断言 ErrorContains 的片段 ⇒ 不存在能删除整句的变异形态，"
                 "按全局约束第 6/7 条静态检查。"),
     },
+    {
+        "name": "options.go不得建目录",
+        "file": "internal/tracesealer/options.go",
+        "pattern": r"\bMkdir[A-Za-z]*\s*\(",
+        "expect": "absent",
+        "why": ("**D70 的「整包零建目录」**（**E66③** 补齐）：原先只有 `runner.go`"
+                "（`p4-task-1-round.py:93`）与 `rootguard.go`（`p4-task-3-rootguard.py:133`）"
+                "各有该行，`options.go` 缺；而计划全局约束第 27 条要求 `internal/tracesealer/` 的"
+                "**每一个**源文件都不得出现建目录调用形态（`normalize()` 是最容易被顺手加上"
+                "「root 不存在就先建出来」的地方 —— 那正是把消失的挂载点重建到宿主根 FS 上的"
+                "形态，2026-09-24 事故同族）。**不存在性**要求 ⇒ 静态检查；**工具只在 pristine 树"
+                "求值**（`trace_mutate.py:574`）⇒ 变异不可能让它变红，可失败性由 **E66③ 的临时"
+                "仓库探针**实测（插入 `os.MkdirAll(o.Root, 0o755)` 并提交 ⇒ 本行 FAIL、退出 1）。"),
+    },
 ]
 
 EXPECTED_GREEN = {}
@@ -93,5 +113,12 @@ REQUIREMENTS = [
         "mutations": [],
         "checks": ["min-age错误文案指向R8契约"],
         "note": "文案取值要求 ⇒ 静态检查。",
+    },
+    {
+        "plan": "D70：整包零建目录 —— `options.go`（含 `normalize()`）不得出现任何建目录调用",
+        "mutations": [],
+        "checks": ["options.go不得建目录"],
+        "note": ("不存在性要求 ⇒ 静态检查（**E66③** 补齐）。可失败性由 E66③ 的临时仓库探针承载 —— "
+                 "工具只在 pristine 树求值 `CHECKS`（`trace_mutate.py:574`）。"),
     },
 ]

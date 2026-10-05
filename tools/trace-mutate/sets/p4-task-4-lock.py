@@ -49,6 +49,12 @@ r"""计划 4 / 任务 4 的变异集合 A：跨进程单实例锁（`internal/tr
 - **`runner.go` 里不得有第二处锁实现**：`syscall\.Flock|os\.Mkdir` absent。互斥只能有
   一处实现；在 `NewRunner` 里再补一层「目录/文件存在即认为有实例」的家酿锁，会在
   崩溃后把 sealer **永久**挡在外面 ⇒ 不存在性要求。
+- **`lock.go` 自己不得建目录**：`\bMkdir[A-Za-z]*\s*\(` absent（**E66③ 补齐**）。
+  D70「整包零建目录」原先只覆盖 `runner.go`（本集合）与 `rootguard.go`
+  （`p4-task-3-rootguard.py:133`），`lock.go` / `options.go` / `cmd/trace-sealer/main.go`
+  **都没有该行** ⇒ 本轮三个集合各补一行，使「整包」名副其实。它**不可能**由变异承载
+  （工具只在 pristine 树求值 `CHECKS`，见 `trace_mutate.py:574`），可失败性由
+  **E66③ 的临时仓库探针**实测。
 """
 
 NAME = "p4-task-4-lock"
@@ -172,6 +178,21 @@ CHECKS = [
                 "再取一次 flock 则会让同一进程的两次装配互相拒绝。不存在性要求 ⇒ 静态检查"
                 "（本行扫整个文件文本，含注释）。"),
     },
+    {
+        "name": "lock.go不得建目录",
+        "file": "internal/tracesealer/lock.go",
+        "pattern": r"\bMkdir[A-Za-z]*\s*\(",
+        "expect": "absent",
+        "why": ("**D70 的「整包零建目录」**（**E66③** 补齐）：本集合原先只在 `runner.go` 上有这"
+                "一行，`lock.go` 缺该行；而计划全局约束第 27 条要求 `internal/tracesealer/` 与 "
+                "`cmd/trace-sealer/` 的**每一个**源文件都不得出现建目录调用形态 —— 用建目录去"
+                "「修复」消失的挂载点，会把挂载点重建到**宿主根文件系统**上（2026-09-24 `/` 被"
+                "写满的同族事故）。**不存在性**要求 ⇒ 只能静态检查（变异无法证明「没写」）。"
+                "**工具只在 pristine 树求值**（`trace_mutate.py:574` 的 `print_checks(setmod, tree)`，"
+                "`tree` 由 `git archive HEAD` 现取现解）⇒ 任何变异都不可能让本行变红；它的**可失败性**"
+                "由 **E66③ 的临时仓库探针**实测（在 `lock.go` 里插入 `os.MkdirAll(o.Root, 0o755)` 并"
+                "提交到临时仓库 ⇒ 本行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 1）。"),
+    },
 ]
 
 # 本集合**没有任何**允许的绿：m02–m05 全部断言红。
@@ -240,6 +261,15 @@ REQUIREMENTS = [
         "checks": ["A7重启续号用例在册"],
         "note": "在册行为用例 = TestA7RestartAfterSealStartsAtNextPart；无变异杀手（同上，见 COVERAGE_GAPS）。",
     },
+    {
+        "plan": "D70：整包零建目录 —— `lock.go` 里不得出现任何建目录调用（含注释）",
+        "mutations": [],
+        "checks": ["lock.go不得建目录"],
+        "note": ("不存在性要求 ⇒ 静态检查（**E66③** 补齐；同族两行在 `p4-task-1-round.py` 的 "
+                 "`runner.go` 与 `p4-task-3-rootguard.py` 的 `rootguard.go`）。可失败性由 E66③ 的"
+                 "临时仓库探针承载 —— 工具只在 pristine 树求值 `CHECKS`（`trace_mutate.py:574`），"
+                 "变异**不可能**让它变红。"),
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -279,7 +309,8 @@ COVERAGE_GAPS = [
         "falsifiability": (
             "**三条各自人工探针，均可复现、均按 `cp` 还原**（被改文件 "
             "tests/tracesealer/concurrent_test.go @ `0864c519` 还原后 sha256 = "
-            "6ec687db153fbdeb… 与提交逐字节一致，`git status --porcelain` 为空）："
+            "6ec687db153fbdeb… 与提交逐字节一致，`git status --porcelain` 为空；"
+            "**E66①：以下 `*.go:NNN` 均为「改动后行号」**）："
             "① 把 `sealOnce` 里的 `w.MarkSealed(task.DT, task.Part)` 删掉（= 交接前不关 fd，"
             "D7 的形态）⇒ TestA7WriterNeverAppendsToAHandedOffPart 在 concurrent_test.go:161 "
             "的 `require.False(t, sealed[ref.Part], ...)` 处 FAIL（Should be false / "

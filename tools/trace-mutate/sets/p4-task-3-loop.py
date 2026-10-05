@@ -15,7 +15,10 @@
    ⇒ 「循环必须继续转」这条承重性质在册没有杀手。⇒ 加一条直取它的变异（E63⑥）。
 2. **新增 m07**（每轮用 goroutine 启动 ⇒ 轮次并行）。同上，
    `TestLoopNeverOverlapsRounds` 在 m01–m05 下全绿，而「轮次严格串行」是冻结包对同一
-   (dt,inst,part) 的硬要求（两块共用同一个 .tmp）⇒ 加一条变异（E63⑥）。
+   (dt,inst,part) 的硬要求（两块共用同一个 .tmp）⇒ 加一条变异（E63⑥）。**E66② 形态登记**：
+   m07 是**插入型（顺序颠倒）**（串行 → 并行），与 `README.md:5` 的「删掉/放宽」措辞
+   不同形；依据 = 计划 Task 4 步骤 6 的 m07 行原文 + Task 3 m06 的同形先例，详见该条
+   变异上方的登记（及它与 E65 起第 2 条的配合：必须有**确定性**杀手）。
 3. **新增一条用例** `TestLoopStopsSealingAfterCancel`（在 `tests/tracesealer/loop_test.go`）。
    计划写 m04 的杀手是 `TestLoopStopsOnContextCancel`「配合 Task 1 的
    TestRoundCancellationStopsBeforeNextSeal」——后者在 `round_test.go`，**不在本集合的
@@ -123,8 +126,21 @@ MUTATIONS["m06_跑一轮就退出"] = [
 #     杀手：TestLoopNeverOverlapsRounds
 #     附注（如实登记）：本变异**偶发**也会把 TestLoopStopsOnContextCancel 一起打红
 #     （竞态下「取消之后才开跑」的那一轮被它多带出来一个，实测 5 次里 1 次，
-#     expected 10 / actual 11 @loop_test.go:174）⇒ 权威表的「杀死的用例」列偶尔出现
+#     expected 10 / actual 11 @loop_test.go:174（**E66①：改动后行号**））⇒ 权威表的「杀死的用例」列偶尔出现
 #     两个名字属正常；**不得**据此把那条用例登记成 m07 的杀手（见 COVERAGE_GAPS）。
+#     【E66② 形态登记 —— 插入型（顺序颠倒）】m07 **不是**「删掉/放宽某个判定」，而是
+#     把 `r.Round(ctx)` 改成 `go func(){ … }()`：串行语义被**反转**成并行。它与
+#     `tools/trace-mutate/README.md:5` 的措辞（「再逐条把守卫删掉/放宽、跑测试」）**不同形**，
+#     这一点必须登记而不是含糊过去。依据两条：① 计划 Task 4 步骤 6 的 m07 行**原文**自己
+#     就要求这种形态（「`NewRunner` 先建 root 再取锁（**顺序颠倒**，插入 `os.MkdirAll`）」；
+#     原 `:1956` → 本 E66 轮文本同步后为 `:1958`）⇒ 「插入 / 顺序颠倒」是计划认可的变异形态；
+#     ② 同形先例 = Task 3 的 **m06**（「跑完一轮就退出」，在循环体里**插入** `return nil`），
+#     它已作为**断言红**进过权威表（E63⑥ 的裁定）。**张力与对策（如实登记）**：因为它是
+#     语义反转而非放宽，按 E65 起第 2 条它**必须**有**确定性**杀手才成立 —— 本条的确定性
+#     杀手是 `TestLoopNeverOverlapsRounds`（m07 每次都杀它）；`TestLoopStopsOnContextCancel`
+#     的偶发红**不**计入杀手（见 COVERAGE_GAPS）。若将来把「插入型」排除出允许形态，
+#     本变异应连同它的 REQUIREMENTS 条目一起退役（它承载的「轮次严格串行」是冻结包对
+#     同一 (dt,inst,part) 的硬要求，不能没有在册杀手）。
 MUTATIONS["m07_轮次并行"] = [
     ("sub",
      "\tfor {\n\t\tif _, err := r.Round(ctx); err != nil {\n\t\t\tif ctx.Err() != nil {\n"
@@ -168,6 +184,7 @@ COVERAGE_GAPS = [
                   "在册、承重，但本集合 7 条变异**没有一条能可靠地**杀它"
                   "（m07 只在竞态下偶发把它打红）"),
         "where": [
+            # E66①：本 COVERAGE_GAPS 内全部 `*.go:NNN` 均为**改动后行号**
             "tests/tracesealer/loop_test.go:166-175  TestLoopStopsOnContextCancel",
             "断言一：取消后 Loop **干净返回**（loop_test.go:171 的 require.NoError）",
             "断言二：返回后**不再**有新轮次（loop_test.go:172-174：两次 r.rounds() 相等）",
@@ -244,7 +261,8 @@ REQUIREMENTS = [
                  "新轮次」）**没有可依赖的变异杀手**（m07 只在竞态下偶发把它打红：本轮权威表"
                  "m07 的杀手列恰好含它，上一轮 -at-0240d4b5 的表不含 ⇒ 竞态，**不**登记为"
                  "杀手），按隔离探针口径登记在本集合的 COVERAGE_GAPS"
-                 "（工具读不到该字段，故此处复述其实测结论）：① inner 退出分支的 `return nil` "
+                 "（工具读不到该字段，故此处复述其实测结论；**E66①：以下行号均为「改动后行号」**）"
+                 "：① inner 退出分支的 `return nil` "
                  "改成 `return ctx.Err()` ⇒ 该用例在 loop_test.go:171 `require.NoError` 处 FAIL"
                  "（Received unexpected error: context canceled）；② 同一分支注入 "
                  "`go func() { for { r.Round(ctx) } }()` ⇒ 该用例在 loop_test.go:174 "

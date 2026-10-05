@@ -240,7 +240,8 @@ COVERAGE_GAPS = [
         "falsifiability": (
             "**两半各自人工探针，均可复现、均按 `cp` 还原**（被改文件 internal/tracesealer/"
             "runner.go 与 tests/tracesealer/concurrent_test.go @ `0864c519` 还原后 sha256 分别 = "
-            "dd80de132255fafb… / 6ec687db153fbdeb… 与提交逐字节一致，`git status --porcelain` 为空）："
+            "dd80de132255fafb… / 6ec687db153fbdeb… 与提交逐字节一致，`git status --porcelain` 为空；"
+            "**E66①：以下 `*.go:NNN` 均为「改动后行号」**）："
             "① 在 `Round` 的循环里把 `err := r.sealer.Seal(sealCtx, task)` 之后**再重复调用一次** "
             "⇒ 该用例在 concurrent_test.go:277 的 `require.Equal(t, 1, n, ...)` 处 FAIL"
             "（perPart=2：「part 0 在一个轮次内被封了 2 次」）—— 断言一非恒真；"

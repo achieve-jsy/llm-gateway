@@ -85,6 +85,18 @@ CHECKS = [
                 "可失败性由 **E66③ 的临时仓库探针**实测（插入 `os.MkdirAll(*root, 0o755)` 并提交"
                 "⇒ 本行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 1）。"),
     },
+    {
+        "name": "exit.go不得建目录",
+        "file": "internal/tracesealer/exit.go",
+        "pattern": r"\bMkdir[A-Za-z]*\s*\(",
+        "expect": "absent",
+        "why": ("**D70 的「整包零建目录」**（**E67** 补齐）：`E66③` 声称覆盖两个目录的每一个"
+                "源文件，实测 `internal/tracesealer/exit.go` 缺该行 ⇒ 本集合（其 `TARGET` 正是 "
+                "`exit.go`，且 `PACKAGES` 已含 `internal/tracesealer/` 所属的两个包）补上，"
+                "使「整包」对 9 个 `.go` 文件逐一行成立。**不存在性**要求 ⇒ 静态检查；"
+                "可失败性由**E67 的临时仓库探针**实测（在 `exit.go` 里插入 "
+                "`os.MkdirAll(root, 0o755)` 并提交 ⇒ 本行 FAIL、退出 1）。"),
+    },
 ]
 
 EXPECTED_GREEN = {}
@@ -108,5 +120,13 @@ REQUIREMENTS = [
         "checks": ["main不自己决定退出码", "main不得建目录"],
         "note": ("不存在性无法用变异证明 ⇒ 静态检查。「不得建目录」是 D70 在薄壳上的落点"
                  "（**E66③** 补齐），可失败性由 E66③ 的临时仓库探针承载。"),
+    },
+    {
+        "plan": "计划 4 全局约束第 27 条（D70 整包零建目录）：internal/tracesealer/exit.go",
+        "mutations": [],
+        "checks": ["exit.go不得建目录"],
+        "note": ("**E67** 补齐：`E66③` 的「覆盖每一个源文件」名不副实（实测缺 "
+                 "`classify.go` / `alert.go` / `exit.go` / `covers_test.go`）⇒ 本集合补 "
+                 "`exit.go` 这一行。不存在性要求 ⇒ 静态检查；可失败性由 E67 的临时仓库探针实测。"),
     },
 ]

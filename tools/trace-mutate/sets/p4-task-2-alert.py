@@ -157,6 +157,20 @@ CHECKS = [
                 "证明）⇒ 静态检查。"),
     },
     {
+        "name": "alert.go不得建目录",
+        "file": "internal/tracesealer/alert.go",
+        "pattern": r"\bMkdir[A-Za-z]*\s*\(",
+        "expect": "absent",
+        "why": ("**D70 的「整包零建目录」**（**E67** 补齐）：全局约束第 27 条要求 "
+                "`internal/tracesealer/` 与 `cmd/trace-sealer/` 的**每一个**源文件都不得"
+                "出现建目录调用形态 —— 用建目录去「修复」消失的挂载点，会把挂载点重建到"
+                "**宿主根文件系统**上（2026-09-24 `/` 被写满的同族事故）。`E66③` 声称覆盖"
+                "每一个源文件而实测 `alert.go` 缺该行 ⇒ 本行由 **E67** 补上。**不存在性**"
+                "要求 ⇒ 静态检查；**工具只在 pristine 树求值**（`trace_mutate.py:574`）⇒ "
+                "变异不可能让它变红，可失败性由 **E67 的临时仓库探针**实测（在 `alert.go` "
+                "里插入 `os.MkdirAll(root, 0o755)` 并提交 ⇒ 本行 FAIL、退出 1）。"),
+    },
+    {
         "name": "心跳每轮必打且在最外层",
         "file": "internal/tracesealer/runner.go",
         "pattern": r'(?m)^\tr\.logger\.Info\("trace-sealer round"',
@@ -266,5 +280,13 @@ REQUIREMENTS = [
         "mutations": [],
         "checks": ["Slog优先于Logf", "缺省回落slog.Default"],
         "note": "接线要求 ⇒ 静态检查（runner.go 的 resolveLogger）。",
+    },
+    {
+        "plan": "计划 4 全局约束第 27 条（D70 整包零建目录）：internal/tracesealer/alert.go",
+        "mutations": [],
+        "checks": ["alert.go不得建目录"],
+        "note": ("**E67** 补齐：`E66③` 的「覆盖每一个源文件」名不副实（实测缺 "
+                 "`classify.go` / `alert.go` / `exit.go` / `covers_test.go`）⇒ 本集合补 "
+                 "`alert.go` 这一行。不存在性要求 ⇒ 静态检查；可失败性由 E67 的临时仓库探针实测。"),
     },
 ]

@@ -19,6 +19,18 @@
 契约**。它是「取值必须是某个字面量」的**取值**要求，不是「删掉某个分支」的**结构**
 要求 ⇒ 不存在能让用例转红的变异形态（没有任何用例读字面量以外的形态），按全局约束
 第 6/7 条用静态检查钉住。
+
+## E67：D70「整包零建目录」的覆盖补齐（本行）
+
+**E66③** 声称该静态检查覆盖两个目录的**每一个**源文件，实测只覆盖
+`runner.go` / `rootguard.go` / `lock.go` / `options.go` / `main.go`，而
+`classify.go` / `alert.go` / `exit.go`（以及包内测试文件 `covers_test.go`）**没有该行**
+⇒ 名不副实。**E67** 把该行按「一个源文件一行」补齐到 `internal/tracesealer/` 与
+`cmd/trace-sealer/` 下的**全部 9 个 `.go` 文件**；本集合负责 `classify.go` 这一行。
+完整的「覆盖到的文件清单」与可失败性探测证据见本目录的
+`e67-mkdir-coverage-at-*.txt` 与 `e67-mkdir-probe-at-*.txt`（探测中该行 FAIL ⇒ 工具以
+「静态检查失败 ⇒ 整轮失败」退出 1）。它**不可能**由变异承载（工具只在 pristine 树
+求值 `CHECKS`，`trace_mutate.py:574`）。
 """
 
 NAME = "p4-task-1-classify"
@@ -65,6 +77,20 @@ CHECKS = [
                 "是**跨进程契约**；改成任意串就等于把告警规则悄悄打断。"
                 "它是「取值」要求（不存在能让用例转红的删除形态）⇒ 只能静态检查。"),
     },
+    {
+        "name": "classify.go不得建目录",
+        "file": "internal/tracesealer/classify.go",
+        "pattern": r"\bMkdir[A-Za-z]*\s*\(",
+        "expect": "absent",
+        "why": ("**D70 的「整包零建目录」**（**E67** 补齐）：全局约束第 27 条要求 "
+                "`internal/tracesealer/` 与 `cmd/trace-sealer/` 的**每一个**源文件都不得"
+                "出现建目录调用形态 —— 用建目录去「修复」消失的挂载点，会把挂载点重建到"
+                "**宿主根文件系统**上（2026-09-24 `/` 被写满的同族事故）。**不存在性**要求 "
+                "⇒ 只能静态检查；**工具只在 pristine 树求值**（`trace_mutate.py:574`）⇒ "
+                "变异不可能让它变红，可失败性由 **E67 的临时仓库探针**实测（在 `classify.go` "
+                "里插入 `os.MkdirAll(root, 0o755)` 并提交到临时仓库 ⇒ 本行 FAIL、工具以"
+                "「静态检查失败 ⇒ 整轮失败」退出 1）。本行扫整个文件文本（含注释）。"),
+    },
 ]
 
 REQUIREMENTS = [
@@ -74,6 +100,10 @@ REQUIREMENTS = [
     {"plan": "冻结包 errors.go + N5：ErrTooManyRows 永久拒绝、需人工介入", "mutations": ["m01_不识别TooManyRows", "m06_Permanent恒false"], "checks": []},
     {"plan": "计划 4 全局约束：未分类错误不得被吞", "mutations": ["m03_未分类吞成PartExists"], "checks": []},
     {"plan": "计划 4 全局约束：FailureKind 字符串是日志/告警的稳定面", "mutations": [], "checks": ["分类只认哨兵常量，不认裸字面量"]},
+    {"plan": "计划 4 全局约束第 27 条（D70 整包零建目录）：internal/tracesealer/classify.go", "mutations": [], "checks": ["classify.go不得建目录"],
+     "note": ("**E67** 补齐：原先只有 runner.go / rootguard.go / lock.go / options.go / main.go "
+              "五行，`classify.go` / `alert.go` / `exit.go` / `covers_test.go` 缺 ⇒「整包」名不副实。"
+              "不存在性要求 ⇒ 静态检查；可失败性由临时仓库探针实测（见集合 docstring）。")},
 ]
 
 EXPECTED_GREEN = {}

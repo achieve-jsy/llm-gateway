@@ -30,6 +30,22 @@ services:
       BUDGET_TIER_SHADOW_ENABLED: ${BUDGET_TIER_SHADOW_ENABLED:-false}
       BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED: ${BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED:-false}
       BUDGET_LEGACY_TOTAL_WRITE_ENABLED: ${BUDGET_LEGACY_TOTAL_WRITE_ENABLED:-true}
+      # ── 调用链正文直写（方案 C，计划 2/4）──
+      # inst 必须与颜色一一对应，且**不能**放进 config/prod.yaml：全局 YAML 会让
+      # 两个颜色写进同一个 inst= 目录（part 序号与 spool 会互相踩）。
+      TRACE_BODY_INST: green
+      TRACE_BODY_BLOCK_MB: "1536"
+      TRACE_BODY_FLUSH_INTERVAL: 1m
+      TRACE_BODY_ROLL_INTERVAL: 1h
+      TRACE_BODY_DISK_WATERMARK_PERCENT: "90"
+      # 功能开关：取消注释即开启（前置条件见任务 7 的硬门：读侧就绪 + 挂载在场）。
+      # TRACE_BODY_ROOT: /datalog/trace-archive-v4
+    volumes:
+      # 长语法（不是 `-v`）：source/target 显式，且**绝不**让 Docker 去创建宿主路径。
+      # 部署前必须先 `findmnt -T /datalog` 证明挂载在场（见任务 6 步骤 5）。
+      - type: bind
+        source: /datalog
+        target: /datalog
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8082/health"]
       interval: 10s
@@ -73,6 +89,12 @@ services:
       BUDGET_TIER_SHADOW_ENABLED: ${BUDGET_TIER_SHADOW_ENABLED:-false}
       BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED: ${BUDGET_V2_TOTAL_ENFORCEMENT_ENABLED:-false}
       BUDGET_LEGACY_TOTAL_WRITE_ENABLED: ${BUDGET_LEGACY_TOTAL_WRITE_ENABLED:-true}
+    volumes:
+      # 控制面只点读（冻结包 reader 全程不写文件）⇒ 只读挂载即可。
+      - type: bind
+        source: /datalog
+        target: /datalog
+        read_only: true
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8083/healthz"]
       interval: 10s

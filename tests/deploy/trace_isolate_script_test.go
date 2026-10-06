@@ -73,7 +73,9 @@ func TestIsolateScriptStopsAndMasksTimer(t *testing.T) {
 	require.Contains(t, s, `systemctl is-active --quiet "$OLD_TIMER"`, "必须复核已停")
 	require.Contains(t, s, `systemctl list-timers --all --no-pager | grep -F "$OLD_TIMER"`,
 		"必须复核它确实从 list-timers 里消失")
-	require.Contains(t, s, "restore-old-trace-archive.sh --confirm", "必须打印回滚命令")
+	require.Contains(t, s, "restore-old-trace-archive.sh --confirm", "必须给出回滚命令")
+	require.Contains(t, s, `echo "完成。回滚： bash restore-old-trace-archive.sh --confirm"`,
+		"回滚命令必须由脚本在**运行时打印**出来 —— 只写在注释里等于现场没有回滚入口")
 	require.NotContains(t, s, "systemctl unmask", "隔离脚本不该 unmask（那是回滚脚本的事）")
 }
 

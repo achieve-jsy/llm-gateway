@@ -1,4 +1,4 @@
-.PHONY: build test lint swagger dev clean remove-bg
+.PHONY: build test lint swagger dev clean remove-bg build-sealer build-trace-verify
 
 # 使用 bash 以支持 trap / kill 0 等特性
 SHELL := /bin/bash
@@ -7,15 +7,28 @@ SHELL := /bin/bash
 APP_ENV ?= dev
 GATEWAY_BIN := bin/gateway
 CP_BIN := bin/control-plane
+# 调用链正文封块器（宿主机常驻进程，不进任何容器镜像）
+SEALER_BIN := bin/trace-sealer
+# 验收工具（仅本机/测试机用；**不进** build、不进任何镜像）
+VERIFY_BIN := bin/trace-verify
 
 # ─── 构建 ────────────────────────────────────────────────────────────────────────
-build: build-gateway build-cp
+build: build-gateway build-cp build-sealer
 
 build-gateway:
 	go build -o $(GATEWAY_BIN) ./cmd/gateway
 
 build-cp:
 	go build -o $(CP_BIN) ./cmd/control-plane
+
+# sealer 跑在 Linux 宿主机上（直接用宿主机 /usr/bin/zstd 与 /datalog）；开发机是 darwin，
+# 不交叉编译就会把一个 Mach-O 传上去。CGO_ENABLED=0 ⇒ 静态链接、无 glibc 版本耦合。
+build-sealer:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o $(SEALER_BIN) ./cmd/trace-sealer
+
+# 验收工具：只在本机/测试机跑，**不**参与生产上线，因此**不**列进 build 的依赖。
+build-trace-verify:
+	go build -o $(VERIFY_BIN) ./cmd/trace-verify
 
 build-all:
 	go build -mod=vendor -ldflags="-s -w" -o bin/gateway-all ./cmd/gateway-all

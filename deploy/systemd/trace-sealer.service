@@ -1,0 +1,66 @@
+# 调用链正文封块器（方案 C：网关只写 spool，压缩由本进程调 C 版 zstd 完成）。
+# 部署路径：/etc/systemd/system/trace-sealer.service（由 CI 或运维从本仓库同步）。
+# 上线/回滚剧本见 deploy/blue-green/README.md 与 docs/deployment.md 的运行手册一节。
+# ⚠️ 本 unit **不得**在「读侧（计划 3）就绪 + 挂载在场」之前 enable（见运行手册的硬门）。
+[Unit]
+Description=调用链正文封块器（spool → zstd -19 --long=29 产物）
+Documentation=file:///opt/llm-gateway/docs/deployment.md
+After=local-fs.target
+# 挂载不在场就不要启动；挂载被 umount 时本单元随之下线（纵深防御，
+# 主防线是进程内的根目录身份护栏 —— 它每轮复检并把结论写进日志）。
+RequiresMountsFor=/datalog
+
+[Service]
+Type=simple
+User=root
+# 宿主机自带的 zstd；版本是压缩比标定的前提（10.26× 是 v1.4.8 专属），
+# 因此显式给出绝对路径与期望版本，**不许**走 PATH 漂移。
+ExecStart=/usr/local/bin/trace-sealer \
+    --root /datalog/trace-archive-v4 \
+    --zstd-binary /usr/bin/zstd \
+    --zstd-level 19 \
+    --zstd-window-mb 512 \
+    --expected-zstd-version 1.4.8 \
+    --min-age 3h \
+    --poll-interval 5m \
+    --lock-file /datalog/trace-archive-v4/.sealer.lock
+# 致命错误后重试；**不要**用 always：锁冲突（人为再起一个 --once）会变成重启风暴。
+Restart=on-failure
+RestartSec=30s
+# 关停：SIGTERM 交给整个 cgroup（含 zstd 子进程）⇒ Seal 走 ctx 取消路径
+# （删 .tmp、保留 spool，下轮重新发现）。60s 足够；**不必**等一个 -19 的块压完。
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=60s
+# 日志全部进 journald；Unit 的可观测性就是它的失败面。
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trace-sealer
+
+# ── 资源限制（规格 §11.2 V1：编码器内存落在本机，不再进网关的 2 GiB）──
+# 口径：C 版 CLI 的 RSS ≈ 窗口 × 1.08 ≈ 570 MB（512 MiB 窗口）；Go 侧偏移表
+# 8 B/行 × 上界 8,388,608 行 ≤ 64 MB。2G 给了 ~2.5× 余量；A6（任务 9）必须
+# 实测本进程与 zstd 子进程的 VmHWM 并回填/修正这两个值。
+MemoryMax=2G
+MemoryHigh=1500M
+# 相对权重减半：sealer 有 3h 的余量，不该和网关抢 IO/CPU。
+CPUWeight=50
+IOWeight=50
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+Nice=10
+LimitNOFILE=4096
+
+# ── 收窄可写面（承重）──
+# 除 /datalog 之外整个文件系统只读。这条把「因为建目录/写日志把宿主根文件系统写满」
+# 这类事故直接堵死（2026-09-24 `/` 被写满的同一类）。
+ProtectSystem=strict
+ReadWritePaths=/datalog
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+UMask=0022

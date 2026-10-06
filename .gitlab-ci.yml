@@ -479,6 +479,15 @@ deploy-app-test-fast:
       CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o /tmp/gateway ./cmd/gateway
       CGO_ENABLED=0 go build -mod=vendor -ldflags="-s -w" -o /tmp/control-plane ./cmd/control-plane
 
+      # 1.5 编译并安装 trace-sealer（宿主机常驻封块器；**不进**任何容器镜像 —— 它直接用
+      #     宿主机的 /usr/bin/zstd 与宿主机上的 /datalog）。只安装 + daemon-reload，
+      #     **不** enable/start：启用是人工门（读侧就绪 + 挂载在场，见运行手册的硬门）。
+      CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -trimpath -ldflags="-s -w" -o /tmp/trace-sealer ./cmd/trace-sealer
+      scp ${SSH_OPTS} /tmp/trace-sealer ${TEST_USER}@${TEST_HOST}:/tmp/trace-sealer.new
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "install -m 0755 /tmp/trace-sealer.new /usr/local/bin/trace-sealer && rm -f /tmp/trace-sealer.new && /usr/local/bin/trace-sealer --version"
+      scp ${SSH_OPTS} deploy/systemd/trace-sealer.service ${TEST_USER}@${TEST_HOST}:/etc/systemd/system/trace-sealer.service
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "systemctl daemon-reload"
+
       # 2. 同步蓝绿部署文件
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
       scp ${SSH_OPTS} -r deploy/blue-green/* ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/

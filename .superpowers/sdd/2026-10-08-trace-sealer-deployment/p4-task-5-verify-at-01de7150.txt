@@ -1,0 +1,124 @@
+== 工作树 HEAD = 01de71509129938246cf60b76588409d69c657bd
+== 工作树脏行数 = 0（0 = 干净）
+
+== 冻结包零 diff（internal/tracearchive/，base 0bfb130f..HEAD）==
+tracearchive_diff_lines = 0（0 = 零 diff）
+tracearchive_commits = 0
+
+== 工具 sha256（必须仍是 10dea750…）==
+10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  tools/trace-mutate/trace_mutate.py
+
+== go build ./internal/... ./cmd/... ==
+build_exit=0
+
+== go vet ./tests/deploy/ ==
+vet_exit=0
+
+== 聚焦用例：go test ./tests/deploy/ -count=1 -v（19 条，覆盖任务 5 的三份测试文件）==
+=== RUN   TestMakefileBuildsSealerForLinux
+--- PASS: TestMakefileBuildsSealerForLinux (0.00s)
+=== RUN   TestMakefileBuildTargetsIncludeSealer
+--- PASS: TestMakefileBuildTargetsIncludeSealer (0.00s)
+=== RUN   TestCICIBuildsAndInstallsSealer
+--- PASS: TestCICIBuildsAndInstallsSealer (0.00s)
+=== RUN   TestCICIDoesNotEnableSealerUnit
+--- PASS: TestCICIDoesNotEnableSealerUnit (0.00s)
+=== RUN   TestIsolateScriptDefaultIsDryRun
+--- PASS: TestIsolateScriptDefaultIsDryRun (0.00s)
+=== RUN   TestIsolateScriptRefusesWhenDeletionPredicateTouchesNewRoot
+--- PASS: TestIsolateScriptRefusesWhenDeletionPredicateTouchesNewRoot (0.00s)
+=== RUN   TestIsolateScriptStopsAndMasksTimer
+--- PASS: TestIsolateScriptStopsAndMasksTimer (0.00s)
+=== RUN   TestRestoreScriptUnmasksAndEnables
+--- PASS: TestRestoreScriptUnmasksAndEnables (0.00s)
+=== RUN   TestIsolateAndRestoreScriptsAreExecutable
+--- PASS: TestIsolateAndRestoreScriptsAreExecutable (0.00s)
+=== RUN   TestSealerUnitIsResidentLoopWithRestart
+--- PASS: TestSealerUnitIsResidentLoopWithRestart (0.00s)
+=== RUN   TestSealerUnitPinsZstdBinaryLevelAndVersion
+--- PASS: TestSealerUnitPinsZstdBinaryLevelAndVersion (0.00s)
+=== RUN   TestSealerUnitPinsMinAgeAboveGatewayRollBound
+--- PASS: TestSealerUnitPinsMinAgeAboveGatewayRollBound (0.00s)
+=== RUN   TestSealerUnitKnowsItsRootAndLockFile
+--- PASS: TestSealerUnitKnowsItsRootAndLockFile (0.00s)
+=== RUN   TestSealerUnitRequiresDatalogMount
+--- PASS: TestSealerUnitRequiresDatalogMount (0.00s)
+=== RUN   TestSealerUnitConfinesWritesToDatalog
+--- PASS: TestSealerUnitConfinesWritesToDatalog (0.00s)
+=== RUN   TestSealerUnitLimitsMemoryCpuAndIO
+--- PASS: TestSealerUnitLimitsMemoryCpuAndIO (0.00s)
+=== RUN   TestSealerUnitLogsToJournal
+--- PASS: TestSealerUnitLogsToJournal (0.00s)
+=== RUN   TestSealerUnitNeverUsesSealIntervalKey
+--- PASS: TestSealerUnitNeverUsesSealIntervalKey (0.00s)
+=== RUN   TestSealerUnitNeverPreparesFilesystem
+--- PASS: TestSealerUnitNeverPreparesFilesystem (0.00s)
+PASS
+ok  	github.com/example/llm-gateway/tests/deploy	0.008s
+test_exit=0
+
+== 主检出（只读查询；本任务全程未写入）==
+main_branch = fix/budget-next-period-409
+main_HEAD   = 08ecc9c5
+main_dirty_lines = 229
+
+== p4 集合总数（任务 5 步骤 7 的强制核对）==
+p4_set_files_on_disk = 14（任务 1–5 = 4+1+2+2+5 = 14）
+plan_formula_total = = **27**（任务 5 步骤 7 的算式）
+plan_file_structure_total = **27** 个变异集合（文件结构表）
+plan_remaining_26_quotes = 1（只应剩 E66 行里对旧值的历史引述）
+sets_using_tests_deploy = 5（全部是任务 5 自己的 5 个 ⇒ 无跨任务携带）
+
+== E66 各项落点行号（**改动后行号**）==
+  E66① tools/trace-mutate/sets/p4-task-3-loop.py:129:#     expected 10 / actual 11 @loop_test.go:174（**E66①：改动后行号**））⇒ 权威表的「杀死的用例」列偶尔出现
+  E66① tools/trace-mutate/sets/p4-task-3-loop.py:187:            # E66①：本 COVERAGE_GAPS 内全部 `*.go:NNN` 均为**改动后行号**
+  E66① tools/trace-mutate/sets/p4-task-3-loop.py:264:                 "（工具读不到该字段，故此处复述其实测结论；**E66①：以下行号均为「改动后行号」**）"
+  E66① tools/trace-mutate/sets/p4-task-4-lock.py:313:            "**E66①：以下 `*.go:NNN` 均为「改动后行号」**）："
+  E66① tools/trace-mutate/sets/p4-task-4-runner.py:244:            "**E66①：以下 `*.go:NNN` 均为「改动后行号」**）："
+  E66② 18:   (dt,inst,part) 的硬要求（两块共用同一个 .tmp）⇒ 加一条变异（E63⑥）。**E66② 形态登记**：
+  E66② 131:#     【E66② 形态登记 —— 插入型（顺序颠倒）】m07 **不是**「删掉/放宽某个判定」，而是
+  E66③ tools/trace-mutate/sets/p4-task-1-exit.py:20:**`main.go` 不得建目录**：`\bMkdir[A-Za-z]*\s*\(` absent（**E66③ 补齐**）。D70 的
+  E66③ tools/trace-mutate/sets/p4-task-1-options.py:24:**`options.go` 自己不得建目录**：`\bMkdir[A-Za-z]*\s*\(` absent（**E66③ 补齐**）。D70
+  E66③ tools/trace-mutate/sets/p4-task-4-lock.py:52:- **`lock.go` 自己不得建目录**：`\bMkdir[A-Za-z]*\s*\(` absent（**E66③ 补齐**）。
+  E66④ 计划:3100（E65 行 (c) 的「改动前」订正）
+  E66⑤ 计划:1947:**`p4-task-4-runner.py`**（`TARGET = "internal/tracesealer/runner.go"`，`MANIFEST_FILES = ["tests/tracesealer/lock_test.go", "tests/tracesealer/concurrent_test.go"]`）：下表 **m06–m09**。**E66⑤**：工具一次只能变异一个文件（全局约束第 42 条）⇒ 原先把 `runner.go` 的匹配串塞进 `TARGET = lock.go` 的集合，只会在 `--check` 得到 `PATTERN-MISS: count=0`；E65(d) 已裁定拆分，本处**文本**同步（m01–m09 编号原样保留，`runner.go` 的 m06–m09 共用同一份名字清单）。
+  E66⑤ 计划:1969:- [ ] **步骤 7：提交 → 跑集合**（命令同 Task 1 步骤 10/11；集合名换 `p4-task-4-lock` **与** `p4-task-4-runner` —— **两个**集合各跑一次 `--check` 与一张权威表（E66⑤ 的文本同步）；并**额外**登记 A7 的零覆盖说明）。
+  E66⑤ 计划:2266:- [ ] **步骤 7：提交 → 跑五个集合**（unit / isolate / restore / build / ci —— 实为**五**个，与步骤 6 的标题一致）。**p4 集合总数核对**：任务 1（4）+ 任务 2（1）+ 任务 3（2）+ 任务 4（**2**）+ 任务 5（**5**）+ 任务 6（3）+ 任务 7（1）+ 任务 8（3）+ 任务 9（2）+ 任务 10（3）+ 任务 11（1）= **27**，与「文件结构」表里的 27 个 `p4-task-*.py` 一致；任务 12 的全量重跑必须覆盖这 27 个。（**E66⑥ 订正**：原写「任务 4（1）…= 26」—— **E66⑤** 只同步了任务 4 步骤 6/7 的集合**文本**，没同步这两处**计数**；本轮以「计划自己声明的集合名」为判据逐一点名复核：任务 1 `classify/exit/options/round`、任务 2 `alert`、任务 3 `loop/rootguard`、任务 4 `lock/runner`、任务 5 `unit/isolate/restore/build/ci`、任务 6 `blue/green/root`、任务 7 `bluegreen`、任务 8 `compose/guard/runsh`、任务 9 `budget/vmhwm`、任务 10 `contract/footer/observability`、任务 11 `runbook` = **27**；任务 5 收口时磁盘上实有 14 个 `p4-task-*.py`（任务 1–5），与算式的前五项 4+1+2+2+5 = 14 逐字一致。）
+  E66⑤ 计划:3122:> **本轮改动面（已核实）**：实现面 `internal/tracesealer/**`、`cmd/**`、`tests/**` **零改动**；冻结包 `internal/tracearchive/**`、`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum` **零改动**；`tools/trace-mutate/trace_mutate.py` **未动**（sha256 仍是 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）；集合面改五个 —— `p4-task-1-exit.py` / `p4-task-1-options.py` / `p4-task-4-lock.py` **各补一行** `Mkdir` absent 静态检查（**E66③**），`p4-task-3-loop.py` **补 m07 形态登记**（**E66②**），`p4-task-3-loop.py` / `p4-task-4-lock.py` / `p4-task-4-runner.py` **补探针行号版本标记**（**E66①**）；计划面改三处 —— Task 4 步骤 6/7 的集合拆分文本同步（**E66⑤**）、E65(c) 的范围订正（**E66④**）、计划 E64 行与 Task 4 探针段的「改动后行号」标记（**E66①**）。
+  E66⑤ 计划:3128:| **E66** | ① 计划 E64 行与 Task 4 探针段、以及 `p4-task-3-loop.py` / `p4-task-4-lock.py` / `p4-task-4-runner.py` 的 `COVERAGE_GAPS` 里引用的探针行号；② `tools/trace-mutate/sets/p4-task-3-loop.py` 的 **m07**；③ `p4-task-1-round.py:93`（`runner.go`）与 `p4-task-3-rootguard.py:133`（`rootguard.go`）之外的全部 sealer 源文件；④ 计划 **E65** 行 (c) 的计数句；⑤ 计划 Task 4 步骤 6/7 的集合文本；触发 = 上一轮（Task 4 收口轮）独立评审留下的 **5 条** | **文档①**：探针行号**没有标注版本** —— 同一行号在「改动前 / 改动后」指向不同位置，读者无法复核。**文档②**：loop 的 **m07** 是**插入型（顺序颠倒）**变异（串行 → 并行），与 `tools/trace-mutate/README.md:5` 的「再逐条把守卫删掉/放宽」措辞**不同形**，而集合里**没有这一条形态登记**。**必做③**：D70「整包零建目录」的静态检查当时只覆盖 `runner.go`（`p4-task-1-round.py:93`）与 `rootguard.go`（`p4-task-3-rootguard.py:133`），`lock.go` / `options.go` / `cmd/trace-sealer/main.go` **缺该行** ⇒「整包」名不副实，而「启动时 root 不在就先建出来」正是这类事故（2026-09-24 `/` 被写满）最自然的入口。**必做④**：E65(c) 写「`grep -rn '全项目'` 与 `grep -rn '零允许的绿'` …… 均 0 命中」，但 E65 自己新增的「新增约定（E65 起）」第 1 条引入了这两串 ⇒ **提交后各 1 命中、且都落在该约定自身（自指）**；该观测**只在「改动前」成立**。**文档⑤**：计划 Task 4 步骤 6/7 仍只写一个集合、`TARGET` 仍写 `lock.go`，与 **E65(d)** 的裁定（拆成 `p4-task-4-lock` ＋ `p4-task-4-runner`）**不同步** | **①** 在计划 E64 行、Task 4 探针段与三个集合的 `COVERAGE_GAPS` 里统一标注「**改动后行号**」（本轮五处；判据 = 行号取自本轮提交后的文件，E66 本身不改任何 `.go` ⇒ 与提交内容一致）。**②** 在 m07 条目上方补【E66② 形态登记】，写明：它是插入型、与 `README.md:5` 的张力；依据两条 —— 计划 Task 4 步骤 6 的 m07 行**原文自己**就要求「顺序颠倒，插入 `os.MkdirAll`」，以及**同形先例** = Task 3 的 **m06**（「跑完一轮就退出」，在循环体里插入 `return nil`，已在权威表里为**断言红**）；并要求插入型**必须**另有**确定性**杀手（本条 = `TestLoopNeverOverlapsRounds`；`TestLoopStopsOnContextCancel` 的偶发红**不**计入，见本集合 `COVERAGE_GAPS`）。**③** 在 `p4-task-1-exit.py`（`cmd/trace-sealer/main.go`）、`p4-task-1-options.py`（`options.go`）、`p4-task-4-lock.py`（`lock.go`）各补一行 `\bMkdir[A-Za-z]*\s*\(` **absent**，使 D70 覆盖两个目录的**每一个**源文件；它**不可能**由变异承载（工具只在 pristine 树求值 `CHECKS`，`trace_mutate.py:574`）⇒ 可失败性由**临时仓库探针**实测（三个临时克隆各插入一处建目录调用并提交到该克隆 ⇒ 对应那一行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 **1**；三份输出落盘为证据目录里的 `e66-mkdir-check-probe-*.txt`，表末记 `probe_exit=`）。**④** 就地改写为「**在改动前**均 0 命中」，并写明「提交后各 1 命中、落在 E65 本节自身的约定行（自指）」，判据以**改动前**的 0 为准。**⑤** 就地把 Task 4 步骤 6 的集合文本同步成两份（新增 `p4-task-4-runner.py` 那一行、m07 行补形态依据）、步骤 7 改成「两个集合各跑一次」（**E66⑤**）。**⑥（任务 5 步骤 7 的强制核对自己发现的，不是上一轮评审的条目）**：计划里的 **p4 集合总数「26」是错的** —— 任务 4 已按 **E65(d)** 拆成 `p4-task-4-lock.py` ＋ `p4-task-4-runner.py`（计划 `:1946-1947` 自己也写着这是两个文件），而 `:97` 的「26 个变异集合」与任务 5 步骤 7 的算式「任务 4（1）… = **26**」都还是**拆分前**的数。**就地订正为 27**（算式其余项不变，任务 5 = 5），判据 = **按计划自己声明的集合名逐一点名复核**（task1 `classify/exit/options/round`、task2 `alert`、task3 `loop/rootguard`、task4 `lock/runner`、task5 `unit/isolate/restore/build/ci`、task6 `blue/green/root`、task7 `bluegreen`、task8 `compose/guard/runsh`、task9 `budget/vmhwm`、task10 `contract/footer/observability`、task11 `runbook`）⇒ **27**；而任务 5 收口时磁盘上实有 **14** 个 `p4-task-*.py`，恰等于算式前五项 4+1+2+2+5。**不改任何集合/测试/实现**（纯计划文本）⇒ 按 **E59**，五个 `p4-task-5-*` 集合的绑定不受影响（纯计划与证据提交不使绑定失效）。**自引用级联**：动计划文本前 `grep -cE '本计划 ?:[0-9]'` = **0**，本轮（含⑥的两处改写）动后复测仍为 **0** ⇒ 零级联（⑤/⑥的改写会改变后续行的**绝对行号**，但全文**不含**指向绝对行号的自引用；唯一一处行号对映（集合里的「原 `:1956` → `:1958`」）已在写入时按改后实际值给出）。 |
+  E66⑥ 计划:97:| `tools/trace-mutate/sets/p4-task-*.py` | **新建**（git-tracked）：**27** 个变异集合（一个集合只变异**一个**文件，见全局约束；**E66⑥ 订正**：原写 26 —— 任务 4 已按 **E65(d)** 拆成 `p4-task-4-lock.py` ＋ `p4-task-4-runner.py` 两个集合，「26」少算了它） | 每个 120–280 行 |
+  E66⑥ 计划:2266:- [ ] **步骤 7：提交 → 跑五个集合**（unit / isolate / restore / build / ci —— 实为**五**个，与步骤 6 的标题一致）。**p4 集合总数核对**：任务 1（4）+ 任务 2（1）+ 任务 3（2）+ 任务 4（**2**）+ 任务 5（**5**）+ 任务 6（3）+ 任务 7（1）+ 任务 8（3）+ 任务 9（2）+ 任务 10（3）+ 任务 11（1）= **27**，与「文件结构」表里的 27 个 `p4-task-*.py` 一致；任务 12 的全量重跑必须覆盖这 27 个。（**E66⑥ 订正**：原写「任务 4（1）…= 26」—— **E66⑤** 只同步了任务 4 步骤 6/7 的集合**文本**，没同步这两处**计数**；本轮以「计划自己声明的集合名」为判据逐一点名复核：任务 1 `classify/exit/options/round`、任务 2 `alert`、任务 3 `loop/rootguard`、任务 4 `lock/runner`、任务 5 `unit/isolate/restore/build/ci`、任务 6 `blue/green/root`、任务 7 `bluegreen`、任务 8 `compose/guard/runsh`、任务 9 `budget/vmhwm`、任务 10 `contract/footer/observability`、任务 11 `runbook` = **27**；任务 5 收口时磁盘上实有 14 个 `p4-task-*.py`（任务 1–5），与算式的前五项 4+1+2+2+5 = 14 逐字一致。）
+  E66⑥ 计划:2862:1. 每个任务的**提交哈希 + 该任务全部集合的 sha256 绑定表**（工具头部原样抄；任务 5 是 5 个集合，全文共 **27** 个 —— **E66⑥ 订正**：原写 26，少算了任务 4 拆出的 `p4-task-4-runner.py`）。
+  自引用级联 grep -cE '本计划 ?:[0-9]' = 0
+
+== 五个集合的绑定 sha256 / 名字清单条数 / --check 与权威表的退出码 ==
+  a399e3fd134bbf1970056de6fc39734a9355bcd2ebf9953e76109e5688e542cf  tools/trace-mutate/sets/p4-task-5-build.py
+  0930097fe9b3f5c6350a02fa92056adb6ec39e8e6c057265e16d36e878591d07  tools/trace-mutate/sets/p4-task-5-ci.py
+  8c32ae2c3ae9a82651632cf163de7e1bb80b80af253014cabb1e8b2068aa1b7d  tools/trace-mutate/sets/p4-task-5-isolate.py
+  8dd06f37210017750baefc8a26170b00db58acfe8201252ac87bcfb74002d055  tools/trace-mutate/sets/p4-task-5-restore.py
+  356e32be72577a728eab37b1430f3b4366a85e2b9c4507059fd8f27784c56418  tools/trace-mutate/sets/p4-task-5-unit.py
+  p4-task-5-unit: names=10 check_exit=0 table_exit=0 合计: 14 = 14 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+  p4-task-5-isolate: names=5 check_exit=0 table_exit=0 合计: 4 = 4 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+  p4-task-5-restore: names=5 check_exit=0 table_exit=0 合计: 1 = 1 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+  p4-task-5-build: names=4 check_exit=0 table_exit=0 合计: 3 = 3 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+  p4-task-5-ci: names=4 check_exit=0 table_exit=0 合计: 2 = 2 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+  五个集合合计：断言红的变异行 = 24
+  五个集合合计：未登记的绿（必须为 0） = 5 张表为 0
+  五个集合合计：静态检查 PASS 行 = 13
+  探针：静态检查 FAIL 行 = 13；探针 A 的 FAIL 用例数 = FAIL 用例数 = 19
+
+== 证据文件清单（ls -l）==
+-rw-r--r--  1 jsy  staff  5215 10  9 11:07 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-build-authoritative-at-a5aed61e.txt
+-rw-r--r--  1 jsy  staff   208 10  9 11:07 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-build-check-at-a5aed61e.txt
+-rw-r--r--  1 jsy  staff  4401 10  9 11:07 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-ci-authoritative-at-a5aed61e.txt
+-rw-r--r--  1 jsy  staff   184 10  9 11:07 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-ci-check-at-a5aed61e.txt
+-rw-r--r--  1 jsy  staff  6251 10  9 11:07 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-isolate-authoritative-at-5d67595a.txt
+-rw-r--r--  1 jsy  staff  6149 10  9 11:07 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-isolate-authoritative-at-a5aed61e.txt
+-rw-r--r--  1 jsy  staff   277 10  9 11:07 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-isolate-check-at-a5aed61e.txt
+-rw-r--r--  1 jsy  staff  3966 10  9 11:09 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-probe-at-a5aed61e.txt
+-rw-r--r--  1 jsy  staff  4992 10  9 11:07 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-restore-authoritative-at-a5aed61e.txt
+-rw-r--r--  1 jsy  staff   197 10  9 11:07 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-restore-check-at-a5aed61e.txt
+-rw-r--r--  1 jsy  staff  9247 10  9 11:07 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-unit-authoritative-at-a5aed61e.txt
+-rw-r--r--  1 jsy  staff   525 10  9 11:07 .superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-unit-check-at-a5aed61e.txt
+
+verify_exit=0

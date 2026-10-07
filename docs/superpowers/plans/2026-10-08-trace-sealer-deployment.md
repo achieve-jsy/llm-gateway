@@ -2273,7 +2273,7 @@ build-trace-verify:
 - 修改：`deploy/blue-green/docker-compose.blue.yml`、`deploy/blue-green/docker-compose.green.yml`、`docker-compose.yml`
 - 测试：`tests/deploy/trace_compose_mount_test.go`
 
-**接口：** 交付物是三个 compose 的**挂载与 env 契约**：gateway 读写挂 `/datalog`；control-plane 只读挂；蓝/绿各自注入 `TRACE_BODY_INST`；根 compose **不启用**功能；`TRACE_BODY_ROOT` 一旦出现在某个文件里，它的父目录必须正好是该文件里的某个挂载目标。
+**接口：** 交付物是三个 compose 的**挂载与 env 契约**：gateway 读写挂 `/datalog`；control-plane 只读挂；蓝/绿各自注入 `TRACE_BODY_INST`；根 compose **不启用**功能（**门禁口径 = 非注释生效行 = 0**，见 **E68①**）；`TRACE_BODY_ROOT` 一旦出现在某个文件里，它的父目录必须正好是该文件里的某个挂载目标。
 
 - [ ] **步骤 1：写失败的测试**
 
@@ -2374,7 +2374,7 @@ func TestComposeNeverCarriesSealIntervalKey(t *testing.T) { … 三个文件都�
         read_only: true
 ```
 
-`docker-compose.yml`（根编排）：给两个服务同样的挂载（gateway 读写、cp 只读），但**不加任何** `TRACE_BODY_*`（连 `TRACE_BODY_INST` 也不加 —— 根编排没有颜色概念，加了反而暗示“根编排也能开功能”）。
+`docker-compose.yml`（根编排）：给两个服务同样的挂载（gateway 读写、cp 只读），但**不加任何生效的** `TRACE_BODY_*`（连 `TRACE_BODY_INST` 也不加 —— 根编排没有颜色概念，加了反而暗示“根编排也能开功能”）。**门禁口径（E68①）**：真正的门禁是**非注释生效行 = 0**（语义测试 `TestComposeRootComposeDoesNotEnableTraceBody` 的 `effectiveAssignments` 只收非注释行），**不是** `grep -c TRACE_BODY docker-compose.yml`（注释里提到该键族前缀是允许的，文本 grep 只是辅助读数）；注释措辞统一用 `TRACE_BODY_` 前缀，**不写完整键名**。
 
 - [ ] **步骤 4：跑测试** → `go test ./tests/deploy/ -run 'TestCompose' -count=1 -v` ⇒ PASS。
 
@@ -2408,7 +2408,7 @@ func TestComposeNeverCarriesSealIntervalKey(t *testing.T) { … 三个文件都�
 | m08 | root：删掉 cp 的挂载 | `TestComposeControlPlaneMountsDatalogReadOnly` |
 | m09 | blue：插入 `TRACE_BODY_SEAL_INTERVAL: 15m` | `TestComposeNeverCarriesSealIntervalKey` |
 
-`CHECKS`：三个文件里都不得出现 `-v /datalog` 或 `volumes: ... :/datalog` 的短语法形式（长语法是「不许 Docker 代建宿主路径」的可读证据链之一）。
+`CHECKS`：三个文件里都不得出现 `-v /datalog` 或 `volumes: ... :/datalog` 的短语法形式（长语法是「不许 Docker 代建宿主路径」的可读证据链之一）。**另（E68①）**：根编排的「**非注释生效行 = 0**」在 `p4-task-6-root.py` 里补一行静态检查 —— 正则 `(?m)^\s*TRACE_BODY_[A-Z0-9_]+\s*:` **absent**（注释行以 `#` 起头、不匹配 ⇒ 这一行量的正是「生效赋值」；真正的门禁仍是语义测试，文本读数只是辅助）。
 
 - [ ] **步骤 7：提交 → 跑三个集合**。
 
@@ -2989,6 +2989,7 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
   8. 运行手册的其余条目与任务 12 的收尾。
 - **注意次序的方向**：把任务 11 的观察部分排在写侧启用之前，得到的是一条**永远绿、什么都没证明**的验收（见「验收项归属」表下方的前置条件说明）。因此若第 5 步的读侧迟迟不就绪，本计划就**如实**只交付任务 11 的运行手册文本，并把该验收登记为「读侧就绪后的启用门禁」，**不得**宣称它已通过。
 - 任务 12 必须**在最终 HEAD 上**执行，且在它之后再有任何提交 ⇒ 全部变异绑定失效，必须重跑重记。
+- **基线（登记事实；E68②）**：本分支（`feat/trace-sealer-deployment`）的基点写的是 `main=0bfb130f`，但 `main` 引用**已前进到 `43af78b0`**（领先 `0bfb130f` **2 个提交** = `d8875bda` ＋ 合并提交 `43af78b0`），只动 **3 个文件**：`internal/gateway/authz/groups.go`、`tests/gateway/authz/groups_test.go`、`tests/gateway/orchestrator/group_auth_test.go`。本分支的改动面是 `internal/tracesealer/**` / `cmd/trace-sealer/**` / `tests/tracesealer/**` / `tests/deploy/**` / `deploy/**` / `docker-compose.yml` / `Makefile` / `.gitlab-ci.yml` / `tools/trace-mutate/**` / `docs/**` ⇒ 两者**零交集**，因此**不影响绑定与合并**（绑定的实质是**内容哈希**，见全局约束「变异证据绑定提交」与 **E59**）。本条**只登记事实**，不改任何门禁。
 
 ---
 
@@ -3133,3 +3134,21 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 1. **D70「整包零建目录」的静态检查必须覆盖该包**每一个**源文件**：`internal/tracesealer/` 与 `cmd/trace-sealer/` 下每新增一个 `.go` 源文件（**含包内 `*_test.go`**），都必须在某个集合的 `CHECKS` 里有一行 `\bMkdir[A-Za-z]*\s*\(` **absent**；只覆盖「本轮动过的那几个文件」不算覆盖「整包」。**`E66③` 的「每一个源文件」曾被实测证伪（只覆盖 5 个，缺 `classify.go` / `alert.go` / `exit.go` / `covers_test.go`）⇒ 本条按 `E67` 要求把覆盖做成可复核的**逐文件清单****：清单落盘为 `e67-mkdir-coverage-at-*.txt`，判据是「`ls` 两个目录全部 `.go` 的集合」与「`CHECKS` 里 `Mkdir` absent 行的 `file` 集合」逐元素相等（`全部覆盖: True`）。可失败性由**临时仓库探针**承载（工具只在 pristine 树求值 `CHECKS`，变异**不可能**让它变红）。
 2. **插入型（顺序颠倒）变异必须逐条登记，且必须另有确定性杀手**：`README.md:5` 把变异表述为「把守卫删掉/放宽」；「插入一条提前返回 / 把串行改成并行」这类**语义反转**与之不同形 ⇒ 必须在集合里写明「依据（计划原文 / 同形先例）」＋「与铁律 5 的张力」＋「该变异的**确定性**杀手」。无**确定性**杀手者不得以插入型存在（与「新增约定（E65 起）」第 2 条配合）。
 3. **探针行号必须标注版本**：凡在计划文本或集合工件里以 `*.go:NNN` 作为「实测红在哪一行」的证据，必须写明它是**改动前**还是**改动后**行号；默认口径 = 「**改动后行号**」并逐处标注。
+
+---
+
+## 过程失误登记与新增约定（E68；**Task 7 轮**）
+
+> 编号续 **E67**。与 E57–E67 同一纪律：逐条写清「位置 / 问题 / 处置」。
+
+> **本轮改动面（已核实）**：交付面**新增** `deploy/blue-green/README.md`（蓝绿切换/回滚/降级/硬门剧本）、`tests/deploy/trace_bluegreen_runbook_test.go`（6 条顶层用例）、`tools/trace-mutate/sets/p4-task-7-bluegreen.py` 与名字清单 `p4-task-7-bluegreen-names.txt`；**订正面**改三处 —— `docker-compose.yml` 的注释措辞（**E68①**：只用 `TRACE_BODY_` 前缀、不写完整键名）、`tools/trace-mutate/sets/p4-task-6-root.py`（**E68①**：`CHECKS` 新增一行 `root不得有生效TRACE_BODY_赋值`）、`tests/deploy/trace_isolate_script_test.go` 与 `tests/deploy/trace_sealer_unit_test.go`（**E68③**：task-5 遗留的 `gofmt -w`，非本轮引入）；计划面改四处 —— Task 6 的「接口」段、步骤 3 的根编排段、步骤 6 的 `CHECKS` 段（**E68①**：门禁改写为「**非注释生效行 = 0**」）、「执行顺序与依赖」段末（**E68②**：登记 `main` 已前进到 `43af78b0`）。`internal/tracesealer/**`、`cmd/**`、`internal/tracearchive/**`（冻结包）、`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum` **零改动**；`tools/trace-mutate/trace_mutate.py` **未动**（sha256 仍是 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）。**零迁移**：本任务不涉及任何 PG schema 变更（剧本文本契约 + 只读 SQL 比对），因此**未触发** `atlas-db-migration` skill（全局约束「零迁移」）。
+
+> **跨任务连带（E59③ 自查，先自查后报告）**：`grep -n 'PACKAGES' tools/trace-mutate/sets/p4-task-*.py` 显示**八个**既有集合把 `./tests/deploy/` 列入 `PACKAGES`（`p4-task-5-{unit,isolate,restore,build,ci}` ＋ `p4-task-6-{blue,green,root}`）；工具对包内**全部** `*_test.go` 取哈希 ⇒ **E68③** 的 `gofmt -w` 使这八个集合的「测试文件 sha256」段**全部失效**。另 **E68①** 改了 `p4-task-6-root` 的 TARGET `docker-compose.yml` **与集合文件本身** ⇒ 它的「被测文件 sha256」段与「变异集合 sha256」段同时失效。⇒ 本轮共跑 **9 个集合**（新集合 `p4-task-7-bluegreen` ＋ 八个重出）的 `--check` 与权威表，全部 `check_exit=0` / `table_exit=0`，详情见交付报告。`p4-task-1..4`（`./tests/tracesealer/` 包）与 `p4-task-5/6` 之外的一切集合**不受牵连**（测试文件哈希与集合内容都没变）。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E68** | ① 计划 Task 6 的「接口」段与步骤 3 的根编排段（旧措辞「不加任何 `TRACE_BODY_*`」，易被读成「`grep -c TRACE_BODY docker-compose.yml` 必须为 0」）、步骤 6 的 `CHECKS` 段，以及 `docker-compose.yml:39-40`（订正前）的两行注释；② 计划的基线说明（全局约束与「执行顺序与依赖」段）只写到 `main=0bfb130f`；③ `tests/deploy/trace_isolate_script_test.go` 与 `tests/deploy/trace_sealer_unit_test.go` 的 `gofmt` 漂移（task-5 遗留、非本轮引入）。触发 = Task 6 收口轮的独立评审留下的 **3 条**（①判据口径 / ②登记事实 / ③格式化遗留） | **①判据口径（字面不成立）**：root compose 的 `grep -c TRACE_BODY docker-compose.yml` 实测 **= 2**（订正前，两处都在 `:39`/`:40` 的**注释**里：`TRACE_BODY_*` 与 `TRACE_BODY_ROOT`/`TRACE_BODY_INST`），而**非注释生效行 = 0** ⇒「不加任何 `TRACE_BODY_*`」若被读成「文本 grep 计数为 0」，这个门禁**字面不成立**（注释里提到键族是合法且必要的：不讲清楚「设了写侧开关而实例名缺失会启动失败」，运维反而会照抄错误做法）。真正的门禁是**语义**测试 `TestComposeRootComposeDoesNotEnableTraceBody`（`effectiveAssignments` 只收非注释行）。**②登记事实**：`main` 引用已前进到 `43af78b0`（领先基点 `0bfb130f` **2 个提交** = `d8875bda` ＋ 合并 `43af78b0`，只动 `internal/gateway/authz/groups.go` / `tests/gateway/authz/groups_test.go` / `tests/gateway/orchestrator/group_auth_test.go` **3 个文件**），与本分支**零交集** ⇒ **不影响绑定与合并**；此事实此前只存在于分支外，计划文本里查不到。**③格式化遗留**：两个 `tests/deploy/` 测试文件不合 `gofmt`（task-5 遗留），而 `tests/deploy/` 被**八个**既有集合列入 `PACKAGES` ⇒ 一改就会连带使它们的绑定失效，必须一并重跑重绑 | **①**：计划 Task 6 的「接口」段、步骤 3 的根编排段、步骤 6 的 `CHECKS` 段**就地改写**为「**非注释生效行 = 0**」，并显式写明**文本 `grep -c TRACE_BODY docker-compose.yml` 不是门禁、只是辅助读数**（真正的门禁是语义测试 `TestComposeRootComposeDoesNotEnableTraceBody`）；同时在 `p4-task-6-root.py` 的 `CHECKS` **新增一行** `root不得有生效TRACE_BODY_赋值`（正则 `(?m)^\s*TRACE_BODY_[A-Z0-9_]+\s*:` **absent**；注释行以 `#` 起头、不匹配 ⇒ 这一行量的正是「生效赋值」），它**不可能**由变异承载（工具只在 pristine 树求值 `CHECKS`，`trace_mutate.py:574`）⇒ 可失败性由**临时仓库探针**实测（临时克隆插入一行生效赋值并提交 ⇒ 该行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 **1**；输出落盘 `p4-task-6-rootcheck-probe-at-*.txt`，表末记 `probe_exit=`）。**统一注释措辞**：`docker-compose.yml` 的注释改成只用 `TRACE_BODY_` **前缀**、**不写完整键名** ⇒ `grep -c TRACE_BODY docker-compose.yml` 由 **2 → 1**（`grep -cE 'TRACE_BODY_[A-Z]'` = **0**），而**生效行仍是 0**（`grep -cE '^\s*TRACE_BODY_[A-Z0-9_]+\s*:'` = **0**）。**②**：在「执行顺序与依赖」段末新增一条**基线登记**（只登记事实、不改任何门禁）：写明 `main` 已前进到 `43af78b0`、领先 `0bfb130f` 两个提交、只动三个 `authz` 文件、与本分支零交集 ⇒ 不影响绑定（绑定的实质是**内容哈希**，见全局约束与 **E59**）与合并。**③**：执行 `gofmt -w tests/deploy/trace_isolate_script_test.go tests/deploy/trace_sealer_unit_test.go`（`gofmt -l tests/deploy/ tests/tracesealer/ internal/tracesealer/ cmd/trace-sealer/` 复测**为空**）；因这两个文件属于全部把 `./tests/deploy/` 列入 `PACKAGES` 的集合，按 **E59** 与 Task 7 的新集合**一并重跑重绑**（**9 个集合**：`p4-task-7-bluegreen` 新出 ＋ `p4-task-5-{unit,isolate,restore,build,ci}` 与 `p4-task-6-{blue,green,root}` 重出）。**自引用级联**：动计划文本前 `grep -cE '本计划 ?:[0-9]'` = **0**（已实测），改后复测仍为 **0**（本轮计划面的四处改动都是**段内就地改写**或**段末追加**，不含指向绝对行号的自引用） |
+
+### 新增约定（E68 起，**今后所有轮次适用**）
+
+1. **门禁判据必须写成语义判据，文本 grep 只能当辅助读数**：任何「产物里不得出现 X」类门禁，必须写明它的**语义**判据（例：`effectiveAssignments` 的「**非注释生效行 = 0**」，或行为用例名），**不得**把「某条 `grep -c <键名> <文件>` = 0」写成门禁 —— 注释里合法出现键名前缀会让文本计数**恒非零**，于是门禁要么字面不成立、要么逼着作者把必要的注释删掉。文本 grep 若要保留，必须**显式标注为辅助**，并给出它的可失败性证据（临时仓库探针）。

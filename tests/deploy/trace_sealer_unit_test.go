@@ -1,5 +1,5 @@
 // 本文件是 B 层测试（tests/deploy，package deploy_test）：**只读仓库里的产物文件**
-//（systemd unit / 运维脚本 / Makefile / .gitlab-ci.yml），全部用纯文本与权限位断言，
+// （systemd unit / 运维脚本 / Makefile / .gitlab-ci.yml），全部用纯文本与权限位断言，
 // 不需要触达任何未导出符号（docs/guardrails.md Q3）。
 //
 // 「产物即契约」：unit 的每条关键指令、脚本的默认 dry-run、Makefile 的目标名、CI 里的
@@ -116,7 +116,7 @@ func TestSealerUnitPinsZstdBinaryLevelAndVersion(t *testing.T) {
 }
 
 // TestSealerUnitPinsMinAgeAboveGatewayRollBound R8 在 unit 层的落点：min-age 取 3h
-//（网关滚动上界 1h1m 的 3 倍）；进程里还有一道强制下界（>1h），这里只是把
+// （网关滚动上界 1h1m 的 3 倍）；进程里还有一道强制下界（>1h），这里只是把
 // 「被静态改小」这条路径也堵死。
 func TestSealerUnitPinsMinAgeAboveGatewayRollBound(t *testing.T) {
 	u := readRepoFile(t, "deploy/systemd/trace-sealer.service")
@@ -126,7 +126,7 @@ func TestSealerUnitPinsMinAgeAboveGatewayRollBound(t *testing.T) {
 }
 
 // TestSealerUnitKnowsItsRootAndLockFile 根目录与锁文件：锁必须落在同一个 root 里
-//（root 之外没有可写保证 —— unit 只把 /datalog 打开为可写）。
+// （root 之外没有可写保证 —— unit 只把 /datalog 打开为可写）。
 func TestSealerUnitKnowsItsRootAndLockFile(t *testing.T) {
 	u := readRepoFile(t, "deploy/systemd/trace-sealer.service")
 	requireUnitLine(t, u, "--root /datalog/trace-archive-v4")
@@ -193,8 +193,8 @@ func TestSealerUnitNeverUsesSealIntervalKey(t *testing.T) {
 }
 
 // TestSealerUnitNeverPreparesFilesystem 启动前不得有任何「先建目录/先写文件」的形态
-//（ExecStartPre 一类）：那正是把消失的挂载点重建到**宿主根文件系统**上的入口
-//（2026-09-24 `/` 被写满的同族事故）。sealer 用 --root 而不是环境变量，因此
+// （ExecStartPre 一类）：那正是把消失的挂载点重建到**宿主根文件系统**上的入口
+// （2026-09-24 `/` 被写满的同族事故）。sealer 用 --root 而不是环境变量，因此
 // TRACE_BODY_ROOT 也不该出现在 unit 里（那是网关侧的接口名）。
 func TestSealerUnitNeverPreparesFilesystem(t *testing.T) {
 	u := readRepoFile(t, "deploy/systemd/trace-sealer.service")

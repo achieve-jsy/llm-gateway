@@ -65,6 +65,21 @@ CHECKS = [
                 "本行只钉 `/datalog`：根编排里 otel-collector 的既有短语法挂载"
                 "（`- ./deploy/…:/etc/otelcol/config.yaml:ro`）与 /datalog 无关，不在射程内。"),
     },
+    {
+        "name": "root不得有生效TRACE_BODY_赋值",
+        "file": "docker-compose.yml",
+        "pattern": r"(?m)^\s*TRACE_BODY_[A-Z0-9_]+\s*:",
+        "expect": "absent",
+        "why": ("**E68①**（门禁口径订正后的辅助读数）：根编排「不启用功能」的判据是"
+                "**非注释生效行 = 0** —— 真正的门禁是语义测试 "
+                "`TestComposeRootComposeDoesNotEnableTraceBody`（`effectiveAssignments` 只收"
+                "非注释行；m06 的杀手），本行只补一条**文本**读数：注释行以 `#` 起头 ⇒ 不匹配本"
+                "正则。**`grep -c TRACE_BODY docker-compose.yml` 不是门禁**：注释里可合法出现"
+                "该族**前缀**（E68① 订正后 = 1、订正前 = 2，两处都在注释里），它数到的是注释。"
+                "**不存在性**要求 ⇒ 静态检查；可失败性由 `p4-task-6-rootcheck-probe-at-*.txt` 的"
+                "临时仓库探针实测（在临时克隆里插入一行生效赋值并提交 ⇒ 本行 FAIL、工具以"
+                "「静态检查失败 ⇒ 整轮失败」退出 1）。"),
+    },
 ]
 
 # 本集合**没有任何**允许的绿：m06 与 m08 都断言红。
@@ -74,10 +89,12 @@ REQUIREMENTS = [
     {
         "plan": "根编排不得启用调用链正文直写：不得出现任何生效的 TRACE_BODY_*",
         "mutations": ["m06_根编排插入生效ROOT"],
-        "checks": [],
+        "checks": ["root不得有生效TRACE_BODY_赋值"],
         "note": ("杀手 = TestComposeRootComposeDoesNotEnableTraceBody（它断言整文件里"
                  "生效的 TRACE_BODY_* 集合为空 —— 比只钉 TRACE_BODY_ROOT 更贴「根编排没有"
-                 "颜色概念」）。"),
+                 "颜色概念」）。**门禁口径 = 非注释生效行 = 0**（**E68①**）：语义测试是真正的"
+                 "门禁，文本读数 `root不得有生效TRACE_BODY_赋值` 只是辅助；"
+                 "`grep -c TRACE_BODY docker-compose.yml` **不是**门禁。"),
     },
     {
         "plan": "三个编排里 control-plane 必须只读挂载 /datalog（根编排那一半）",

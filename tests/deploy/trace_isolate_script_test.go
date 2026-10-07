@@ -27,7 +27,7 @@ func indexOf(t *testing.T, hay, needle string) int {
 }
 
 // TestIsolateScriptDefaultIsDryRun 脚本默认必须**不动手**：dry-run 闸门
-//（`[ "$CONFIRM" != "1" ]`）必须在任何 systemctl 变更命令之前 —— 默认执行就等于
+// （`[ "$CONFIRM" != "1" ]`）必须在任何 systemctl 变更命令之前 —— 默认执行就等于
 // 一次误敲命令把生产旧归档停掉。
 func TestIsolateScriptDefaultIsDryRun(t *testing.T) {
 	s := script(t, "isolate-old-trace-archive.sh")

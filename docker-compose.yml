@@ -36,9 +36,10 @@ services:
     volumes:
       # 长语法（不是 `-v`）：source/target 显式，且**绝不**让 Docker 去创建宿主路径。
       # 部署前必须先 `findmnt -T /datalog` 证明挂载在场（见计划 4 任务 6 步骤 5）。
-      # 【根编排只给挂载、不给开关】没有颜色概念 ⇒ 这里**不写任何** TRACE_BODY_*：
-      # 设了 TRACE_BODY_ROOT 而 TRACE_BODY_INST 缺失，等于再造一个写者到 inst 未定义、
-      # 启动直接失败的状态。
+      # 【根编排只给挂载、不给开关】没有颜色概念 ⇒ 这里不写任何生效的 TRACE_BODY_ 系列键
+      # （门禁口径是「非注释生效行 = 0」，见计划 4 E68①；文本 grep 不是门禁）：
+      # 设了「写侧开关」而配套的「实例名」缺失，等于再造一个写者到 inst 未定义、
+      # 启动直接失败的状态。完整键名见 deploy/blue-green 的两份颜色编排。
       - type: bind
         source: /datalog
         target: /datalog

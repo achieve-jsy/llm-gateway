@@ -1,0 +1,59 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = 7c853dbf6391e850d154e3b0e2a075b992a2e2c2
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 0930097fe9b3f5c6350a02fa92056adb6ec39e8e6c057265e16d36e878591d07  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-5-ci.py)
+名字清单 sha256          = a0c3f5ce6598a544c4fb3df81ff39101b1330e15aa31ba504fc5ec65a3224cbf  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-ci-names.txt)
+名字清单条数             = 4
+清单推导命令             = grep -h '^func Test' tests/deploy/trace_build_contract_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 4 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-ie529dch
+被测文件 sha256          = d6797599470656c4e79bc00f143c5240d991c20d5c349ecc0042545cd88eba7d  .gitlab-ci.yml
+测试文件 sha256          = 9ba416fe158cb34c2088239aea330bad631d8a388024cd49eb322b30881e0ccb  tests/deploy/trace_build_contract_test.go
+测试文件 sha256          = e9540b2e80c284d53cf6525b749117ed26a469d035951924b88215ba2ce8360b  tests/deploy/trace_compose_mount_test.go
+测试文件 sha256          = ad4acb1222923184f965e9d54c59875522dbc9d8a95ea0db4b86d030822060ad  tests/deploy/trace_isolate_script_test.go
+测试文件 sha256          = c8f1666d28bed7e17d3a48c565a2c99a02ab6c4ffa8f2cc3cd9270b041637047  tests/deploy/trace_sealer_unit_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] CI不得enable-sealer
+      文件=.gitlab-ci.yml  正则=systemctl (enable|start|restart)[^\n]*trace-sealer  期望=absent  实际=未命中
+      理由=启用 sealer 是**人工门**（读侧就绪 D73 + 挂载在场）；CI 只安装 + daemon-reload。这是**不存在性**要求 ⇒ 只能静态检查（变异无法证明「没写」）；行为面由 TestCICIDoesNotEnableSealerUnit 承载（m04b 是它的断言红杀手）。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| CI 的上线作业必须编译 `./cmd/trace-sealer` 并 `install -m 0755 … /usr/local/bin/trace-sealer`（unit 的 ExecStart 就是这个绝对路径） | `m04a_装到tmp` | — | 杀手 = TestCICIBuildsAndInstallsSealer（同时断言 unit 文件同步与 daemon-reload）。 |
+| CI **不得** enable/start/restart trace-sealer（启用是人工门：读侧就绪 + 挂载在场） | `m04b_CI启用unit` | `CI不得enable-sealer` | 杀手 = TestCICIDoesNotEnableSealerUnit；不存在性面由同名静态检查承载（两者互补，不存在只靠静态检查的缺口）。 |
+
+计划要求总数 = 2；引用到的变异 = 2；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=4 ran=4 diff=0 PASS=4 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m04a_装到tmp | 红 | names=4 ran=4 diff=0 PASS=3 SKIP=0 FAIL=1 | TestCICIBuildsAndInstallsSealer |
+| m04b_CI启用unit | 红 | names=4 ran=4 diff=0 PASS=3 SKIP=0 FAIL=1 | TestCICIDoesNotEnableSealerUnit |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 2
+集合里的变异总数          = 2（本次运行 == 全集 ✓）
+断言支撑的红             = 2 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 2 = 2 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

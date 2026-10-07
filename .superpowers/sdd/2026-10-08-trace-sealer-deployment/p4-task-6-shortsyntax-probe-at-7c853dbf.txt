@@ -1,0 +1,152 @@
+## 任务 6：三个编排「不得用短语法挂载」静态检查的可失败性探针（插入 `- /datalog:/datalog`）
+说明：工具只在 pristine 树求值 CHECKS（trace_mutate.py:574 的 print_checks(setmod, tree)，
+      tree 由 git archive HEAD 现取现解）⇒ **变异不可能**让「不得建目录」/「不得用短语法」
+      这类不存在性检查变红；本探针在临时克隆里**插入**违规形态并提交到该克隆，
+      使对应那一行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 1。
+探针克隆 = /tmp/e67probe（git clone --shared 自 /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer）
+探针克隆 HEAD = ff1f0f48ffaf650ff6836af746dd152955dd60a1
+探针克隆 git status --porcelain = []
+工具自身 sha256 = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8
+工作树 HEAD = 7c853dbf6391e850d154e3b0e2a075b992a2e2c2
+调用形态 = python3 /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py --repo /tmp/e67probe \
+             --mutation-set /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/<集合>.py \
+             --manifest /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/<集合>-names.txt   （输出重定向后追加 probe_exit=$?）
+插入前 = 工作树 HEAD 里该文件的内容；插入后 = 克隆里被提交的内容
+
+插入的形态（每个文件 gateway 的 volumes 段首插入一行，共 3 处）：
+      - /datalog:/datalog
+
+---- 3 个编排的 sha256（插入前 → 插入后）----
+  deploy/blue-green/docker-compose.blue.yml
+      插入前 4de889fa98e4778928e2fa10f93f7ad54a91575e1842dfd9c0c62f82dd73e7f8
+      插入后 a3684e66842852074df9a3657be325aa5ece7de3563a55d9eff7c7ce2f718013
+  deploy/blue-green/docker-compose.green.yml
+      插入前 048ca0a7ddad893ad85259f57df549771c0fd19f8d5448e5166e8400630011e0
+      插入后 a26d98c3b21e7dcec97c21ca669617880e31deabeed62201d4fdb72a84c7ccb6
+  docker-compose.yml
+      插入前 5edffa954c90e5f479ed78fd9b84065ce68fe35f18e299569f6b1e0cdffad5e0
+      插入后 99b129050daac7aa4b3095f64e3f336b98a86d39f4af647f9c533785a7117dcd
+
+================ 探针：p4-task-6-blue ================
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = ff1f0f48ffaf650ff6836af746dd152955dd60a1
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 05dc5ca28e20f33dc8a917e4a17222a7878abf0474490e286f2d77e15c255034  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-6-blue.py)
+名字清单 sha256          = 0ef7b5d7ae397ea9cc72145daa6895315044c5407d71e90fd568889133a74f5c  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-6-blue-names.txt)
+名字清单条数             = 8
+清单推导命令             = grep -h '^func Test' tests/deploy/trace_compose_mount_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 8 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-ufkkap81
+被测文件 sha256          = a3684e66842852074df9a3657be325aa5ece7de3563a55d9eff7c7ce2f718013  deploy/blue-green/docker-compose.blue.yml
+测试文件 sha256          = 9ba416fe158cb34c2088239aea330bad631d8a388024cd49eb322b30881e0ccb  tests/deploy/trace_build_contract_test.go
+测试文件 sha256          = e9540b2e80c284d53cf6525b749117ed26a469d035951924b88215ba2ce8360b  tests/deploy/trace_compose_mount_test.go
+测试文件 sha256          = ad4acb1222923184f965e9d54c59875522dbc9d8a95ea0db4b86d030822060ad  tests/deploy/trace_isolate_script_test.go
+测试文件 sha256          = c8f1666d28bed7e17d3a48c565a2c99a02ab6c4ffa8f2cc3cd9270b041637047  tests/deploy/trace_sealer_unit_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [FAIL] blue不得用短语法挂载
+      文件=deploy/blue-green/docker-compose.blue.yml  正则=(?m)-v\s+/datalog|^\s*-\s*/datalog\s*:  期望=absent  实际=命中 '      - /datalog:'
+      理由=计划任务 6 步骤 6 的 CHECKS：不得出现 `-v /datalog` 或 `volumes: … :/datalog` 的短语法。短语法把 source/target 挤成一个不透明的字符串，且**当 source 不存在时 Docker 会替你建目录**（正是在宿主根 FS 上现建挂载源的那条路）。**不存在性**要求 ⇒ 静态检查；行为面由 TestComposeGatewayMountsDatalogReadWrite 的 `mountTo`（要求 `type: bind`）承载。可失败性由 `p4-task-6-shortsyntax-probe-at-*.txt` 的临时仓库探针实测。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 三个编排里 gateway 都必须读写挂载 /datalog（长语法 type: bind，target=/datalog） | `m01_网关挂载目标改错` | — | 杀手 = TestComposeGatewayMountsDatalogReadWrite（对蓝/绿/根各断言一次）。 |
+| 三个编排里 control-plane 必须只读挂载 /datalog | `m02_删掉控制面只读` | — | 杀手 = TestComposeControlPlaneMountsDatalogReadOnly（对蓝/绿/根各断言一次）。 |
+| 蓝文件的 TRACE_BODY_INST 必须是 blue（颜色↔inst 一一对应） | `m03_蓝inst改成green` | — | 杀手 = TestComposeBluePinsInstBlue（并反向断言块内不出现 green 的 inst）。 |
+| 蓝/绿必须显式写出四个非开关参数且与规格/计划 2 默认值一致（BLOCK_MB 1536 / FLUSH 1m / ROLL 1h / WATERMARK 90） | `m04_ROLL改2h` | — | 杀手 = TestComposeColorFilesCarrySpecTraceBodyValues（蓝色迭代；绿色迭代的同类变异在 `p4-task-6-green.py` 的 m05b —— 计划表格只给了蓝侧 m04，绿侧那一半由本轮补强，避免「同一断言在另一份颜色文件上从未被证明可失败」）。 |
+| 生效的 TRACE_BODY_ROOT 的父目录必须正好是同文件里的某个挂载目标（D70 的机器可判定形态） | `m07_ROOT指到未挂目录` | — | 杀手 = TestComposeTraceBodyRootParentIsMounted（对蓝/绿/根各扫一次生效的 TRACE_BODY_ROOT）。 |
+| 编排里不得出现无效键 TRACE_BODY_SEAL_INTERVAL（D64/D71） | `m09_插入无效SEAL键` | — | 杀手 = TestComposeNeverCarriesSealIntervalKey（对三个文件各断言一次）。 |
+| 三个编排都不得用 `-v /datalog` / `:/datalog` 短语法挂载（长语法是「不许 Docker 代建宿主路径」的证据链） | — | `blue不得用短语法挂载` | 不存在性要求 ⇒ 静态检查（本集合负责蓝文件那一条；绿/根各在各自集合里）。可失败性由临时仓库探针实测。 |
+
+计划要求总数 = 7；引用到的变异 = 6；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+!!! 静态检查失败 ⇒ 整轮失败
+probe_exit=1
+
+================ 探针：p4-task-6-green ================
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = ff1f0f48ffaf650ff6836af746dd152955dd60a1
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 64914dc6e65e08f7e8902daa50b3876ffd35355aef6606404e5302963cff53c2  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-6-green.py)
+名字清单 sha256          = 0ef7b5d7ae397ea9cc72145daa6895315044c5407d71e90fd568889133a74f5c  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-6-green-names.txt)
+名字清单条数             = 8
+清单推导命令             = grep -h '^func Test' tests/deploy/trace_compose_mount_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 8 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-oxa3g7pr
+被测文件 sha256          = a26d98c3b21e7dcec97c21ca669617880e31deabeed62201d4fdb72a84c7ccb6  deploy/blue-green/docker-compose.green.yml
+测试文件 sha256          = 9ba416fe158cb34c2088239aea330bad631d8a388024cd49eb322b30881e0ccb  tests/deploy/trace_build_contract_test.go
+测试文件 sha256          = e9540b2e80c284d53cf6525b749117ed26a469d035951924b88215ba2ce8360b  tests/deploy/trace_compose_mount_test.go
+测试文件 sha256          = ad4acb1222923184f965e9d54c59875522dbc9d8a95ea0db4b86d030822060ad  tests/deploy/trace_isolate_script_test.go
+测试文件 sha256          = c8f1666d28bed7e17d3a48c565a2c99a02ab6c4ffa8f2cc3cd9270b041637047  tests/deploy/trace_sealer_unit_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [FAIL] green不得用短语法挂载
+      文件=deploy/blue-green/docker-compose.green.yml  正则=(?m)-v\s+/datalog|^\s*-\s*/datalog\s*:  期望=absent  实际=命中 '      - /datalog:'
+      理由=计划任务 6 步骤 6 的 CHECKS：不得出现 `-v /datalog` 或 `volumes: … :/datalog` 的短语法（短语法下 Docker 会替你创建不存在的宿主路径）。**不存在性**要求 ⇒ 静态检查；可失败性由 `p4-task-6-shortsyntax-probe-at-*.txt` 的临时仓库探针实测。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 绿文件的 TRACE_BODY_INST 必须是 green（颜色↔inst 一一对应） | `m05_绿inst改成blue` | — | 杀手 = TestComposeGreenPinsInstGreen（并反向断言块内不出现 blue 的 inst）。 |
+| 蓝/绿必须显式写出四个非开关参数且与规格/计划 2 默认值一致（绿侧那一半） | `m05b_绿ROLL改2h` | — | 杀手 = TestComposeColorFilesCarrySpecTraceBodyValues 的**绿色迭代**（本轮补强；计划表格的 m04 只覆盖蓝色迭代）。 |
+| 三个编排都不得用 `-v /datalog` / `:/datalog` 短语法挂载 | — | `green不得用短语法挂载` | 不存在性要求 ⇒ 静态检查（本集合负责绿文件那一条）。 |
+
+计划要求总数 = 3；引用到的变异 = 2；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+!!! 静态检查失败 ⇒ 整轮失败
+probe_exit=1
+
+================ 探针：p4-task-6-root ================
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = ff1f0f48ffaf650ff6836af746dd152955dd60a1
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = c88c210443406a8f5791494767d2c788c7fbae82b25fdeaeadb495b55c917f0f  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-6-root.py)
+名字清单 sha256          = 0ef7b5d7ae397ea9cc72145daa6895315044c5407d71e90fd568889133a74f5c  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-6-root-names.txt)
+名字清单条数             = 8
+清单推导命令             = grep -h '^func Test' tests/deploy/trace_compose_mount_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 8 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-mp_y8bcw
+被测文件 sha256          = 99b129050daac7aa4b3095f64e3f336b98a86d39f4af647f9c533785a7117dcd  docker-compose.yml
+测试文件 sha256          = 9ba416fe158cb34c2088239aea330bad631d8a388024cd49eb322b30881e0ccb  tests/deploy/trace_build_contract_test.go
+测试文件 sha256          = e9540b2e80c284d53cf6525b749117ed26a469d035951924b88215ba2ce8360b  tests/deploy/trace_compose_mount_test.go
+测试文件 sha256          = ad4acb1222923184f965e9d54c59875522dbc9d8a95ea0db4b86d030822060ad  tests/deploy/trace_isolate_script_test.go
+测试文件 sha256          = c8f1666d28bed7e17d3a48c565a2c99a02ab6c4ffa8f2cc3cd9270b041637047  tests/deploy/trace_sealer_unit_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [FAIL] root不得用短语法挂载
+      文件=docker-compose.yml  正则=(?m)-v\s+/datalog|^\s*-\s*/datalog\s*:  期望=absent  实际=命中 '      - /datalog:'
+      理由=计划任务 6 步骤 6 的 CHECKS：不得出现 `-v /datalog` 或 `volumes: … :/datalog` 的短语法（短语法下 Docker 会替你在**宿主根 FS** 上创建不存在的挂载源）。**不存在性**要求 ⇒ 静态检查；可失败性由 `p4-task-6-shortsyntax-probe-at-*.txt` 的临时仓库探针实测。本行只钉 `/datalog`：根编排里 otel-collector 的既有短语法挂载（`- ./deploy/…:/etc/otelcol/config.yaml:ro`）与 /datalog 无关，不在射程内。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 根编排不得启用调用链正文直写：不得出现任何生效的 TRACE_BODY_* | `m06_根编排插入生效ROOT` | — | 杀手 = TestComposeRootComposeDoesNotEnableTraceBody（它断言整文件里生效的 TRACE_BODY_* 集合为空 —— 比只钉 TRACE_BODY_ROOT 更贴「根编排没有颜色概念」）。 |
+| 三个编排里 control-plane 必须只读挂载 /datalog（根编排那一半） | `m08_删掉根cp挂载` | — | 杀手 = TestComposeControlPlaneMountsDatalogReadOnly 的根编排迭代。 |
+| 三个编排都不得用 `-v /datalog` / `:/datalog` 短语法挂载 | — | `root不得用短语法挂载` | 不存在性要求 ⇒ 静态检查（本集合负责根编排那一条）。 |
+
+计划要求总数 = 3；引用到的变异 = 2；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+!!! 静态检查失败 ⇒ 整轮失败
+probe_exit=1

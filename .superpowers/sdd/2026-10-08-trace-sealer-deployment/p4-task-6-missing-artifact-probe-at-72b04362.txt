@@ -1,0 +1,79 @@
+## 任务 6 探针：产物缺失必须 FAIL，不许 SKIP（E62 / 任务 5 先例）
+探针克隆 = /tmp/t6missing（git clone --shared 自本工作树）
+工作树 HEAD = 72b04362797256c2083a4ee5114dd9643ac74a6a
+探针克隆 HEAD = 9f3c71004a4583dd21e170f03ce82065aac40ce5（= 工作树 HEAD + 「删掉蓝编排」一个提交）
+探针克隆 git status --porcelain = []
+操作 = git rm deploy/blue-green/docker-compose.blue.yml && git commit
+命令 = go test ./tests/deploy/ -run 'TestCompose' -count=1 -v
+判据 = 缺失/读不到的产物必须让对应用例 FAIL（不是 t.Skip）⇒ 全层级 SKIP 必须为 0
+
+=== RUN   TestComposeGatewayMountsDatalogReadWrite
+    trace_compose_mount_test.go:252: 
+        	Error Trace:	/tmp/t6missing/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/tmp/t6missing/tests/deploy/trace_compose_mount_test.go:64
+        	            				/tmp/t6missing/tests/deploy/trace_compose_mount_test.go:252
+        	Error:      	Received unexpected error:
+        	            	open /tmp/t6missing/deploy/blue-green/docker-compose.blue.yml: no such file or directory
+        	Test:       	TestComposeGatewayMountsDatalogReadWrite
+        	Messages:   	读不到产物文件 deploy/blue-green/docker-compose.blue.yml：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestComposeGatewayMountsDatalogReadWrite (0.00s)
+=== RUN   TestComposeControlPlaneMountsDatalogReadOnly
+    trace_compose_mount_test.go:265: 
+        	Error Trace:	/tmp/t6missing/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/tmp/t6missing/tests/deploy/trace_compose_mount_test.go:64
+        	            				/tmp/t6missing/tests/deploy/trace_compose_mount_test.go:265
+        	Error:      	Received unexpected error:
+        	            	open /tmp/t6missing/deploy/blue-green/docker-compose.blue.yml: no such file or directory
+        	Test:       	TestComposeControlPlaneMountsDatalogReadOnly
+        	Messages:   	读不到产物文件 deploy/blue-green/docker-compose.blue.yml：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestComposeControlPlaneMountsDatalogReadOnly (0.00s)
+=== RUN   TestComposeBluePinsInstBlue
+    trace_compose_mount_test.go:276: 
+        	Error Trace:	/tmp/t6missing/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/tmp/t6missing/tests/deploy/trace_compose_mount_test.go:64
+        	            				/tmp/t6missing/tests/deploy/trace_compose_mount_test.go:276
+        	Error:      	Received unexpected error:
+        	            	open /tmp/t6missing/deploy/blue-green/docker-compose.blue.yml: no such file or directory
+        	Test:       	TestComposeBluePinsInstBlue
+        	Messages:   	读不到产物文件 deploy/blue-green/docker-compose.blue.yml：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestComposeBluePinsInstBlue (0.00s)
+=== RUN   TestComposeGreenPinsInstGreen
+--- PASS: TestComposeGreenPinsInstGreen (0.00s)
+=== RUN   TestComposeColorFilesCarrySpecTraceBodyValues
+    trace_compose_mount_test.go:304: 
+        	Error Trace:	/tmp/t6missing/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/tmp/t6missing/tests/deploy/trace_compose_mount_test.go:64
+        	            				/tmp/t6missing/tests/deploy/trace_compose_mount_test.go:304
+        	Error:      	Received unexpected error:
+        	            	open /tmp/t6missing/deploy/blue-green/docker-compose.blue.yml: no such file or directory
+        	Test:       	TestComposeColorFilesCarrySpecTraceBodyValues
+        	Messages:   	读不到产物文件 deploy/blue-green/docker-compose.blue.yml：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestComposeColorFilesCarrySpecTraceBodyValues (0.00s)
+=== RUN   TestComposeRootComposeDoesNotEnableTraceBody
+--- PASS: TestComposeRootComposeDoesNotEnableTraceBody (0.00s)
+=== RUN   TestComposeTraceBodyRootParentIsMounted
+    trace_compose_mount_test.go:331: 
+        	Error Trace:	/tmp/t6missing/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/tmp/t6missing/tests/deploy/trace_compose_mount_test.go:331
+        	Error:      	Received unexpected error:
+        	            	open /tmp/t6missing/deploy/blue-green/docker-compose.blue.yml: no such file or directory
+        	Test:       	TestComposeTraceBodyRootParentIsMounted
+        	Messages:   	读不到产物文件 deploy/blue-green/docker-compose.blue.yml：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestComposeTraceBodyRootParentIsMounted (0.00s)
+=== RUN   TestComposeNeverCarriesSealIntervalKey
+    trace_compose_mount_test.go:353: 
+        	Error Trace:	/tmp/t6missing/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/tmp/t6missing/tests/deploy/trace_compose_mount_test.go:353
+        	Error:      	Received unexpected error:
+        	            	open /tmp/t6missing/deploy/blue-green/docker-compose.blue.yml: no such file or directory
+        	Test:       	TestComposeNeverCarriesSealIntervalKey
+        	Messages:   	读不到产物文件 deploy/blue-green/docker-compose.blue.yml：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestComposeNeverCarriesSealIntervalKey (0.00s)
+FAIL
+FAIL	github.com/example/llm-gateway/tests/deploy	0.008s
+FAIL
+test_exit=1
+--- 判据 ---
+顶层 FAIL 行数 = 6
+顶层 SKIP 行数 = 0
+全层级 SKIP 行数 = 0

@@ -1,0 +1,137 @@
+=== RUN   TestGuardRejectsFilesystemRoot
+--- PASS: TestGuardRejectsFilesystemRoot (0.00s)
+=== RUN   TestGuardRejectsSameDeviceAsForbidden
+--- PASS: TestGuardRejectsSameDeviceAsForbidden (0.00s)
+=== RUN   TestGuardRequiresExplicitConfirm
+--- PASS: TestGuardRequiresExplicitConfirm (0.00s)
+=== RUN   TestGuardAcceptsDedicatedFilesystem
+--- PASS: TestGuardAcceptsDedicatedFilesystem (0.00s)
+=== RUN   TestGuardRejectsTargetOnSameDeviceAsForbiddenSelf
+--- PASS: TestGuardRejectsTargetOnSameDeviceAsForbiddenSelf (0.00s)
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead/目标读不到
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead/forbidden读不到
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead/stat回调为空
+--- PASS: TestGuardRejectsWhenDeviceCannotBeRead (0.00s)
+    --- PASS: TestGuardRejectsWhenDeviceCannotBeRead/目标读不到 (0.00s)
+    --- PASS: TestGuardRejectsWhenDeviceCannotBeRead/forbidden读不到 (0.00s)
+    --- PASS: TestGuardRejectsWhenDeviceCannotBeRead/stat回调为空 (0.00s)
+=== RUN   TestGuardUnsafeErrorIsSentinel
+--- PASS: TestGuardUnsafeErrorIsSentinel (0.00s)
+=== RUN   TestParseSizeAcceptsBinarySuffixes
+=== RUN   TestParseSizeAcceptsBinarySuffixes/1G
+=== RUN   TestParseSizeAcceptsBinarySuffixes/1g
+=== RUN   TestParseSizeAcceptsBinarySuffixes/980M
+=== RUN   TestParseSizeAcceptsBinarySuffixes/512
+=== RUN   TestParseSizeAcceptsBinarySuffixes/_2T_
+=== RUN   TestParseSizeAcceptsBinarySuffixes/1K
+--- PASS: TestParseSizeAcceptsBinarySuffixes (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/1G (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/1g (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/980M (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/512 (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/_2T_ (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/1K (0.00s)
+=== RUN   TestParseSizeRejectsMalformed
+=== RUN   TestParseSizeRejectsMalformed/#00
+=== RUN   TestParseSizeRejectsMalformed/___
+=== RUN   TestParseSizeRejectsMalformed/0
+=== RUN   TestParseSizeRejectsMalformed/-1
+=== RUN   TestParseSizeRejectsMalformed/1.5G
+=== RUN   TestParseSizeRejectsMalformed/abc
+=== RUN   TestParseSizeRejectsMalformed/1X
+=== RUN   TestParseSizeRejectsMalformed/G
+=== RUN   TestParseSizeRejectsMalformed/99999999999999999999
+=== RUN   TestParseSizeRejectsMalformed/9223372036854775807T
+--- PASS: TestParseSizeRejectsMalformed (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/#00 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/___ (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/0 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/-1 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/1.5G (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/abc (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/1X (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/G (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/99999999999999999999 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/9223372036854775807T (0.00s)
+=== RUN   TestScratchCapacityMarginIncludesReserve
+--- PASS: TestScratchCapacityMarginIncludesReserve (0.00s)
+=== RUN   TestParseVmHWMReadsPeakResidentBytes
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/真实形态
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/零值
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/单空格
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/多空格
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/重复行取第一条
+--- PASS: TestParseVmHWMReadsPeakResidentBytes (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/真实形态 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/零值 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/单空格 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/多空格 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/重复行取第一条 (0.00s)
+=== RUN   TestParseVmHWMRejectsMalformedStatus
+=== RUN   TestParseVmHWMRejectsMalformedStatus/空文本
+=== RUN   TestParseVmHWMRejectsMalformedStatus/缺VmHWM行
+=== RUN   TestParseVmHWMRejectsMalformedStatus/只有键没有值
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值非数字
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值带前缀符号
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值为负
+=== RUN   TestParseVmHWMRejectsMalformedStatus/单位不是kB
+=== RUN   TestParseVmHWMRejectsMalformedStatus/缺单位
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值溢出int64
+--- PASS: TestParseVmHWMRejectsMalformedStatus (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/空文本 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/缺VmHWM行 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/只有键没有值 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值非数字 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值带前缀符号 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值为负 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/单位不是kB (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/缺单位 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值溢出int64 (0.00s)
+=== RUN   TestPeakVmHWMTracksMaximumAcrossSamples
+--- PASS: TestPeakVmHWMTracksMaximumAcrossSamples (0.01s)
+=== RUN   TestPeakVmHWMReadsStatusFilesUnderRoot
+--- PASS: TestPeakVmHWMReadsStatusFilesUnderRoot (0.00s)
+=== RUN   TestPeakVmHWMRejectsInvalidArguments
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/pids为空
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/samples为零
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/samples为负
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/interval为负
+--- PASS: TestPeakVmHWMRejectsInvalidArguments (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/pids为空 (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/samples为零 (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/samples为负 (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/interval为负 (0.00s)
+=== RUN   TestPeakVmHWMPropagatesReadErrors
+=== RUN   TestPeakVmHWMPropagatesReadErrors/reader报错
+=== RUN   TestPeakVmHWMPropagatesReadErrors/文本缺VmHWM行
+=== RUN   TestPeakVmHWMPropagatesReadErrors/默认根下不存在的pid
+--- PASS: TestPeakVmHWMPropagatesReadErrors (0.00s)
+    --- PASS: TestPeakVmHWMPropagatesReadErrors/reader报错 (0.00s)
+    --- PASS: TestPeakVmHWMPropagatesReadErrors/文本缺VmHWM行 (0.00s)
+    --- PASS: TestPeakVmHWMPropagatesReadErrors/默认根下不存在的pid (0.00s)
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/#00
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/___
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/1,,2
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/a
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/1,a
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/0
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/-1
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/65
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/2,2
+--- PASS: TestParseConcurrencyLevelsNormalizesAndRejects (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/#00 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/___ (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/1,,2 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/a (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/1,a (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/0 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/-1 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/65 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/2,2 (0.00s)
+=== RUN   TestDecodeArtifactRoundTripsRealArtifact
+--- PASS: TestDecodeArtifactRoundTripsRealArtifact (0.00s)
+PASS
+ok  	github.com/example/llm-gateway/tests/traceverify	0.021s
+test_exit=0

@@ -1,0 +1,6 @@
+# github.com/example/llm-gateway/tests/traceverify
+tests/traceverify/guard_test.go:25:2: cannot find module providing package github.com/example/llm-gateway/internal/traceverify: import lookup disabled by -mod=vendor
+	(Go version in go.mod is at least 1.14 and vendor directory exists.)
+FAIL	github.com/example/llm-gateway/tests/traceverify [setup failed]
+FAIL
+test_exit=1

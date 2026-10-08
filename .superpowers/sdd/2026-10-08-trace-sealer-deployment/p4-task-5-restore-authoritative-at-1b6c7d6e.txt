@@ -1,0 +1,63 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = 1b6c7d6ea4965ac4a98d9308b44ee983a604d7e5
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 8dd06f37210017750baefc8a26170b00db58acfe8201252ac87bcfb74002d055  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-5-restore.py)
+名字清单 sha256          = 685b625b04a968aee909cdf9ec40810ba030566136bd0703d10ed7827538b46b  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-restore-names.txt)
+名字清单条数             = 5
+清单推导命令             = grep -h '^func Test' tests/deploy/trace_isolate_script_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 5 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-jp47iw10
+被测文件 sha256          = 50ea35c1ce5e6e98036a58a28ae7799dcd19513ef53781e43327380e09b8c57c  deploy/systemd/restore-old-trace-archive.sh
+测试文件 sha256          = 8121fdce81c2d3ba4257fbb7b4c3c570e56effc318e4e979c272a302097b8416  tests/deploy/trace_bluegreen_runbook_test.go
+测试文件 sha256          = 9ba416fe158cb34c2088239aea330bad631d8a388024cd49eb322b30881e0ccb  tests/deploy/trace_build_contract_test.go
+测试文件 sha256          = e9540b2e80c284d53cf6525b749117ed26a469d035951924b88215ba2ce8360b  tests/deploy/trace_compose_mount_test.go
+测试文件 sha256          = 12b7a0726ea1bbb8c058bdafc2e50aa98b887b6450270ebe715a3a290a584862  tests/deploy/trace_isolate_script_test.go
+测试文件 sha256          = 28418e7dcc2a4654061af42af882529b743d74894ab952ba96f6c4abaf17214a  tests/deploy/trace_sealer_unit_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] 回滚脚本必须fail-fast
+      文件=deploy/systemd/restore-old-trace-archive.sh  正则=set -euo pipefail  期望=present  实际=命中 'set -euo pipefail'
+      理由=回滚一次跑完「留证 → unmask → enable --now → 复核」，任何一步失败都必须立刻中止；否则会出现「enable 失败但脚本继续跑完并打印完成」的假绿。取值要求 ⇒ 静态检查。
+- [PASS] 回滚必须复核list-timers
+      文件=deploy/systemd/restore-old-trace-archive.sh  正则=systemctl list-timers --all --no-pager \| grep -F "\$OLD_TIMER"  期望=present  实际=命中 'systemctl list-timers --all --no-pager | grep -F "$OLD_TIMER"'
+      理由=`enable --now` 返回 0 不等于 timer 真的排上了。判据是「重新出现在 list-timers 里」，不是「命令没报错」⇒ 形态要求 ⇒ 静态检查；行为面由 TestRestoreScriptUnmasksAndEnables 承载。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 回滚必须真的解除隔离：`unmask` → `enable --now`，且默认 dry-run（闸门在变更之前） | `m05_unmask改回mask` | — | 杀手 = TestRestoreScriptUnmasksAndEnables（它还断言 `[ "$CONFIRM" != "1" ]` 闸门出现在 unmask 之前，并反向断言回滚脚本里没有 `systemctl mask`）。 |
+| 回滚的判据是「旧 timer 重新出现在 list-timers / is-enabled / is-active 里」，不是「命令没报错」 | — | `回滚必须复核list-timers` | 形态要求 ⇒ 静态检查；行为面由 TestRestoreScriptUnmasksAndEnables 承载。 |
+| 回滚脚本必须 fail-fast（`set -euo pipefail`） | — | `回滚脚本必须fail-fast` | 取值要求 ⇒ 静态检查（没有任何变异形态能让它变成断言红）。 |
+
+计划要求总数 = 3；引用到的变异 = 1；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=5 ran=5 diff=0 PASS=5 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m05_unmask改回mask | 红 | names=5 ran=5 diff=0 PASS=4 SKIP=0 FAIL=1 | TestRestoreScriptUnmasksAndEnables |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 1
+集合里的变异总数          = 1（本次运行 == 全集 ✓）
+断言支撑的红             = 1 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 1 = 1 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

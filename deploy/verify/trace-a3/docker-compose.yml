@@ -1,0 +1,32 @@
+# 仅用于 A3（真实 ENOSPC）与 A7（进程级并发）的隔离验证实例。
+# ⛔ 不得用于生产：
+#   · 它挂的是回环文件系统 /srv/trace-a3（与 /datalog 不是同一个设备）
+#   · 它复用测试环境的 Redis/PG（刻意省掉造配置的成本）⇒ **只能在测试环境跑**
+#   · 端口 8090（gateway）与活跃颜色（8080/8082）错开；本实例**只跑 gateway**
+#     （复用测试环境已有的控制面/Redis/PG，刻意不再定义 cp 服务 ⇒ 不存在 8091）
+services:
+  gateway-a3:
+    image: ${REGISTRY}/llm-gateway:${IMAGE_TAG:?IMAGE_TAG required}
+    container_name: llm-a3-gateway
+    restart: "no"
+    network_mode: host
+    environment:
+      APP_ENV: test
+      GATEWAY_PORT: "8090"
+      # 连接串一律来自环境（无默认值）：写错就没有默认值可以掩盖，
+      # 也保证「不可能不小心连到生产」这件事是靠结构而不是靠自觉。
+      DATABASE_URL: ${A3_DATABASE_URL:?A3_DATABASE_URL required（必须是测试库）}
+      REDIS_ADDR: ${A3_REDIS_ADDR:?A3_REDIS_ADDR required}
+      REDIS_PASSWORD: ${A3_REDIS_PASSWORD:-}
+      REDIS_DB: ${A3_REDIS_DB:?A3_REDIS_DB required（必须选一个测试环境没人用的库号）}
+      # ── 正文直写：故意把水位压到 99，让**真实 ENOSPC** 先于水位闩锁发生 ──
+      TRACE_BODY_ROOT: /datalog-a3/trace-archive-v4
+      TRACE_BODY_INST: blue
+      TRACE_BODY_BLOCK_MB: "64"
+      TRACE_BODY_FLUSH_INTERVAL: 5s
+      TRACE_BODY_ROLL_INTERVAL: 10s
+      TRACE_BODY_DISK_WATERMARK_PERCENT: "99"
+    volumes:
+      - type: bind
+        source: /srv/trace-a3
+        target: /datalog-a3

@@ -2458,7 +2458,7 @@ package deploy_test
 
 - [ ] **步骤 4：跑测试** ⇒ PASS。
 
-- [ ] **步骤 5：写变异集合** `p4-task-7-bluegreen.py`（`TARGET = "deploy/blue-green/README.md"`，`MANIFEST_FILES = ["tests/deploy/trace_bluegreen_runbook_test.go"]`）：m01 删掉硬门段落 → `TestBlueGreenRunbookHasReadSideHardGate`；m02 把「sealer 必须继续运行」改成「sealer 可随功能一并停掉」→ `TestBlueGreenRunbookCoversRollback`；m03 删掉 SQL 比对 → `TestBlueGreenRunbookCoversFeatureOffByteIdentical`；m04 把 `body_ref_inst` 改成「配置里的 inst」→ `TestBlueGreenRunbookCoversSwitch`；m05 插入 `TRACE_BODY_SEAL_INTERVAL` → `TestBlueGreenRunbookNeverMentionsSealInterval`。`CHECKS`：`deploy/blue-green/deploy-blue-green.sh` 内 `TRACE_BODY` **absent**。
+- [ ] **步骤 5：写变异集合** `p4-task-7-bluegreen.py`（`TARGET = "deploy/blue-green/README.md"`，`MANIFEST_FILES = ["tests/deploy/trace_bluegreen_runbook_test.go"]`）：m01 删掉硬门段落 → `TestBlueGreenRunbookHasReadSideHardGate`；m02 把「sealer 必须继续运行」改成「sealer 可随功能一并停掉」→ `TestBlueGreenRunbookCoversRollback`；m03 删掉 SQL 比对 → `TestBlueGreenRunbookCoversFeatureOffByteIdentical`；m04 把 `body_ref_inst` 改成「配置里的 inst」→ `TestBlueGreenRunbookCoversSwitch`；m05 插入 `TRACE_BODY_SEAL_INTERVAL` → `TestBlueGreenRunbookNeverMentionsSealInterval`。`CHECKS`：`deploy/blue-green/deploy-blue-green.sh` 内 `TRACE_BODY` **absent**；**E69③（计划↔集合逐条对照）**：本集合的 `CHECKS` 共 **6 行** —— 上面这一行是本步骤明列的，另 **5 行**（剧本必须钉住颜色↔inst 静态对应、剧本必须含读侧硬门 D73、剧本必须含功能关闭的 SQL 比对、剧本必须含旧颜色 drain 无损、剧本必须含禁止事项）是按 **E62** 追加的**存在性**静态检查（静态检查只承载**存在 / 不存在**类要求）；它们的**可失败性**由交付报告的「改坏→转红→还原」探针逐条实测（输出落盘 `p4-task-7-bluegreen-probe-at-*.txt`），集合 docstring 同文登记。
 
 - [ ] **步骤 6：提交 → 跑集合**。
 
@@ -3152,3 +3152,22 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 ### 新增约定（E68 起，**今后所有轮次适用**）
 
 1. **门禁判据必须写成语义判据，文本 grep 只能当辅助读数**：任何「产物里不得出现 X」类门禁，必须写明它的**语义**判据（例：`effectiveAssignments` 的「**非注释生效行 = 0**」，或行为用例名），**不得**把「某条 `grep -c <键名> <文件>` = 0」写成门禁 —— 注释里合法出现键名前缀会让文本计数**恒非零**，于是门禁要么字面不成立、要么逼着作者把必要的注释删掉。文本 grep 若要保留，必须**显式标注为辅助**，并给出它的可失败性证据（临时仓库探针）。
+
+---
+
+## 过程失误登记与新增约定（E69；**Task 8 开工前的上轮评审收口轮**）
+
+> 编号续 **E68**。与 E57–E68 同一纪律：逐条写清「位置 / 问题 / 处置」。
+
+> **本轮改动面（已核实）**：计划面**两处** —— Task 7 步骤 5 段末**就地追加一句**（E69③，**行数不变**）＋ 文件末尾**追加**本节；**实现/测试/产物/集合/证据面零改动** —— `internal/**`（含冻结包 `internal/tracearchive/**`）、`cmd/**`、`tests/**`、`deploy/**`、`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum`、`tools/trace-mutate/**`、`.superpowers/sdd/**` 全部**未动**；`tools/trace-mutate/trace_mutate.py` **未动**（sha256 仍是 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）。**零迁移**：本轮不涉及任何 PG schema 变更 ⇒ **未触发** `atlas-db-migration` skill（全局约束「零迁移」）。
+
+> **跨任务连带（E59③ 自查，先自查后报告）**：`grep -n '^PACKAGES' tools/trace-mutate/sets/p4-task-*.py` 显示**没有任何**集合把 `docs/**` 列入 `PACKAGES`，也没有任何集合的 `TARGET` 指向计划文档 ⇒ 本轮**唯一**的改动面是计划文本 ⇒ 按 **E59**「纯计划文档提交不使绑定失效」，**零个集合需要重出**（这与 E59③ 的连带面判定一致：只有实现 / 测试 / 集合 / 被测产物的**内容**变更才使绑定失效）。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E69** | ① 计划 / 证据文本里若有「git reflog 无 amend 记录」一类措辞（**实测：本计划与本任务的证据目录里都没有这种措辞** —— 可复算命令 `grep -rniE 'amend\|reflog' docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md .superpowers/sdd/2026-10-08-trace-sealer-deployment/ tools/trace-mutate/`：**追加本节之前为 0 行**；追加之后同一命令只命中**本节自身**（本节逐字引用了该措辞与 `amend` / `reflog` 两个词）⇒ **除本节外仍为 0 行**；`grep -rniE '无.*amend\|未.*amend' docs/ .superpowers/sdd/2026-10-08-trace-sealer-deployment/ tools/trace-mutate/` 只命中**另一份计划** `docs/superpowers/plans/2026-09-24-tracearchive-storage-primitives.md:4116`（D40，措辞是「`amend` 已禁 ⇒ 留痕」，**不是**「reflog 无 amend 记录」）＋本节自身 ⇒ 本计划与本任务证据目录仍为 **0 行**）；② `45e39d92` 的提交说明尾部；③ `tools/trace-mutate/sets/p4-task-7-bluegreen.py` 的 **6 行** `CHECKS` 与计划 Task 7 步骤 5 的**明列范围**（只列了 `deploy-blue-green.sh` 内 `TRACE_BODY` **absent** 一行）之间的差 | **①（订正事实）**：`git reflog` **有 1 条** `commit (amend)` = **`01de7150`**（`HEAD@{13}`，内容 = `docs(plan): E66⑥ —— p4 集合总数 26 → 27`）—— 它属 **Task 5 轮**，**与 Task 7 的提交及当前 tip（`45e39d92`）无关**（`git reflog -15` 实测：`45e39d92`/`1b6c7d6e`/`957c8ed2`/`38ebcf7e` 四条全部是 `commit:`，无 `amend`）⇒ 正确表述是「**Task 7 的提交未 amend；reflog 中唯一那条 amend 来自 Task 5 轮**」；「reflog 无 amend 记录」**不实**，此后不得出现。**②（登记伪影）**：`45e39d92` 的提交说明**尾部**有残缺 UTF-8 伪影（字节 `\xc2\xbc\xc2\x89`，实测命令 `git log -1 --format=%B 45e39d92 \| xxd \| tail -2`；正确字符应为 `）` + 换行）⇒ **禁止 amend**（会改写已发布的证据绑定时点），本项**只登记**：**不修**、保留原始提交说明与其字节，处置方式写明为「随分支收尾的合并 / squash 顺手修正，或在收尾报告里另立登记」。**③（对齐范围）**：该集合的 `CHECKS` 有 **6 行** —— 1 行是计划步骤 5 明列的（`deploy-blue-green.sh` 内 `TRACE_BODY` **absent**），另 **5 行**是本轮按 **E62** 追加的**存在性**静态检查（颜色↔inst 静态对应、硬门 D73、功能关闭的 SQL 比对、旧颜色 drain 无损、禁止事项）；集合 docstring 已写明理由与「静态检查只承载存在性、可失败性由探针实测」，但**计划文本里没有对应句子** ⇒ 计划与集合**无法逐条对照** | **①**：本节把事实写成**可复核的判据**（命令 + 结论），供后续轮次直接引用；`git reflog` 的当前事实同时登记为「1 条 amend / 属 Task 5 轮 / 与 Task 7 无关」。**②**：只登记、不动历史（**禁止 amend**，与全局约束「禁止 `--amend`」一致）。**③**：在 Task 7 **步骤 5 段末就地追加一句**（**行数不变**）写明那 5 行 `CHECKS` 的存在与理由（E62：静态检查只承载**存在 / 不存在**类要求；它们的**可失败性**由交付报告的「改坏→转红→还原」探针逐条实测，输出落盘 `p4-task-7-bluegreen-probe-at-*.txt`）⇒ 计划与集合此后可逐条对照。**自引用级联**：动计划文本前 `grep -cE '本计划 ?:[0-9]' docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md` = **0**（已实测），改后复测仍为 **0**（本轮两处改动都是**段末追加/就地追加**，不含指向绝对行号的自引用）。
+
+### 新增约定（E69 起，**今后所有轮次适用**）
+
+1. **提交历史的「事实陈述」必须带可复算命令，且禁止改写已发布提交**：凡在报告或计划里陈述 `amend` / `reset` / `rebase` 一类历史事实，必须同时给出可复算命令（如 `git reflog -15`）与结论；**禁止 `--amend`**（它会改写绑定证据的产出时点）。已发生的提交说明伪影（残字节）**只登记不修**，修正留给分支收尾的合并 / squash 或另立登记。
+2. **集合的 `CHECKS` 行数必须与计划文本逐条可对照**：集合可以按 E62 追加**存在性**静态检查，但每追加一行都必须在**计划文本**里能找到对应句子（写明存在与理由）；只写在集合 docstring 里不算 —— 否则计划与集合无法逐条对照，读者无法从计划推出集合的应然范围。

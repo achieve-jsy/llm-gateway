@@ -1,0 +1,4 @@
+TestA3ComposeDisablesWatermarkSoRealEnospcHappensFirst
+TestA3ComposeHasNoConnectionDefaults
+TestA3ComposeNeverMountsProductionDatalog
+TestA3ComposeUsesIsolatedNamesAndPorts

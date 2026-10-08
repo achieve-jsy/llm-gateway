@@ -132,3 +132,51 @@ func TestGuardUnsafeErrorIsSentinel(t *testing.T) {
 	require.True(t, errors.Is(err, traceverify.ErrScratchTargetUnsafe), "必须包住哨兵错误")
 	require.Contains(t, err.Error(), "/", "拒绝消息里必须带上被拒的目标")
 }
+
+// TestParseSizeAcceptsBinarySuffixes `--size` 的后缀解析（1024 进制，大小写不敏感，
+// 无后缀即 bytes）。它承载 R2 的容量预检：把 "1G" 解析错（例如当成 1 byte）会让预检
+// 形同虚设，A3 就有可能在宿主根 FS 上建镜像。
+func TestParseSizeAcceptsBinarySuffixes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+	}{
+		{"1G", 1 << 30},
+		{"1g", 1 << 30},
+		{"980M", 980 << 20},
+		{"512", 512},
+		{" 2T ", 2 << 40},
+		{"1K", 1 << 10},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			got, err := traceverify.ParseSize(c.in)
+			require.NoError(t, err)
+			require.Equal(t, c.want, got)
+		})
+	}
+}
+
+// TestParseSizeRejectsMalformed 非法尺寸必须报错（不许静默取 0：0 会让「可用空间 ≥
+// size + 1 GiB」这条判据退化成「可用空间 ≥ 1 GiB」）。
+func TestParseSizeRejectsMalformed(t *testing.T) {
+	for _, in := range []string{"", "   ", "0", "-1", "1.5G", "abc", "1X", "G", "99999999999999999999", "9223372036854775807T"} {
+		t.Run(in, func(t *testing.T) {
+			_, err := traceverify.ParseSize(in)
+			require.Error(t, err, "尺寸 %q 必须报错", in)
+		})
+	}
+}
+
+// TestScratchCapacityMarginIncludesReserve 容量判据必须是「可用 ≥ 镜像 + **1 GiB 余量**」
+// （R2）。边界值两侧都要钉住：正好等于 ⇒ 通过；少 1 byte ⇒ 拒绝。
+func TestScratchCapacityMarginIncludesReserve(t *testing.T) {
+	const img = 1 << 30
+	require.Equal(t, int64(1<<30), traceverify.ScratchCapacityMarginBytes, "余量口径是 1 GiB（R2）")
+	require.True(t, traceverify.ScratchCapacitySufficient(img+traceverify.ScratchCapacityMarginBytes, img),
+		"可用空间正好等于 镜像 + 余量 ⇒ 通过")
+	require.False(t, traceverify.ScratchCapacitySufficient(img+traceverify.ScratchCapacityMarginBytes-1, img),
+		"少 1 byte ⇒ 必须拒绝")
+	require.False(t, traceverify.ScratchCapacitySufficient(0, img), "读不到可用空间（0）⇒ 拒绝")
+	require.False(t, traceverify.ScratchCapacitySufficient(8<<30, 0), "镜像大小非法（0）⇒ 拒绝")
+}

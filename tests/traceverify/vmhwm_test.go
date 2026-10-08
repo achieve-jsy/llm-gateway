@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 
 	"github.com/example/llm-gateway/internal/traceverify"
@@ -185,4 +186,63 @@ func TestPeakVmHWMPropagatesReadErrors(t *testing.T) {
 		_, err := traceverify.PeakVmHWM([]int{1 << 30}, 1, 0)
 		require.Error(t, err, "不存在的进程必须报错")
 	})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// decode-bench 的承重逻辑（与 VmHWM 采样同源：被测对象就是解码路径）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestParseConcurrencyLevelsNormalizesAndRejects `--concurrency 1,2,3` 的解析：
+// 去重后升序（档位的测试次序必须确定），空档/非整数/越界/重复一律报错。
+func TestParseConcurrencyLevelsNormalizesAndRejects(t *testing.T) {
+	got, err := traceverify.ParseConcurrencyLevels("1,2,3")
+	require.NoError(t, err)
+	require.Equal(t, []int{1, 2, 3}, got)
+
+	got, err = traceverify.ParseConcurrencyLevels("3, 1 ,2")
+	require.NoError(t, err)
+	require.Equal(t, []int{1, 2, 3}, got, "输出必须升序（与入参顺序无关）")
+
+	for _, in := range []string{"", "   ", "1,,2", "a", "1,a", "0", "-1", "65", "2,2"} {
+		t.Run(in, func(t *testing.T) {
+			_, err := traceverify.ParseConcurrencyLevels(in)
+			require.Error(t, err, "--concurrency %q 必须报错", in)
+		})
+	}
+}
+
+// TestDecodeArtifactRoundTripsRealArtifact 解码必须走**真实**的 zstd 产物（用与读侧
+// 同一个 klauspost 库写、同一个库读），并返回解压后的字节数；读不到 / 不是 zstd ⇒ 报错。
+// 这是 decode-bench 的承重前置：解压字节数错了，`peak_vmhwm_bytes` 的对照就没有意义。
+func TestDecodeArtifactRoundTripsRealArtifact(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "part-000001.jsonl.zst")
+
+	payload := []byte("{\"row\":0}\n{\"row\":1}\n")
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	w, err := zstd.NewWriter(f, zstd.WithEncoderLevel(zstd.SpeedFastest))
+	require.NoError(t, err)
+	_, err = w.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	require.NoError(t, f.Close())
+
+	n, err := traceverify.DecodeArtifact(path, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(payload)), n, "必须返回**解压后**的字节数")
+
+	n, err = traceverify.DecodeArtifact(path, 1<<20)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(payload)), n, "显式窗口同样能解")
+
+	_, err = traceverify.DecodeArtifact(filepath.Join(dir, "不存在.zst"), 0)
+	require.Error(t, err, "读不到产物必须报错")
+	_, err = traceverify.DecodeArtifact("", 0)
+	require.Error(t, err, "空路径必须报错")
+
+	plain := filepath.Join(dir, "not-zstd.jsonl")
+	require.NoError(t, os.WriteFile(plain, payload, 0o644))
+	_, err = traceverify.DecodeArtifact(plain, 0)
+	require.Error(t, err, "不是 zstd 的输入必须报错（不许当成 0 字节顺利返回）")
 }

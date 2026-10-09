@@ -10,15 +10,20 @@
 package traceverify_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 
+	"github.com/example/llm-gateway/internal/tracearchive"
 	"github.com/example/llm-gateway/internal/traceverify"
 )
 
@@ -79,6 +84,64 @@ func TestParseVmHWMRejectsMalformedStatus(t *testing.T) {
 			_, err := traceverify.ParseVmHWM(c.text)
 			require.Error(t, err, "%s：必须报错（读不到/读不懂不许静默返回 0）", c.name)
 		})
+	}
+}
+
+// TestParseVmHWMReadsPeakResidentNotVirtual status 里 **VmPeak（峰值虚拟）与 VmHWM（峰值
+// 常驻）同时在且取值不同** ⇒ 必须取 VmHWM：C5 的预算、2 GiB cgroup 与 `peak_vmhwm_bytes`
+// 比的都是**常驻**内存；取成 VmPeak 会把虚拟地址空间（含未落页的映射）当成实际占用。
+// 同时钉住「只有 VmPeak、没有 VmHWM ⇒ 报错」—— 缺字段时必须红，不许拿 VmPeak 顶替。
+// killer：`fields[0] != "VmHWM:"` 被改成 `fields[0] != "VmPeak:"`（见 p4-task-9-vmhwm.py 的 m01）。
+func TestParseVmHWMReadsPeakResidentNotVirtual(t *testing.T) {
+	text := "Name:\tgateway\n" +
+		"VmPeak:\t 9999999 kB\n" + // 峰值虚拟：比 VmHWM 大一个量级
+		"VmSize:\t 8888888 kB\n" +
+		"VmHWM:\t  111111 kB\n" + // 峰值常驻：唯一正确读数
+		"VmRSS:\t  222222 kB\n"
+	got, err := traceverify.ParseVmHWM(text)
+	require.NoError(t, err)
+	require.Equal(t, int64(111111*1024), got,
+		"必须取 VmHWM（峰值常驻 111111 kB）；取 VmPeak 会得到 9999999 kB")
+
+	_, err = traceverify.ParseVmHWM("Name:\tgateway\nVmPeak:\t 9999999 kB\nVmRSS:\t  100 kB\n")
+	require.Error(t, err, "只有 VmPeak、没有 VmHWM ⇒ 必须报错（不许拿 VmPeak 当读数）")
+	require.ErrorIs(t, err, traceverify.ErrVmHWMMissing,
+		"缺字段的错误身份必须是 ErrVmHWMMissing（调用方据此区分「读不到」与「读不懂」）")
+}
+
+// TestParseVmHWMConvertsKilobytesToBytes kB → bytes 必须乘 1024：漏乘是这类解析里最容易
+// 发生的静默错（读数小 1024 倍 ⇒ 内存预算看起来极宽裕）。用 1 kB 与 640 MiB 两个量级钉住，
+// 使「只对某些量级凑对」不可能发生。
+// killer：`return kb * bytesPerKB, nil` 被改成 `return kb, nil`（m02）。
+func TestParseVmHWMConvertsKilobytesToBytes(t *testing.T) {
+	got, err := traceverify.ParseVmHWM(statusWithVmHWMKB(1))
+	require.NoError(t, err)
+	require.Equal(t, int64(1024), got, "1 kB = 1024 bytes（漏乘 1024 会把读数缩小 1024 倍）")
+
+	got, err = traceverify.ParseVmHWM(statusWithVmHWMKB(640 * 1024)) // 640 MiB
+	require.NoError(t, err)
+	require.Equal(t, int64(640<<20), got, "640 MiB 的 kB 值应换算成 640 MiB 的 bytes 值")
+
+	// 单位不是 kB 时不得按 1024 硬乘（必须报错）—— 否则换一个单位就静默算错。
+	_, err = traceverify.ParseVmHWM("Name:\tgateway\nVmHWM:\t 100000 MB\n")
+	require.Error(t, err, "单位不是 kB ⇒ 必须报错（不许静默当成 kB 乘 1024）")
+}
+
+// TestParseVmHWMErrorsOnMissingField 缺 VmHWM 行时必须**报错**，绝不返回 0 冒充读数：
+// 0 会被下游当成一个合法的峰值，把「没有证据」洗成「内存很小」（本包最不可接受的失效）。
+// killer：`return 0, fmt.Errorf("%w: 没有任何以 \`VmHWM:\` 起头的行", ErrVmHWMMissing)`
+// 被改成 `return 0, nil`（m03）。
+func TestParseVmHWMErrorsOnMissingField(t *testing.T) {
+	for _, text := range []string{
+		"",
+		"Name:\tgateway\nVmRSS:\t  100 kB\n",
+		"VmHWM 没有冒号\n",
+		"VmHWMX:\t  100 kB\n", // 前缀相似但不是该字段
+	} {
+		got, err := traceverify.ParseVmHWM(text)
+		require.Error(t, err, "缺 VmHWM 行必须报错（输入 %q）", text)
+		require.ErrorIs(t, err, traceverify.ErrVmHWMMissing, "输入 %q 的错误身份", text)
+		require.Zero(t, got, "报错时不得同时返回一个像读数一样的值（输入 %q）", text)
 	}
 }
 
@@ -245,4 +308,210 @@ func TestDecodeArtifactRoundTripsRealArtifact(t *testing.T) {
 	require.NoError(t, os.WriteFile(plain, payload, 0o644))
 	_, err = traceverify.DecodeArtifact(plain, 0)
 	require.Error(t, err, "不是 zstd 的输入必须报错（不许当成 0 字节顺利返回）")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// decode-bench 的点读负载（计划任务 9 步骤 3-4）
+//
+// 这些用例用**替身 reader** 驱动真实负载：不需要产物、不需要 zstd 子进程、不需要 /proc
+// ⇒ 在 darwin 上也能真跑。「K 路并发」「随机行号」「错误传播」这三条是 A6/C5 结论的
+// 承重前提（配置了 K 却实际串行 ⇒ 峰值偏低 ⇒ 结论失真）。
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestPointReadLoadRunsConcurrentlyAndRandomly K 个 goroutine × rounds × points 次点读：
+// 点数必须跑满、实测同时在飞峰值必须等于档位、行号必须随机落在 [0, rows) 内。
+// killer：行号被固定成 0（m04，DistinctRows==1）或 goroutine 数写成 K+1（m05）。
+func TestPointReadLoadRunsConcurrentlyAndRandomly(t *testing.T) {
+	const rows, k, rounds, points = 8, 4, 5, 50
+
+	var inFlight, maxInFlight int64
+	var mu sync.Mutex
+	seen := map[int]int{}
+	read := func(_ context.Context, ref tracearchive.Ref) ([]byte, error) {
+		cur := atomic.AddInt64(&inFlight, 1)
+		for {
+			old := atomic.LoadInt64(&maxInFlight)
+			if cur <= old || atomic.CompareAndSwapInt64(&maxInFlight, old, cur) {
+				break
+			}
+		}
+		time.Sleep(200 * time.Microsecond) // 让并发真的重叠（否则「在飞峰值」没有意义）
+		atomic.AddInt64(&inFlight, -1)
+		mu.Lock()
+		seen[ref.Row]++
+		mu.Unlock()
+		return []byte("x"), nil
+	}
+
+	res, err := traceverify.PointReadLoad{
+		Ref:                tracearchive.Ref{DT: "2026-10-08", Inst: "blue", Part: 1},
+		Rows:               rows,
+		Concurrency:        k,
+		Rounds:             rounds,
+		PointsPerGoroutine: points,
+		Seed:               42,
+		Read:               read,
+	}.Run(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, k*rounds*points, res.Points, "点数必须是 K × rounds × 每 goroutine 每轮点数")
+	require.Equal(t, k, res.MaxInFlight, "实测同时在飞峰值必须等于档位（否则这一档没真正并发）")
+	require.Equal(t, int64(k*rounds*points), res.Bytes, "每行 1 字节 ⇒ 总字节数 == 点数")
+	require.Greater(t, res.DistinctRows, 1, "行号必须随机（固定成 0 会让该断言转红）")
+	require.Equal(t, len(seen), res.DistinctRows, "DistinctRows 必须等于实际命中过的行号个数")
+	for row := range seen {
+		require.GreaterOrEqual(t, row, 0, "行号下界")
+		require.Less(t, row, rows, "行号必须落在 [0, rows) 内")
+	}
+}
+
+// TestPointReadLoadRejectsInvalidArguments 参数非法必须在**任何点读之前**报错
+// （Read 为空 / Rows ≤ 0 / Concurrency ≤ 0 / Rounds ≤ 0），且一次读都不许发生。
+func TestPointReadLoadRejectsInvalidArguments(t *testing.T) {
+	var calls int64
+	read := func(context.Context, tracearchive.Ref) ([]byte, error) {
+		atomic.AddInt64(&calls, 1)
+		return nil, nil
+	}
+	base := traceverify.PointReadLoad{
+		Ref:         tracearchive.Ref{DT: "2026-10-08", Inst: "blue", Part: 1},
+		Rows:        8,
+		Concurrency: 2,
+		Rounds:      5,
+		Read:        read,
+	}
+	cases := []struct {
+		name string
+		load traceverify.PointReadLoad
+	}{
+		{"Read为空", func() traceverify.PointReadLoad { l := base; l.Read = nil; return l }()},
+		{"Rows为零", func() traceverify.PointReadLoad { l := base; l.Rows = 0; return l }()},
+		{"Rows为负", func() traceverify.PointReadLoad { l := base; l.Rows = -1; return l }()},
+		{"Concurrency为零", func() traceverify.PointReadLoad { l := base; l.Concurrency = 0; return l }()},
+		{"Rounds为零", func() traceverify.PointReadLoad { l := base; l.Rounds = 0; return l }()},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			before := atomic.LoadInt64(&calls)
+			_, err := c.load.Run(context.Background())
+			require.Error(t, err, "%s：必须报错", c.name)
+			require.Equal(t, before, atomic.LoadInt64(&calls), "%s：参数校验必须发生在任何点读之前", c.name)
+		})
+	}
+}
+
+// TestPointReadLoadPropagatesReadErrors 任一次点读失败 ⇒ Run 必须把该错误原样上抛
+// （不许吞掉、不许返回半个读数）：吞掉会让「盘有问题」看起来像一次成功的标定。
+// killer：错误分支被放宽成 `if err != nil && false`（m06）。
+func TestPointReadLoadPropagatesReadErrors(t *testing.T) {
+	var calls int64
+	boom := errors.New("traceverify_test: 产物损坏")
+	read := func(_ context.Context, ref tracearchive.Ref) ([]byte, error) {
+		if atomic.AddInt64(&calls, 1) == 3 {
+			return nil, boom
+		}
+		return []byte("x"), nil
+	}
+	_, err := traceverify.PointReadLoad{
+		Ref:                tracearchive.Ref{DT: "2026-10-08", Inst: "blue", Part: 1},
+		Rows:               4,
+		Concurrency:        2,
+		Rounds:             5,
+		PointsPerGoroutine: 10,
+		Read:               read,
+	}.Run(context.Background())
+	require.Error(t, err, "点读失败必须上抛（不许当成成功）")
+	require.ErrorIs(t, err, boom, "原始错误必须被包装保留（errors.Is 可判）")
+}
+
+// TestArtifactRowsBinaryProbesRowCount 行数探测：用 GetBody 的错误身份（越界 ⇒
+// ErrNotArchived；标记行 ⇒ ErrBodyMissing）倍增 + 二分求出行数。逐档覆盖 1 / 2 / 3 /
+// 1000 与「中点是标记行」的形态。
+// killer：`return lo + 1` 被改成 `return lo`（m07，整体差一行）。
+func TestArtifactRowsBinaryProbesRowCount(t *testing.T) {
+	for _, rows := range []int{1, 2, 3, 5, 1000} {
+		rows := rows
+		t.Run(fmt.Sprintf("rows=%d", rows), func(t *testing.T) {
+			read := func(_ context.Context, ref tracearchive.Ref) ([]byte, error) {
+				if ref.Row < 0 || ref.Row >= rows {
+					return nil, fmt.Errorf("%w: 越界", tracearchive.ErrNotArchived)
+				}
+				if rows > 2 && ref.Row == rows/2 {
+					return nil, fmt.Errorf("%w: 标记行", tracearchive.ErrBodyMissing)
+				}
+				return []byte("body"), nil
+			}
+			got, err := traceverify.ArtifactRows(context.Background(), read,
+				tracearchive.Ref{DT: "2026-10-08", Inst: "blue", Part: 1}, 0)
+			require.NoError(t, err)
+			require.Equal(t, rows, got, "探测出的行数必须等于真实行数")
+		})
+	}
+}
+
+// TestArtifactRowsPropagatesNonRangeErrors 未知错误必须原样上抛：把「读不懂的错误」
+// 当成「行号越界」会让探测出一个错的（偏小的）行数，随机点读随即落到不存在的行上。
+func TestArtifactRowsPropagatesNonRangeErrors(t *testing.T) {
+	boom := errors.New("traceverify_test: footer 损坏")
+	read := func(_ context.Context, ref tracearchive.Ref) ([]byte, error) {
+		if ref.Row >= 2 {
+			return nil, boom
+		}
+		return []byte("body"), nil
+	}
+	_, err := traceverify.ArtifactRows(context.Background(), read,
+		tracearchive.Ref{DT: "2026-10-08", Inst: "blue", Part: 1}, 0)
+	require.Error(t, err, "未知错误必须上抛（不许当成越界/在范围）")
+	require.ErrorIs(t, err, boom)
+}
+
+// TestPointReadLoadAbortsWhenPeakReachesLimit 峰值到 `AbortAtBytes` ⇒ 取消负载、置
+// `Aborted`、把观测到的峰值留下来 —— **中止不是失败**（返回部分读数）。
+// 这条是 GOGC=off 形态的唯一安全出口：没有它，进程会被 OOM 杀掉、什么都报不出来。
+// killer：中止分支被放宽成 `… && false`（m09）。
+func TestPointReadLoadAbortsWhenPeakReachesLimit(t *testing.T) {
+	const limit = int64(2 << 30)
+	peak := int64(3 << 30) // 3 GiB ≥ 2 GiB 阈值
+	read := func(context.Context, tracearchive.Ref) ([]byte, error) {
+		time.Sleep(time.Millisecond) // 让监控协程有机会先跑
+		return []byte("x"), nil
+	}
+	res, err := traceverify.PointReadLoad{
+		Ref:                tracearchive.Ref{DT: "2026-10-08", Inst: "blue", Part: 1},
+		Rows:               8,
+		Concurrency:        2,
+		Rounds:             5,
+		PointsPerGoroutine: 50,
+		Read:               read,
+		Peak:               func() (int64, error) { return peak, nil },
+		AbortAtBytes:       limit,
+		SampleInterval:     time.Millisecond,
+	}.Run(context.Background())
+	require.NoError(t, err, "到限中止不是失败：必须返回部分读数，而不是 error")
+	require.True(t, res.Aborted, "峰值 ≥ 阈值 ⇒ 必须置 Aborted")
+	require.GreaterOrEqual(t, res.PeakBytes, limit, "必须把观测到的峰值留下来（≥ 阈值）")
+	require.Greater(t, res.PeakSamples, 0, "必须真的采过样")
+	require.Less(t, res.Points, 2*5*50, "到限必须中止负载，而不是跑满")
+}
+
+// TestPointReadLoadPropagatesPeakErrors 峰值读不到 ⇒ 必须报错（绝不把「没有证据」洗成
+// 「内存很小」），并且取消负载。
+// killer：采样失败分支被放宽成 `_ = err`（m08）。
+func TestPointReadLoadPropagatesPeakErrors(t *testing.T) {
+	boom := errors.New("traceverify_test: procfs 读不到")
+	read := func(context.Context, tracearchive.Ref) ([]byte, error) {
+		time.Sleep(time.Millisecond)
+		return []byte("x"), nil
+	}
+	_, err := traceverify.PointReadLoad{
+		Ref:                tracearchive.Ref{DT: "2026-10-08", Inst: "blue", Part: 1},
+		Rows:               8,
+		Concurrency:        2,
+		Rounds:             5,
+		PointsPerGoroutine: 50,
+		Read:               read,
+		Peak:               func() (int64, error) { return 0, boom },
+		SampleInterval:     time.Millisecond,
+	}.Run(context.Background())
+	require.Error(t, err, "峰值采样失败必须上抛（不许当成成功）")
+	require.ErrorIs(t, err, boom)
 }

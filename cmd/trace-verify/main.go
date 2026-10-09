@@ -293,7 +293,7 @@ func runDecodeBench(args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(results)
 	}
-	fmt.Printf("采样对象 pid=%d proc_root=%s\n", pid, procRoot)
+	fmt.Printf("采样对象 pid=%d proc_root=%s\n", pid, *procRoot)
 	fmt.Printf("%-8s %-12s %-10s %-18s %s\n", "并发", "解码字节", "耗时ms", "peak_vmhwm_bytes", "delta_bytes")
 	for _, r := range results {
 		fmt.Printf("%-8d %-12d %-10d %-18d %d\n",

@@ -114,13 +114,15 @@ CHECKS = [
                 "`工具源里护栏必须在mount之后`（`p4-task-8-runsh.py`）钉住。"),
     },
     {
-        "name": "trace-verify破坏性删除面不得用rm-rf",
+        "name": "trace-verify破坏性删除面不得递归",
         "file": "cmd/trace-verify/main.go",
-        "pattern": r"rm -rf",
+        "pattern": r"(?m)^(?!\s*(?://|#)).*\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b",
         "expect": "absent",
         "why": ("计划任务 8 步骤 3：`scratch-cleanup` 是唯一允许删镜像/目录的入口，删除面必须**有界**"
                 "（只删命令行给出的那一个镜像文件 + `rmdir` 空挂载点 —— `rmdir` 对非空目录会失败）。"
-                "**不存在性**要求 ⇒ 静态检查。"),
+                "**不存在性**要求 ⇒ 静态检查。正则刻意**跳过注释行**：源码注释里说明「刻意不用它」"
+                "是合法且有价值的（E68：文本计数不是门禁 —— 第一版写法 `rm -rf` 正是踩了这个坑，"
+                "只命中了两行注释，见本轮 `fix(trace-mutate)` 提交）。"),
     },
 ]
 
@@ -184,7 +186,7 @@ REQUIREMENTS = [
     {
         "plan": "`scratch-cleanup` 是唯一允许删镜像/目录的入口，删除面有界（`rm -f` 具体镜像 + `rmdir`）",
         "mutations": [],
-        "checks": ["trace-verify破坏性删除面不得用rm-rf"],
-        "note": "**不存在性**要求 ⇒ 静态检查（`rm -rf` 在 `cmd/trace-verify/main.go` 里不得出现）。",
+        "checks": ["trace-verify破坏性删除面不得递归"],
+        "note": "**不存在性**要求 ⇒ 静态检查（**非注释行**里不得出现递归删除的调用形态；注释里的说明文字不算）。",
     },
 ]

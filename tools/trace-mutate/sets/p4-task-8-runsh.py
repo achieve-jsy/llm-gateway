@@ -89,10 +89,11 @@ CHECKS = [
     {
         "name": "run.sh不得递归删除",
         "file": "deploy/verify/trace-a3/run.sh",
-        "pattern": r"rm -rf",
+        "pattern": r"(?m)^(?!\s*(?://|#)).*\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b",
         "expect": "absent",
         "why": ("删除面必须**有界**：镜像由 `scratch-cleanup` 的 `rm -f <具体文件>` 删、"
-                "挂载点由 `rmdir` 删（非空即失败）。**不存在性**要求 ⇒ 静态检查。"),
+                "挂载点由 `rmdir` 删（非空即失败）。**不存在性**要求 ⇒ 静态检查；"
+                "正则刻意**跳过注释行**（E68：注释里说明「为什么不用它」是合法的）。"),
     },
     {
         "name": "run.sh必须打印每步命令",

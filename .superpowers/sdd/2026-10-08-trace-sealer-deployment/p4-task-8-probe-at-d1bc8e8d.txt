@@ -1,0 +1,273 @@
+### 临时树 = /tmp/p4t8-probe（git 共享克隆：工具需要真 git 仓库来读 HEAD 的树）
+HEAD = d1bc8e8d46b5f3c41a6f7a4bd968c8ef1463c9e1
+d1bc8e8d46b5f3c41a6f7a4bd968c8ef1463c9e1
+克隆完成：0 个脏文件（期望 0）
+
+════════ 轮 1：断言可失败性（改坏 ⇒ 必须转红）════════
+--- 1a. internal/traceverify/{guard,vmhwm}.go ---
+  [改坏] internal/traceverify/guard.go :: ScratchCapacityMarginBytes int64 = 1 << 30
+  [改坏] guard.go :: 目标设备号读不到的分支改成 return nil
+  [改坏] internal/traceverify/guard.go :: 	if n <= 0 {
+  [改坏] vmhwm.go :: VmHWM 单位校验改成 && false
+  [改坏] internal/traceverify/vmhwm.go :: 		if seen[n] {
+  [改坏] vmhwm.go :: DecodeArtifact 的解码长度变成 0（io.LimitReader）
+--- 1b. deploy/verify/trace-a3/docker-compose.yml ---
+  [改坏] deploy/verify/trace-a3/docker-compose.yml :: TRACE_BODY_ROOT: /datalog-a3/trace-archive-v4
+  [改坏] deploy/verify/trace-a3/docker-compose.yml :: TRACE_BODY_BLOCK_MB: "64"
+--- 1c. deploy/verify/trace-a3/run.sh ---
+  [改坏] run.sh :: trap 挪到 scratch-prepare **之后**
+  [改坏] deploy/verify/trace-a3/run.sh :: run findmnt -T /srv/trace-a3/trace-archive-v4 --output TARGE
+--- 1d. cmd/trace-verify/main.go ---
+  [改坏] main.go :: 护栏挪到 mount -o loop **之前**
+  [改坏] cmd/trace-verify/main.go :: "-d", "-m", "0755"
+  [改坏] internal/traceverify/guard.go :: ScratchCapacitySufficient → ScratchCapacityOK（2 处）
+  [改坏] cmd/trace-verify/main.go :: ScratchCapacitySufficient → ScratchCapacityOK（1 处）
+  [改坏] tests/traceverify/guard_test.go :: ScratchCapacitySufficient → ScratchCapacityOK（4 处）
+
+--- 轮 1 观察：tests/traceverify（期望点名用例红）---
+probe_traceverify_exit=1
+--- FAIL: TestGuardRejectsWhenDeviceCannotBeRead (0.00s)
+    --- FAIL: TestGuardRejectsWhenDeviceCannotBeRead/目标读不到 (0.00s)
+        guard_test.go:109: 
+            	Error Trace:	/tmp/p4t8-probe/tests/traceverify/guard_test.go:109
+            	Error:      	An error is expected but got nil.
+            	Test:       	TestGuardRejectsWhenDeviceCannotBeRead/目标读不到
+            	Messages:   	目标设备号读不到时必须拒绝
+--- FAIL: TestParseSizeRejectsMalformed (0.00s)
+    --- FAIL: TestParseSizeRejectsMalformed/0 (0.00s)
+        guard_test.go:166: 
+            	Error Trace:	/tmp/p4t8-probe/tests/traceverify/guard_test.go:166
+            	Error:      	An error is expected but got nil.
+            	Test:       	TestParseSizeRejectsMalformed/0
+            	Messages:   	尺寸 "0" 必须报错
+    --- FAIL: TestParseSizeRejectsMalformed/-1 (0.00s)
+        guard_test.go:166: 
+            	Error Trace:	/tmp/p4t8-probe/tests/traceverify/guard_test.go:166
+            	Error:      	An error is expected but got nil.
+            	Test:       	TestParseSizeRejectsMalformed/-1
+            	Messages:   	尺寸 "-1" 必须报错
+--- FAIL: TestScratchCapacityMarginIncludesReserve (0.00s)
+    guard_test.go:175: 
+        	Error Trace:	/tmp/p4t8-probe/tests/traceverify/guard_test.go:175
+        	Error:      	Not equal: 
+        	            	expected: 1073741824
+        	            	actual  : 1048576
+        	Test:       	TestScratchCapacityMarginIncludesReserve
+        	Messages:   	余量口径是 1 GiB（R2）
+--- FAIL: TestParseVmHWMRejectsMalformedStatus (0.00s)
+    --- FAIL: TestParseVmHWMRejectsMalformedStatus/单位不是kB (0.00s)
+        vmhwm_test.go:80: 
+            	Error Trace:	/tmp/p4t8-probe/tests/traceverify/vmhwm_test.go:80
+            	Error:      	An error is expected but got nil.
+            	Test:       	TestParseVmHWMRejectsMalformedStatus/单位不是kB
+            	Messages:   	单位不是kB：必须报错（读不到/读不懂不许静默返回 0）
+--- FAIL: TestParseConcurrencyLevelsNormalizesAndRejects (0.00s)
+    --- FAIL: TestParseConcurrencyLevelsNormalizesAndRejects/2,2 (0.00s)
+        vmhwm_test.go:209: 
+            	Error Trace:	/tmp/p4t8-probe/tests/traceverify/vmhwm_test.go:209
+            	Error:      	An error is expected but got nil.
+            	Test:       	TestParseConcurrencyLevelsNormalizesAndRejects/2,2
+            	Messages:   	--concurrency "2,2" 必须报错
+--- FAIL: TestDecodeArtifactRoundTripsRealArtifact (0.00s)
+    vmhwm_test.go:233: 
+        	Error Trace:	/tmp/p4t8-probe/tests/traceverify/vmhwm_test.go:233
+        	Error:      	Not equal: 
+        	            	expected: 20
+        	            	actual  : 0
+        	Test:       	TestDecodeArtifactRoundTripsRealArtifact
+        	Messages:   	必须返回**解压后**的字节数
+FAIL
+FAIL	github.com/example/llm-gateway/tests/traceverify	0.020s
+FAIL
+
+--- 轮 1 观察：tests/deploy -run TestA3（期望点名用例红）---
+probe_deploy_exit=1
+--- FAIL: TestA3ComposeDisablesWatermarkSoRealEnospcHappensFirst (0.00s)
+    trace_a3_compose_test.go:89: 
+        	Error Trace:	/tmp/p4t8-probe/tests/deploy/trace_a3_compose_test.go:89
+        	Error:      	Not equal: 
+        	            	expected: "/datalog-a3/trace-archive-v4"
+        	            	actual  : "/datalog/trace-archive-v4"
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1 +1 @@
+        	            	-/datalog-a3/trace-archive-v4
+        	            	+/datalog/trace-archive-v4
+        	Test:       	TestA3ComposeDisablesWatermarkSoRealEnospcHappensFirst
+        	Messages:   	正文根必须落在隔离挂载点内
+--- FAIL: TestA3RunScriptAlwaysCleansUp (0.00s)
+    trace_a3_compose_test.go:195: 
+        	Error Trace:	/tmp/p4t8-probe/tests/deploy/trace_a3_compose_test.go:195
+        	Error:      	"5667" is not less than "5557"
+        	Test:       	TestA3RunScriptAlwaysCleansUp
+        	Messages:   	trap 必须在第一个破坏性步骤（scratch-prepare）之前注册
+--- FAIL: TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep (0.00s)
+    trace_a3_compose_test.go:221: 
+        	Error Trace:	/tmp/p4t8-probe/tests/deploy/trace_isolate_script_test.go:25
+        	            				/tmp/p4t8-probe/tests/deploy/trace_a3_compose_test.go:221
+        	Error:      	"-1" is not greater than or equal to "0"
+        	Test:       	TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep
+        	Messages:   	脚本里找不到 "findmnt -T /srv/trace-a3/trace-archive-v4"
+--- FAIL: TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot (0.00s)
+    trace_a3_compose_test.go:235: 
+        	Error Trace:	/tmp/p4t8-probe/tests/deploy/trace_isolate_script_test.go:25
+        	            				/tmp/p4t8-probe/tests/deploy/trace_a3_compose_test.go:235
+        	Error:      	"-1" is not greater than or equal to "0"
+        	Test:       	TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot
+        	Messages:   	脚本里找不到 "\"-d\", \"-m\", \"0755\""
+FAIL
+FAIL	github.com/example/llm-gateway/tests/deploy	0.008s
+FAIL
+
+--- 轮 1 逐条判定（没有变异杀手的断言：改坏后必须转红）---
+红 ✓ TestGuardRejectsWhenDeviceCannotBeRead
+红 ✓ TestParseSizeRejectsMalformed
+红 ✓ TestScratchCapacityMarginIncludesReserve
+红 ✓ TestParseVmHWMRejectsMalformedStatus
+红 ✓ TestParseConcurrencyLevelsNormalizesAndRejects
+红 ✓ TestDecodeArtifactRoundTripsRealArtifact
+红 ✓ TestA3ComposeDisablesWatermarkSoRealEnospcHappensFirst
+红 ✓ TestA3RunScriptAlwaysCleansUp
+红 ✓ TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep
+红 ✓ TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot
+
+════════ 轮 1 还原：从 HEAD 重新抽出被改坏的文件，并核对 sha256 ════════
+还原 internal/traceverify/guard.go : sha256=d17822980703e86d89f7ab7899fab257cb6dbab61d1bc01f7eb820fcfd0a6695  与 HEAD 提交内容=一致
+还原 internal/traceverify/vmhwm.go : sha256=cf719e6eb0b46dbfa2b0d60951c89a4242b782b12070b4a6cabfb645db1e6eb4  与 HEAD 提交内容=一致
+还原 cmd/trace-verify/main.go : sha256=f537d666ae5877d332cdd36741fda84b7182e942fd3d9e354e770cc4209fc557  与 HEAD 提交内容=一致
+还原 tests/traceverify/guard_test.go : sha256=766fc96a5e07ca47523ef2745d778e5a28eb8164b14bd72a953c58f257341816  与 HEAD 提交内容=一致
+还原 deploy/verify/trace-a3/docker-compose.yml : sha256=9b4c93313522008341107fcca174669a75e8b3758bcf15324a1c98fb98952c48  与 HEAD 提交内容=一致
+还原 deploy/verify/trace-a3/run.sh : sha256=c9aca492a69ab6e75b6bed8837024690ef75737cd79ed853189d618b9b3cce92  与 HEAD 提交内容=一致
+
+--- 轮 1 还原后复跑（期望全绿）---
+ok  	github.com/example/llm-gateway/tests/traceverify	0.019s
+restore_traceverify_exit=0
+ok  	github.com/example/llm-gateway/tests/deploy	0.007s
+restore_deploy_exit=0
+
+--- 工作树核对（探针只写 /tmp）---
+git -C /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer status --porcelain = []
+git -C /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer rev-parse HEAD = d1bc8e8d46b5f3c41a6f7a4bd968c8ef1463c9e1
+
+════════ 轮 2：静态检查可失败性（在临时树上改坏并提交 ⇒ 工具读 HEAD 的树）════════
+（同时改坏 24 处，覆盖三张表的**每一条**静态检查）
+  [改坏] internal/traceverify/guard.go :: 的设备号读不到 → 的 stat 读取失败
+  [改坏] internal/traceverify/guard.go :: func ParseSize( → func SizeBytes(
+  [改坏] internal/traceverify/guard.go :: ScratchCapacityMarginBytes int64 = 1 << 30 → ScratchCapacityMarginBytes int64 = 1 << 20
+  [改坏] cmd/trace-verify/main.go :: traceverify.GuardScratchTarget → traceverify.GuardScratch(
+  [改坏] cmd/trace-verify/main.go :: runCmd("rm", "-f", *image) → runCmd("rm", "-rf", *image)
+  [改坏] deploy/verify/trace-a3/docker-compose.yml :: source: /srv/trace-a3 → source: /srv/trace-a3-x
+  [改坏] deploy/verify/trace-a3/docker-compose.yml :: services:\n → services:\n  control-plane:\n    image: x\n
+  [改坏] deploy/verify/trace-a3/docker-compose.yml ::       GATEWAY_PORT: "8090" →       GATEWAY_PORT: "8090"\n      CONTROL_PLANE_PO
+  [改坏] deploy/verify/trace-a3/docker-compose.yml :: TRACE_BODY_ROOT: /datalog-a3/trace-archive-v4 → TRACE_BODY_ROOT: /datalog/trace-archive-v4
+  [改坏] deploy/verify/trace-a3/docker-compose.yml :: TRACE_BODY_INST: blue → TRACE_BODY_INST: green
+  [改坏] deploy/verify/trace-a3/docker-compose.yml :: TRACE_BODY_BLOCK_MB: "64" → TRACE_BODY_BLOCK_MB: "512"
+  [改坏] deploy/verify/trace-a3/run.sh :: set -euo pipefail → set -e
+  [改坏] deploy/verify/trace-a3/run.sh :: run rm -f "$FILL" → run rm -rf "$FILL"
+  [改坏] deploy/verify/trace-a3/run.sh :: run() { → run_cmd() {
+  [改坏] deploy/verify/trace-a3/run.sh :: ⛔ 停止点 → 停止点
+  [改坏] deploy/verify/trace-a3/run.sh :: stat -c '%d %n' → stat -c %d
+  [改坏] deploy/verify/trace-a3/run.sh :: findmnt -T /srv/trace-a3/trace-archive-v4 → findmnt -T /srv/trace-a3
+  [改坏] deploy/verify/trace-a3/run.sh :: up -d --wait → up -d
+  [改坏] deploy/verify/trace-a3/run.sh :: fallocate -l "$FILL_SIZE" "$FILL" → fallocate -l 980M /srv/trace-a3/fill.bin
+  [改坏] deploy/verify/trace-a3/run.sh :: [trace-body] ERROR → [trace-body] WARN
+  [改坏] deploy/verify/trace-a3/run.sh :: body_missing IS TRUE → body_missing = true
+  [改坏] deploy/verify/trace-a3/run.sh :: 正文落盘已恢复 → 已恢复
+  [改坏] deploy/verify/trace-a3/run.sh :: 已有另一个 sealer 持有锁 → 另一个 --once 失败
+  [改坏] main.go :: 护栏块挪到 mount -o loop 之前（次序）
+probe 提交 = c34f2bcdf57f35283b82415e9434baa1ce303443
+
+──────── 轮 2：p4-task-8-guard（期望：逐条静态检查 FAIL + 退出码 1）────────
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [FAIL] 护栏不得跳过读不到设备号的路径
+      文件=internal/traceverify/guard.go  正则=的设备号读不到  期望=present  实际=未命中
+      理由=计划任务 8 步骤 3 的保守拒绝口径：拿不到设备号就**无法证明**目标与 `/`、`/datalog` 不同设备 ⇒ 必须拒绝（「读不到」必须红，不许放行、不许跳过）。**存在性**要求 ⇒ 静态检查；同一批语义的行为由在册用例 `TestGuardRejectsWhenDeviceCannotBeRead`（三条路径：目标读不到 / forbidden 读不到 / 回调为 nil）承载。
+- [FAIL] 容量预检必须解析尺寸后缀
+      文件=internal/traceverify/guard.go  正则=func ParseSize  期望=present  实际=未命中
+      理由=计划任务 8 步骤 3 第 1 步「容量预检（statfs 断言可用空间 ≥ size + 1 GiB 余量；见 R2）」的前置：`--size 1G` 必须被解析成 bytes。**存在性**要求 ⇒ 静态检查（行为由 `TestParseSizeAcceptsBinarySuffixes` / `TestParseSizeRejectsMalformed` 承载）。
+- [FAIL] 容量判据必须含1GiB余量
+      文件=internal/traceverify/guard.go  正则=ScratchCapacityMarginBytes int64 = 1 << 30  期望=present  实际=未命中
+      理由=风险登记 R2：护栏只护**挂载点**，镜像文件（约 1 GiB）落在 `/srv` 所在文件系统上、不受设备护栏保护 ⇒ 容量预检是它唯一的前置防线，余量口径必须是 **1 GiB**。**存在性**要求 ⇒ 静态检查（边界两侧由 `TestScratchCapacityMarginIncludesReserve` 承载）。
+- [FAIL] trace-verify必须调用护栏
+      文件=cmd/trace-verify/main.go  正则=traceverify\.GuardScratchTarget  期望=present  实际=未命中
+      理由=计划任务 8 步骤 3：`scratch-prepare` 必须在 `mount -o loop` **成功之后**调 `GuardScratchTarget` 复核设备号。没有这次调用，A3 的安全边界就只是文档。**存在性**要求 ⇒ 静态检查；**次序**（在 mount 之后、建归档根之前）另由 `TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot` 与静态检查 `工具源里护栏必须在mount之后`（`p4-task-8-runsh.py`）钉住。
+- [FAIL] trace-verify破坏性删除面不得递归
+      文件=cmd/trace-verify/main.go  正则=(?m)^(?!\s*(?://|#)).*(?:"rm"\s*,\s*"-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*"|\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b)  期望=absent  实际=命中 '\tif err := runCmd("rm", "-rf"'
+      理由=计划任务 8 步骤 3：`scratch-cleanup` 是唯一允许删镜像/目录的入口，删除面必须**有界**（只删命令行给出的那一个镜像文件 + `rmdir` 空挂载点 —— `rmdir` 对非空目录会失败）。**不存在性**要求 ⇒ 静态检查。正则刻意**跳过注释行**：源码注释里说明「刻意不用它」是合法且有价值的（E68：文本计数不是门禁 —— 第一版写法 `rm -rf` 正是踩了这个坑，只命中了两行注释，见本轮 `fix(trace-mutate)` 提交）。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+probe_p4-task-8-guard_exit=1
+
+──────── 轮 2：p4-task-8-compose（期望：逐条静态检查 FAIL + 退出码 1）────────
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [FAIL] A3编排必须只挂回环目录
+      文件=deploy/verify/trace-a3/docker-compose.yml  正则=(?m)^\s+source: /srv/trace-a3\s*$  期望=present  实际=未命中
+      理由=计划任务 8 步骤 4 第 1 步：回环镜像/挂载点都在 `/srv/trace-a3` 下，**这一整套只允许在 `/srv/trace-a3` 上执行**。**存在性**要求 ⇒ 静态检查（同一批语义由 `TestA3ComposeNeverMountsProductionDatalog` 承载）。
+- [FAIL] A3编排不得定义控制面服务
+      文件=deploy/verify/trace-a3/docker-compose.yml  正则=(?m)^\s+control-plane:\s*$  期望=absent  实际=命中 '  control-plane:'
+      理由=计划任务 8 步骤 4 的编排头注释：本实例**只跑 gateway**（复用测试环境已有的控制面/Redis/PG，刻意不再定义 cp 服务）⇒ 不存在 8091，`down` 的破坏面有界。**不存在性**要求 ⇒ 静态检查（服务集合的语义判据由 `TestA3ComposeUsesIsolatedNamesAndPorts` 承载）。
+- [FAIL] A3编排不得出现8091生效赋值
+      文件=deploy/verify/trace-a3/docker-compose.yml  正则=(?m)^\s*[A-Za-z_][A-Za-z0-9_]*:.*8091  期望=absent  实际=命中 '      CONTROL_PLANE_PORT: "8091'
+      理由=同上，但**只覆盖非注释行**（注释里合法地说明「不存在 8091」—— E68：文本计数不是门禁）。**不存在性**要求 ⇒ 静态检查。
+- [FAIL] A3编排的正文根必须指向隔离挂载点
+      文件=deploy/verify/trace-a3/docker-compose.yml  正则=(?m)^\s+TRACE_BODY_ROOT: /datalog-a3/trace-archive-v4\s*$  期望=present  实际=未命中
+      理由=计划任务 8 步骤 4：正文根必须指向容器内的隔离挂载点（不是 `/datalog`），否则 ENOSPC 会落在生产盘上。**存在性**要求 ⇒ 静态检查。
+- [FAIL] A3编排必须显式给实例名
+      文件=deploy/verify/trace-a3/docker-compose.yml  正则=(?m)^\s+TRACE_BODY_INST: blue\s*$  期望=present  实际=未命中
+      理由=实例名必须显式（不能靠默认值）；`tt` 目录里 spool 的路径（`inst=blue`）也被 run.sh 的复核步骤引用。**存在性**要求 ⇒ 静态检查。
+- [FAIL] A3编排的块必须小到能触发ENOSPC
+      文件=deploy/verify/trace-a3/docker-compose.yml  正则=(?m)^\s+TRACE_BODY_BLOCK_MB: "64"\s*$  期望=present  实际=未命中
+      理由=块必须小到能在 1 GiB 回环盘上真的写满（太大了会在写满前先滚动，A3 就测不到 ENOSPC）。**存在性**要求 ⇒ 静态检查。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+probe_p4-task-8-compose_exit=1
+
+──────── 轮 2：p4-task-8-runsh（期望：逐条静态检查 FAIL + 退出码 1）────────
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [FAIL] run.sh必须开严格模式
+      文件=deploy/verify/trace-a3/run.sh  正则=set -euo pipefail  期望=present  实际=未命中
+      理由=计划任务 8 步骤 4：中途失败必须**立刻**停下来交给 `trap` 清理（不许带错继续）。**存在性**要求 ⇒ 静态检查。
+- [FAIL] run.sh不得递归删除
+      文件=deploy/verify/trace-a3/run.sh  正则=(?m)^(?!\s*(?://|#)).*\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b  期望=absent  实际=命中 'run rm -rf'
+      理由=删除面必须**有界**：镜像由 `scratch-cleanup` 的 `rm -f <具体文件>` 删、挂载点由 `rmdir` 删（非空即失败）。**不存在性**要求 ⇒ 静态检查；正则刻意**跳过注释行**（E68：注释里说明「为什么不用它」是合法的）。
+- [FAIL] run.sh必须打印每步命令
+      文件=deploy/verify/trace-a3/run.sh  正则=run\(\) \{  期望=present  实际=未命中
+      理由=A3 的证据是「命令 + 真实输出」的逐条抄录 ⇒ 每一步都必须经 `run()` 打印。**存在性**要求 ⇒ 静态检查。
+- [FAIL] run.sh必须给出停止点
+      文件=deploy/verify/trace-a3/run.sh  正则=⛔ 停止点  期望=present  实际=未命中
+      理由=计划任务 8 步骤 4 反复强调「只能在测试环境跑」⇒ 脚本必须在关键节点显式停手让操作者确认环境。**存在性**要求 ⇒ 静态检查。
+- [FAIL] run.sh必须复核设备号
+      文件=deploy/verify/trace-a3/run.sh  正则=stat -c '%d %n'  期望=present  实际=未命中
+      理由=步骤 2 的复核：归档根所在设备号必须与 `/`、`/datalog` **两两不同**（这是护栏之外的第二道人工可见证据）。**存在性**要求 ⇒ 静态检查。
+- [FAIL] run.sh必须含归档根复核
+      文件=deploy/verify/trace-a3/run.sh  正则=findmnt -T /srv/trace-a3/trace-archive-v4  期望=present  实际=未命中
+      理由=步骤 2 计划原文：复核归档根确实落在回环 FS 上（TARGET 必须是 `/srv/trace-a3`）。**存在性**要求 ⇒ 静态检查（次序由两个用例的 `indexOf` 断言承载）。
+- [FAIL] run.sh必须起隔离实例并等健康
+      文件=deploy/verify/trace-a3/run.sh  正则=up -d --wait  期望=present  实际=未命中
+      理由=步骤 3 计划原文：起隔离实例（只跑 gateway）。**存在性**要求 ⇒ 静态检查。
+- [FAIL] run.sh必须真正填盘
+      文件=deploy/verify/trace-a3/run.sh  正则=fallocate -l "\$FILL_SIZE" "\$FILL"  期望=present  实际=未命中
+      理由=步骤 5 计划原文：先 `fallocate -l 980M` 把 1 GiB 的文件系统占到只剩几十 MB，再靠写入吃掉最后的空间 —— 这是「真实 ENOSPC」的承重步骤。**存在性**要求 ⇒ 静态检查。
+- [FAIL] run.sh必须观察闩锁
+      文件=deploy/verify/trace-a3/run.sh  正则=\[trace-body\] ERROR  期望=present  实际=未命中
+      理由=步骤 6 计划原文：`docker logs … | grep '[trace-body] ERROR'`（期望**只报一次**）。**存在性**要求 ⇒ 静态检查。
+- [FAIL] run.sh必须观察降级
+      文件=deploy/verify/trace-a3/run.sh  正则=body_missing IS TRUE  期望=present  实际=未命中
+      理由=步骤 7 计划原文：`SELECT count(*) … WHERE body_missing = true AND body_ref_part IS NULL` 与总数对比。**存在性**要求 ⇒ 静态检查。
+- [FAIL] run.sh必须观察恢复
+      文件=deploy/verify/trace-a3/run.sh  正则=正文落盘已恢复  期望=present  实际=未命中
+      理由=步骤 9 计划原文：删掉 `fill.bin`、等 1–2 个 tick、看闩锁日志出现「已恢复」（`internal/gateway/observability/trace_event.go:356` 的真实措辞）。**存在性**要求 ⇒ 静态检查。
+- [FAIL] run.sh必须做A7撞锁
+      文件=deploy/verify/trace-a3/run.sh  正则=已有另一个 sealer 持有锁  期望=present  实际=未命中
+      理由=步骤 10 计划原文：第二个 `--once` 必须以退出码 1 失败且 stderr 含该消息（措辞取自 `internal/tracesealer/lock.go:11` 的 `ErrAnotherSealerRunning`）。**存在性**要求 ⇒ 静态检查。
+- [FAIL] 工具源里护栏必须在mount之后
+      文件=cmd/trace-verify/main.go  正则=(?s)"mount", "-o", "loop".*?traceverify\.GuardScratchTarget\(  期望=present  实际=未命中
+      理由=任务 8 步骤 3 的次序（并见步骤 6 的注）：护栏必须在 `mount -o loop` **成功之后**调用（挂载前校验必然误拒）。**次序存在性**要求 ⇒ 静态检查；同一批语义由 `TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot` 承载。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+probe_p4-task-8-runsh_exit=1

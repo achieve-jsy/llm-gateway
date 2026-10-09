@@ -1,0 +1,91 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = d1bc8e8d46b5f3c41a6f7a4bd968c8ef1463c9e1
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 356e32be72577a728eab37b1430f3b4366a85e2b9c4507059fd8f27784c56418  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-5-unit.py)
+名字清单 sha256          = 5c8d6bc6316b39b1dbd9fe4f6627126032ea8c4b925265f48fdbb7a3a27e6e2a  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-unit-names.txt)
+名字清单条数             = 10
+清单推导命令             = grep -h '^func Test' tests/deploy/trace_sealer_unit_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 10 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-smvk8eht
+被测文件 sha256          = 6b64100976143211657f72f487ba33e28524259875cb278c8c58d78be5738ca2  deploy/systemd/trace-sealer.service
+测试文件 sha256          = 036dce9bc18421c897f7b368c74c610a909f051171367ca96e8d87cab5fba5aa  tests/deploy/trace_a3_compose_test.go
+测试文件 sha256          = 8121fdce81c2d3ba4257fbb7b4c3c570e56effc318e4e979c272a302097b8416  tests/deploy/trace_bluegreen_runbook_test.go
+测试文件 sha256          = 9ba416fe158cb34c2088239aea330bad631d8a388024cd49eb322b30881e0ccb  tests/deploy/trace_build_contract_test.go
+测试文件 sha256          = e9540b2e80c284d53cf6525b749117ed26a469d035951924b88215ba2ce8360b  tests/deploy/trace_compose_mount_test.go
+测试文件 sha256          = 12b7a0726ea1bbb8c058bdafc2e50aa98b887b6450270ebe715a3a290a584862  tests/deploy/trace_isolate_script_test.go
+测试文件 sha256          = 28418e7dcc2a4654061af42af882529b743d74894ab952ba96f6c4abaf17214a  tests/deploy/trace_sealer_unit_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] unit钉住zstd级别
+      文件=deploy/systemd/trace-sealer.service  正则=--zstd-level 19  期望=present  实际=命中 '--zstd-level 19'
+      理由=全局约束第 37 条要求编码器参数终值逐字钉住（`-19 --long=29 -T1`）。m13 已覆盖行为面，这一行是同一要求的文本面（进程侧的默认值另有 `internal/tracesealer` 的常量契约用例）。
+- [PASS] unit钉住zstd窗口
+      文件=deploy/systemd/trace-sealer.service  正则=--zstd-window-mb 512  期望=present  实际=命中 '--zstd-window-mb 512'
+      理由=`--long=29` 的前提是窗口 512 MiB；窗口是**取值**要求 ⇒ 静态检查（m14 覆盖行为面）。
+- [PASS] unit不得有ExecStartPre
+      文件=deploy/systemd/trace-sealer.service  正则=ExecStartPre  期望=absent  实际=未命中
+      理由=「启动前先建目录/先写文件」会把消失的挂载点重建到**宿主根文件系统**上（2026-09-24 `/` 被写满的同族事故），并且绕过进程内的根目录身份护栏 ⇒ **不存在性**要求 ⇒ 只能静态检查（变异无法证明「没写」）。行为面由 TestSealerUnitNeverPreparesFilesystem 承载。
+- [PASS] unit不得出现TRACE_BODY_ROOT
+      文件=deploy/systemd/trace-sealer.service  正则=TRACE_BODY_ROOT  期望=absent  实际=未命中
+      理由=sealer 用 `--root`；`TRACE_BODY_ROOT` 是网关侧（计划 2）的接口名。写进 unit 等于把「谁决定 root」复制成两份，并让运维误以为改 unit 就能改 sealer 的 root ⇒ 不存在性要求 ⇒ 静态检查（行为面由 TestSealerUnitNeverPreparesFilesystem 承载）。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| sealer 是**常驻循环**（Type=simple）而不是 oneshot+timer，且致命错误后重试（Restart=on-failure） | `m01_常驻改oneshot`, `m02_失败不重启` | — | 杀手 = TestSealerUnitIsResidentLoopWithRestart（它同时断言了 RestartSec= 与 ExecStart 的绝对路径，并反向断言 oneshot / always 不出现）。 |
+| 编码器参数逐字锁定：`--zstd-binary /usr/bin/zstd --zstd-level 19 --zstd-window-mb 512 --expected-zstd-version 1.4.8`（换版本必须重新标定） | `m03_zstd版本漂移`, `m04_zstd走PATH`, `m13_zstd级别改小`, `m14_zstd窗口改小` | `unit钉住zstd级别`, `unit钉住zstd窗口` | 杀手 = TestSealerUnitPinsZstdBinaryLevelAndVersion（四条变异都杀它）。级别/窗口另有两行静态检查（全局约束第 37 条），与行为面互补。 |
+| R8：min-age 取 3h（网关滚动上界 1h1m 的 3 倍），不得被静默改小 | `m05_min-age过小` | — | 杀手 = TestSealerUnitPinsMinAgeAboveGatewayRollBound（另有反向断言 30m/1h 不出现）。 |
+| root 与锁文件必须在同一个 root 里（锁在 root 之外没有可写保证） | `m12_锁文件挪出root` | — | 杀手 = TestSealerUnitKnowsItsRootAndLockFile。 |
+| 挂载依赖（纵深防御）：`RequiresMountsFor=/datalog` + `After=local-fs.target` | `m06_挂载依赖错位` | — | 杀手 = TestSealerUnitRequiresDatalogMount（整行相等，防止「保留前缀」的改写逃逸）。 |
+| 可写面收窄（承重）：除 /datalog 之外整个文件系统只读 + NoNewPrivileges/PrivateTmp/ProtectHome | `m07_可写面放大到根`, `m08_取消ProtectSystem` | — | 杀手 = TestSealerUnitConfinesWritesToDatalog。 |
+| 资源限额（规格 §11.2 V1）：MemoryMax/MemoryHigh/CPUWeight/IOWeight/IOScheduling*/Nice/LimitNOFILE | `m09_去掉内存上限` | — | 杀手 = TestSealerUnitLimitsMemoryCpuAndIO。 |
+| 日志全部进 journald 且标识固定（告警规则按 SyslogIdentifier 匹配） | `m10_改syslog标识` | — | 杀手 = TestSealerUnitLogsToJournal。 |
+| D64/D71：unit 里不得出现 `SEAL_INTERVAL` / `--seal-interval`（不是有效键名，会冒充有效配置） | `m11_塞入无效配置键` | — | 杀手 = TestSealerUnitNeverUsesSealIntervalKey。 |
+| D70 同族：启动前不得有任何建目录/写文件的形态（ExecStartPre 一类） | — | `unit不得有ExecStartPre` | 不存在性要求 ⇒ 静态检查；行为面由 TestSealerUnitNeverPreparesFilesystem 承载（它还断言 `mkdir` / ExecStartPost 不出现）。 |
+| sealer 用 `--root` 而不是环境变量：unit 里不得出现网关侧的 `TRACE_BODY_ROOT` | — | `unit不得出现TRACE_BODY_ROOT` | 不存在性要求 ⇒ 静态检查；行为面同上一条用例。 |
+
+计划要求总数 = 11；引用到的变异 = 14；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=10 ran=10 diff=0 PASS=10 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_常驻改oneshot | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitIsResidentLoopWithRestart |
+| m02_失败不重启 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitIsResidentLoopWithRestart |
+| m03_zstd版本漂移 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitPinsZstdBinaryLevelAndVersion |
+| m04_zstd走PATH | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitPinsZstdBinaryLevelAndVersion |
+| m05_min-age过小 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitPinsMinAgeAboveGatewayRollBound |
+| m06_挂载依赖错位 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitRequiresDatalogMount |
+| m07_可写面放大到根 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitConfinesWritesToDatalog |
+| m08_取消ProtectSystem | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitConfinesWritesToDatalog |
+| m09_去掉内存上限 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitLimitsMemoryCpuAndIO |
+| m10_改syslog标识 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitLogsToJournal |
+| m11_塞入无效配置键 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitNeverUsesSealIntervalKey |
+| m12_锁文件挪出root | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitKnowsItsRootAndLockFile |
+| m13_zstd级别改小 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitPinsZstdBinaryLevelAndVersion |
+| m14_zstd窗口改小 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestSealerUnitPinsZstdBinaryLevelAndVersion |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 14
+集合里的变异总数          = 14（本次运行 == 全集 ✓）
+断言支撑的红             = 14 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 14 = 14 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

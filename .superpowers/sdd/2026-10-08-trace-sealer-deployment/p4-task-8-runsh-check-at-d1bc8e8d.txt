@@ -1,0 +1,6 @@
+定位校验（基于 HEAD:deploy/verify/trace-a3/run.sh，sha256=c9aca492a69ab6e7）
+OK  m01_删掉trap清理
+OK  m02_删掉护栏调用
+OK  m03_摘掉confirm
+全部 3 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

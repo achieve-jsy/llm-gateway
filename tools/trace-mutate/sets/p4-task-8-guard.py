@@ -116,7 +116,7 @@ CHECKS = [
     {
         "name": "trace-verify破坏性删除面不得递归",
         "file": "cmd/trace-verify/main.go",
-        "pattern": r"(?m)^(?!\s*(?://|#)).*\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b",
+        "pattern": r'(?m)^(?!\s*(?://|#)).*(?:"rm"\s*,\s*"-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*"|\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b)',
         "expect": "absent",
         "why": ("计划任务 8 步骤 3：`scratch-cleanup` 是唯一允许删镜像/目录的入口，删除面必须**有界**"
                 "（只删命令行给出的那一个镜像文件 + `rmdir` 空挂载点 —— `rmdir` 对非空目录会失败）。"

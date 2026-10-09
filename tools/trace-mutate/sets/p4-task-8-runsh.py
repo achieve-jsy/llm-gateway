@@ -201,7 +201,9 @@ REQUIREMENTS = [
         "plan": "护栏调用必须在「复核归档根 → 起实例 → 填盘」之前（且不得被删掉）",
         "mutations": ["m02_删掉护栏调用"],
         "checks": [],
-        "note": "杀手 = TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep（护栏行必须存在 + 四条 `indexOf` 次序）。",
+        "note": ("杀手 = TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep（护栏行必须存在 + 四条 `indexOf` 次序）；"
+                 "**连带**：同一条变异也打红 TestA3RunScriptAlwaysCleansUp —— 该用例以 `scratch-prepare` 行的位置作为"
+                 "「第一个破坏性步骤」的锚点，锚点被删就无从比较先后 ⇒ 如实登记，不隐瞒连带（表里 m02 的 FAIL=2）。"),
     },
     {
         "plan": "护栏调用必须带 `--confirm`（破坏性准备动作要显式确认）",

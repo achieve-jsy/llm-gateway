@@ -30,7 +30,8 @@ const (
 	// 【必须由测试钉住】它是未导出的，本包只能复制；一旦冻结包改了常量而这里没跟，
 	// A8 的「不超上界」判断就会静默失真 ⇒ tests/tracesealer/constants_contract_test.go
 	// 现读 reader.go 的源码比对。镜像值：maxTrailerBytes(64<<20) / 8 = 8,388,608。
-	// （本任务只镜像、不使用：A8 的观测在计划 4/4 的任务 10 落地。）
+	// （任务 1 只镜像、不使用；A8 的观测面已在任务 10 落地 —— runner.go 的
+	// observeSealedPart 用它算「上界的百分比」并在超过一半时预警。）
 	MaxTrailerEntries = 8_388_608
 
 	// MinAgeFloor 是 --min-age 的强制下界，数值上等于网关滚动间隔上界（1h）；

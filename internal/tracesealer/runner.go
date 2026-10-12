@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"time"
 
@@ -13,12 +14,16 @@ import (
 
 // RoundResult 是一轮封块的汇总（对外可观测面：日志、退出码、告警、看板）。
 //
-// 【MaxRows / MinBytesPerRow / MinRatio 的零值语义】这三个量在计划 4/4 的任务 10
-// 之前**恒为零值**：块内行数只有从产物 footer 才拿得到（任务 10 的 RowCount），
-// 而「未压缩字节/行」与压缩比都需要行数作分母。因此零值 = 「本轮无样本」，
-// 而**不是**「0 行」/「0 字节每行」/「比值 0」——消费方必须先判 Sealed > 0 再读它们。
-// 本任务只承重「计数与分类」：把未知量显式留成零值，好过拿 0 当分母算出 Inf/NaN
-// 混进告警（那会把「还没实现」伪装成「观测结论」）。
+// 【MaxRows / MinBytesPerRow / MinRatio 的来源与零值语义】这三个量由
+// `observeSealedPart` 从**每个成功封出的 part 的产物 footer** 采集（任务 10）：
+// 块内行数只有从 footer 才拿得到（`RowCount`），而「未压缩字节/行」与压缩比都需要
+// 行数作分母。因此零值 = 「本轮无样本」—— 没有成功封出的块，或者块的 footer 读不
+// 出来（后者会另留一条带稳定 reason 的 ERROR，见 observeSealedPart），而**不是**
+// 「0 行」/「0 字节每行」/「比值 0」。消费方必须先判 `Sealed > 0` 再读它们。
+//
+// 【为什么依然不拿 0 当分母】非法分母（0 行 / 未压缩字节为 0）不产生 Inf/NaN，
+// 也不被写进这三个量：宁可「本轮无样本」，也不把一个**凑出来的**读数混进 A8/A6
+// 的观测面 —— 那会把「没观测到」伪装成「观测结论」。
 type RoundResult struct {
 	Eligible, Sealed                                                int
 	PartExists, RowMismatch, SealFailed, TooManyRows, UnknownFailed int
@@ -218,6 +223,90 @@ func (r *Runner) logPartFailure(kind FailureKind, note string, task ta.SealTask,
 		"err", err)
 }
 
+// observeSealedPart 采集本轮成功封出的 part 的观测量（A8 行数分布、A6 压缩比）。
+//
+// 【为什么它只是「观测」而不是「判定」】A8 的判定门槛（`max(rows)` 相对
+// `MaxTrailerEntries` 的余量）是**人的决策**：真的越界时要在运行手册里登记「按行数
+// 滚动」并重新标定，而不是让 sealer 自己改行为。因此本函数只写 RoundResult 的三个
+// 极值/最小值与日志，绝不因为 rows 接近上界而拒绝、回滚或改写已经封好的产物。
+//
+// 【为什么读不出来只记日志、不改计数】`Sealed` 已经在调用点累加 —— 冻结包确确实实
+// 把产物写出来了；读不出 footer 是**观测面**的问题，不是封块失败。把它并进失败计数
+// 会让「一次观测缺陷」把整轮判成故障。但它也绝不静默：`footer_unreadable` /
+// `artifact_stat_failed` 两条 ERROR 带**稳定 reason**，日志规则按 reason 匹配。
+// 「读不到就当 0 行」正是 A8 最不可接受的一类失效（分布会画成「块都很小」，而没人
+// 会去查）。
+//
+// 【每个 part 一行 INFO，每轮一行汇总】per-part 的 INFO 让运维能下钻到「是哪一块
+// 撑大的」；轮次汇总（`Round` 末尾那条心跳）带上 max_rows / min_bytes_per_row /
+// min_ratio 三个量（字段集在 alert.go 的 Summarize 里，恒在）。两者一起构成 A8/A6 的
+// **持续**观测面。
+func (r *Runner) observeSealedPart(res *RoundResult, task ta.SealTask) {
+	refStr := fmt.Sprintf("%s/%s/part-%06d", task.DT, task.Inst, task.Part)
+	partPath := ta.NewPaths(r.opts.Root).PartFile(ta.Ref{DT: task.DT, Inst: task.Inst, Part: task.Part})
+
+	rows, err := RowCount(partPath)
+	if err != nil {
+		r.logger.Error("trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）",
+			"reason", "footer_unreadable", "ref", refStr, "part_path", partPath, "err", err)
+		return
+	}
+	fi, err := os.Stat(partPath)
+	if err != nil {
+		r.logger.Error("trace-sealer 读不到产物的字节数（本块的观测量不计入本轮；产物本身已经封好）",
+			"reason", "artifact_stat_failed", "ref", refStr, "part_path", partPath, "err", err)
+		return
+	}
+	artifactBytes := fi.Size()
+	// RowCount 成功 ⇒ 文件至少有 FooterSize 字节 ⇒ artifactBytes ≥ 32 恒成立，因此
+	// 这里**不**再判它一次（那条分支是证明不可达的死代码，E64① 要求要么删掉、要么
+	// 由用例触达 —— 我们选择删掉）。
+	if rows <= 0 || task.UncompressedBytes <= 0 {
+		r.logger.Warn("trace-sealer 观测量分母非法（跳过本块，不发明读数）",
+			"reason", "observation_skipped", "ref", refStr,
+			"rows", rows, "artifact_bytes", artifactBytes,
+			"uncompressed_bytes", task.UncompressedBytes)
+		return
+	}
+
+	// 0 行没有「每行字节数」这个概念。上面的守卫已经拦下 rows <= 0，这里再加一层
+	// 只是为了「守卫将来被改动时也不会除以 0」—— 除零是 panic，不是可恢复的错误。
+	bytesPerRow := int64(0)
+	if rows > 0 {
+		bytesPerRow = task.UncompressedBytes / int64(rows)
+	}
+	ratio := float64(task.UncompressedBytes) / float64(artifactBytes)
+
+	if rows > res.MaxRows {
+		res.MaxRows = rows
+	}
+	// `== 0 ||` 短路是零值语义的**唯一**实现点：0 表示「本轮还没有样本」，不能被
+	// 当成一个真实读数参与比较（否则第一个块之后的最小值就永远定死在那里）。
+	if res.MinBytesPerRow == 0 || bytesPerRow < res.MinBytesPerRow {
+		res.MinBytesPerRow = bytesPerRow
+	}
+	if res.MinRatio == 0 || ratio < res.MinRatio {
+		res.MinRatio = ratio
+	}
+
+	partFields := []any{
+		"ref", refStr,
+		"rows", rows,
+		"bytes_per_row", bytesPerRow,
+		"ratio", ratio,
+		"artifact_bytes", artifactBytes,
+		"uncompressed_bytes", task.UncompressedBytes,
+		"row_cap_pct", float64(rows) / float64(MaxTrailerEntries) * 100,
+	}
+	r.logger.Info("trace-sealer sealed part", partFields...)
+	// A8 的预警线：行数一旦越过上界的一半，余量就只剩 2 倍（冻结包超限时返回
+	// ErrTooManyRows ⇒ 该块**永远不会**被封出、spool 无限增长）。这是**预警**，
+	// 不是拒绝：处置是人的决策（登记「按行数滚动」或下调 TRACE_BODY_BLOCK_MB）。
+	if rows > MaxTrailerEntries/2 {
+		r.logger.Warn("trace-sealer 块内行数已超过 maxTrailerEntries 的一半（A8 余量不足 2 倍）", partFields...)
+	}
+}
+
 // Round 跑一轮：护栏复检 → 发现 → 逐个封块 → 分类计数 → 汇总 → 打日志。
 //
 // 【为什么护栏是本轮的第一件事】根目录不可用时「发现」这一步看到的是一片空（挂载点
@@ -264,6 +353,9 @@ func (r *Runner) Round(ctx context.Context) (RoundResult, error) {
 		switch kind {
 		case "":
 			res.Sealed++
+			// 观测量（A8/A6）在**封块成功之后**采集：产物已经在盘上，读它的 footer
+			// 不会失败成「封块失败」，也不会改变分类结果。
+			r.observeSealedPart(&res, task)
 		case KindPartExists:
 			res.PartExists++
 			// 幂等无害：不告警。下轮扫描仍会看到同一 spool（它不会被删），

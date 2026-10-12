@@ -1,0 +1,7 @@
+TestFooterRejectsBadMagic
+TestFooterRejectsMissingFile
+TestFooterRejectsNegativeRowCount
+TestFooterRejectsShortFile
+TestFooterRejectsTrailerNotAdjacentFooter
+TestFooterRejectsUnknownFormatVersion
+TestFooterRowCountOnHandBuiltFooter

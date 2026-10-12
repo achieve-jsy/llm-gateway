@@ -1,0 +1,6 @@
+TestObserveLogsOneInfoLinePerSealedPart
+TestObserveSkipsDegenerateDenominator
+TestObserveSkipsUnreadableArtifact
+TestObserveTracksMaxRowsAndMinRatio
+TestObserveTracksMinimumBytesPerRow
+TestObserveWarnsAtHalfOfRowCap

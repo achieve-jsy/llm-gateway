@@ -93,9 +93,12 @@ MUTATIONS["m03_缺字段返回0nil"] = [
 
 # m04 行号固定成 0（不随机）⇒ 「K 个 goroutine 各做 50 次**随机**点读」名不副实：
 #     所有并发都打在同一行上，缓存局部性让峰值失去代表性。
+#     **刻意用 `rng.Int63n(1)`（恒 0）而不是字面量 `0`**：后者会让 `rng` 变成未使用的
+#     变量 ⇒ **编译红**（本集合第一版正是这样，已被 `--list` 的表判为「红(编译失败)」并就地改写；
+#     全局约束第 5 条要求每条变异都红成**断言红**）。
 #     杀手：TestPointReadLoadRunsConcurrentlyAndRandomly（DistinctRows == 1）
 MUTATIONS["m04_行号固定为0"] = [
-    ("sub", "ref.Row = int(rng.Int63n(int64(l.Rows)))", "ref.Row = 0"),
+    ("sub", "ref.Row = int(rng.Int63n(int64(l.Rows)))", "ref.Row = int(rng.Int63n(1))"),
 ]
 
 # m05 多起一个 goroutine（K+1）⇒ 实测同时在飞峰值与档位不符，档位声明失真。

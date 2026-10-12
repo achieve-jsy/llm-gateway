@@ -1,16 +1,22 @@
 package traceverify
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/example/llm-gateway/internal/tracearchive"
 )
 
 // defaultProcRoot 是 procfs 的默认根（Linux）。darwin 上没有它 ⇒ 默认根下的读取
@@ -222,4 +228,317 @@ func DecodeArtifact(path string, windowBytes int) (int64, error) {
 		return 0, fmt.Errorf("traceverify: 解码 %s: %w", path, err)
 	}
 	return n, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// decode-bench 的点读负载（计划任务 9 步骤 3-4）
+//
+// 【为什么是点读而不是整流解码】规格 §14.2 的 A6/C5 要标定的是「**K 路并发点读**的
+// 峰值常驻内存」——读侧（计划 3）的实际动作是 `tracearchive.NewReader` + `GetBody`
+// 按定位键取一行，它必须把整个解码窗口载入。整流解码（把整块解压一遍再丢弃）测的是
+// 另一个动作：它共享解码器，却少了 trailer/索引那条路径（那正是 `maxTrailerEntries`
+// 上界要压的东西）⇒ 只能当参考读数，不能当 C5 的判据。故本节与真实读侧同形。
+//
+// 【可测性】真实点读需要一个真实产物（要 zstd 子进程）与 `/proc`（要 Linux）；
+// 负载因此把「取一行」与「采一次峰值」都抽象成可注入的函数 ⇒ 并发度、随机性、
+// 错误传播、**到限中止**这些行为断言可以用替身在 darwin 上真跑。
+// ─────────────────────────────────────────────────────────────────────────────
+
+// DefaultPointsPerGoroutine 是每个 goroutine 每轮的点读数（计划任务 9 步骤 3 的 50 次）。
+const DefaultPointsPerGoroutine = 50
+
+// DefaultSampleInterval 是峰值采样的默认间隔。
+const DefaultSampleInterval = 50 * time.Millisecond
+
+// PointReadFunc 按定位键取回一行正文。真实实现 = `tracearchive.Reader.GetBody`；
+// 用例注入替身即可在没有任何产物 / 没有 procfs 的机器上驱动整个负载。
+type PointReadFunc func(ctx context.Context, ref tracearchive.Ref) ([]byte, error)
+
+// PeakFunc 采样一次峰值常驻内存（VmHWM，bytes）。decode-bench 注入真实 procfs 读取
+// （本进程 + 自身子进程）；用例注入替身即可驱动「到限中止」与「读不到峰值」两条路径。
+//
+// **读不到必须报错，绝不返回 0**：0 会被当成「内存很小」的合法读数。
+type PeakFunc func() (int64, error)
+
+// PointReadResult 是一次点读负载的读数。
+//
+// MaxInFlight 是**实测**到的同时在飞点数（不是配置值）：它是「K 路并发」这句话的
+// 唯一可核验证据 —— 配置了 K 但实际串行，峰值内存自然上不去，A6 的结论就会失真。
+type PointReadResult struct {
+	Points       int           // 实际完成的点读数
+	Bytes        int64         // 取回的正文总字节数
+	MaxInFlight  int           // 同时在飞点读数的峰值
+	DistinctRows int           // 命中过的不同行号个数（随机性证据）
+	Rows         int           // 采样上界（= l.Rows）
+	Elapsed      time.Duration // 整个负载的墙钟耗时
+	PeakBytes    int64         // 采样到的峰值常驻内存（Peak 为 nil ⇒ 0）
+	PeakSamples  int           // 实际采样次数
+	Aborted      bool          // 是否因峰值达到 AbortAtBytes 而中止（中止 ≠ 失败）
+}
+
+// PointReadLoad 描述一次「K 个 goroutine 各做 Rounds × PointsPerGoroutine 次随机点读」。
+//
+// Rounds 是**连续轮数**（≥5，计划任务 9 步骤 4.2 要复测「连续多轮不做 GC」的形态）：
+// 轮内不重建进程、不重建 Reader，因此分配压力跨轮累积 —— 这正是要暴露的形态。
+//
+// 【到限中止（承重）】`GOGC=off` 的形态会让内存单调增长，直跑到 OOM 为止；
+// 被 OOM 杀掉的进程**什么都报不出来**。因此 `AbortAtBytes > 0` 时，监控协程一旦
+// 采样到峰值 ≥ 该阈值就取消负载并置 `Aborted`：于是「峰值至少到了阈值」是一条
+// **已证明**的读数（而不是一个被杀的进程）。这正是计划任务 9 停止点要的判据形态。
+type PointReadLoad struct {
+	Ref                tracearchive.Ref // DT/Inst/Part；Row 由负载逐次随机生成
+	Rows               int              // 块内行数（采样上界，来自 ArtifactRows 或 --rows）
+	Concurrency        int              // K
+	Rounds             int              // 连续轮数
+	PointsPerGoroutine int              // 0 ⇒ DefaultPointsPerGoroutine
+	Seed               int64            // 随机种子（可复现）；每个 goroutine 用它 + slot
+	Read               PointReadFunc    // 必填
+
+	Peak           PeakFunc      // nil ⇒ 不采样（峰值与中止都不生效）
+	AbortAtBytes   int64         // >0 且实测峰值 ≥ 它 ⇒ 取消负载并置 Aborted
+	SampleInterval time.Duration // 0 ⇒ DefaultSampleInterval
+	MaxSamples     int           // 0 ⇒ 采到负载结束
+}
+
+// Run 执行负载并返回读数。参数非法 ⇒ 在**任何点读之前**报错。
+// 任一次点读 / 峰值采样失败 ⇒ 取消其余 goroutine 并把该错误原样上抛（不返回半个读数）。
+// 到限中止（Aborted）**不是**错误：它返回部分读数，由调用方（报告）据此判定。
+func (l PointReadLoad) Run(ctx context.Context) (PointReadResult, error) {
+	if l.Read == nil {
+		return PointReadResult{}, errors.New("traceverify: 点读负载需要一个 Read（真实实现 = tracearchive.Reader.GetBody）")
+	}
+	if l.Rows <= 0 {
+		return PointReadResult{}, fmt.Errorf("traceverify: 点读负载需要 Rows > 0（得到 %d）", l.Rows)
+	}
+	if l.Concurrency <= 0 {
+		return PointReadResult{}, fmt.Errorf("traceverify: 点读负载需要 Concurrency > 0（得到 %d）", l.Concurrency)
+	}
+	if l.Rounds <= 0 {
+		return PointReadResult{}, fmt.Errorf("traceverify: 点读负载需要 Rounds > 0（得到 %d）", l.Rounds)
+	}
+	points := l.PointsPerGoroutine
+	if points <= 0 {
+		points = DefaultPointsPerGoroutine
+	}
+	interval := l.SampleInterval
+	if interval <= 0 {
+		interval = DefaultSampleInterval
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg          sync.WaitGroup
+		mu          sync.Mutex
+		firstErr    error
+		inFlight    int64
+		maxInFlight int64
+		pointsDone  int64
+		bytesRead   int64
+		rowsSeen    = map[int]struct{}{}
+		peakBytes   int64
+		peakSamples int
+		aborted     bool
+	)
+	// abortRequested 让「到限中止」与「真错误」区分开：中止会把 ctx 取消掉，
+	// 正在飞的点读随即返回 context.Canceled —— 那是**预期的收尾**，不是失败。
+	var abortRequested int32
+	recordErr := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		mu.Unlock()
+	}
+	noteRow := func(row int) {
+		mu.Lock()
+		rowsSeen[row] = struct{}{}
+		mu.Unlock()
+	}
+	notePeak := func(v int64) {
+		mu.Lock()
+		if v > peakBytes {
+			peakBytes = v
+		}
+		peakSamples++
+		mu.Unlock()
+	}
+
+	start := time.Now()
+	done := make(chan struct{})
+	monitorDone := make(chan struct{})
+	if l.Peak != nil {
+		go func() {
+			defer close(monitorDone)
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			sample := func() bool { // 返回 false ⇒ 监控结束
+				v, err := l.Peak()
+				if err != nil {
+					recordErr(fmt.Errorf("traceverify: 采样峰值常驻内存失败: %w", err))
+					return false
+				}
+				notePeak(v)
+				mu.Lock()
+				n := peakSamples
+				mu.Unlock()
+				if l.AbortAtBytes > 0 && v >= l.AbortAtBytes {
+					mu.Lock()
+					aborted = true
+					mu.Unlock()
+					atomic.StoreInt32(&abortRequested, 1)
+					cancel()
+					return false
+				}
+				return l.MaxSamples <= 0 || n < l.MaxSamples
+			}
+			if !sample() {
+				return
+			}
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					if !sample() {
+						return
+					}
+				}
+			}
+		}()
+	} else {
+		close(monitorDone)
+	}
+
+	for slot := 0; slot < l.Concurrency; slot++ {
+		wg.Add(1)
+		go func(slot int) {
+			defer wg.Done()
+			rng := rand.New(rand.NewSource(l.Seed + int64(slot)))
+			for i := 0; i < l.Rounds*points; i++ {
+				if ctx.Err() != nil {
+					return
+				}
+				ref := l.Ref
+				ref.Row = int(rng.Int63n(int64(l.Rows)))
+				cur := atomic.AddInt64(&inFlight, 1)
+				for {
+					old := atomic.LoadInt64(&maxInFlight)
+					if cur <= old || atomic.CompareAndSwapInt64(&maxInFlight, old, cur) {
+						break
+					}
+				}
+				body, err := l.Read(ctx, ref)
+				atomic.AddInt64(&inFlight, -1)
+				if err != nil {
+					if atomic.LoadInt32(&abortRequested) == 1 && errors.Is(err, context.Canceled) {
+						return // 到限中止的预期收尾，不是失败
+					}
+					recordErr(fmt.Errorf("traceverify: 点读 %s: %w", ref, err))
+					return
+				}
+				atomic.AddInt64(&pointsDone, 1)
+				atomic.AddInt64(&bytesRead, int64(len(body)))
+				noteRow(ref.Row)
+			}
+		}(slot)
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+	close(done)
+	<-monitorDone
+
+	mu.Lock()
+	err := firstErr
+	res := PointReadResult{
+		Points:       int(pointsDone),
+		Bytes:        bytesRead,
+		MaxInFlight:  int(maxInFlight),
+		DistinctRows: len(rowsSeen),
+		Rows:         l.Rows,
+		Elapsed:      elapsed,
+		PeakBytes:    peakBytes,
+		PeakSamples:  peakSamples,
+		Aborted:      aborted,
+	}
+	mu.Unlock()
+	if err != nil {
+		return PointReadResult{}, err
+	}
+	return res, nil
+}
+
+// ArtifactRows 用**公开 API 的错误身份**探测一个产物块内的行数（decode-bench 的
+// `--rows 0` 默认路径）。它只读、不写、不落临时文件。
+//
+// 判据来自冻结包 `reader.go` 的显式越界拒绝：`ref.Row < 0 || ref.Row >= RowCount`
+// ⇒ `ErrNotArchived`（在**解码之前**返回）；块内行 ⇒ 正文或 `ErrBodyMissing`（标记行）。
+// 因此「第一个越界的行号」就等于行数 —— 不需要复刻 footer 布局（那是任务 10 的
+// `tracesealer.RowCount` 的活），也就不存在第三份 footer 镜像。
+//
+// 代价（如实登记）：倍增 + 二分共约 2×log2(rows) 次点读；真实块上每次都要解码到目标行
+// ⇒ 这一步本身会推高 VmHWM（保守方向）。`--rows` 可以直接给定行数跳过它。
+func ArtifactRows(ctx context.Context, read PointReadFunc, ref tracearchive.Ref, maxRows int) (int, error) {
+	if read == nil {
+		return 0, errors.New("traceverify: 行数探测需要一个 Read")
+	}
+	if maxRows <= 0 {
+		maxRows = 1 << 31
+	}
+	inRange := func(row int) (bool, error) {
+		r := ref
+		r.Row = row
+		_, err := read(ctx, r)
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, tracearchive.ErrBodyMissing):
+			return true, nil
+		case errors.Is(err, tracearchive.ErrNotArchived):
+			return false, nil
+		default:
+			return false, err
+		}
+	}
+
+	ok, err := inRange(0)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, fmt.Errorf("traceverify: %s 的 row=0 都不在范围内 ⇒ 无法探测行数", ref)
+	}
+	lo, hi := 0, 1
+	for {
+		ok, err := inRange(hi)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			break
+		}
+		lo = hi
+		if hi >= maxRows {
+			return 0, fmt.Errorf("traceverify: %s 的行数超过 maxRows=%d（探测上界）", ref, maxRows)
+		}
+		hi *= 2
+		if hi > maxRows {
+			hi = maxRows
+		}
+	}
+	for lo+1 < hi {
+		mid := lo + (hi-lo)/2
+		ok, err := inRange(mid)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return lo + 1, nil
 }

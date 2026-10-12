@@ -1,0 +1,109 @@
+# 任务 9 步骤 4「A6 的两次真实测量」与（计划 3 E52 划归本任务的）A1 百万级读回——**执行状态登记**（诚实登记，不是证据替代品）
+
+HEAD = 7740bdbf5a82df2fe0137860d11fa2ecfa0d4785（本文件的生成时点；内容只描述本 HEAD 上的产物）
+本文件**不声称任何未落盘的数字**：下表「状态」列里凡写「**待宿主执行**」的，都**没有**产出读数。
+
+## 一句话结论
+
+A6 的两次**真实测量**（① 生产宿主 v1.4.8 的压缩比；② Linux `/proc` 上的 K 路点读解码内存）
+与 A1 的**百万级读回**，在**当前工作机（darwin/arm64，16 GiB）上一条都执行不了**：
+
+- **没有 `/proc`**：`VmHWM` 的唯一来源是 `/proc/<pid>/status`（本机 CLI 冒烟用 `--pid/--proc-root`
+  注入**假 procfs** 才跑通；默认路径在 darwin 上**响亮失败**、退出码 1 —— 见
+  `p4-task-9-build-vet-smoke-at-7740bdbf.txt` 的 6.6 例，这是刻意行为：读不到就必须红，不许 SKIP）；
+- **没有 zstd v1.4.8**：本机 `/opt/homebrew/bin/zstd` 是 **v1.5.7**，而规格 §11.1 / §5.3.1.1 明确
+  「**10.26× 是「zstd v1.4.8 + `-19 --long=29`」专属的结果**，换版本必须重新标定」⇒ 本机的封块
+  压缩比**不能**用来回答 A6；
+- **没有真实 PG / 测试库**：A1 的读回要求「真实 PG + 真实 zstd 1.4.8 + ≥ 1e6 行真实封块」；
+- **没有 docker 引擎**：本机只有 docker CLI，起不了 `deploy/verify/trace-a3/docker-compose.yml`。
+
+按计划全局约束第 55 行，这类「重活」只能走 `cmd/trace-verify` / 生产宿主 + 手工剧本，**不得**进入
+任何 `p4-task-*.py` 的清单。因此本步骤的产出是三层：
+
+1. **已落盘的可执行面**：`internal/traceverify/budget.go`（C5 预算算术）、`internal/traceverify/vmhwm.go`
+   （`ParseVmHWM` / `VmHWMProbe` / `PointReadLoad` / `ArtifactRows`）、`cmd/trace-verify/main.go`
+   的 `decode-bench`（**真实 K 路点读** = `tracearchive.NewReader` + `GetBody`，与读侧同形）。
+2. **已落盘的契约面**：`tests/traceverify/*`（18 PASS，含点读负载的并发度 / 随机性 / 错误传播 /
+   到限中止 / 参数校验）、`tests/traceverify/budget_test.go`（C5 算术 4 PASS），以及四张变异表
+   `p4-task-9-{budget,vmhwm}` + 重出的 `p4-task-8-{guard,runsh}`（**15 = 15 断言红、0 崩溃/编译红、
+   0 允许的绿**）—— 任何一步被改坏都会转红。
+3. **未产出（下表逐条列出）**：生产宿主与 Linux 宿主上的**真实读数**。
+
+## 逐条执行状态
+
+| 步骤 4 要求的读数 | 状态 | 由谁在何处产出 |
+|---|---|---|
+| **A6-①** 生产宿主（`/usr/bin/zstd` **v1.4.8**）上复制一棵真实 spool/产物树后的封块读数：每个 part 的 `rows` / `uncompressed_bytes` / `artifact_bytes` / **`ratio`** | **待宿主执行** | `touch -d '5 hours ago' <spool>`（**不得**改 `--min-age`，那是 R8 的承重参数）后执行 `trace-sealer --root <copy> --zstd-binary /usr/bin/zstd --expected-zstd-version 1.4.8 --min-age 3h --once`，抄录它打出的 per-part 行与每轮汇总 |
+| **A6-① 对照基线**：整树压缩比是否 ≥ 规格 §16 第 7 条的门槛 | **待宿主执行**（本机只能给 Go 侧对照，见下） | 同上；门槛原文逐字见本文件「逐字引用的门槛」一节 |
+| **A6-②** `decode-bench` 在**真实产物**上给出 `K = 1 / 2 / 3` 三档的 `peak_vmhwm_bytes` | **待宿主执行**（本机只有注入假 procfs 的**形状**冒烟，不是读数） | Linux 宿主：`go run ./cmd/trace-verify decode-bench --artifact <真实产物> --concurrency 1,2,3 --json` |
+| **A6-② 基线**：`K = 0`（空读）的 RSS 作为 `MaxConcurrent` 的 `baselineBytes` | **待宿主执行** | 同一进程内先跑空转（`--points 0` 形态或等价的空读），取 `VmHWM`/RSS |
+| **A6-② 停止点判据**：`GOGC=off` 下 `K = 2` 的峰值是否 ≥ 2 GiB | **待宿主执行** | 同一次 `decode-bench` 的 `gc_mode=off` 行（`--gc-modes on,off` 是默认） |
+| **A6-② 判据**：`traceverify.PerReadPeakBytes()` / `MaxConcurrent(2GiB, baseline, safety, …)` 的结论 | **算术已钉**（640 MiB / 2），**但 `MaxConcurrent` 的最终结论必须等实测** | `tests/traceverify/budget_test.go`（算术）＋ 上表的实测峰值（结论）；回填见下「交接 H5 / H10」 |
+| **A1（读回半部，n = 1e6，口径 = 计划 3 的 H19）**：≥ 1e6 行真实封块上固定 seed 抽 1,000 行**逐字节**比对；覆盖 ≥2 个 part / ≥2 个 dt / 1 个越界样本（⇒ `ErrNotArchived`）/ 1 条 `body_missing=true` 行（⇒ `ErrBodyMissing`）；**不得出现 SKIP**；归档命中行 `Source == SourceArchive` | **待宿主执行**（环境 = 生产宿主 + 真实 PG + 真实 zstd 1.4.8） | 计划 3 的交接 **H19** 逐字给出「测什么 / 怎么测 / 通过标准」；比对源 = **封块前 spool 行的原字节**（不得用重新序列化的 jsonb，D57）；`zstd --version` 原样抄进报告 |
+
+## 本机**已**可执行的替代验证（不是上述真实读数的替代品 —— 只是把能关的缝关掉）
+
+| 验证 | 结果 | 证据 |
+|---|---|---|
+| `go build ./internal/... ./cmd/...` / `go vet`（4 包）/ `gofmt -l` | `build_exit=0` / `vet_exit=0` / 空 | `p4-task-9-build-vet-smoke-at-7740bdbf.txt` |
+| `go test ./tests/traceverify/ -count=1 -v` | **18 PASS / 0 FAIL / 0 SKIP**，`test_exit=0` | 同上 |
+| `go test ./internal/tracearchive/ -run TestGoEncoderRatioRegression -v`（**A6-① 的对照基线**，计划 1 的 ≥50× 回归门） | **压缩比 8097.3×**（下界 50.0×），17158144 B → 2119 B，`test_exit=0` | 同上 |
+| `decode-bench` 的**点读路径**端到端（真实产物 + 注入假 procfs） | `K=1/2/3` 三档 `max_in_flight == K`、点数跑满（250/500/750）、`peak_vmhwm_bytes` 全部等于注入值 536870912（假 procfs 常量 ⇒ 只证明**形状**正确，不是内存读数） | 同上 6.1 |
+| `GOGC=off` 形态真的禁掉了 GC | `gc_cycles=0`（`runtime.MemStats.NumGC` 差值），且负载跑满 | 同上 6.2 |
+| **到限中止**（`GOGC=off` 的安全出口） | 假 procfs 报 2 GiB、阈值 1 GiB ⇒ `aborted=true`、`peak_vmhwm_bytes=2147483648`、点数未跑满、**退出码 0**（中止不是失败） | 同上 6.3 |
+| 「读不到就必须红」而非 SKIP（产物缺失 / `--rounds 4` / procfs 里没有该 pid） | 三例全部 `exit=1` 且带明确错误 | 同上 6.4–6.6 |
+| C5 的算术单源 | `PerReadPeakBytes() = 512 + 64 + 64 = 640 MiB`；`MaxConcurrent(2GiB, 300MiB, 256MiB) = 2`（向下取整，`(2048−300−256)/640 = 2.33`）；边界 `1408 MiB−1` 处「减安全垫 ⇒ 1、不减 ⇒ 2」证明减法真的存在；下限 1；`perRead ≤ 0 ⇒ 1`（不 panic） | `p4-task-9-budget-authoritative-at-3777d04c.txt`（m01–m04 全红） |
+| 点读负载的形状（并发 / 随机 / 错误传播 / 行数探测 / 到限中止 / 峰值读不到） | 8 条变异全部**断言红**，0 崩溃/编译红 | `p4-task-9-vmhwm-authoritative-at-7740bdbf.txt`（m01–m11 = 11 断言红） |
+| 断言与静态检查的**可失败性**（改坏 → 转红 → 还原） | 3 条无变异杀手的入口守卫改坏后逐条**断言红**；E70① 的两条删除面静态检查插入递归形态后逐条 **FAIL + 工具退出 1**（旧判据 0 命中 / 新判据 2 命中）；主工作树的四个文件**逐字节未变** | `p4-task-9-probe-at-7740bdbf.txt` |
+
+## 逐字引用的门槛（本计划**不替**规格定门槛，只要求把原文抄进报告并与实测并列）
+
+- **规格 §14.2 A6**（`docs/superpowers/specs/2026-09-23-trace-body-direct-write-design.md:962`）：
+  `A6  2 GB 单块的 P99 点读延迟 ≤ 1.5 秒`
+- **规格 §16 第 7 条**（同文件 `:1026`）：
+  「实测整体压缩比达到规划的 **9×**（**或**至少达到难压日的实测下界 **10.26×** 所对应的水平），
+  否则说明未达标的原因并修正 §13 的容量账」
+- **计划 1 的回归门**（`internal/tracearchive/calib_test.go:81`）：
+  `压缩比 8097.3x（下界 50.0x）`；**10.26× 的版本标注**（规格 `:254`）：
+  「**10.26× 是「zstd v1.4.8 + `-19 --long=29`」专属的结果**，不是该参数组合的通用值 ——
+  换版本必须重新标定压缩比（§11.1）」
+- **640 MiB/并发 的来源**（冻结包 `internal/tracearchive/reader.go:30-62` 的注释，逐字）：
+  「`maxTrailerEntries` 是 trailer 条目数（= 块内行数）的合理性上界……条目数 × 8 字节 ≤
+  `maxTrailerBytes` ⇒ n ≤ 8 Mi = 8,388,608 条。于是「trailer 字节 + 解码索引」对一次并发点读的
+  贡献 ≤ 128 MiB，叠加解码窗口 512 MiB ⇒ ≈640 MiB/并发，回到 C5 的 600 MB 量级。」
+  同处登记的**未加上界之前**的实测病态值：「单次点读实测峰值堆 = **1090 MiB**（= 索引 512 +
+  tb 64 + 解码窗口 512）；再叠加 MaxConcurrent 默认 2（稳态 2 并发实测 **1666 MiB**；
+  **连续多轮不做 GC 时实测 3268 MiB**）⇒ 超过规格 §8.4 C5 按 600 MB/并发做的 2 GiB 估算」。
+  ⚠️ **必须复测**的正是最后这一项（「连续多轮不做 GC」）：`decode-bench` 因此**连续跑 ≥5 轮**
+  并对每个并发档位**分别**报告「有 GC」与「禁掉 GC（`GOGC=off`）」两种形态。
+
+## 交接 H5 / H10（回填给计划 3 的唯一输入）——**本轮不填数字**
+
+- **H5**：并发上限用 `MaxConcurrent` 的**实测结论**回填计划 3 的 `TRACE_BODY_READ_MAX_CONCURRENT`
+  （计划 3 的 H15）；C5 预算取蓝绿编排的 2 GiB（D72）。
+- **H10**：本任务的 A6 解码内存实测是计划 3 的 H15 的**唯一输入**（计划 3 的默认并发 2 是按
+  600 MB/并发估的）。
+- ⛔ **停止点（未触发，因为没有读数）**：若 `GOGC=off` 下 2 并发的峰值 ≥ 2 GiB ⇒ **不得**宣称 2 并发
+  安全：`MaxConcurrent` 的结论取 **1**，并把「计划 3 的 `TRACE_BODY_READ_MAX_CONCURRENT` 默认值必须
+  从 2 改成 1（或控制面限额提高）」写进报告与交接 H5。
+- 本轮**能**给出的只有算术面：`PerReadPeakBytes() = 640 MiB`、
+  `MaxConcurrent(2 GiB, baseline = 300 MiB, safety = 256 MiB) = 2`。**这两个数字不是结论**：
+  结论必须来自上表的实测峰值（`baseline` 也必须是**实测**的空转 RSS，而不是占位值）。
+
+## 为什么这不是 `EXPECTED_GREEN`
+
+`EXPECTED_GREEN` 是「变异杀不死、经评审批准为**允许的绿**」的清单。本文件的条目不是「允许的绿」，
+而是**尚未产生**：它们每一条都被契约钉住（改坏 ⇒ 转红），但**真实数字**必须由人在生产宿主 / Linux
+宿主上按上表执行并抄录。把「待宿主执行」塞进 `EXPECTED_GREEN` 会把「还没有证据」洗成「已经批准」；
+把整件事从清单里删掉又会让「A6 / A1 到底做没做」无从查证 —— 所以按 E62/E64② 的既有形态
+（`COVERAGE_GAPS` + 本独立登记文件）如实留痕。
+
+## 下一个跑 A6 / A1 的人要带走的三件事
+
+1. **A6-① 必须用 `/usr/bin/zstd --version` 确认是 v1.4.8**（`--expected-zstd-version 1.4.8` 会强制它；
+   版本不符时 sealer 会**响亮失败**，这是 §11.1 的承重行为）；**不得**为省时间把 `--min-age` 调小 ——
+   用 `touch -d '5 hours ago'` 让 spool 变「合格」。
+2. **A6-② 必须在带 `/proc` 的机器上跑**，并且**先**拿到 `K = 0` 的空转 RSS 作为基线；两种 GC 形态
+   （默认 `on,off`）都要抄。若 `GOGC=off` 下 `K = 2` 的峰值 ≥ 2 GiB ⇒ **停**，按停止点处置。
+3. **A1 的比对源必须是「封块前 spool 行的原字节」**（D57），且必须覆盖跨 part / 跨日 / 越界 /
+   `body_missing` 四类；**1,000/1,000 逐字节相等**才算过，**不得**降低抽样数或改写用例来「通过」。

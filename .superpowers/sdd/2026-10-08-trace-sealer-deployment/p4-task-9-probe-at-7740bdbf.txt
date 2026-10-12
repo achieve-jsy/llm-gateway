@@ -1,0 +1,122 @@
+# 任务 9：断言与静态检查的**可失败性**探针（改坏 → 转红 → 还原）
+# 主工作树 = /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer（提交 7740bdbf）；探针在**临时工作树** /tmp/p4-t9-probe 里做（独立 HEAD，探针提交不影响主工作树）
+# 工具 = tools/trace-mutate/trace_mutate.py；它的 pristine 树由 `git -C <repo> archive HEAD` 现取
+#        ⇒ 静态检查的探针必须**在探针仓库里提交**才生效（工作树改动不算）
+
+## A) 三条「无专属变异」的入口守卫（E64② 的 COVERAGE_GAPS 项）：改坏 ⇒ 断言必须转红
+    改坏方式 = 把守卫体换成**安全兜底**（而不是删掉守卫：删掉会让非法输入流入负载、红成崩溃）
+### A.Read为空 期望 `TestPointReadLoadRejectsInvalidArguments/Read为空` 转红
+    Error:      	An error is expected but got nil.
+    Test:       	TestPointReadLoadRejectsInvalidArguments/Read为空
+    --- FAIL: TestPointReadLoadRejectsInvalidArguments (0.00s)
+    --- FAIL: TestPointReadLoadRejectsInvalidArguments/Read为空 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rows为零 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rows为负 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Concurrency为零 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rounds为零 (0.00s)
+    ⇒ 断言红 = True；test_exit=1
+
+### A.Rows为零 期望 `TestPointReadLoadRejectsInvalidArguments/Rows为零` 转红
+    Error:      	An error is expected but got nil.
+    Test:       	TestPointReadLoadRejectsInvalidArguments/Rows为零
+    Error:      	An error is expected but got nil.
+    Test:       	TestPointReadLoadRejectsInvalidArguments/Rows为负
+    --- FAIL: TestPointReadLoadRejectsInvalidArguments (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Read为空 (0.00s)
+    --- FAIL: TestPointReadLoadRejectsInvalidArguments/Rows为零 (0.00s)
+    --- FAIL: TestPointReadLoadRejectsInvalidArguments/Rows为负 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Concurrency为零 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rounds为零 (0.00s)
+    ⇒ 断言红 = True；test_exit=1
+
+### A.Rounds为零 期望 `TestPointReadLoadRejectsInvalidArguments/Rounds为零` 转红
+    Error:      	An error is expected but got nil.
+    Test:       	TestPointReadLoadRejectsInvalidArguments/Rounds为零
+    --- FAIL: TestPointReadLoadRejectsInvalidArguments (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Read为空 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rows为零 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rows为负 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Concurrency为零 (0.00s)
+    --- FAIL: TestPointReadLoadRejectsInvalidArguments/Rounds为零 (0.00s)
+    ⇒ 断言红 = True；test_exit=1
+
+### A.还原后：ok  	github.com/example/llm-gateway/tests/traceverify	0.006s
+    还原后与提交逐字节一致 = True
+    还原后 sha256 = 09726c96be4472d37c771fd502bbfdfb9cb643f0beb100e259a5aa70af7dbede
+    提交里 sha256 = 09726c96be4472d37c771fd502bbfdfb9cb643f0beb100e259a5aa70af7dbede
+
+## B) E70① 的两条「不得递归删除」静态检查：插入递归删除形态 ⇒ 必须 FAIL、工具退出 1
+    （同时给出**旧判据 vs 新判据**对同一段文本的判定差 → 证明 E70① 不是空改）
+
+### B.0 旧判据（订正前的正则，取自 git 历史 3777d04c^）
+117:        "name": "trace-verify破坏性删除面不得递归",
+118-        "file": "cmd/trace-verify/main.go",
+119-        "pattern": r'(?m)^(?!\s*(?://|#)).*(?:"rm"\s*,\s*"-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*"|\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b)',
+120-        "expect": "absent",
+--
+189:        "checks": ["trace-verify破坏性删除面不得递归"],
+190-        "note": "**不存在性**要求 ⇒ 静态检查（**非注释行**里不得出现递归删除的调用形态；注释里的说明文字不算）。",
+191-    },
+192-]
+90:        "name": "run.sh不得递归删除",
+91-        "file": "deploy/verify/trace-a3/run.sh",
+92-        "pattern": r"(?m)^(?!\s*(?://|#)).*\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b",
+93-        "expect": "absent",
+--
+236:        "checks": ["run.sh不得递归删除"],
+237-        "note": "**不存在性**要求 ⇒ 静态检查（`rm -rf` 在 run.sh 里不得出现）。",
+238-    },
+239-    {
+
+### B.1 目标 1/2：cmd/trace-verify/main.go 插入「rm -r」与「rm --recursive」两种 Go 调用形态
+    旧判据命中 = []（**漏网**）
+    新判据命中 = ['return exec.Command("rm", "-r", dir).Run()', 'return exec.Command("rm", "--recursive", dir).Run()']
+- [PASS] 护栏不得跳过读不到设备号的路径
+      文件=internal/traceverify/guard.go  正则=的设备号读不到  期望=present  实际=命中 '的设备号读不到'
+- [PASS] 容量预检必须解析尺寸后缀
+      文件=internal/traceverify/guard.go  正则=func ParseSize  期望=present  实际=命中 'func ParseSize'
+- [PASS] 容量判据必须含1GiB余量
+      文件=internal/traceverify/guard.go  正则=ScratchCapacityMarginBytes int64 = 1 << 30  期望=present  实际=命中 'ScratchCapacityMarginBytes int64 = 1 << 30'
+- [PASS] trace-verify必须调用护栏
+      文件=cmd/trace-verify/main.go  正则=traceverify\.GuardScratchTarget  期望=present  实际=命中 'traceverify.GuardScratchTarget'
+- [FAIL] trace-verify破坏性删除面不得递归
+      文件=cmd/trace-verify/main.go  正则=(?m)^(?!\s*(?://|#))(?=.*\brm\b)(?=.*(?:--recursive\b|(?<!-)-[a-zA-Z]*[rR][a-zA-Z]*\b)).*  期望=absent  实际=命中 '\treturn exec.Command("rm", "-r", dir).Run()'
+!!! 静态检查失败 ⇒ 整轮失败
+probe_guard_exit=1
+
+### B.2 目标 2/2：deploy/verify/trace-a3/run.sh 插入「rm -r」/「rm -v -r」两种 shell 形态
+    旧判据命中 = []（**漏网**）
+    新判据命中 = ['rm -r "$PROBE_ONE"', 'rm -v -r "$PROBE_TWO"']
+- [PASS] run.sh必须开严格模式
+      文件=deploy/verify/trace-a3/run.sh  正则=set -euo pipefail  期望=present  实际=命中 'set -euo pipefail'
+- [FAIL] run.sh不得递归删除
+      文件=deploy/verify/trace-a3/run.sh  正则=(?m)^(?!\s*(?://|#))(?=.*\brm\b)(?=.*(?:--recursive\b|(?<!-)-[a-zA-Z]*[rR][a-zA-Z]*\b)).*  期望=absent  实际=命中 'rm -r "$PROBE_ONE"'
+- [PASS] run.sh必须打印每步命令
+      文件=deploy/verify/trace-a3/run.sh  正则=run\(\) \{  期望=present  实际=命中 'run() {'
+- [PASS] run.sh必须给出停止点
+      文件=deploy/verify/trace-a3/run.sh  正则=⛔ 停止点  期望=present  实际=命中 '⛔ 停止点'
+- [PASS] run.sh必须复核设备号
+      文件=deploy/verify/trace-a3/run.sh  正则=stat -c '%d %n'  期望=present  实际=命中 "stat -c '%d %n'"
+- [PASS] run.sh必须含归档根复核
+      文件=deploy/verify/trace-a3/run.sh  正则=findmnt -T /srv/trace-a3/trace-archive-v4  期望=present  实际=命中 'findmnt -T /srv/trace-a3/trace-archive-v4'
+- [PASS] run.sh必须起隔离实例并等健康
+      文件=deploy/verify/trace-a3/run.sh  正则=up -d --wait  期望=present  实际=命中 'up -d --wait'
+- [PASS] run.sh必须真正填盘
+      文件=deploy/verify/trace-a3/run.sh  正则=fallocate -l "\$FILL_SIZE" "\$FILL"  期望=present  实际=命中 'fallocate -l "$FILL_SIZE" "$FILL"'
+- [PASS] run.sh必须观察闩锁
+      文件=deploy/verify/trace-a3/run.sh  正则=\[trace-body\] ERROR  期望=present  实际=命中 '[trace-body] ERROR'
+- [PASS] run.sh必须观察降级
+      文件=deploy/verify/trace-a3/run.sh  正则=body_missing IS TRUE  期望=present  实际=命中 'body_missing IS TRUE'
+- [PASS] run.sh必须观察恢复
+      文件=deploy/verify/trace-a3/run.sh  正则=正文落盘已恢复  期望=present  实际=命中 '正文落盘已恢复'
+- [PASS] run.sh必须做A7撞锁
+      文件=deploy/verify/trace-a3/run.sh  正则=已有另一个 sealer 持有锁  期望=present  实际=命中 '已有另一个 sealer 持有锁'
+- [PASS] 工具源里护栏必须在mount之后
+probe_runsh_exit=1
+
+## C) 还原复核：主工作树的两个目标文件与两个集合文件**逐字节未变**（探针只在临时树里做）
+    cmd/trace-verify/main.go                                工作树=941210925d5d56c4 提交=941210925d5d56c4 一致=yes
+    deploy/verify/trace-a3/run.sh                           工作树=c9aca492a69ab6e7 提交=c9aca492a69ab6e7 一致=yes
+    tools/trace-mutate/sets/p4-task-8-guard.py              工作树=2dbe4a5ce77c949c 提交=2dbe4a5ce77c949c 一致=yes
+    tools/trace-mutate/sets/p4-task-8-runsh.py              工作树=84f84b677b8364a8 提交=84f84b677b8364a8 一致=yes
+    git status --porcelain（主工作树，应为空）= 0 行

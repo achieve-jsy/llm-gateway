@@ -1,0 +1,14 @@
+定位校验（基于 HEAD:internal/traceverify/vmhwm.go，sha256=09726c96be4472d3）
+OK  m01_取VmPeak而不是VmHWM
+OK  m02_少乘1024
+OK  m03_缺字段返回0nil
+OK  m04_行号固定为0
+OK  m05_多起一个goroutine
+OK  m06_点读错误被忽略
+OK  m07_行数探测差一行
+OK  m08_峰值采样失败被忽略
+OK  m09_到限不中止
+OK  m10_档位零被放行
+OK  m11_未知错误当成越界
+全部 11 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

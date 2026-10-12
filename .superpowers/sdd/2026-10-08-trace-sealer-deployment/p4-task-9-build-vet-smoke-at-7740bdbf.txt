@@ -1,0 +1,367 @@
+# 任务 9：构建 / vet / 聚焦用例 / CLI 冒烟（本机 darwin/arm64；无 /proc、zstd v1.5.7、无 docker 引擎）
+# HEAD = 7740bdbf (7740bdbf5a82df2fe0137860d11fa2ecfa0d4785)
+# 工作树 = 0 个变更（0 = 干净）
+
+## 1) go build ./internal/... ./cmd/...
+build_exit=0
+
+## 2) go vet（四个包）
+vet_exit=0
+
+## 3) gofmt -l（必须为空）
+gofmt_lines=0
+
+## 4) go test ./tests/traceverify/ -count=1 -v
+=== RUN   TestPerReadPeakMatchesSpecBudget
+--- PASS: TestPerReadPeakMatchesSpecBudget (0.00s)
+=== RUN   TestMaxConcurrentMatchesControlPlaneBudget
+--- PASS: TestMaxConcurrentMatchesControlPlaneBudget (0.00s)
+=== RUN   TestMaxConcurrentIsAtLeastOne
+--- PASS: TestMaxConcurrentIsAtLeastOne (0.00s)
+=== RUN   TestMaxConcurrentRejectsNonPositivePerRead
+--- PASS: TestMaxConcurrentRejectsNonPositivePerRead (0.00s)
+=== RUN   TestGuardRejectsFilesystemRoot
+--- PASS: TestGuardRejectsFilesystemRoot (0.00s)
+=== RUN   TestGuardRejectsSameDeviceAsForbidden
+--- PASS: TestGuardRejectsSameDeviceAsForbidden (0.00s)
+=== RUN   TestGuardRequiresExplicitConfirm
+--- PASS: TestGuardRequiresExplicitConfirm (0.00s)
+=== RUN   TestGuardAcceptsDedicatedFilesystem
+--- PASS: TestGuardAcceptsDedicatedFilesystem (0.00s)
+=== RUN   TestGuardRejectsTargetOnSameDeviceAsForbiddenSelf
+--- PASS: TestGuardRejectsTargetOnSameDeviceAsForbiddenSelf (0.00s)
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead/目标读不到
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead/forbidden读不到
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead/stat回调为空
+--- PASS: TestGuardRejectsWhenDeviceCannotBeRead (0.00s)
+    --- PASS: TestGuardRejectsWhenDeviceCannotBeRead/目标读不到 (0.00s)
+    --- PASS: TestGuardRejectsWhenDeviceCannotBeRead/forbidden读不到 (0.00s)
+    --- PASS: TestGuardRejectsWhenDeviceCannotBeRead/stat回调为空 (0.00s)
+=== RUN   TestGuardUnsafeErrorIsSentinel
+--- PASS: TestGuardUnsafeErrorIsSentinel (0.00s)
+=== RUN   TestParseSizeAcceptsBinarySuffixes
+=== RUN   TestParseSizeAcceptsBinarySuffixes/1G
+=== RUN   TestParseSizeAcceptsBinarySuffixes/1g
+=== RUN   TestParseSizeAcceptsBinarySuffixes/980M
+=== RUN   TestParseSizeAcceptsBinarySuffixes/512
+=== RUN   TestParseSizeAcceptsBinarySuffixes/_2T_
+=== RUN   TestParseSizeAcceptsBinarySuffixes/1K
+--- PASS: TestParseSizeAcceptsBinarySuffixes (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/1G (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/1g (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/980M (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/512 (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/_2T_ (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/1K (0.00s)
+=== RUN   TestParseSizeRejectsMalformed
+=== RUN   TestParseSizeRejectsMalformed/#00
+=== RUN   TestParseSizeRejectsMalformed/___
+=== RUN   TestParseSizeRejectsMalformed/0
+=== RUN   TestParseSizeRejectsMalformed/-1
+=== RUN   TestParseSizeRejectsMalformed/1.5G
+=== RUN   TestParseSizeRejectsMalformed/abc
+=== RUN   TestParseSizeRejectsMalformed/1X
+=== RUN   TestParseSizeRejectsMalformed/G
+=== RUN   TestParseSizeRejectsMalformed/99999999999999999999
+=== RUN   TestParseSizeRejectsMalformed/9223372036854775807T
+--- PASS: TestParseSizeRejectsMalformed (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/#00 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/___ (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/0 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/-1 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/1.5G (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/abc (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/1X (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/G (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/99999999999999999999 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/9223372036854775807T (0.00s)
+=== RUN   TestScratchCapacityMarginIncludesReserve
+--- PASS: TestScratchCapacityMarginIncludesReserve (0.00s)
+=== RUN   TestParseVmHWMReadsPeakResidentBytes
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/真实形态
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/零值
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/单空格
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/多空格
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/重复行取第一条
+--- PASS: TestParseVmHWMReadsPeakResidentBytes (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/真实形态 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/零值 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/单空格 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/多空格 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/重复行取第一条 (0.00s)
+=== RUN   TestParseVmHWMRejectsMalformedStatus
+=== RUN   TestParseVmHWMRejectsMalformedStatus/空文本
+=== RUN   TestParseVmHWMRejectsMalformedStatus/缺VmHWM行
+=== RUN   TestParseVmHWMRejectsMalformedStatus/只有键没有值
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值非数字
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值带前缀符号
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值为负
+=== RUN   TestParseVmHWMRejectsMalformedStatus/单位不是kB
+=== RUN   TestParseVmHWMRejectsMalformedStatus/缺单位
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值溢出int64
+--- PASS: TestParseVmHWMRejectsMalformedStatus (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/空文本 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/缺VmHWM行 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/只有键没有值 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值非数字 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值带前缀符号 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值为负 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/单位不是kB (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/缺单位 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值溢出int64 (0.00s)
+=== RUN   TestParseVmHWMReadsPeakResidentNotVirtual
+--- PASS: TestParseVmHWMReadsPeakResidentNotVirtual (0.00s)
+=== RUN   TestParseVmHWMConvertsKilobytesToBytes
+--- PASS: TestParseVmHWMConvertsKilobytesToBytes (0.00s)
+=== RUN   TestParseVmHWMErrorsOnMissingField
+--- PASS: TestParseVmHWMErrorsOnMissingField (0.00s)
+=== RUN   TestPeakVmHWMTracksMaximumAcrossSamples
+--- PASS: TestPeakVmHWMTracksMaximumAcrossSamples (0.01s)
+=== RUN   TestPeakVmHWMReadsStatusFilesUnderRoot
+--- PASS: TestPeakVmHWMReadsStatusFilesUnderRoot (0.00s)
+=== RUN   TestPeakVmHWMRejectsInvalidArguments
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/pids为空
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/samples为零
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/samples为负
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/interval为负
+--- PASS: TestPeakVmHWMRejectsInvalidArguments (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/pids为空 (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/samples为零 (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/samples为负 (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/interval为负 (0.00s)
+=== RUN   TestPeakVmHWMPropagatesReadErrors
+=== RUN   TestPeakVmHWMPropagatesReadErrors/reader报错
+=== RUN   TestPeakVmHWMPropagatesReadErrors/文本缺VmHWM行
+=== RUN   TestPeakVmHWMPropagatesReadErrors/默认根下不存在的pid
+--- PASS: TestPeakVmHWMPropagatesReadErrors (0.00s)
+    --- PASS: TestPeakVmHWMPropagatesReadErrors/reader报错 (0.00s)
+    --- PASS: TestPeakVmHWMPropagatesReadErrors/文本缺VmHWM行 (0.00s)
+    --- PASS: TestPeakVmHWMPropagatesReadErrors/默认根下不存在的pid (0.00s)
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/#00
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/___
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/1,,2
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/a
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/1,a
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/0
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/-1
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/65
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/2,2
+--- PASS: TestParseConcurrencyLevelsNormalizesAndRejects (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/#00 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/___ (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/1,,2 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/a (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/1,a (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/0 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/-1 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/65 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/2,2 (0.00s)
+=== RUN   TestDecodeArtifactRoundTripsRealArtifact
+--- PASS: TestDecodeArtifactRoundTripsRealArtifact (0.00s)
+=== RUN   TestPointReadLoadRunsConcurrentlyAndRandomly
+--- PASS: TestPointReadLoadRunsConcurrentlyAndRandomly (0.06s)
+=== RUN   TestPointReadLoadRejectsInvalidArguments
+=== RUN   TestPointReadLoadRejectsInvalidArguments/Read为空
+=== RUN   TestPointReadLoadRejectsInvalidArguments/Rows为零
+=== RUN   TestPointReadLoadRejectsInvalidArguments/Rows为负
+=== RUN   TestPointReadLoadRejectsInvalidArguments/Concurrency为零
+=== RUN   TestPointReadLoadRejectsInvalidArguments/Rounds为零
+--- PASS: TestPointReadLoadRejectsInvalidArguments (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Read为空 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rows为零 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rows为负 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Concurrency为零 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rounds为零 (0.00s)
+=== RUN   TestPointReadLoadPropagatesReadErrors
+--- PASS: TestPointReadLoadPropagatesReadErrors (0.00s)
+=== RUN   TestArtifactRowsBinaryProbesRowCount
+=== RUN   TestArtifactRowsBinaryProbesRowCount/rows=1
+=== RUN   TestArtifactRowsBinaryProbesRowCount/rows=2
+=== RUN   TestArtifactRowsBinaryProbesRowCount/rows=3
+=== RUN   TestArtifactRowsBinaryProbesRowCount/rows=5
+=== RUN   TestArtifactRowsBinaryProbesRowCount/rows=1000
+--- PASS: TestArtifactRowsBinaryProbesRowCount (0.00s)
+    --- PASS: TestArtifactRowsBinaryProbesRowCount/rows=1 (0.00s)
+    --- PASS: TestArtifactRowsBinaryProbesRowCount/rows=2 (0.00s)
+    --- PASS: TestArtifactRowsBinaryProbesRowCount/rows=3 (0.00s)
+    --- PASS: TestArtifactRowsBinaryProbesRowCount/rows=5 (0.00s)
+    --- PASS: TestArtifactRowsBinaryProbesRowCount/rows=1000 (0.00s)
+=== RUN   TestArtifactRowsPropagatesNonRangeErrors
+--- PASS: TestArtifactRowsPropagatesNonRangeErrors (0.00s)
+=== RUN   TestPointReadLoadAbortsWhenPeakReachesLimit
+--- PASS: TestPointReadLoadAbortsWhenPeakReachesLimit (0.00s)
+=== RUN   TestPointReadLoadPropagatesPeakErrors
+--- PASS: TestPointReadLoadPropagatesPeakErrors (0.00s)
+PASS
+ok  	github.com/example/llm-gateway/tests/traceverify	0.088s
+traceverify_test_exit=0
+
+## 5) go test ./internal/tracearchive/ -run TestGoEncoderRatioRegression（A6 的对照基线，计划 1 的 ≥50× 回归门）
+=== RUN   TestGoEncoderRatioRegression
+    calib_test.go:81: 压缩比 8097.3x（下界 50.0x），17158144 字节 → 2119 字节
+--- PASS: TestGoEncoderRatioRegression (0.07s)
+PASS
+ok  	github.com/example/llm-gateway/internal/tracearchive	0.075s
+ratio_test_exit=0
+
+## 6) decode-bench 冒烟（注入假 procfs 428/4242；本机没有 /proc 与 zstd 1.4.8，真读数待宿主）
+build_cli_exit=0
+
+### 6.1 有 GC：K=1,2,3 × 5 轮 × 50 点（真实产物 200 行，行数由错误身份探测得出）
+decode-bench: 探测到 2026-10-08/blue/part-000000#row=0 共 200 行（探测过程本身会推高 VmHWM —— 保守方向）
+[
+  {
+    "concurrency": 1,
+    "gc_mode": "on",
+    "rounds": 5,
+    "points": 50,
+    "total_points": 250,
+    "expected_points": 250,
+    "aborted": false,
+    "max_in_flight": 1,
+    "distinct_rows": 140,
+    "rows": 200,
+    "artifact": "/tmp/p4-t9-bench/root/dt=2026-10-08/inst=blue/part-000000.jsonl.zst",
+    "window_bytes": 536870912,
+    "bytes": 137250,
+    "elapsed_ms": 1145,
+    "gc_cycles": 250,
+    "peak_vmhwm_bytes": 536870912,
+    "peak_vmhwm_delta_bytes": 0,
+    "pid": 4242,
+    "proc_root": "/tmp/p4-t9-bench/fakeproc"
+  },
+  {
+    "concurrency": 2,
+    "gc_mode": "on",
+    "rounds": 5,
+    "points": 50,
+    "total_points": 500,
+    "expected_points": 500,
+    "aborted": false,
+    "max_in_flight": 2,
+    "distinct_rows": 183,
+    "rows": 200,
+    "artifact": "/tmp/p4-t9-bench/root/dt=2026-10-08/inst=blue/part-000000.jsonl.zst",
+    "window_bytes": 536870912,
+    "bytes": 274500,
+    "elapsed_ms": 2059,
+    "gc_cycles": 253,
+    "peak_vmhwm_bytes": 536870912,
+    "peak_vmhwm_delta_bytes": 0,
+    "pid": 4242,
+    "proc_root": "/tmp/p4-t9-bench/fakeproc"
+  },
+  {
+    "concurrency": 3,
+    "gc_mode": "on",
+    "rounds": 5,
+    "points": 50,
+    "total_points": 750,
+    "expected_points": 750,
+    "aborted": false,
+    "max_in_flight": 3,
+    "distinct_rows": 196,
+    "rows": 200,
+    "artifact": "/tmp/p4-t9-bench/root/dt=2026-10-08/inst=blue/part-000000.jsonl.zst",
+    "window_bytes": 536870912,
+    "bytes": 411750,
+    "elapsed_ms": 7004,
+    "gc_cycles": 271,
+    "peak_vmhwm_bytes": 536870912,
+    "peak_vmhwm_delta_bytes": 0,
+    "pid": 4242,
+    "proc_root": "/tmp/p4-t9-bench/fakeproc"
+  }
+]
+smoke1_exit=0
+
+### 6.2 禁掉 GC（GOGC=off）：K=1,2 × 5 轮 × 5 点 ⇒ gc_cycles 必须为 0
+decode-bench: 探测到 2026-10-08/blue/part-000000#row=0 共 200 行（探测过程本身会推高 VmHWM —— 保守方向）
+[
+  {
+    "concurrency": 1,
+    "gc_mode": "off",
+    "rounds": 5,
+    "points": 5,
+    "total_points": 25,
+    "expected_points": 25,
+    "aborted": false,
+    "max_in_flight": 1,
+    "distinct_rows": 24,
+    "rows": 200,
+    "artifact": "/tmp/p4-t9-bench/root/dt=2026-10-08/inst=blue/part-000000.jsonl.zst",
+    "window_bytes": 536870912,
+    "bytes": 13725,
+    "elapsed_ms": 49,
+    "gc_cycles": 0,
+    "peak_vmhwm_bytes": 536870912,
+    "peak_vmhwm_delta_bytes": 0,
+    "pid": 4242,
+    "proc_root": "/tmp/p4-t9-bench/fakeproc"
+  },
+  {
+    "concurrency": 2,
+    "gc_mode": "off",
+    "rounds": 5,
+    "points": 5,
+    "total_points": 50,
+    "expected_points": 50,
+    "aborted": false,
+    "max_in_flight": 2,
+    "distinct_rows": 43,
+    "rows": 200,
+    "artifact": "/tmp/p4-t9-bench/root/dt=2026-10-08/inst=blue/part-000000.jsonl.zst",
+    "window_bytes": 536870912,
+    "bytes": 27450,
+    "elapsed_ms": 1220,
+    "gc_cycles": 0,
+    "peak_vmhwm_bytes": 536870912,
+    "peak_vmhwm_delta_bytes": 0,
+    "pid": 4242,
+    "proc_root": "/tmp/p4-t9-bench/fakeproc"
+  }
+]
+smoke2_exit=0
+
+### 6.3 到限中止：假 procfs 报 2 GiB、阈值 1 GiB ⇒ aborted=true 且点数未跑满（不是失败）
+decode-bench: 探测到 2026-10-08/blue/part-000000#row=0 共 200 行（探测过程本身会推高 VmHWM —— 保守方向）
+[
+  {
+    "concurrency": 2,
+    "gc_mode": "off",
+    "rounds": 5,
+    "points": 50,
+    "total_points": 0,
+    "expected_points": 500,
+    "aborted": true,
+    "max_in_flight": 2,
+    "distinct_rows": 0,
+    "rows": 200,
+    "artifact": "/tmp/p4-t9-bench/root/dt=2026-10-08/inst=blue/part-000000.jsonl.zst",
+    "window_bytes": 536870912,
+    "bytes": 0,
+    "elapsed_ms": 0,
+    "gc_cycles": 0,
+    "peak_vmhwm_bytes": 2147483648,
+    "peak_vmhwm_delta_bytes": 0,
+    "pid": 4242,
+    "proc_root": "/tmp/p4-t9-bench/fakeproc2"
+  }
+]
+smoke3_exit=0
+
+### 6.4 产物不存在 ⇒ 响亮失败（不许 SKIP）
+trace-verify: decode-bench: 探测 2026-10-08/blue/part-000000#row=0 的行数失败（可用 --rows 直接给定）：traceverify: 2026-10-08/blue/part-000000#row=0 的 row=0 都不在范围内 ⇒ 无法探测行数
+smoke4_exit=1
+
+### 6.5 --rounds 4 被拒（计划步骤 4.2 要求 ≥5 轮）
+trace-verify: decode-bench 的 --rounds 必须 ≥5（计划任务 9 步骤 4.2：要复测「连续多轮不做 GC」的形态），得到 4
+smoke5_exit=1
+
+### 6.6 procfs 里没有该 pid ⇒ 响亮失败（读不到实测内存就必须红）
+decode-bench: 探测到 2026-10-08/blue/part-000000#row=0 共 200 行（探测过程本身会推高 VmHWM —— 保守方向）
+trace-verify: traceverify: pid 999999 的 status 读不到: 读 /tmp/p4-t9-bench/fakeproc/999999/status: open /tmp/p4-t9-bench/fakeproc/999999/status: no such file or directory
+smoke6_exit=1

@@ -14,7 +14,7 @@
 
 ## 全局约束
 
-- **范围（本计划交付什么、不交付什么）**：本计划 = ① `cmd/trace-sealer` + `internal/tracesealer`；② systemd unit 与旧归档定时器隔离；③ `/datalog` bind mount 与编排变更；④ 蓝绿切换剧本；⑤ 验收 A3 / A6 / A7 / A8 + 「撤掉挂载 ≤1 tick 闩锁」；⑥ 运行手册条目。**不交付**：读侧（点读服务，计划 3）、冷层合并（§5.5）、A1/A2/A4/A5（依赖读侧）、任何 PG schema 变更、`docs/guardrails.md` 的订正。
+- **范围（本计划交付什么、不交付什么）**：本计划 = ① `cmd/trace-sealer` + `internal/tracesealer`；② systemd unit 与旧归档定时器隔离；③ `/datalog` bind mount 与编排变更；④ 蓝绿切换剧本；⑤ 验收 A3 / A6 / A7 / A8 + 「撤掉挂载 ≤1 tick 闩锁」；⑥ 运行手册条目。**不交付**：读侧（点读服务，计划 3）、冷层合并（§5.5）、A2/A4/A5（依赖读侧）、任何 PG schema 变更、`docs/guardrails.md` 的订正；**A1 的读回半部（n = 1e6）物理测量**按发起者裁定（计划 3 的 **E52**）归**任务 9**，口径见计划 3 的交接 **H19**，环境 = 生产宿主 + 真实 PG + 真实 `zstd` **1.4.8** ⇒ 本计划只把它登记为「待宿主执行」（见 **E71**）。
 - **冻结包零改动（铁律）**：`internal/tracearchive/` 附有 142 条变异证据（R11 v3，冻结提交 `ea962a70`）。本计划**不得**新增/改名/改行为其中任何文件；只以公开 API 复用（`NewSealer` / `SealerOptions` / `Seal` / `ListPendingSeals` / `SealTask` / `ErrPartExists` / `ErrRowCountMismatch` / `ErrTooManyRows` / `ErrSealFailed` / `Ref` / `Paths` / `Writer` / `Reader`）。交付报告必须以 `git diff --stat 3a2301ad..HEAD -- internal/tracearchive/` **输出为空**为证（命令与真实输出一起抄）。
 - **计划 2 的代码同样「非必要不改」**：`internal/gateway/observability/{trace_line.go,spool_gate.go,spooler.go,trace_event.go}` 与 `internal/gateway/config/trace_body.go` 是计划 2 变异集合（`p2-task-2..8`）的被测文件。本计划**默认不改**它们；**只有**任务 10 的 A8 决策门被触发（实测证明「块内行数会超 `maxTrailerEntries`」）时才允许改 `spooler.go`，届时 `p2-task-5` / `p2-task-8-spooler` 的绑定立即失效 ⇒ **必须重跑这两个集合并重新记录 sha256**（见全局约束「变异证据绑定提交」）。
 - **跨进程次序不变量（R8 / D7）**：网关先滚动（`MarkSealed`，关 fd）→ sealer 才可能封块。网关滚动间隔 `TRACE_BODY_ROLL_INTERVAL=1h`（计划 2 已强制 ≤1h 且 <3h），实际滚动上界 = `1h + flush(1m) = 1h1m`。sealer 侧唯一的保护是 `minAge`，因此 `internal/tracesealer` **必须**对 `--min-age` 施加强制下界：`min-age > 1h`（R8 的网关滚动上界），违反即启动失败；默认值 `3h`（= 冻结包 `defaultSealMinAge`）。
@@ -107,7 +107,7 @@ python3 -c "import sys;ns=[l.strip() for l in sys.stdin];bad=[(a,b) for a in ns 
 | **A7** 跨进程验证 | 任务 4（自动化：次序/锁/串行）+ 任务 8 run.sh 步骤 10（进程级：两个 `--once` 撞锁 + 边写边封） | 本机（自动化）/ A3 隔离实例（进程级） | 用例通过的清单 + 第二个 `--once` 的退出码 1 与 stderr | 出现「ref 无落点」或两个 sealer 同时封同一 part ⇒ **停止上线** |
 | **A8** 行数分布 | 任务 10（footer 解析 + 契约钉住 + 决策门） | 测试环境/生产（只读日志） | 每个 part 的 `rows` 分布（min/p50/p95/max）与 `bytes_per_row` | 越界或落到 50%–100% ⇒ 按决策门三级处置（含改 `spooler.go` 并重跑 p2 集合） |
 | **新增：撤掉挂载 ≤1 tick 闩锁** | 任务 11（先在测试环境/A3 实例做，再在**已摘流**的非活跃颜色上确认） | **只允许**测试环境，或**无真实流量**的生产窗口（非活跃且已摘流）；**该实验本身会持续丢正文**（见下），禁止在有正常流量的生产颜色上执行 | ≤1 个 tick 内的 ERROR + 不再出现新文件 + 活跃颜色无影响 + 重启后恢复 + 「流量为零」留证 + **闩锁期间累计丢失行数（期望 0）** | 未在 ≤1 tick 内闩锁 ⇒ 停下来查 `checkRoot` 的调用点（计划 2 的 `FlushAndRoll`）；丢失行数非 0 ⇒ 停手并按事故复盘 |
-| A1 / A2 / A4 / A5 | ❌ 不在本计划（属计划 3 读侧） | — | — | — |
+| A1 / A2 / A4 / A5 | **A1 的读回半部（n = 1e6）物理测量 = 任务 9**（口径 = 计划 3 的交接 **H19**；环境 = 生产宿主 + 真实 PG + 真实 `zstd` **1.4.8**）；**A2 / A5** 的对外映射归计划 3；**A4** 由计划 1 覆盖（计划 3 的 E52③ 欠账在本轮销账，见 **E71**） | 任务 9 / 生产宿主 | 抽样 1,000 行逐字节比对表 + `zstd --version` | 任一格不成立 ⇒ 未通过（不得降低抽样数或改写用例） |
 | A9 冷热分层 | ❌ 不在本计划（D68） | — | — | — |
 
 > ⚠️ **「撤掉挂载 ≤1 tick 闩锁」的前置条件（不可省，否则该验收恒空）**：本项只有在**写侧已启用**时才有意义 —— 即 `TRACE_BODY_ROOT` 非空**且**该 root 目录已存在（`internal/gateway/observability/spooler.go:144` 的 `rootExists` 在**构造期**就要求目录在场）。功能关闭时 `cmd/gateway/main.go:275` 的 `sink` 为 **nil**、`TraceSpooler` **根本不会构造** ⇒ 它的根身份护栏（`spooler.go` 的 `checkRoot`）从不运行 ⇒ 期望的 `root_unavailable` / `root-identity-mismatch` ERROR **永不出现**，断言恒真（空过）。因此本项**不得**排在写侧启用之前，也不是计划 4 在「功能关闭」阶段就能交付的验收；它的编排位置是：**读侧就绪（D73 硬门）→ 开启写侧 → 立即执行本门禁**（见任务 11 步骤 4 与文末「生产上的执行次序」）。另有两个不可省的约束：**① 该实验本身在持续丢正文**（闩锁期间正文既不进 `/datalog` 也不回退 jsonb，只落 `body_missing=true`）⇒ 只允许在测试环境或**无真实流量**的生产窗口执行；**② 证据里必须含「闩锁期间累计丢失行数」（期望 0）**。
@@ -2950,7 +2950,7 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 - **H6**：隔离件（`part-NNNNNN.jsonl.zst` 内容是明文 JSONL）必须报 `ErrNotArchived`（500），**不得**新增哨兵（D47/D50 同族）。
 - **H7**：不得新增 `atlas-migrations/` 而不先做全库对账（D52）。
 - **H8**：缺陷编号从 **D75** 起（计划 1 用到 D41、计划 2 用到 D52、计划 3 用到 D63、本计划用到 D74）。
-- **H9**：A1/A2/A4/A5 归计划 3；A9（冷热分层，见 D68）与 §5.5 冷层合并、`/datalog/emergency-archive` 存量点读（计划 3 的 D58/H13）、管理后台 UI 归计划 5/后续。
+- **H9**：**A1 的读回半部（n = 1e6）物理测量归本计划任务 9**（口径 = 计划 3 的交接 **H19**；环境 = 生产宿主 + 真实 PG + 真实 `zstd` **1.4.8**；本轮只登记「待宿主执行」）；A2 / A5 的对外映射归计划 3、A4 由计划 1 覆盖；A9（冷热分层，见 D68）与 §5.5 冷层合并、`/datalog/emergency-archive` 存量点读（计划 3 的 D58/H13）、管理后台 UI 归计划 5/后续。
 - **H10**：本计划的 A6 解码内存实测是计划 3 的 **H15 的唯一输入**（它的默认并发 2 就是按 600 MB/并发估的）⇒ 任务 9 完成后必须把结论回填给读侧，而不是只写在本计划的报告里。
 
 ## 自检结果
@@ -3171,3 +3171,24 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 
 1. **提交历史的「事实陈述」必须带可复算命令，且禁止改写已发布提交**：凡在报告或计划里陈述 `amend` / `reset` / `rebase` 一类历史事实，必须同时给出可复算命令（如 `git reflog -15`）与结论；**禁止 `--amend`**（它会改写绑定证据的产出时点）。已发生的提交说明伪影（残字节）**只登记不修**，修正留给分支收尾的合并 / squash 或另立登记。
 2. **集合的 `CHECKS` 行数必须与计划文本逐条可对照**：集合可以按 E62 追加**存在性**静态检查，但每追加一行都必须在**计划文本**里能找到对应句子（写明存在与理由）；只写在集合 docstring 里不算 —— 否则计划与集合无法逐条对照，读者无法从计划推出集合的应然范围。
+
+---
+
+## 过程失误登记与新增约定（E70–E71；**Task 9 交付轮**）
+
+> 编号续 **E69**。与 E57–E69 同一纪律：逐条写清「位置 / 问题 / 处置」。
+
+> **本轮改动面（已核实）**：**实现面** = `internal/traceverify/budget.go`（新）＋ `internal/traceverify/vmhwm.go` ＋ `cmd/trace-verify/main.go` ＋ `tests/traceverify/budget_test.go`（新）＋ `tests/traceverify/vmhwm_test.go`；**集合面** = 新增 `p4-task-9-{budget,vmhwm}.py` 与两份名字清单，并**就地补齐** `p4-task-8-{guard,runsh}.py` 的删除面判据（E70①）；**计划面** = 范围段（`:17`）/ A 表尾行（`:110`）/ H9（`:2953`）三处**同行就地改写**（E71①）＋ 文件末尾**追加本节**；**证据面** = 新增 `p4-task-9-*` 六份与重出的 `p4-task-8-{guard,runsh}-*` 四份。**冻结包 `internal/tracearchive/**` 零改动**、`atlas-migrations/**` 与 `migrations/**` 零改动、`tools/trace-mutate/trace_mutate.py` 零改动（sha256 见交付报告）、`deploy/verify/trace-a3/run.sh` 零改动。
+
+> **跨任务连带（E59③ 自查，先自查后报告）**：`grep -n '^PACKAGES' tools/trace-mutate/sets/p4-task-*.py` ⇒ 本轮改了 `tests/traceverify/*_test.go`（被 `p4-task-8-guard` 与两个新集合列入 `PACKAGES`）与 `cmd/trace-verify/main.go`（`p4-task-8-guard` 的 TARGET）⇒ **必须重出** `p4-task-8-guard`；改了 `p4-task-8-runsh.py` **自身**（判据正则，E70①）⇒ **必须重出** `p4-task-8-runsh`。另 `grep -l '^PACKAGES.*tests/deploy' tools/trace-mutate/sets/p4-task-*.py | wc -l` = **11** 个集合与 `./tests/deploy/` 包**耦合**，但本轮 `tests/deploy/**` 与 `deploy/verify/trace-a3/run.sh` **零改动** ⇒ 只有 `p4-task-8-runsh`（集合文件变了）需要重出，其余 **10 个不受牵连**。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E70** | ① `tools/trace-mutate/sets/p4-task-8-guard.py` 的 `trace-verify破坏性删除面不得递归`、`tools/trace-mutate/sets/p4-task-8-runsh.py` 的 `run.sh不得递归删除`（上一轮 Task 8 收口轮的独立评审第 ① 条）；② 上一轮 `cmd/trace-verify/main.go` 的 `decode-bench` 实现面与 CLI 面（评审第 ② 条）；③ 上一轮报告 / 计划文本里的两处表述（评审第 ③ 条） | ① 判据只钉 `-rf`（`r` **紧跟** `f`）⇒ `rm -r X`、`runCmd("rm","-r",…)`、`rm --recursive`、`rm -fr`、`rm -v -r` **全部漏网** ⇒ 门禁退化成「对某一种拼写的巧合」，与 **E68** 的「判据必须是**语义**判据」相悖。② 上一轮的 `decode-bench` 做的是**整流解码**（`DecodeArtifact`：把整块解压一遍再丢弃），而计划任务 9 步骤 3 要求「对每个并发度 K，起 K 个 goroutine 各做 50 次**随机点读**（`tracearchive.NewReader` + `GetBody`）」—— 两者测的不是同一个动作：整流解码共享解码器、**少了 trailer/索引那条路径**（而那正是 `maxTrailerEntries` 上界要压的东西）⇒ 整流读数**不能**当 C5 的判据。同时 CLI 面（`--rounds/--samples/--interval/--window-bytes/--pid/--proc-root`）超出计划只给出的 `--artifact/--concurrency/--json`。③ 两处表述不实：「含 `./tests/deploy/` 的集合恰为 9」只数了**本轮连带重出的** 9 个；`git reflog \| grep -i amend` 会因**提交说明里含 `amend` 二字**而多出一行。 | ① **本轮选择「把正则补全」**（而不是「把 `-r` 边界登记进 why」）：E68 要求门禁是语义判据（「删除面有界」= **任何**递归删除形态都不许出现），只钉一种拼写下一轮换个写法就能绕过。新判据（两集合同一形态）= `(?m)^(?!\s*(?://\|#))(?=.*\brm\b)(?=.*(?:--recursive\b\|(?<!-)-[a-zA-Z]*[rR][a-zA-Z]*\b)).*`（同一行同时出现 `rm` 与递归开关；`(?<!-)` 把 `--force` 这类名字里含 `r` 的长开关排除在外），仍是 `absent`；**旧判据 vs 新判据对同一段插入文本的判定差**（旧 0 命中 / 新 2 命中）与「插入 ⇒ 该行 FAIL ⇒ 工具以『静态检查失败 ⇒ 整轮失败』退出 1」的实测见 `p4-task-9-probe-at-*.txt`；补全后在两个真实目标文件上实测 **0 命中**（不引入误报，见 `p4-task-8-{guard,runsh}-authoritative-at-*.txt` 的 `[PASS]`）。② **本轮按计划落实点读负载**（`PointReadLoad`：K 个 goroutine × 连续 ≥5 轮 × 每 goroutine 每轮 50 次随机点读、实测同时在飞峰值、首错即取消并原样上抛、峰值到 `AbortAtBytes` 即中止并留下已观测峰值），**偏差就地消解**（整流解码保留为独立的 `DecodeArtifact`，其用例 `TestDecodeArtifactRoundTripsRealArtifact` 仍在册）。CLI 面**仍是计划的超集**，**如实登记**为**已登记偏差**：新增 `--rows`（跳过行数探测——探测本身会推高 VmHWM）/ `--gc-modes`（承载步骤 4.2 的「同时报告有 GC 与 GOGC=off 两种形态」）/ `--abort-at-bytes`（承载步骤 4.2 停止点的**可观测性**：`GOGC=off` 下进程会被 OOM 杀掉、什么都报不出来），`--samples` 的语义改为「采样次数上限，0 ⇒ 采到负载结束」；计划给出的输出形状 `{"concurrency":K,"peak_vmhwm_bytes":N,"points":50}` 三个键**逐字保留**在 JSON 里（本实现是它的**超集**）。③ 本轮把两处事实写成**可复算判据**：`grep -l '^PACKAGES.*tests/deploy' tools/trace-mutate/sets/p4-task-*.py \| wc -l` = **11**（第 10、11 个是 `p4-task-8-compose` 与 `p4-task-8-runsh`，它们随后一轮才新增）；`git reflog \| grep -c 'commit (amend)'` = **1**，而 `git reflog \| grep -i amend \| wc -l` = **2**（第 2 条是 `c9e500a9` 的**提交说明**里含「amend」二字，不是一次 amend）⇒ **今后一律用前者**。 |
+| **E71** | 计划 3（`docs/superpowers/plans/2026-09-25-trace-point-read-service.md`）的 **E52③** 登记的「**计划 4 实现轮欠账**」：计划 4 的 A 表尾行与 **H9** 仍把 A1 划给「计划 3 读侧」（计划 3 的 E52 写的位置是 `:101` / `:2936`） | 发起者已裁定（计划 3 **E52**）：规格 §14.2 **A1** 的百万级（n = 1e6）读回的**物理测量归计划 4 任务 9**（环境 = 生产宿主 + 真实 PG + 真实 `zstd` **1.4.8**），**口径**（测什么 / 怎么测 / 通过标准）由计划 3 的交接 **H19** 给出；而计划 4 的两处文本仍写「A1 归计划 3」⇒ 两处分工表**互指对方、无人执行**。**行号漂移（已核实，不是推测）**：计划 3 的 E52 引用计划 4 的 `:101` / `:2936`，在计划 4 **当前**版本里实为 **`:110`** / **`:2953`**（计划 4 此后追加过文本；计划 3 按 H18「只引用不改」纪律当时未动计划 4）⇒ 本条一律以**当前实时行号**为准（E54/E55 的同一纪律）。 | ① **就地订正计划 4 的三处**（范围段 `:17`、A 表尾行 `:110`、H9 `:2953`）：写明「**A1 的读回半部（n = 1e6）物理测量归任务 9**（环境 = 生产宿主 + 真实 PG + 真实 zstd **1.4.8**）；**口径**由计划 3 的交接 **H19** 给出；**A2 / A5** 的对外映射归计划 3；**A4** 由计划 1 覆盖」。三处都是**同行就地改写**（行数不变 ⇒ 不产生行号级联）。② 本轮**不产出** A1 的物理测量数字（本机 = darwin/arm64、无真实 PG、本机 `zstd` v1.5.7 ≠ 1.4.8）⇒ 按任务 8 的既有形态登记「**待宿主执行**」（`p4-task-9-host-deferral-at-*.txt`），**不得**写成「已覆盖 / 已承接」。③ **自引用级联**：动计划文本前 `grep -cE '本计划 ?:[0-9]' docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md` = **0**（已实测），改后复测仍为 **0**（三处都是**段内就地改写**，不含指向绝对行号的自引用）。 |
+
+### 新增约定（E70 起，**今后所有轮次适用**）
+
+1. **「不得出现 X」类判据必须覆盖 X 的**全部**常见形态，并给出「旧判据漏网 / 新判据命中」的同文本对照**：只钉一种拼写等于把门禁退化成对某一行文本的巧合（E70① 的实例：`-rf` 漏掉 `-r` / `--recursive` / `-fr` / `-v -r`）。补齐后必须把**两个目标文件上的 0 命中**与**插入形态后的 FAIL + 退出 1**都落盘（探针表）。
+2. **变异必须红成断言红**：编译红 / panic / 超时一律**就地改写变异字符串**，不得登记为「允许的绿」（E70② 的实例：把行号变异成字面量 `0` 会让 `rng` 成为未使用变量 ⇒ 编译红；改成 `rng.Int63n(1)`（恒 0、仍引用 `rng`）后才红成 `TestPointReadLoadRunsConcurrentlyAndRandomly` 的断言）。
+3. **跨计划行号引用必须以「当前实时行号」为准**：跨计划引用别处行号时必须**当场复算**（如 `grep -n`），并在登记里同时写出「对方当时写的行号」与「当前实时行号」（E71 的实例：`:101` → `:110`、`:2936` → `:2953`）。

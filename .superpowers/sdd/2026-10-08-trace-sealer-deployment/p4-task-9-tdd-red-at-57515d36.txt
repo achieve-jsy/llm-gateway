@@ -1,0 +1,18 @@
+# 任务 9 步骤 1：TDD 红（在 57515d36 的**纯净工作树**里跑，不含未提交的 budget.go）
+# 命令 = git worktree add --detach /tmp/p4-t9-red 57515d36 && (cd /tmp/p4-t9-red && go test ./tests/traceverify/ -count=1)
+# 纯净性 = 该目录 = 提交 57515d36 的完整内容（工作树里 Untracked 的 budget.go 不在其中）
+# github.com/example/llm-gateway/tests/traceverify_test [github.com/example/llm-gateway/tests/traceverify.test]
+tests/traceverify/budget_test.go:25:47: undefined: traceverify.DecodeWindowBytes
+tests/traceverify/budget_test.go:26:46: undefined: traceverify.MaxIndexBytes
+tests/traceverify/budget_test.go:27:46: undefined: traceverify.PerReadFixedBytes
+tests/traceverify/budget_test.go:29:47: undefined: traceverify.PerReadPeakBytes
+tests/traceverify/budget_test.go:34:15: undefined: traceverify.DecodeWindowBytes
+tests/traceverify/budget_test.go:34:45: undefined: traceverify.MaxIndexBytes
+tests/traceverify/budget_test.go:34:71: undefined: traceverify.PerReadFixedBytes
+tests/traceverify/budget_test.go:35:15: undefined: traceverify.PerReadPeakBytes
+tests/traceverify/budget_test.go:39:45: undefined: traceverify.ControlPlaneLimitBytes
+tests/traceverify/budget_test.go:50:21: undefined: traceverify.MaxConcurrent
+tests/traceverify/budget_test.go:50:21: too many errors
+FAIL	github.com/example/llm-gateway/tests/traceverify [build failed]
+FAIL
+test_exit=1

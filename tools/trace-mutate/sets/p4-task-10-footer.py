@@ -74,9 +74,9 @@ CHECKS = [
     {
         "name": "footer不相容五条判据的在册用例",
         "file": "tests/tracesealer/footer_test.go",
-        "pattern": (r"(?s)^.*func TestFooterRejectsBadMagic\(.*func TestFooterRejectsUnknownFormatVersion\("
-                    r".*func TestFooterRejectsNegativeRowCount\(.*func TestFooterRejectsTrailerNotAdjacentFooter\("
-                    r".*func TestFooterRejectsMissingFile\("),
+        "pattern": (r"(?s)(?=.*func TestFooterRejectsBadMagic\()(?=.*func TestFooterRejectsUnknownFormatVersion\()"
+                    r"(?=.*func TestFooterRejectsNegativeRowCount\()(?=.*func TestFooterRejectsTrailerNotAdjacentFooter\()"
+                    r"(?=.*func TestFooterRejectsMissingFile\()"),
         "expect": "present",
         "why": ("五条判据（坏 magic / 未知版本 / 负 row_count / trailer 未紧邻 footer / 文件不存在）各有在册用例，"
                 "但本集合的 m01–m03 只改「长度 / 偏移 / 短文件返回值」⇒ 没有杀手。**存在性**要求 ⇒ 静态检查钉住"

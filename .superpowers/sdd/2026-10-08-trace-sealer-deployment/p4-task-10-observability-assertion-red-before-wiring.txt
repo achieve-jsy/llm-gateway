@@ -1,0 +1,53 @@
+# 任务 10 步骤 3：TDD 断言红（footer.go 已实现、observeSealedPart 尚未接线）
+# 工作树状态：internal/tracesealer/footer.go 已写（未提交），runner.go 未改
+# 命令 = go test ./tests/tracesealer/ -run 'TestObserveTracksMinimumBytesPerRow|TestObserveTracksMaxRowsAndMinRatio|TestObserveWarnsAtHalfOfRowCap|TestObserveLogsOneInfoLinePerSealedPart|TestObserveSkipsUnreadableArtifact|TestObserveSkipsDegenerateDenominator' -count=1 -v
+# 目的 = 证明观测面 6 条用例的断言**不是恒真**：在只差 observeSealedPart 的中间态下逐条转红
+=== RUN   TestObserveTracksMinimumBytesPerRow
+    observability_test.go:153: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/tracesealer/observability_test.go:153
+        	Error:      	Not equal: 
+        	            	expected: 512
+        	            	actual  : 0
+        	Test:       	TestObserveTracksMinimumBytesPerRow
+--- FAIL: TestObserveTracksMinimumBytesPerRow (0.00s)
+=== RUN   TestObserveTracksMaxRowsAndMinRatio
+    observability_test.go:175: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/tracesealer/observability_test.go:175
+        	Error:      	Not equal: 
+        	            	expected: 1000
+        	            	actual  : 0
+        	Test:       	TestObserveTracksMaxRowsAndMinRatio
+--- FAIL: TestObserveTracksMaxRowsAndMinRatio (0.00s)
+=== RUN   TestObserveWarnsAtHalfOfRowCap
+    observability_test.go:204: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/tracesealer/observability_test.go:204
+        	Error:      	"[]" should have 1 item(s), but has 0
+        	Test:       	TestObserveWarnsAtHalfOfRowCap
+        	Messages:   	只有越线的那一块预警（等于一半不预警）
+--- FAIL: TestObserveWarnsAtHalfOfRowCap (0.00s)
+=== RUN   TestObserveLogsOneInfoLinePerSealedPart
+    observability_test.go:229: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/tracesealer/observability_test.go:229
+        	Error:      	"[]" should have 3 item(s), but has 0
+        	Test:       	TestObserveLogsOneInfoLinePerSealedPart
+--- FAIL: TestObserveLogsOneInfoLinePerSealedPart (0.00s)
+=== RUN   TestObserveSkipsUnreadableArtifact
+    observability_test.go:278: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/tracesealer/observability_test.go:278
+        	Error:      	[]interface {}(nil) does not contain "footer_unreadable"
+        	Test:       	TestObserveSkipsUnreadableArtifact
+        	Messages:   	对照度：行数读不出来必须留一条带**稳定 reason** 的 ERROR（否则「无样本」与「没跑」无法区分）
+--- FAIL: TestObserveSkipsUnreadableArtifact (0.00s)
+=== RUN   TestObserveSkipsDegenerateDenominator
+    observability_test.go:312: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/tracesealer/observability_test.go:312
+        	Error:      	Not equal: 
+        	            	expected: 2
+        	            	actual  : 0
+        	Test:       	TestObserveSkipsDegenerateDenominator
+        	Messages:   	两个非法分母各留一条 WARN（不许静默跳过）
+--- FAIL: TestObserveSkipsDegenerateDenominator (0.00s)
+FAIL
+FAIL	github.com/example/llm-gateway/tests/tracesealer	0.014s
+FAIL
+test_exit=1

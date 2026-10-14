@@ -1,0 +1,18 @@
+# 任务 10 步骤 2：TDD 编译红（在提交 5dd56a3eb89deeea07d897481d1595b36059d0ef 的**纯净归档树**里跑，不含任何未提交的实现）
+# 命令 = git archive 5dd56a3e | tar -x -C /tmp/p4-t10-red1 && (cd /tmp/p4-t10-red1 && go test ./tests/tracesealer/ -count=1)
+# 纯净性 = 该目录 = 提交 5dd56a3e 的完整内容（工作树里尚未创建 footer.go / observeSealedPart）
+# github.com/example/llm-gateway/tests/tracesealer_test [github.com/example/llm-gateway/tests/tracesealer.test]
+tests/tracesealer/constants_contract_test.go:368:46: undefined: tracesealer.FooterSize
+tests/tracesealer/footer_roundtrip_test.go:70:26: undefined: tracesealer.RowCount
+tests/tracesealer/footer_test.go:76:35: undefined: tracesealer.FooterSize
+tests/tracesealer/footer_test.go:83:26: undefined: tracesealer.RowCount
+tests/tracesealer/footer_test.go:101:27: undefined: tracesealer.RowCount
+tests/tracesealer/footer_test.go:104:39: undefined: tracesealer.ErrFooterCorrupt
+tests/tracesealer/footer_test.go:116:26: undefined: tracesealer.RowCount
+tests/tracesealer/footer_test.go:117:38: undefined: tracesealer.ErrFooterCorrupt
+tests/tracesealer/footer_test.go:129:26: undefined: tracesealer.RowCount
+tests/tracesealer/footer_test.go:130:38: undefined: tracesealer.ErrFooterCorrupt
+tests/tracesealer/footer_test.go:130:38: too many errors
+FAIL	github.com/example/llm-gateway/tests/tracesealer [build failed]
+FAIL
+test_exit=1

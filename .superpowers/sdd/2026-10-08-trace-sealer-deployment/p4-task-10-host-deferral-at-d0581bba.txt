@@ -1,0 +1,65 @@
+# 任务 10 步骤 4「A8 的行数分布测量与判定」——**执行状态登记**（诚实登记，不是证据替代品）
+
+HEAD = d0581bbac2b49ae01bbc93042d2ec0dfabf4a495（本文件的生成时点；内容只描述本 HEAD 上的产物）
+本文件**不声称任何未落盘的数字**：下表「状态」列里凡写「**待宿主执行**」的，都**没有**产出读数。
+
+## 一句话结论
+
+步骤 4 的第 1 条（跑真实流量、抽出所有 `rows` 算分布）与第 4 条里的「A3 环境人工构造样本」
+在当前工作机（darwin/arm64，无真实流量、无 A3 环境）上**执行不了**；第 2–3 条是**判据的算术**，
+本机可以、也已经把它钉成可执行面（见下「本机已可执行的替代验证」）。因此本步骤的产出是三层：
+
+1. **已落盘的实现面**：`internal/tracesealer/footer.go`（`RowCount` / `FooterSize`）与
+   `internal/tracesealer/runner.go` 的 `observeSealedPart`（每个成功封出的 part 读一次行数、
+   算 `bytes_per_row` 与 `ratio`、更新 `MaxRows` / `MinBytesPerRow` / `MinRatio`、每块一行 INFO、
+   每轮一行汇总带这三个量、`rows > MaxTrailerEntries/2` 打 WARN）。
+2. **已落盘的契约面**：`tests/tracesealer/{footer,constants_contract,observability}_test.go`（本机
+   **72 PASS / 0 FAIL / 0 SKIP**，见 `p4-task-10-build-vet-test-at-32a8e9cb.txt`）与三张变异表
+   `p4-task-10-{footer,contract,observability}`（**16 = 8 + 3 + 5 断言红、0 崩溃/编译红、0 允许的绿**，
+   见 `p4-task-10-*-authoritative-at-708f2caa.txt`）—— 任何一个观测读数、任何一条 footer 判据被改坏
+   都会转红。
+3. **未产出（下表逐条列出）**：真实流量上的行数分布与由此得出的决策。
+
+## 逐条执行状态
+
+| 步骤 4 的条目 | 状态 | 由谁在何处产出 |
+|---|---|---|
+| **4.1 采集**：开启写路径跑真实流量后 `grep 'sealed part' <日志>` 抽出全部 `rows`，算 min/p50/p95/max 与 `bytes_per_row` 的分布 | **待宿主执行**（需要真实流量 + 真实 `zstd` **1.4.8** 的宿主；本机无生产流量、本机 `/opt/homebrew/bin/zstd` 是 **v1.5.7**） | 生产宿主（或 A3 环境）：`trace-sealer --once` 打出的 per-part `trace-sealer sealed part` 行；汇总行的 `max_rows` / `min_bytes_per_row` / `min_ratio` 三个字段（Task 2 的 `Summarize` 十个键**恒在**，本机已由 `TestSummarizeFieldsAreStable` 钉住） |
+| **4.2 判定门槛**：`max(rows) < MaxTrailerEntries`（8,388,608）；理论可达性 `rows ≈ BlockMB × 1 MiB / 平均行字节` ⇒ 仅当平均行 < `BlockMB × 1 MiB / 8,388,608 = 192 B`（BlockMB=1536）才可能越界 | **算术已钉**：`TestSealerMaxTrailerEntriesMatchesFrozenReader` 现读冻结包 `reader.go` **求值**出上界 = 8,388,608（不是 grep 数字）；`TestObserveWarnsAtHalfOfRowCap` 钉住「越过一半（4,194,304）即 WARN、正好等于一半不 WARN」 | `tests/tracesealer/constants_contract_test.go` + `tests/tracesealer/observability_test.go`；**结论**（实测 `max(rows)` 到底是多少）待宿主回填 |
+| **4.3 决策门 · 余量 > 2 倍**（实测 `max(rows) < 4,194,304`）⇒ 记「余量充足」、**不改**计划 2 的代码 | **待宿主执行**（判据的**观测面**已就位：越过一半就 WARN，本机有在册用例钉住这个阈值） | 判定人 = 拿到 4.1 读数的人；本文件只登记判据原文，**不替**判定人下结论 |
+| **4.3 决策门 · 落在 50%–100%**（`4,194,304 ≤ max(rows) < 8,388,608`）⇒ 在运行手册里登记「需要按行数滚动」的后续项并给建议参数 | **待宿主执行** | 同上；回填目标 = 运行手册（任务 11 的产物） |
+| **4.3 决策门 · ≥ 上界**（真的出现 `ErrTooManyRows`）⇒ **必须**在 `internal/gateway/observability/spooler.go` 增加**按行数滚动**，并在同一提交里重跑 `p2-task-5` / `p2-task-8-spooler` 两个集合、重新记录 sha256；**不得**只调大 `BLOCK_MB` 了事 | **待宿主执行**（未触发 ⇒ 本任务**不得**预防性地改 `spooler.go`：那会越过任务 10 的边界，并与计划 2 的既有集合脱钩） | 触发条件成立时由后续轮次执行；两个集合路径已核实存在：`tools/trace-mutate/sets/p2-task-5.py`、`tools/trace-mutate/sets/p2-task-8-spooler.py`、目标文件 `internal/gateway/observability/spooler.go` |
+| **4.4 告警面**：确认 `too_many_rows` 以 `permanent=true` 语义出现在日志与轮次汇总里，并抄一条**人工构造**的样本进报告（用 A3 环境把 `TRACE_BODY_BLOCK_MB` 调到极小 + 平均行 < 192 B 复现；**不允许**在生产上复现） | **形状已钉（本机）/ 人工构造样本待宿主执行** | 形状：`TestSummarizeTooManyRowsIsErrorAndNamed`（`SeverityError` + 稳定串 `reason=too_many_rows`）与 `TestRoundTooManyRowsEmitsErrorAlertLine`（日志行级别与字段），本机 PASS；**A3 环境的人工构造样本**属宿主执行 —— 上面两条用例**不是**它的替代品（它们用替身驱动，不产生真实 spool） |
+
+## 决策门的**判据原文**（本计划不替判定人下结论，只要求把原文抄进报告并与实测并列）
+
+计划 `docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md` 任务 10 步骤 4.3 逐字：
+
+> - 若实测 `max(rows)` 距上界 **> 2 倍余量**（即 < 4,194,304）⇒ 记「余量充足」，**不改**计划 2 的代码。
+> - 若实测落在 **50%–100%** 之间 ⇒ 在运行手册里登记「需要按行数滚动」的后续项，并给出建议参数
+>   （`TRACE_BODY_BLOCK_MB` 下调到 X 使 rows < 上界/2）。
+> - 若实测 **≥ 上界**（即真的出现 `ErrTooManyRows`）⇒ 必须在 `internal/gateway/observability/spooler.go`
+>   增加**按行数滚动**（`Ref.Row` 已经带了行号，可实现），并在同一提交里重跑 `p2-task-5` /
+>   `p2-task-8-spooler` 两个集合、重新记录 sha256（全局约束里已经写明这条代价）。**此时不得**只调大
+>   `BLOCK_MB` 了事（那只是把问题推远）。
+
+## 本机**已**可执行的替代验证（不是上述真实读数的替代品 —— 只是把能关的缝关掉）
+
+| 验证 | 结果 | 证据 |
+|---|---|---|
+| `RowCount` 在**手工拼的 32 字节 footer** 上读出行数（纯函数证据，不需要 zstd） | PASS：`TestFooterRowCountOnHandBuiltFooter` 断言 `RowCount == 4242` 且 `FooterSize == 32` | `p4-task-10-build-vet-test-at-32a8e9cb.txt` |
+| `RowCount` 在**真实产物**上读出行数（冻结包 `Sealer` 真封 3 行再解析） | PASS（本机 zstd **v1.5.7**；缺 zstd 的机器上该用例 **SKIP** ⇒ **故意不进任何 `MANIFEST_FILES`**，只作人工复核项） | 同上（`TestFooterRoundTripOnRealArtifact`）；探针里改坏后转红见 `p4-task-10-probe-at-32a8e9cb.txt` P3 |
+| 观测面三个量的**更新方向**与零值语义 | PASS：`TestObserveTracksMinimumBytesPerRow`（取最小 B/行）、`TestObserveTracksMaxRowsAndMinRatio`（取最大行数 / 最小压缩比） | `p4-task-10-observability-authoritative-at-708f2caa.txt`（m02/m03 全红） |
+| **预警线**（`rows > 8,388,608/2` ⇒ WARN，带 `rows` / `ref` / `row_cap_pct`；等于一半不预警） | PASS：`TestObserveWarnsAtHalfOfRowCap`；改坏（阈值 → 100%）后转红 | 同上（m01） |
+| 「读不出行数」不得被折成一个读数 | PASS：`TestObserveSkipsUnreadableArtifact`（三个量保持零值 + `reason=footer_unreadable` 的 ERROR）、`TestObserveSkipsDegenerateDenominator`（0 行 / 未压缩字节 ≤ 0 各一条 `reason=observation_skipped` 的 WARN） | 同上（m04/m05） |
+| 每个成功块一行 INFO、每轮一行汇总且带三个量 | PASS：`TestObserveLogsOneInfoLinePerSealedPart`（3 块 ⇒ 3 行 INFO + 1 行汇总） | 同上；可失败性见探针 P4–P7 |
+| `too_many_rows` 的级别与稳定 reason（4.4 的**形状**） | PASS：`TestSummarizeTooManyRowsIsErrorAndNamed`、`TestRoundTooManyRowsEmitsErrorAlertLine` | `p4-task-10-build-vet-test-at-32a8e9cb.txt` |
+| 构建 / vet / 全量 `tests/tracesealer` | `build_exit=0`（`./internal/... ./cmd/...`）、`vet_exit=0`、**72 PASS / 0 FAIL / 0 SKIP**、`tests_exit=0` | `p4-task-10-build-vet-test-at-32a8e9cb.txt` |
+
+## 与任务 8 / 任务 9 的登记口径一致的三条纪律
+
+1. **不得把「本机跑不了」写成「不需要跑」**：上表每一条「待宿主执行」都写明了**由谁、在哪、用什么命令**产出。
+2. **不得用形状证据冒充读数**：替身驱动 / 手工拼 footer 的用例只证明**形状**（字段、级别、阈值、
+   零值语义），**不**产生任何真实行数分布；报告里不得把它们写成 A8 的实测结论。
+3. **不得预防性地改越界代码**：4.3 的第三条决策门**未触发** ⇒ 本轮**不动** `spooler.go`，
+   也**不**重跑 `p2-task-5` / `p2-task-8-spooler`（它们的绑定与任务 10 无关）。

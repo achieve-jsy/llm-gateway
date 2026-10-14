@@ -170,8 +170,11 @@ COVERAGE_GAPS = [
         "no_killer": ("要杀它们必须把 `if rows > res.MaxRows` 改成 `>=` 或把 `ratio < res.MinRatio` 改成 `>`。"
                       "本集合刻意**没有**加这两条变异：m02 已经直取同一函数里**同类**的「更新方向」判据"
                       "（`MinBytesPerRow` 的 `<`），再加两条形态几乎相同的变异只会让表更长而不增加信息。"
-                      "⇒ 缺口**可闭合**（加两条变异即可），本轮选择不加并**如实登记**：这不是「允许的绿」，"
-                      "而是「要求有在册用例、但没有点名杀手」。"),
+                      "【如实登记工具表的读数】m02/m03 会**顺带**杀死 `TestObserveTracksMaxRowsAndMinRatio`"
+                      "（该用例同时断言 `MinBytesPerRow`，见权威表的「杀死的用例」列），但那条用例的**点名杀手**"
+                      "是 `TestObserveTracksMinimumBytesPerRow`；**没有任何**一条变异直取 `MaxRows` / `MinRatio` "
+                      "的更新方向。⇒ 缺口**可闭合**（加两条变异即可），本轮选择不加并**如实登记**："
+                      "这不是「允许的绿」，而是「要求有在册用例、但没有点名杀手」。"),
         "falsifiability": ("本轮落盘了**人工探针**（改坏 → 转红 → 还原，见 `p4-task-10-probe-at-*.txt`）："
                            "把 `if rows > res.MaxRows` 改成 `if false`、把 `ratio < res.MinRatio` 改成 "
                            "`ratio > res.MinRatio`，逐条确认 `TestObserveTracksMaxRowsAndMinRatio` 转红 ⇒ "

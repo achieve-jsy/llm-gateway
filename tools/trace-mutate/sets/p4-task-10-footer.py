@@ -8,15 +8,28 @@ r"""计划 4 / 任务 10 的变异集合 A：产物 footer 的**只读镜像解�
     里 ⇒ 解析出的行数与真实行数无关（或直接报错）；
   * **偏移差一个字节**（m02）⇒ magic 不再落在 footer 首位 ⇒ 每一块都读不出来（或读到错的行数）；
   * **短文件被折成 0 行**（m03）⇒ 「读不到」与「读到 0 行」从此不可区分 ⇒ A8 的分布会在产物损坏时
-    画成「块都很小」，且没有任何东西报警。
+    画成「块都很小」，且没有任何东西报警；
+  * **五条字段自洽判据各自被改成空操作**（m04 magic / m05 版本 / m06 负 row_count / m07 trailer 未
+    紧邻 footer / m08 文件不存在 ⇒ 返回 `0, nil`）⇒ 每一类坏产物都会被**当真**解析出一个行数，
+    或者把「文件不存在」与「产物损坏」折成同一件事。
 
 编号一经发布不再改动；匹配一律用字符串（不用行号）。
 
-## 与计划文本的一致性
+## 与计划文本的一致性（如实登记：一处**新增**，零处削弱）
 
 计划任务 10 步骤 5 的 `p4-task-10-footer.py` 逐字给出三条变异与各自杀手（m01–m03），本文件逐字采用，
-**没有**追加；也**没有**静态检查 —— 三条要求全部是「解析会返回什么」这类**行为**要求，按 E62 只能由
-在册行为测试承载（`tests/tracesealer/footer_test.go`）。
+并**新增** m04–m08：把 footer 的五条字段自洽判据各自改成空操作。
+
+> **为什么加**：这五条判据都由在册用例承载（`TestFooterRejectsBadMagic` / `...UnknownFormatVersion` /
+> `...NegativeRowCount` / `...TrailerNotAdjacentFooter` / `...MissingFile`）。按 E62「行为要求必须由
+> 在册行为测试承载、且必须有能直取它的变异」，只登记「无杀手」是不够的 —— 加五条变异后每个负例
+> 都有**点名杀手**，且全部红成断言红（不是编译红 / 崩溃红，E70 约定 2）。
+>
+> **前置的用例侧修正（同一次提交里）**：bad-magic 与未知版本这两个负例原来的产物**同时**违反了
+> 「trailer 紧邻 footer」判据（`buildFooter(7, 64, 0)` 配 128 字节 ⇒ 64+0 ≠ 96）⇒ 单独删掉 magic /
+> 版本判据时，另一条判据仍会把同一个产物拦下，用例照样绿 —— 那样加的变异红不起来，只能登记成
+> 「允许的绿」。因此把这两个负例的 trailer 改成紧邻（offset=96），让每个负例**只违反一条**判据；
+> m04/m05 这才真的能红。
 
 ## 与冻结包的边界（如实登记）
 
@@ -27,7 +40,7 @@ r"""计划 4 / 任务 10 的变异集合 A：产物 footer 的**只读镜像解�
 
 ## 允许的绿
 
-无（`EXPECTED_GREEN` 为空）。三条变异都必须红成**断言红**；任何编译红 / panic / 超时都要就地改写变异
+无（`EXPECTED_GREEN` 为空）。八条变异都必须红成**断言红**；任何编译红 / panic / 超时都要就地改写变异
 字符串（E70 约定 2），不得登记为允许的绿。
 """
 
@@ -68,21 +81,44 @@ MUTATIONS["m03_短文件返回0而不是错误"] = [
             "return 0, nil"),
 ]
 
-# 变异测不到的两条要求（「五个字段自洽校验分支」与「镜像长度 == 冻结包已导出常量」）各配一条
-# **存在性**静态检查（E62：静态检查只承载存在/不存在类要求；行为由在册用例承载，见 COVERAGE_GAPS）。
+# m04 magic 判据改成空操作 ⇒ 一段「不是本格式」的字节会被继续解析并当成行数返回。
+#     杀手：TestFooterRejectsBadMagic
+MUTATIONS["m04_magic判据空操作"] = [
+    ("sub", "if string(b[0:4]) != footerMagic {", "if false && string(b[0:4]) != footerMagic {"),
+]
+
+# m05 版本判据改成空操作 ⇒ **未来格式**的 footer 会被按当前格式解析。
+#     杀手：TestFooterRejectsUnknownFormatVersion
+MUTATIONS["m05_版本判据空操作"] = [
+    ("sub", "if v := binary.BigEndian.Uint16(b[4:6]); v != footerFormatVersion {",
+            "if v := binary.BigEndian.Uint16(b[4:6]); false && v != footerFormatVersion {"),
+]
+
+# m06 负 row_count 判据改成空操作 ⇒ 一个自相矛盾的 footer 会被折成一个**负的行数读数**混进 A8 的分布。
+#     杀手：TestFooterRejectsNegativeRowCount
+MUTATIONS["m06_负行数判据空操作"] = [
+    ("sub", "if rowCount < 0 {", "if false && rowCount < 0 {"),
+]
+
+# m07 「trailer 必须紧邻 footer」判据改成空操作 ⇒ footer 字段本身自洽、但与文件长度不相容的产物
+#     会被当成合法（行数照读），A8 会拿一个**错位**的 footer 当样本。
+#     杀手：TestFooterRejectsTrailerNotAdjacentFooter
+MUTATIONS["m07_trailer紧邻判据空操作"] = [
+    ("sub", "if trailerOffset+int64(trailerLen) != fileSize-int64(FooterSize) {",
+            "if false && trailerOffset+int64(trailerLen) != fileSize-int64(FooterSize) {"),
+]
+
+# m08 打开文件失败时返回 (0, nil) ⇒ 「这个 part 还没封」（os.ErrNotExist）与「产物损坏」
+#     （ErrFooterCorrupt）被折成同一件事：调用方再也分不出「还没好」与「坏了」，而 0 会被当成
+#     「0 行」这个**合法读数**。
+#     杀手：TestFooterRejectsMissingFile
+MUTATIONS["m08_文件不存在返回0而不是错误"] = [
+    ("sub", 'return 0, fmt.Errorf("tracesealer: 打开产物 %s 失败: %w", artifactPath, err)', "return 0, nil"),
+]
+
+# 变异测不到的那条要求（「镜像长度 == 冻结包已导出常量」）配一条**存在性**静态检查（E62：静态检查
+# 只承载存在/不存在类要求；行为由在册用例承载，见 COVERAGE_GAPS）。
 CHECKS = [
-    {
-        "name": "footer不相容五条判据的在册用例",
-        "file": "tests/tracesealer/footer_test.go",
-        "pattern": (r"(?s)(?=.*func TestFooterRejectsBadMagic\()(?=.*func TestFooterRejectsUnknownFormatVersion\()"
-                    r"(?=.*func TestFooterRejectsNegativeRowCount\()(?=.*func TestFooterRejectsTrailerNotAdjacentFooter\()"
-                    r"(?=.*func TestFooterRejectsMissingFile\()"),
-        "expect": "present",
-        "why": ("五条判据（坏 magic / 未知版本 / 负 row_count / trailer 未紧邻 footer / 文件不存在）各有在册用例，"
-                "但本集合的 m01–m03 只改「长度 / 偏移 / 短文件返回值」⇒ 没有杀手。**存在性**要求 ⇒ 静态检查钉住"
-                "这五条用例都在册（删掉任何一条就会 FAIL，整轮失败）；「它们真的能失败」由人工探针承载"
-                "（见 COVERAGE_GAPS 的 falsifiability）。"),
-    },
     {
         "name": "镜像长度契约用例在册",
         "file": "tests/tracesealer/constants_contract_test.go",
@@ -118,13 +154,19 @@ REQUIREMENTS = [
                  "ErrorIs(ErrFooterCorrupt) + 返回零值）。"),
     },
     {
-        "plan": "footer 与文件不相容（坏 magic / 未知版本 / 负 row_count / trailer 未紧邻 footer）⇒ 报错，且与「文件不存在」分开",
-        "mutations": [],
-        "checks": ["footer不相容五条判据的在册用例"],
-        "note": ("**行为**要求（无专属变异，理由见 COVERAGE_GAPS gap-1）⇒ 在册用例 `TestFooterRejectsBadMagic` / "
-                 "`TestFooterRejectsUnknownFormatVersion` / `TestFooterRejectsNegativeRowCount` / "
-                 "`TestFooterRejectsTrailerNotAdjacentFooter` / `TestFooterRejectsMissingFile`；"
-                 "存在性由静态检查「footer不相容五条判据的在册用例」钉住。"),
+        "plan": "footer 与文件不相容（坏 magic / 未知版本 / 负 row_count / trailer 未紧邻 footer）⇒ 报错",
+        "mutations": ["m04_magic判据空操作", "m05_版本判据空操作", "m06_负行数判据空操作",
+                      "m07_trailer紧邻判据空操作"],
+        "checks": [],
+        "note": ("**行为**要求 ⇒ 在册用例 `TestFooterRejectsBadMagic` / `TestFooterRejectsUnknownFormatVersion` / "
+                 "`TestFooterRejectsNegativeRowCount` / `TestFooterRejectsTrailerNotAdjacentFooter`，**每条判据各有一个"
+                 "点名杀手**（各负例产物只违反一条判据，见文件头「前置的用例侧修正」）。"),
+    },
+    {
+        "plan": "「这个 part 还没封」（文件不存在）与「产物损坏」必须分开：前者不得被折成 0 行的读数",
+        "mutations": ["m08_文件不存在返回0而不是错误"],
+        "checks": [],
+        "note": ("**行为**要求 ⇒ 在册用例 `TestFooterRejectsMissingFile`（断言不是 ErrFooterCorrupt、且返回零值）。"),
     },
     {
         "plan": "镜像的 footer 长度必须等于冻结包已导出的 tracearchive.FooterSize（跨包镜像不漂移）",
@@ -142,32 +184,7 @@ REQUIREMENTS = [
 # ---------------------------------------------------------------------------
 COVERAGE_GAPS = [
     {
-        "id": "gap-1-footer五个字段自洽校验分支无专属变异",
-        "title": ("`footer.go` 的五个字段自洽校验分支（坏 magic / 未知版本 / 负 trailer_offset 或 trailer_len / "
-                  "负 row_count / trailer 未紧邻 footer）各自都有在册用例，但本集合 m01–m03 没有一条能杀它们"),
-        "where": [
-            "tests/tracesealer/footer_test.go  TestFooterRejectsBadMagic",
-            "tests/tracesealer/footer_test.go  TestFooterRejectsUnknownFormatVersion",
-            "tests/tracesealer/footer_test.go  TestFooterRejectsNegativeRowCount",
-            "tests/tracesealer/footer_test.go  TestFooterRejectsTrailerNotAdjacentFooter",
-        ],
-        "reachable": "**可达且确定**：全部是「写一个 128 字节的文件 + 手工拼的 footer」的纯文件读写，pristine 侧每次运行都执行并 PASS。",
-        "no_killer": (
-            "本集合 TARGET 的三条变异改的是**长度、偏移、短文件返回值**，不触碰这五条判据的**条件**。"
-            "把其中任一条判据整体删掉（例如不再检查 magic）不会让任何在册用例转红 —— 因为其余四条判据仍然"
-            "会拦下同一批坏产物（本文件里的坏 magic 形态同时不满足 trailer 紧邻判据）。"
-            "⇒ 这是**判据之间的冗余**造成的覆盖缺口，不是「判据没被触达」。"
-        ),
-        "falsifiability": (
-            "本轮按 E70② 补了**人工探针**（改坏 → 转红 → 还原，逐条落盘，见 "
-            "`p4-task-10-probe-at-*.txt`）：把每条判据各自的**专属**坏产物喂进去，确认它能单独把对应用例"
-            "打红 —— 说明断言不是恒真。**没有**为它们造变异：造出来的形态（删掉一条判据）在本文件里"
-            "必然被另一条判据兜住，红不起来，那只能登记成「允许的绿」，而按 E64② 那比如实登记缺口更糟。"
-        ),
-        "owner": "本轮只登记 + 人工探针。升格路径：把「判据 A 与判据 B 必须各自独立可证伪」做成一条按判据拆分的变异集合（本轮明确不做，会超出任务 10 的边界）。",
-    },
-    {
-        "id": "gap-2-真实产物往返测不在任何清单里",
+        "id": "gap-1-真实产物往返测不在任何清单里",
         "title": ("`TestFooterRoundTripOnRealArtifact`（tests/tracesealer/footer_roundtrip_test.go）是本任务"
                   "**唯一**的真实产物证据，但它**故意不进任何 MANIFEST_FILES**"),
         "where": [
@@ -177,9 +194,9 @@ COVERAGE_GAPS = [
         "reachable": ("本机**可达**（zstd v1.5.7 在场），本轮实跑 PASS（见 build/vet/测试证据）；"
                       "但缺 zstd 的机器上它会 **Skip** ⇒ 放进任何清单都会让整张表在那类机器上判「证据无效」。"),
         "no_killer": (
-            "它是「冻结包真的按这个布局写」的证据，不是「镜像侧某行被改坏」的证据 ⇒ 本集合的三条变异"
-            "（长度 / 偏移 / 短文件）都会让它一起转红，但它**不点名**任何一条 —— 点名杀手是手工拼 footer 的"
-            "用例。按 E62「行为要求必须能在某张权威表的名字清单里找到承载它的顶层用例」：这条要求的承载者是"
+            "它是「冻结包真的按这个布局写」的证据，不是「镜像侧某行被改坏」的证据 ⇒ 本集合的八条变异"
+            "都会让它一起转红，但它**不点名**任何一条 —— 点名杀手是手工拼 footer 的用例。按 E62「行为要求"
+            "必须能在某张权威表的名字清单里找到承载它的顶层用例」：这条要求的承载者是"
             "`constants_contract_test.go` 的四个常量断言（在册）+ 本条真实产物往返（**人工复核项**，"
             "与计划任务 10 步骤 1 的明文规定一致）。"
         ),

@@ -107,9 +107,14 @@ func TestFooterRejectsShortFile(t *testing.T) {
 
 // TestFooterRejectsBadMagic 末尾 32 字节不是本格式的 footer ⇒ 报错。
 // 覆盖「文件长度够、但那段字节是别的东西」这一形态。
+//
+// 【产物只违反**一条**判据】trailer 仍然紧邻 footer（offset=96、len=0、size=128）：
+// 负例产物若同时违反两条判据，就**证不出**这一条判据单独承重 —— 把它删掉，另一条
+// 判据仍会把同一个产物拦下，用例照样绿。下面的版本 / 负 row_count / 未紧邻三个负例
+// 同理，各自只违反一条。
 func TestFooterRejectsBadMagic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "part-000001.jsonl.zst")
-	f := buildFooter(7, 64, 0)
+	f := buildFooter(7, 96, 0)
 	copy(f[0:4], "TBA5")
 	writeArtifactWithRawFooter(t, path, 128, f)
 
@@ -119,10 +124,10 @@ func TestFooterRejectsBadMagic(t *testing.T) {
 }
 
 // TestFooterRejectsUnknownFormatVersion 版本未知 ⇒ 报错（未来格式的 footer 不得被
-// 当成当前格式解析）。
+// 当成当前格式解析）。同样只违反「版本」这一条判据。
 func TestFooterRejectsUnknownFormatVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "part-000002.jsonl.zst")
-	f := buildFooter(7, 64, 0)
+	f := buildFooter(7, 96, 0)
 	binary.BigEndian.PutUint16(f[4:6], 2)
 	writeArtifactWithRawFooter(t, path, 128, f)
 

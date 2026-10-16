@@ -1,0 +1,5 @@
+定位校验（基于 HEAD:.gitlab-ci.yml，sha256=d6797599470656c4）
+OK  m04a_装到tmp
+OK  m04b_CI启用unit
+全部 2 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

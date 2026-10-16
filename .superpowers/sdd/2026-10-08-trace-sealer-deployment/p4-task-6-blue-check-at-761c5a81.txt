@@ -1,0 +1,9 @@
+定位校验（基于 HEAD:deploy/blue-green/docker-compose.blue.yml，sha256=4de889fa98e47789）
+OK  m01_网关挂载目标改错
+OK  m02_删掉控制面只读
+OK  m03_蓝inst改成green
+OK  m04_ROLL改2h
+OK  m07_ROOT指到未挂目录
+OK  m09_插入无效SEAL键
+全部 6 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

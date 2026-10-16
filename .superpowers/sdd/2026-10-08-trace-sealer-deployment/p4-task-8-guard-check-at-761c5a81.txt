@@ -1,0 +1,7 @@
+定位校验（基于 HEAD:internal/traceverify/guard.go，sha256=d17822980703e86d）
+OK  m01_去掉根目录判断
+OK  m02_去掉设备号比较
+OK  m03_去掉confirm检查
+OK  m04_设备比较反向
+全部 4 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

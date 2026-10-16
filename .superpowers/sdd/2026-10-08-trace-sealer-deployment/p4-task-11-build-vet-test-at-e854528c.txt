@@ -1,0 +1,54 @@
+### 任务 11 / E73 轮：构建 / vet / 聚焦测试 / 边界核对（HEAD=��base=0bfb130f）
+生成命令：go build ./internal/... ./cmd/...（基线 go build ./... 本身有既存失败，见计划口径）；go vet 聚焦包；go test 聚焦包 -count=1 -v
+
+## ① go build ./internal/... ./cmd/...
+build_exit=0
+
+## ② go vet ./tests/deploy/ ./tests/tracesealer/
+vet_exit=0
+
+## ③ go test ./tests/deploy/ -count=1
+PASS 行数 = 48
+FAIL 行数 = 0
+SKIP 行数 = 0
+deploy_test_exit=0
+
+## ④ go test ./tests/tracesealer/ -count=1
+PASS 行数 = 73
+FAIL 行数 = 0
+SKIP 行数 = 0
+tracesealer_test_exit=0
+
+## ⑤ 产出方向的人工复核项（本机有 zstd，故它真的执行）
+=== RUN   TestFooterRoundTripOnRealArtifact
+--- PASS: TestFooterRoundTripOnRealArtifact (0.05s)
+
+## ⑥ 冻结包零改动（base..HEAD）
+  （空输出 = 零改动；行数 = 0）
+
+## ⑦ 工具与集合的哈希
+  10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  tools/trace-mutate/trace_mutate.py
+  git 视角的改动 = 0 行
+
+## ⑧ 新增/改动文件（base..HEAD 的统计）
+ tools/trace-mutate/sets/p4-task-5-restore.py       |  93 ++++
+ tools/trace-mutate/sets/p4-task-5-unit.py          | 247 ++++++++++
+ tools/trace-mutate/sets/p4-task-6-blue.py          | 145 ++++++
+ tools/trace-mutate/sets/p4-task-6-green.py         |  84 ++++
+ tools/trace-mutate/sets/p4-task-6-root.py          | 111 +++++
+ tools/trace-mutate/sets/p4-task-7-bluegreen.py     | 230 +++++++++
+ tools/trace-mutate/sets/p4-task-8-compose.py       | 172 +++++++
+ tools/trace-mutate/sets/p4-task-8-guard.py         | 188 +++++++
+ tools/trace-mutate/sets/p4-task-8-runsh.py         | 267 ++++++++++
+ tools/trace-mutate/sets/p4-task-9-budget.py        | 110 +++++
+ tools/trace-mutate/sets/p4-task-9-vmhwm.py         | 222 +++++++++
+ 64 files changed, 11360 insertions(+)
+build_evidence_exit=0
+
+## ⑤（重跑，上面那次的外层 grep 没匹配上，这里附原样输出）
+命令：go test ./tests/tracesealer/ -run TestFooterRoundTripOnRealArtifact -count=1 -v
+=== RUN   TestFooterRoundTripOnRealArtifact
+--- PASS: TestFooterRoundTripOnRealArtifact (0.04s)
+PASS
+ok  	github.com/example/llm-gateway/tests/tracesealer	0.049s
+roundtrip_exit=0

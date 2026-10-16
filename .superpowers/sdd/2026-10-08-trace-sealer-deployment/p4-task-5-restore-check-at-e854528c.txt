@@ -1,0 +1,4 @@
+定位校验（基于 HEAD:deploy/systemd/restore-old-trace-archive.sh，sha256=50ea35c1ce5e6e98）
+OK  m05_unmask改回mask
+全部 1 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

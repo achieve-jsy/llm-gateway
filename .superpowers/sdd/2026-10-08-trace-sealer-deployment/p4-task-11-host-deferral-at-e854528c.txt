@@ -1,0 +1,66 @@
+# 任务 11 步骤 4「挂载消失的生产验证」——**执行状态登记**（诚实登记，不是证据替代品）
+
+HEAD = e854528c（本文件的生成时点；内容只描述本 HEAD 上的产物）
+本文件**不声称任何未落盘的数字**：下表「状态」列里凡写「**待宿主执行**」的，都**没有**产出读数。
+
+## 一句话结论
+
+步骤 4（在生产/测试环境 `umount` 掉 `/datalog` 后观察「≤1 个 tick 闩锁 + 不再写盘 + `body_missing=true`
++ 累计丢失行数 = 0」）在当前工作机上**执行不了** —— 不是「跑了没通过」，而是**连前置条件都不成立**：
+写侧在部署配置里是**关闭**的，于是被观察的那条链路（`checkRoot` → 闩锁 ERROR → 降级）**根本不运行**，
+任何「什么都没发生」都不是通过而是**空过**（计划自己把这一步写成「门槛一，缺则本步骤无意义」）。
+
+因此本任务现在交付的是三层（与任务 8/9/10 的登记形态一致）：
+
+1. **已落盘的手册文本面**：`docs/deployment.md` 的《调用链正文（`/datalog`）运行手册》一节 ——
+   前置条件、撤挂载判定（≤1 tick）、两种降级不对称、停止点 A/B、6s 关停上限、功能关闭逐字节相同、
+   保留与空间预算、sealer 心跳与隔离件处置，每条都给出**可粘贴命令**。
+2. **已落盘的契约面**：`tests/deploy/trace_runbook_test.go`（**8 条顶层用例**，本机 **PASS**，0 SKIP ——
+   见 `p4-task-11-runbook-*` 与本轮 build/vet/test 证据）与变异集合
+   `tools/trace-mutate/sets/p4-task-11-runbook.py`（**7 条变异 = 7 断言红 / 0 编译红 / 0 允许的绿**，
+   见 `p4-task-11-runbook-authoritative-at-e854528c.txt`）；另有 3 行静态检查，其可失败性由
+   `p4-task-11-runbook-probe-at-e854528c.txt` 的「改坏 → 转红 → 还原」探针实测。
+3. **未产出（下表逐条列出）**：步骤 4 的全部运行时读数。
+
+## 为什么现在执行不了（逐条给可复核命令）
+
+| # | 事实 | 可复核命令（本机实测） |
+|---|---|---|
+| ① | **写侧在部署配置里是关闭的**：两个颜色的 compose 里 `TRACE_BODY_ROOT` 都**注释着** | `grep -n 'TRACE_BODY_ROOT' deploy/blue-green/docker-compose.{blue,green}.yml` ⇒ `:42:      # TRACE_BODY_ROOT: /datalog/trace-archive-v4`（两处都带 `#`） |
+| ② | 写侧为空 ⇒ `sink` 是 **nil** ⇒ `TraceSpooler` **根本不构造** ⇒ `checkRoot` 从不运行 ⇒ 步骤 4 期望的 `root_unavailable` / `root-identity-mismatch` ERROR **永不产生**（观察断言恒真） | `cmd/gateway/main.go:274-276`：`var sink gwobs.TraceBodySink` ＋ `if cfg.TraceBody.Enabled { s, serr := gwobs.NewTraceSpooler(...) }`（关闭时 sink 保持 nil）；`internal/gateway/observability/spooler.go:144` 的 `rootExists` 是**构造期**要求 |
+| ③ | 本机**没有**生产宿主 / A3 环境、没有真实流量、没有可 `umount` 的 `/datalog` 挂载 | `mount \| grep -c datalog` ⇒ **0**（本机 darwin/arm64，`/datalog` 不存在） |
+| ④ | D73「同一 root 的读侧就绪」是**部署**硬门。**订正上一轮计划的前置句**：读侧**代码**在 base（`main`）上**已经存在**并在 `cmd` 里接线 | `internal/observability/service/trace_body_service.go`（`cmd/trace-body/main.go` 接线；`git merge-base --is-ancestor <它的引入提交> 0bfb130f` ⇒ **是**，即 base 已含）—— 但这**不等于**生产上的读侧已就绪可用；本任务不替部署负责人判定 D73 已满足 |
+
+## 逐条执行状态
+
+| 步骤 4 的读数 | 状态 | 由谁在何处产出 |
+|---|---|---|
+| **4.3** 撤挂载后 **≤1 个 tick**（tick = `TRACE_BODY_FLUSH_INTERVAL`，生产 `1m`）内闩锁：日志出现 `root_unavailable` / `root-identity-mismatch` ERROR | **待宿主执行** | 生产（或 A3）：`nsenter -m -t $(docker inspect -f '{{.State.Pid}}' llm-green-gateway) umount /datalog` → `docker logs llm-green-gateway --since 15m \| grep -E 'trace-spool.*(root_unavailable\|root-identity-mismatch)'`；**必须在启用写侧之后**（门槛一） |
+| **4.3** 闩锁后 spool **不再出现新文件**（挂载点目录仍在 ⇒ 「只看目录在不在」不够用的实证） | **待宿主执行** | 同上：`docker exec llm-green-gateway ls -l /datalog/trace-archive-v4/spool \| tail`（撤挂载前先抄一次基线） |
+| **4.3** 此后每一行正文 `body_missing=true` 且四个定位键全 NULL | **待宿主执行** | 同上：`docker logs llm-green-gateway --since 15m \| grep -E 'body_missing_rows='`（增量单调） |
+| **4b** 累计丢失行数 = **0**（两种口径二选一，都要抄录） | **待宿主执行** | ① 网关日志 `body_missing_rows=<n>` 的增量；② 测试/A3 库上 `SELECT count(*) FROM call_traces WHERE body_missing IS TRUE AND created_at >= '<umount 时刻>' AND created_at < '<恢复时刻>'`。另须抄录「窗口内落向该颜色端口（8080/8082）的 nginx access 请求计数 = 0」这一**流量为零**的留证 |
+| **5** 活跃颜色 `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9080/health` 仍 **200**，且活跃颜色日志无相关 ERROR | **待宿主执行** | 生产：同一窗口内执行；`docker logs llm-blue-gateway` 无 `trace-spool` ERROR |
+| **6** 恢复：`docker compose -f deploy/blue-green/docker-compose.green.yml -p llm-green up -d --force-recreate gateway`，确认日志恢复为正常轮次 | **待宿主执行** | 生产：恢复动作 + 恢复后 1 个 tick 的正常轮次日志 |
+| **7** 停止点 B：确认 4–6 全部符合预期、第 4b 步丢失行数为 0 之后才解除「禁止切换蓝绿流量」 | **待宿主执行**（**人工值守**，无自动判据） | 判定人 = 现场执行者；本文件只登记判据原文，**不替**判定人下结论 |
+
+## 本机已可执行的替代验证（**不是**读数的替代品）
+
+1. **手册文本的可失败性**：8 条在册用例 + 7 条断言红变异（m01–m07）+ 3 行静态检查探针 ⇒ 手册里
+   任何一条判定被改坏（改字 / 删段 / 放宽 tick / 把 6s 写成 60s / 插入无效键）都会转红，
+   证据 = `p4-task-11-runbook-authoritative-at-e854528c.txt` 与 `p4-task-11-runbook-probe-at-e854528c.txt`。
+2. **「≤1 个 tick」与「换盘后必须重启」的代码面依据（如实标注：这是**读码**，不是实跑）**：
+   - tick 粒度 = `FlushInterval`，`FlushAndRoll` 每 tick 做一次 `checkRoot()`（`spooler.go:536`），
+     Append 失败时也复检（`:451`）⇒ 闩锁的**发现延迟上界 = 一个 tick**；
+   - 换盘 / 改挂载点后**不能**靠解锁探针自救：解锁探针被 `guardProbe` 包了一层**先验身份、再试写**
+     （`spooler.go:206` + `guardProbe` 函数体），身份基线不匹配时探针直接返回身份错误 ⇒ 闸门
+     **不会**被「容器可写层能写」解锁（这正是 A5-1 要堵的静默错位），而身份基线是构造期闭包
+     ⇒ 只能靠重启（或切到对端颜色）重建 ⇒ 与手册的「必须重启后才能恢复写盘」一致。
+   - **本条是读码推演 ⇒ 真正的判定仍必须由宿主按第 4.3 行实测**（例如：撤挂载后连续观察 ≥3 个 tick，
+     确认「闩锁 ERROR」只出现一次跳变而不是每个 tick 反复刷，且 spool 始终没有新文件）。
+3. **明确不声称的东西**：本文件**不**声称闩锁延迟实测值、**不**声称累计丢失行数、**不**声称
+   活跃颜色健康度 —— 这三类都只在宿主上产生，且必须带「窗口 + 命令 + 输出」一起回填。
+
+## 回填目标
+
+宿主执行后，把第 4.3 / 4b / 5 / 6 行的命令与输出回填到本文件（或新建 `p4-task-11-host-readings-at-*.txt`），
+并在交付报告里把「步骤 4」从**待宿主执行**改为**已执行（附读数）**；本任务**不**预先断言任何读数。

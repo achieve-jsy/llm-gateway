@@ -1,0 +1,6 @@
+定位校验（基于 HEAD:Makefile，sha256=c1a1bbab40512e14）
+OK  m01_不交叉编译
+OK  m02_build漏掉sealer
+OK  m03_编译错包
+全部 3 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

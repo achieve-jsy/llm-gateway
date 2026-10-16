@@ -2664,7 +2664,9 @@ func MaxConcurrent(limitBytes, baselineBytes, safetyBytes, perReadBytes int64) i
 **文件：**
 - 新建：`internal/tracesealer/footer.go`
 - 修改：`internal/tracesealer/runner.go`（`observeSealedPart` 的真实实现：填 `MaxRows` / `MinBytesPerRow` / `MinRatio`，并在 50% 阈值处 WARN）
-- 测试：`tests/tracesealer/footer_test.go`、`tests/tracesealer/constants_contract_test.go`、`tests/tracesealer/observability_test.go`
+- 修改：`internal/tracesealer/options.go`（`MaxTrailerEntries` 的注释订正：任务 10 的 `observeSealedPart` 已使用它 —— 3 行注释，行为零改动；**E73③ 补登记**：原清单漏了这一项，而它在本轮的 TARGET 变更面里）
+- 测试：`tests/tracesealer/footer_test.go`、`tests/tracesealer/constants_contract_test.go`、`tests/tracesealer/observability_test.go`、`tests/tracesealer/footer_artifact_test.go`（**E73① 补登记**：在**已提交的真实产物**上解析，**不依赖 zstd**；该文件进 `p4-task-10-footer` 的 `MANIFEST_FILES`，使「冻结包真按此布局写」这条行为要求进入自动门禁）
+- 测试数据：`tests/tracesealer/testdata/footer_roundtrip_real.jsonl.zst`（**E73① 补登记**：**冻结 Sealer 预产**的 104 字节真实产物，sha256 = `7f4291c592b71182a90bfa25953c648b3db5fd64383fc85af14752430e2af75e`）
 
 **接口：**
 ```go
@@ -2810,6 +2812,10 @@ const FooterSize = 32 // 必须等于冻结包 footer.go 的 footerSize
 8. 抄录第 3–7 步的全部命令与输出。**在测试环境先做一遍**（任务 8 的 A3 实例上更安全：直接 `umount /srv/trace-a3`），生产只作为确认。
 
 - [ ] **步骤 5：写变异集合** `p4-task-11-runbook.py`（`TARGET = "docs/deployment.md"`，`MANIFEST_FILES = ["tests/deploy/trace_runbook_test.go"]`）：m01 删掉「需要重启才恢复」一句 → `TestRunbookDocumentsDiskSwapNeedsGatewayRestart`；m02 把「≤1 个 tick」改成「≤10 分钟」→ `TestRunbookDocumentsMountLossLatchesWithinOneTick`；m03 删掉 SQL 比对 → `TestRunbookDocumentsFeatureOffIsByteIdentical`；m04 把 6s 改成 60s → `TestRunbookDocumentsShutdownSixSecondBound`；m05 插入 `TRACE_BODY_SEAL_INTERVAL` → `TestRunbookNeverMentionsSealInterval`；m06 删掉前置条件段落（`TRACE_BODY_ROOT` 非空 + root 在场 + 「读侧就绪后启用」）→ `TestRunbookDocumentsMountLossPrecondition`；m07 删掉「验证窗口内禁止切换蓝绿流量（丢正文防护）」的停止点 → `TestRunbookDocumentsMountLossLatchesWithinOneTick`。
+
+> **E73 补登记的静态检查行（3 行；E69② 的计划↔集合可对照性）**：上面只登记了 m01–m07，而步骤 1 另有两条**在册用例**（`TestRunbookDocumentsRetentionAndSpaceBudget` / `TestRunbookDocumentsSealerHeartbeatAndPermanentFailure`）与一条「两种降级不对称 / 关掉写侧只是补救动作」的文本要求没有对应变异（七条编号已占满）⇒ 集合里按**约束 6** 各补一行 `expect=present` 的静态检查（`df -h /datalog` / `too_many_rows` / `两种降级不对称`）。它们只承载**存在性**，**行为**要求由那两条在册用例与 `TestRunbookDocumentsMountLossLatchesWithinOneTick` 承载（E62）；三行的可失败性由「改坏→转红→还原」探针实测（`p4-task-11-runbook-probe-at-*.txt`）。集合的 `REQUIREMENTS` 里每条计划要求都有对应条目（`--mapping` 输出「无缺口」），表格见 E73 节的登记。
+
+> **E73① 的连带登记（同轮）**：本步骤的 `MANIFEST_FILES` 只列 `tests/deploy/trace_runbook_test.go`；任务 10 的那条**行为**要求（「冻结包真按此布局写」）改由 `tests/tracesealer/footer_artifact_test.go` 的在册用例承载 ⇒ 它被登记进 **`p4-task-10-footer` 的 `MANIFEST_FILES`**（见 Task 10 文件清单的 E73① 补登记与 E73 节）。
   > **m06/m07 的效力边界（如实标注，写进 `why`）**：这两条验证的是**计划/手册文本里的门禁陈述是否存在**（`docs/deployment.md` 中必须出现「前置条件」与「禁止切流」两段），**不是**运行时行为 —— 自动用例钉不住「切流会被阻止」，只能钉住「这句话还在不在」。因此 `why` 必须写成「门禁声明的存在性」，**不得**声称它证明了运行时防护；运行时防护由门槛二（摘流留证）与停止点 A（人工值守）承担。删掉 m06/m07 会让这两条门禁失去唯一的自动覆盖 ⇒ 保留。
 
 - [ ] **步骤 6：提交 → 跑集合。**

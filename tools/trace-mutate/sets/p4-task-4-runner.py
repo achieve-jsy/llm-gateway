@@ -20,10 +20,13 @@ r"""计划 4 / 任务 4 的变异集合 B：装配期的锁接线与释放（`in
 3. **新增 m09**（装配失败不释放已取得的锁）：计划步骤 3 明文要求「`NewRunner` 失败时
    必须把已取得的资源释放干净」⇒ 同上，补一条直取该错误分支的变异与一条在册行为用例
    `TestNewRunnerReleasesLockWhenSealerFails`（E62：行为要求必须由在册用例承载）。
-4. **新增 m07 的实现形态（如实订正计划文本）**：计划 m07 写「插入 `os.MkdirAll`」，
-   而 `runner.go` **没有** `os` 导入 ⇒ 直接插入会红成**编译红**（无效证据，违反全局
-   约束第 46 条）。因此 m07 由**两个操作**组成：先把 `"os"` 插进导入块，再插
-   `os.MkdirAll(opts.Root, 0o755)`；语义与计划逐字相同（「先建 root 再取锁」）。
+4. **m07 的实现形态（E73② 订正）**：计划 m07 写「插入 `os.MkdirAll`」。原来的登记说
+   「`runner.go` 没有 `os` 导入 ⇒ 直接插入会红成编译红」，于是 m07 写成**两个操作**
+   （先插 `"os"` 再插调用）—— 任务 10 之后 `runner.go` **已经**导入 `os`，那两个操作
+   变成**重复导入** ⇒ 该变异红成**编译红（未编译、无用例执行）**，而当时的表却给它安了
+   杀手名 ⇒ 自相矛盾（E64：死于编译失败者不得被安杀手名）。**订正**：m07 恢复为**单个**
+   `os.MkdirAll` 插入操作，红成**断言红**，杀手是真实执行的
+   `TestNewRunnerNeverCreatesRoot`（在名字清单里）。
 5. **名字清单** = `lock_test.go` + `concurrent_test.go` 的全部顶层用例（与
    `p4-task-4-lock.py` 相同，理由见该集合文件头 3）。
 
@@ -70,11 +73,14 @@ MUTATIONS["m06_装配不取锁"] = [
 ]
 # m07 先建 root 再取锁（顺序颠倒）⇒ 根目录不存在时它被**创建**出来：消失的挂载点被
 #     重建到宿主根文件系统上，正文随后写进那片没人会去看的空间（D70 / 2026-09-24 事故）
-#     杀手：TestNewRunnerNeverCreatesRoot
-#     【两个操作】计划只写「插入 os.MkdirAll」，但 runner.go 没有 os 导入 ⇒ 直接插入
-#     是编译红（无效证据）⇒ 先补导入再插调用，语义与计划逐字相同。
+#     杀手：TestNewRunnerNeverCreatesRoot（断言红：装配失败后 `os.Stat(missing)` 必须仍不存在）
+#     【E73② 订正：单操作，不再补 `"os"` 导入】原来这里是**两个操作**（先插导入再插调用），
+#     前提是「runner.go 没有 os 导入」。任务 10 的 `observeSealedPart` 让 runner.go **已经**
+#     导入了 `os` ⇒ 再插一行 `"os"` 是**重复导入** ⇒ 该变异红成**编译红（未编译、无用例执行）**，
+#     而当时的表却给它安了杀手名 `TestNewRunnerNeverCreatesRoot` —— 自相矛盾（违反 E64：
+#     死于编译失败者不得被安杀手名）。订正后：只留插入调用这一个操作，语义与计划逐字相同
+#     （「先建 root 再取锁」），并红成**断言红**，杀手是真实执行的 `TestNewRunnerNeverCreatesRoot`。
 MUTATIONS["m07_先建根目录再取锁"] = [
-    ("sub", '\t"fmt"\n\t"log/slog"\n', '\t"fmt"\n\t"log/slog"\n\t"os"\n'),
     ("sub", "\tguard, err := NewRootGuard(opts.Root, opts.Identity)",
             "\t_ = os.MkdirAll(opts.Root, 0o755)\n\tguard, err := NewRootGuard(opts.Root, opts.Identity)"),
 ]
@@ -147,7 +153,9 @@ REQUIREMENTS = [
         "plan": "装配次序：normalize() → NewRootGuard()（stat 根目录、不建目录）→ AcquireLock()；失败不得创建根目录",
         "mutations": ["m07_先建根目录再取锁"],
         "checks": [],
-        "note": "杀手 = TestNewRunnerNeverCreatesRoot（它断言缺失的根目录事后仍然不存在）。",
+        "note": ("杀手 = TestNewRunnerNeverCreatesRoot（它断言缺失的根目录事后仍然不存在）——**断言红**。"
+                 "E73② 订正后 m07 是**单个** `os.MkdirAll` 插入操作（原两个操作会重复导入 `os` ⇒ 编译红，"
+                 "而编译红不得安杀手名）。"),
     },
     {
         "plan": "装配失败必须把**已取得的**资源释放干净（构造封块器失败 ⇒ 释放锁）",

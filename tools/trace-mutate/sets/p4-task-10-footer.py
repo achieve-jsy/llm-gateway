@@ -31,12 +31,22 @@ r"""计划 4 / 任务 10 的变异集合 A：产物 footer 的**只读镜像解�
 > 「允许的绿」。因此把这两个负例的 trailer 改成紧邻（offset=96），让每个负例**只违反一条**判据；
 > m04/m05 这才真的能红。
 
-## 与冻结包的边界（如实登记）
+## 与冻结包的边界（如实登记；**E73① 已修**）
 
 `internal/tracearchive/**` 是本计划的**冻结面**：本集合只变异**镜像侧**（`internal/tracesealer/footer.go`），
-冻结包零改动。因此「镜像 == 冻结包的编码」这条**跨包**要求只能由 `tests/tracesealer/constants_contract_test.go`
-（已导出常量直接比对）与 `tests/tracesealer/footer_roundtrip_test.go`（真实产物往返，人工复核项）承载，
-不在本集合的变异范围内。
+冻结包零改动。因此「镜像 == 冻结包的编码」这条**跨包**要求由三处承载：
+
+1. `tests/tracesealer/constants_contract_test.go`（已导出常量直接比对；在 `p4-task-10-contract` 的清单里）；
+2. **`tests/tracesealer/footer_artifact_test.go` 的 `TestFooterParsesCommittedRealArtifact`（在册）** ——
+   在**已提交的真实产物 fixture**（`tests/tracesealer/testdata/footer_roundtrip_real.jsonl.zst`，冻结
+   Sealer 预产、104 字节）上，既用镜像 `RowCount` 读行数，又用**冻结读侧** `GetBody` 逐字节取回三行
+   原文 ⇒ 「冻结包真按此布局写」这条**行为**要求第一次进了自动门禁（m01/m02 直取它）。
+   **E73① 的修法**：原来承载它的 `TestFooterRoundTripOnRealArtifact` 要**当场用 zstd 封一块**
+   ⇒ 缺 zstd 的机器上会 Skip ⇒ 进不了任何清单；**「需要 zstd」不是正当理由**（解析产物不需要 zstd，
+   只有产出需要），故改成「预先产好并提交产物 + 不依赖 zstd 的解析用例」；
+3. `tests/tracesealer/footer_roundtrip_test.go` 的 `TestFooterRoundTripOnRealArtifact`（**仍未进任何清单**）
+   —— 它是**产出方向**的人工复核项：在本机有 zstd 时验证「冻结 Sealer 真能封出可解析的产物」。
+   它不承载「镜像解析真实产物」这条要求（那条已由 2 承接），故不再构成 E62 缺口。
 
 ## 允许的绿
 
@@ -47,13 +57,17 @@ r"""计划 4 / 任务 10 的变异集合 A：产物 footer 的**只读镜像解�
 NAME = "p4-task-10-footer"
 TARGET = "internal/tracesealer/footer.go"
 PACKAGES = ["./tests/tracesealer/"]
-MANIFEST_FILES = ["tests/tracesealer/footer_test.go"]
+MANIFEST_FILES = [
+    "tests/tracesealer/footer_test.go",
+    "tests/tracesealer/footer_artifact_test.go",
+]
 # 推导命令：工具会在 pristine 树里实际执行它，并与 --manifest 逐条比对
 MANIFEST_DERIVATION = (
-    "grep -h '^func Test' tests/tracesealer/footer_test.go "
+    "grep -h '^func Test' tests/tracesealer/footer_test.go tests/tracesealer/footer_artifact_test.go "
     "| sed -E 's/^func (Test[A-Za-z0-9_]*).*/\\1/' | sort"
 )
-# 全部是纯文件读写（手工拼 32 字节 footer）：不依赖 zstd、不依赖真实产物，没有可 SKIP 的理由
+# 全部是纯文件读写（手工拼 32 字节 footer + 解析**已提交的**真实产物 fixture）：
+# 不依赖 zstd、不依赖现场封块，没有可 SKIP 的理由
 SKIP_WHITELIST = []
 RETIRED = {}
 EXPECTED_GREEN = {}
@@ -62,13 +76,14 @@ MUTATIONS = {}
 
 # m01 footer 长度 32 → 24 ⇒ 末尾 24 字节被当成定长 footer：magic 落在 trailer_offset 字段里，
 #     解析出的「行数」与真实行数无关（本用例里直接报错，因为 magic 不符）。
-#     杀手：TestFooterRowCountOnHandBuiltFooter
+#     杀手：TestFooterRowCountOnHandBuiltFooter；另 TestFooterParsesCommittedRealArtifact
+#     （E73① 新增的在册用例：同一偏移错位让它在解析真实产物处转红）
 MUTATIONS["m01_footer长度32改24"] = [
     ("sub", "FooterSize = 32", "FooterSize = 24"),
 ]
 
 # m02 读取偏移差一个字节（size-32 → size-33）⇒ magic 不再落在 footer 首位 ⇒ 每块都读不出来。
-#     杀手：TestFooterRowCountOnHandBuiltFooter
+#     杀手：TestFooterRowCountOnHandBuiltFooter；另 TestFooterParsesCommittedRealArtifact
 MUTATIONS["m02_读取偏移差一个字节"] = [
     ("sub", "off := size - int64(FooterSize)", "off := size - int64(FooterSize) - 1"),
 ]
@@ -132,9 +147,11 @@ CHECKS = [
         "file": "tests/tracesealer/footer_roundtrip_test.go",
         "pattern": r"func TestFooterRoundTripOnRealArtifact\(",
         "expect": "present",
-        "why": ("「冻结包真的按这个布局写」的唯一真实产物证据（需要 zstd）。它**故意不进任何 MANIFEST_FILES**"
-                "（缺 zstd 的机器上会 Skip ⇒ 塞进清单会让整张表判「证据无效」）⇒ 存在性由静态检查钉住，"
-                "行为由人工复核承载。"),
+        "why": ("**产出方向**的人工复核项（需要本机 zstd：当场用冻结 Sealer 封一块）。它**仍未进任何 "
+                "MANIFEST_FILES**（缺 zstd 的机器上会 Skip ⇒ 塞进清单会让整张表判「证据无效」）⇒ 存在性由静态"
+                "检查钉住。**E73① 之后**：它**不再**是「冻结包真按此布局写」这条行为要求的唯一承载者 —— "
+                "该要求由在册用例 `TestFooterParsesCommittedRealArtifact`（`footer_artifact_test.go`，"
+                "已提交的真实产物 fixture、不依赖 zstd）承载，故本条不再构成 E62 缺口。"),
     },
 ]
 
@@ -174,8 +191,18 @@ REQUIREMENTS = [
         "checks": ["镜像长度契约用例在册", "真实产物往返测在册"],
         "note": ("**行为**要求（跨包常量一致性）⇒ 在册用例 `TestSealerFooterSizeMatchesFrozenPackage`"
                  "（在 `tests/tracesealer/constants_contract_test.go`，由集合 `p4-task-10-contract` 的清单承载）；"
-                 "另有真实产物往返测 `TestFooterRoundTripOnRealArtifact`（**故意不进任何 MANIFEST_FILES**，需 zstd）。"
-                 "两条用例的**存在性**分别由同名静态检查钉住。"),
+                 "另有**产出方向**的人工复核项 `TestFooterRoundTripOnRealArtifact`（**仍未进任何 MANIFEST_FILES**，"
+                 "需 zstd）。两条用例的**存在性**分别由同名静态检查钉住。"),
+    },
+    {
+        "plan": "**冻结包真按此布局写**（E62 / E73① 的修法）：在**已提交的真实产物**上，"
+                "镜像 `RowCount` 读出封块时的行数，且冻结读侧 `GetBody` 逐字节取回每一行原文",
+        "mutations": ["m01_footer长度32改24", "m02_读取偏移差一个字节"],
+        "checks": [],
+        "note": ("**行为**要求 ⇒ 在册用例 `TestFooterParsesCommittedRealArtifact`（`footer_artifact_test.go`，"
+                 "**在名字清单里**，每次运行都真的执行、不依赖 zstd）。它同时钉住 fixture 的 sha256（换掉字节会"
+                 "先红）与越界行号报 `ErrNotArchived`。m01/m02 改坏镜像的偏移/长度 ⇒ 该用例的 `RowCount` 断言转红"
+                 "（实测见权威表的「杀死的用例」栏：两条变异都把本用例列进 FAIL 集）。"),
     },
 ]
 
@@ -184,24 +211,27 @@ REQUIREMENTS = [
 # ---------------------------------------------------------------------------
 COVERAGE_GAPS = [
     {
-        "id": "gap-1-真实产物往返测不在任何清单里",
-        "title": ("`TestFooterRoundTripOnRealArtifact`（tests/tracesealer/footer_roundtrip_test.go）是本任务"
-                  "**唯一**的真实产物证据，但它**故意不进任何 MANIFEST_FILES**"),
+        "id": "gap-1-真实产物往返测（产出方向）不在任何清单里",
+        "title": ("`TestFooterRoundTripOnRealArtifact`（tests/tracesealer/footer_roundtrip_test.go）是**产出方向**"
+                  "的人工复核项，它**仍未进任何 MANIFEST_FILES**（E73① 之后它不再唯一承载任何行为要求）"),
         "where": [
             "tests/tracesealer/footer_roundtrip_test.go  TestFooterRoundTripOnRealArtifact",
-            "断言：用冻结包 Sealer 真封一块后，RowCount(真实产物) == 封块时的行数",
+            "断言：用冻结包 Sealer **当场封一块**后，RowCount(真实产物) == 封块时的行数",
         ],
         "reachable": ("本机**可达**（zstd v1.5.7 在场），本轮实跑 PASS（见 build/vet/测试证据）；"
                       "但缺 zstd 的机器上它会 **Skip** ⇒ 放进任何清单都会让整张表在那类机器上判「证据无效」。"),
         "no_killer": (
-            "它是「冻结包真的按这个布局写」的证据，不是「镜像侧某行被改坏」的证据 ⇒ 本集合的八条变异"
-            "都会让它一起转红，但它**不点名**任何一条 —— 点名杀手是手工拼 footer 的用例。按 E62「行为要求"
-            "必须能在某张权威表的名字清单里找到承载它的顶层用例」：这条要求的承载者是"
-            "`constants_contract_test.go` 的四个常量断言（在册）+ 本条真实产物往返（**人工复核项**，"
-            "与计划任务 10 步骤 1 的明文规定一致）。"
+            "**E73① 之前的缺口**：它是「冻结包真的按这个布局写」的唯一证据，而它在任何清单之外 ⇒ 违反 E62。"
+            "**E73① 的修法**：把产物**预先产好并提交**（`testdata/footer_roundtrip_real.jsonl.zst`），"
+            "新增在册用例 `TestFooterParsesCommittedRealArtifact` 解析它（**不需要 zstd**），并登记进本集合的"
+            "`MANIFEST_FILES` ⇒ 「镜像解析真实产物」这条行为要求已进自动门禁。**仍然留在清单外的是产出方向**："
+            "「冻结 Sealer 当场封块」这一步只有装 zstd 的机器能跑，它不承载镜像侧的任何判定 ⇒ 作为人工复核项保留。"
         ),
         "falsifiability": ("**本机实跑**：pristine 侧 PASS；把 m01（FooterSize→24）或 m02（偏移 −1）应用到 "
-                           "`footer.go` 后重跑本条用例 ⇒ FAIL（本轮已落盘，见 `p4-task-10-probe-at-*.txt`）。"),
-        "owner": "本轮只登记。若将来 CI 镜像保证装有 C 版 zstd，可把它升格进 `MANIFEST_FILES` 并纳入本集合的推导命令。",
+                          "`footer.go` 后重跑本条用例 ⇒ FAIL（落盘见 `p4-task-10-probe-at-*.txt`）。"
+                          "**在册的那一条**（`TestFooterParsesCommittedRealArtifact`）的红由本集合的权威表"
+                          "「杀死的用例」栏直接给出（m01/m02 都点名它）。"),
+        "owner": ("本轮只登记：产出方向保留为人工复核项。升格路径 = CI 镜像保证装有 C 版 zstd 且断言"
+                  "「zstd 缺失 ⇒ FAIL 而不是 Skip」，或把产出步骤移到一个单独的、带 zstd 的 job。"),
     },
 ]

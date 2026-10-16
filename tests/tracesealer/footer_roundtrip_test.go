@@ -2,14 +2,17 @@ package tracesealer_test
 
 // ⛔ 本文件**故意不进任何 MANIFEST_FILES**（计划任务 10 步骤 1 的明文规定）。
 //
-// 它需要本机有 C 版 zstd（支持 --long）才能真封一块。有 ⇒ 它就是「镜像实现对**真实
-// 产物**解析正确」的人工复核项；没有 ⇒ 跳过，运行时证据改由任务 8 的 A3 环境（那里
-// 有真实产物）补，并在宿主执行登记表里如实标注「待宿主执行」。
+// 【E73① 订正：它不再是「冻结包真按此布局写」的唯一承载者】
+// 原来的理由是「本机可能没有 C 版 zstd，缺了就 Skip ⇒ 塞进清单会让整张表判证据无效」，
+// 于是这条**行为**要求落到了自动门禁之外 —— 而 **「需要 zstd」不是正当理由**：
+// **解析产物不需要 zstd**（冻结读侧用 Go 库 klauspost/compress/zstd），只有**产出**产物需要。
+// 修法 = 把产物**预先产好并提交**（`testdata/footer_roundtrip_real.jsonl.zst`，冻结 Sealer 预产），
+// 由**在册**用例 `TestFooterParsesCommittedRealArtifact`（`footer_artifact_test.go`）解析它，
+// 并把该文件登记进 `p4-task-10-footer` 的 `MANIFEST_FILES`。
 //
-// 【为什么跳到别处补也算数，而不是把这条用例塞进清单】清单里的用例必须每次运行都
-// **真的执行**（工具的 verify() 会把 SKIP 判成证据无效）；把一条「本机可能跑不了」
-// 的用例塞进去，只会让整张表在缺 zstd 的机器上失效。这正是计划把它列为人工复核项
-// 的原因。
+// 因此本文件现在的定位是**产出方向**的人工复核项：在本机有 zstd 时验证「冻结 Sealer 真能当场
+// 封出可解析的产物」。有 ⇒ 仍是一条人工复核证据；没有 ⇒ Skip，而**镜像解析真实产物**这条要求
+// 已由上面那条在册用例承载，不再有缺口（登记见 `p4-task-10-footer.py` 的 `COVERAGE_GAPS` gap-1）。
 //
 // 【为什么不用 `-short` 跳过】本仓库既有约定是「找不到二进制就 Skip 并说明缺什么」
 // （见 tests/tracearchive/helpers_test.go 的 requireZstd）—— 与之一致。

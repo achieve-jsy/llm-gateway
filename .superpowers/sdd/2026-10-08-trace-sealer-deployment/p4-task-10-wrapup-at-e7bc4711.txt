@@ -1,0 +1,73 @@
+# 任务 10 收尾自查 (HEAD e7bc4711b0e02b76bf22876aad8175f86a8ffba9)
+
+## 1. 工作树状态
+$ git status --porcelain
+(空 = 干净)
+
+## 2. 本轮提交（新到旧，任务 10 相关）
+e7bc4711 docs(evidence): 任务 10 步骤 4（A8 真实行数分布）登记为待宿主执行
+d0581bba docs: E72 订正三处（数字口径 / 计划括号 / 变异子集范围）
+33f77e3e docs(evidence): 任务 10 编译红/断言红/人工探针/构建测试证据落盘
+32a8e9cb docs(evidence): 任务 10 三张权威表重出 - footer 8 + contract 3 + observability 5 = 16 断言红
+708f2caa docs(evidence): 任务 10 三份 --check 定位表重出（footer 集合扩到 8 条变异后）
+93f4f6d4 test(tracesealer): 任务 10 footer 负例产物各只违反一条判据 + 集合补 m04-m08
+c00f8157 docs(evidence): E59 跨任务连带 - 4 份既有集合在新 HEAD 上的权威表
+2374b863 docs(evidence): E59 跨任务连带 - 4 份既有集合的 reissue 定位表重出
+8bbde67f docs(evidence): 任务 10 三张权威表（footer 3 + contract 3 + observability 5 = 11 断言红，0 崩溃/编译红，0 允许的绿）
+037ec30d docs(trace-mutate): 任务 10 observability 集合的 COVERAGE_GAPS 口径订正（如实登记顺带杀伤）
+fc59da11 docs(evidence): 任务 10 三份 --check 定位表重出（最终 HEAD ¼3+3+5 条唯一定位，check_exit=0）
+98a3ecdd fix(trace-mutate): 任务 10 footer 集合的静态检查正则改成与顺序无关（五条用例全部在册）
+b8ec2614 docs(evidence): 任务 10 三份 --check 定位表（3+3+5 条全部唯一定位，check_exit=0）
+1a51119e test(trace-mutate): 任务 10 三个变异集合 + 三份名字清单（步骤 5）
+
+## 3. 禁改面（对比基线 main=0bfb130f）
+$ git diff --numstat 0bfb130f..HEAD -- internal/tracearchive/ migrations atlas-migrations go.mod go.sum tools/trace-mutate/trace_mutate.py
+(无输出 = 零改动)
+
+## 4. 工具 sha256（必须仍是 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8）
+10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  tools/trace-mutate/trace_mutate.py
+
+## 5. E59③ 跨任务连带自查（可复算命令 + 结果）
+$ grep -l "^PACKAGES.*tests/deploy" tools/trace-mutate/sets/p4-task-*.py | wc -l  =>        11
+tools/trace-mutate/sets/p4-task-5-build.py
+tools/trace-mutate/sets/p4-task-5-ci.py
+tools/trace-mutate/sets/p4-task-5-isolate.py
+tools/trace-mutate/sets/p4-task-5-restore.py
+tools/trace-mutate/sets/p4-task-5-unit.py
+tools/trace-mutate/sets/p4-task-6-blue.py
+tools/trace-mutate/sets/p4-task-6-green.py
+tools/trace-mutate/sets/p4-task-6-root.py
+tools/trace-mutate/sets/p4-task-7-bluegreen.py
+tools/trace-mutate/sets/p4-task-8-compose.py
+tools/trace-mutate/sets/p4-task-8-runsh.py
+
+$ grep -n "^TARGET" tools/trace-mutate/sets/p4-task-*.py | grep -E "tracesealer/(runner|options)\.go"
+tools/trace-mutate/sets/p4-task-1-options.py:32:TARGET = "internal/tracesealer/options.go"
+tools/trace-mutate/sets/p4-task-1-round.py:41:TARGET = "internal/tracesealer/runner.go"
+tools/trace-mutate/sets/p4-task-10-contract.py:35:TARGET = "internal/tracesealer/options.go"
+tools/trace-mutate/sets/p4-task-10-observability.py:38:TARGET = "internal/tracesealer/runner.go"
+tools/trace-mutate/sets/p4-task-3-loop.py:62:TARGET = "internal/tracesealer/runner.go"
+tools/trace-mutate/sets/p4-task-4-runner.py:45:TARGET = "internal/tracesealer/runner.go"
+
+## 6. 本任务新增的证据文件（含本文件）
+$ ls -l .superpowers/sdd/2026-10-08-trace-sealer-deployment | grep p4-task-10
+-rw-r--r--  1 jsy  staff  17599 10  9 12:24 p4-task-10-build-vet-test-at-32a8e9cb.txt
+-rw-r--r--  1 jsy  staff   1435 10  9 12:24 p4-task-10-compile-red-at-5dd56a3e.txt
+-rw-r--r--  1 jsy  staff   7341 10  9 12:21 p4-task-10-contract-authoritative-at-037ec30d.txt
+-rw-r--r--  1 jsy  staff   7341 10  9 12:24 p4-task-10-contract-authoritative-at-708f2caa.txt
+-rw-r--r--  1 jsy  staff    249 10  9 12:23 p4-task-10-contract-check-at-93f4f6d4.txt
+-rw-r--r--  1 jsy  staff    249 10  9 12:21 p4-task-10-contract-check-at-98a3ecdd.txt
+-rw-r--r--  1 jsy  staff    172 10  9 12:20 p4-task-10-contract-names.txt
+-rw-r--r--  1 jsy  staff   8491 10  9 12:21 p4-task-10-footer-authoritative-at-037ec30d.txt
+-rw-r--r--  1 jsy  staff   8585 10  9 12:24 p4-task-10-footer-authoritative-at-708f2caa.txt
+-rw-r--r--  1 jsy  staff    438 10  9 12:23 p4-task-10-footer-check-at-93f4f6d4.txt
+-rw-r--r--  1 jsy  staff    263 10  9 12:21 p4-task-10-footer-check-at-98a3ecdd.txt
+-rw-r--r--  1 jsy  staff    232 10  9 12:20 p4-task-10-footer-names.txt
+-rw-r--r--  1 jsy  staff   8999 10  9 12:25 p4-task-10-host-deferral-at-d0581bba.txt
+-rw-r--r--  1 jsy  staff   3412 10  9 12:24 p4-task-10-observability-assertion-red-before-wiring.txt
+-rw-r--r--  1 jsy  staff   8343 10  9 12:21 p4-task-10-observability-authoritative-at-037ec30d.txt
+-rw-r--r--  1 jsy  staff   8343 10  9 12:24 p4-task-10-observability-authoritative-at-708f2caa.txt
+-rw-r--r--  1 jsy  staff    336 10  9 12:23 p4-task-10-observability-check-at-93f4f6d4.txt
+-rw-r--r--  1 jsy  staff    336 10  9 12:21 p4-task-10-observability-check-at-98a3ecdd.txt
+-rw-r--r--  1 jsy  staff    216 10  9 12:20 p4-task-10-observability-names.txt
+-rw-r--r--  1 jsy  staff   7292 10  9 12:24 p4-task-10-probe-at-32a8e9cb.txt

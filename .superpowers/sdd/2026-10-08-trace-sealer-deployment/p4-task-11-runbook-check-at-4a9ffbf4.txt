@@ -1,0 +1,10 @@
+定位校验（基于 HEAD:docs/deployment.md，sha256=cde05ffbc546467b）
+OK  m01_删掉需要重启一句
+OK  m02_把一个tick放宽成十分钟
+OK  m03_删掉SQL比对
+OK  m04_把6s改成60s
+OK  m05_插入无效键
+OK  m06_删掉前置条件段落
+OK  m07_删掉禁止切流停止点
+全部 7 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

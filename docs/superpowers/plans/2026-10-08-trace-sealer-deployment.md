@@ -3220,7 +3220,7 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 
 ### E73（任务 11 交付轮：五条复审项 ＋ 一条自查订正）
 
-> **本轮改动面（已核实，命令给出）**：**实现/测试面** = `tests/deploy/trace_runbook_test.go`（新，8 条顶层用例）＋ `docs/deployment.md`（追加运行手册一节）＋ `tests/tracesealer/footer_artifact_test.go`（新，E73① 的在册解析用例）＋ `tests/tracesealer/testdata/footer_roundtrip_real.jsonl.zst`（新，104 字节真实产物 fixture）＋ `tests/tracesealer/footer_roundtrip_test.go`（**只改文件头注释**：降级为产出方向人工复核项，E73①）；**集合面** = 新增 `tools/trace-mutate/sets/p4-task-11-runbook.py`，并就地改 `p4-task-10-footer.py`（`MANIFEST_FILES` / 推导命令 / `REQUIREMENTS` / `COVERAGE_GAPS`，E73①）与 `p4-task-4-runner.py`（m07 单操作化，E73②）；**计划面** = Task 10 文件清单补登记（E73③）＋ Task 11 步骤 5 段末补登记（E69②）＋ Task 11 的 D73 前置句在**同行就地补**一条事实订正（E73 自查⑥，**行数不变**）＋ 文末追加本节；**证据面** = `p4-task-11-runbook-*`（名单 / 先行红 / `--check` 定位表 / 权威表，各含 `4a9ffbf4` 与 `e854528c` 两个时点）＋ `p4-task-11-runbook-probe-at-e854528c.txt` ＋ **27 张**权威表 ＋ **27 份** `--check` 定位表（`e854528c` 上**全部** `p4-task-*` 集合各一份）＋ 探针 ＋ build/vet/test ＋ 宿主挂起登记（提交 `cc8c23b0` / `abad98ce`）。**冻结包 `internal/tracearchive/**` 零改动**（E73① 只调用它的导出 API）；`tools/trace-mutate/trace_mutate.py` 零改动（sha256 仍为 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）；`atlas-migrations/**` 零改动（零迁移）。**提交数（自己数的）**：`git log --oneline 0bfb130f..HEAD | wc -l` = **91**；本轮 `git log --oneline 96a85eb0..HEAD | wc -l` 在**本节写作时** = **5**（本节的提交是第 5 个）。**此处刻意不写「最终值」**：本计划每追加一条提交，这个数就 +1 —— 上一轮把「最终值」写进文本、结果又被自己的追加提交推翻，正是 E73⑤ 要堵的那类自指失效。**计数一律以当场命令输出为准**（交付报告里给的是收尾时的实测值），计划文本只登记「写作时」的时点值。；本轮改动文件 = **9** 个（不含 `.superpowers/sdd/**` 的证据），含证据 = **71** 个（命令：`git diff --name-only 96a85eb0..HEAD [-- . ':(exclude).superpowers/sdd/*'] | wc -l`）。
+> **本轮改动面（已核实，命令给出）**：**实现/测试面** = `tests/deploy/trace_runbook_test.go`（新，8 条顶层用例）＋ `docs/deployment.md`（追加运行手册一节）＋ `tests/tracesealer/footer_artifact_test.go`（新，E73① 的在册解析用例）＋ `tests/tracesealer/testdata/footer_roundtrip_real.jsonl.zst`（新，104 字节真实产物 fixture）＋ `tests/tracesealer/footer_roundtrip_test.go`（**只改文件头注释**：降级为产出方向人工复核项，E73①）；**集合面** = 新增 `tools/trace-mutate/sets/p4-task-11-runbook.py`，并就地改 `p4-task-10-footer.py`（`MANIFEST_FILES` / 推导命令 / `REQUIREMENTS` / `COVERAGE_GAPS`，E73①）与 `p4-task-4-runner.py`（m07 单操作化，E73②）；**计划面** = Task 10 文件清单补登记（E73③）＋ Task 11 步骤 5 段末补登记（E69②）＋ Task 11 的 D73 前置句在**同行就地补**一条事实订正（E73 自查⑥，**行数不变**）＋ 文末追加本节；**证据面** = `p4-task-11-runbook-*`（名单 / 先行红 / `--check` 定位表 / 权威表，各含 `4a9ffbf4` 与 `e854528c` 两个时点）＋ `p4-task-11-runbook-probe-at-e854528c.txt` ＋ **27 张**权威表 ＋ **27 份** `--check` 定位表（`e854528c` 上**全部** `p4-task-*` 集合各一份）＋ 探针 ＋ build/vet/test ＋ 宿主挂起登记（提交 `cc8c23b0` / `abad98ce`）。**冻结包 `internal/tracearchive/**` 零改动**（E73① 只调用它的导出 API）；`tools/trace-mutate/trace_mutate.py` 零改动（sha256 仍为 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）；`atlas-migrations/**` 零改动（零迁移）。**提交数（自己数的）**：`git log --oneline 0bfb130f..HEAD | wc -l` = **91**；本轮 `git log --oneline 96a85eb0..HEAD | wc -l` 在**本节写作时** = **5**（本节的提交是第 5 个）。**此处刻意不写「最终值」**：本计划每追加一条提交，这个数就 +1 —— 上一轮把「最终值」写进文本、结果又被自己的追加提交推翻，正是 E73⑤ 要堵的那类自指失效。**计数一律以当场命令输出为准**（交付报告里给的是收尾时的实测值），计划文本只登记「写作时」的时点值。；本轮改动文件 = **9** 个（不含 `.superpowers/sdd/**` 的证据），含证据 = **71** 个（**E74① 标注：写作时值(761c5a81)** —— 该计数随提交而变，**本行不宣称任何「当前值」**，一律以当场命令为准）（命令：`git diff --name-only 96a85eb0..HEAD [-- . ':(exclude).superpowers/sdd/*'] | wc -l`）。
 
 | 编号 | 位置 | 问题 | 处置 |
 |---|---|---|---|
@@ -3238,3 +3238,57 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 1. **一切计数先跑命令再落笔**：提交数用 `git log --oneline <base>..HEAD | wc -l`，表数用 `ls` / 逐表求和，用例数用 `go test -v | grep -c '^--- PASS'`，变异/断言红/允许的绿用**每张表的 `计数口径` 块**逐表相加并把加法写出（E73⑤）。
 2. **「缺依赖」不是把行为要求留在自动门禁外的理由**：若一条行为要求只能由「需要某外部工具」的用例承载，正确做法是**把该工具产出的工件预先产好并提交**，再写一条**不依赖该工具**的用例去解析它，并把这个新用例登记进某份集合的 `MANIFEST_FILES`（E73① 的形态：`testdata/*.zst` ＋ `TestFooterParsesCommittedRealArtifact` ＋ `p4-task-10-footer` 的推导命令）。**只依赖该工具的「产出方向」可以继续留在人工复核项**，但**不得**让「解析正确」这类要求失去在册承载者。
 3. **变异必须红成断言红；死于编译失败者不得安杀手名**：改任何变异字符串之前，先核对目标文件**当前**的导入与符号现状（E73② 的实例：任务 10 之后 `runner.go` 已导入 `os`，旧的两操作变异会重复导入 ⇒ 编译红）。交付报告里凡写「杀手 = X」，必须在同一轮的权威表里**能看到 X 出现在该变异的 FAIL 名单里**。
+
+---
+
+## 过程失误登记（E74；**任务 12 交付轮 —— 上一轮评审留下的两条**）
+
+> 编号续本计划 **E73**。与 E57–E73 同一纪律：逐条写清「位置 / 问题 / 处置」。
+>
+> **本轮（E74）改动面（已核实）**：改动面**只有计划文本**（E74① 一行原地标注 ＋ 文末追加 E74 节与下面的「未关闭验收项」节）；对 `internal/**`（含冻结包 `internal/tracearchive/**`）、`cmd/**`、`tests/**`、`tools/trace-mutate/**`、`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum` 的改动**全部为零** ⇒ 按 **E59**（绑定 = **内容哈希**；**纯计划文档提交不使绑定失效**）**不**使任何既有绑定失效。但 **任务 12 步骤 2** 另有独立要求（**在最终 HEAD 上全量重跑**）⇒ 本轮仍把**全部 27 个** `p4-task-*.py` 的 `--check` 与权威表重出，落盘为 `p4-task-12-<集合>-authoritative-at-<sha>.txt` 与 `p4-task-12-<集合>-check-at-<sha>.txt`（并在同一次落盘里另存一份**规范名** `<集合>-authoritative-at-<sha>.txt` / `<集合>-check-at-<sha>.txt`，两份内容逐字节相同）。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E74①** | 本计划 E73 节的前言块（**当前实时行号 `:3223`**；该行**同行就地**改写 ⇒ **行数不变**，无行号级联） | **「写作时时点值随提交而失效」的自指残留**（正是 **E73⑤** 要堵的那一类）：该行写「含证据 = **71** 个」，而 `71` 是**写作时（`761c5a81`）**的时点值 —— 分支上继续提交后它**必然失效**。评审在 `8716f067` 上实测为 **125**（当场命令：`git diff --name-only 96a85eb0..8716f067 \| wc -l`；通用式 `git diff --name-only <base>..HEAD \| wc -l`）⇒ `125 ≠ 71`，计划正文里因此留下一个**在工件中查不到的陈旧数字**。 | **同行就地标注为「写作时值(761c5a81)」**，并写明该计数随提交而变、**本行不宣称任何「当前值」**、一律以当场命令为准。`71`（= `761c5a81` 时点）与 `125`（= `8716f067` 时点）**都只是时点值**，**都不是**「最终值」⇒ 落实 E73⑤「一切计数先跑命令再落笔；计划文本只登记写作时时点值」。 |
+| **E74②** | `tests/tracesealer/testdata/footer_roundtrip_real.jsonl.zst`（E73① 提交的真实产物 fixture，**104 字节**，sha256 `7f4291c592b71182a90bfa25953c648b3db5fd64383fc85af14752430e2af75e`）＋ `tests/tracesealer/footer_roundtrip_test.go` 的文件头注释 | **可复现性被过度暗示**：该 fixture 的来源（**真 Sealer 预产**、产出机 zstd **v1.5.7**、产出时点 `4a9ffbf4`、3 行正文、定位键 `dt=2026-10-08 / inst=blue / part=7`）**只写在注释与 E73① 的正文里**；仓库里**没有任何自动用例或脚本能复现它的产出过程**（复现需要「真 Sealer ＋ 与本机版本一致的 zstd ＋ 当时的输入行」，两者都不在仓库里）。 | **如实登记为「不可自动复现」**：本节 ＋ 交付报告 `docs/superpowers/plans/2026-10-08-trace-sealer-deployment-report.md` 的「诚实的覆盖缺口」一节逐字写明「该 fixture 的**产出过程不可自动复现**；可自动验证的只有**解析**方向（在册用例 `TestFooterParsesCommittedRealArtifact` 钉 sha256／字节数，并用镜像 `RowCount` 与冻结读侧 `GetBody` 读回，见 E73①）」。冻结包不可变 ⇒ 该形态**可接受**，但**不得**暗示它可复现。**不改**任何实现/测试/集合文件（避免把本轮变成一次实现变更、触发额外重绑）。 |
+
+---
+
+## 交接：未关闭验收项（**只做代码不算完成**，必须在真实宿主补做）
+
+> **纪律（先声明）**：本节逐条列出**尚未关闭**的验收项。它们**不会**因为代码合并、门禁全绿或本计划收尾而关闭 —— 只有**在真实宿主上按在册路径抄录出真实读数**才算关闭。**任何报告/交接都不得把它们勾掉，也不得用「本机跑不了」代替「不需要跑」（E64）**；本机能交付的只有**契约面**（改坏 ⇒ 转红），**不是**读数。逐条登记原文见 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/` 的 `p4-task-8-a3-deferral-at-d1bc8e8d.txt`、`p4-task-9-host-deferral-at-7740bdbf.txt`、`p4-task-10-host-deferral-at-d0581bba.txt`、`p4-task-11-host-deferral-at-e854528c.txt`。
+
+### U1　任务 8 —— A3 步骤 5 七项读数 ＋ **进程级 A7**
+
+- **在册路径**：`deploy/verify/trace-a3/run.sh`（＋ `deploy/verify/trace-a3/docker-compose.yml`）；契约面 = `tests/deploy/trace_a3_compose_test.go` ＋ `tests/traceverify/*` ＋ 三张表 `p4-task-8-{guard,compose,runsh}`。
+- **宿主要求**：**Linux ＋ root**（`fallocate` / `mkfs.ext4` / `mount -o loop` / `losetup` / `/proc`）＋ **可用的 docker 引擎** ＋ 测试环境 PG/Redis ＋ 必然拒连的上游（`base_url: http://127.0.0.1:9`）；按 `deploy/verify/trace-a3/run.sh` 执行。
+- **待执行项（7 ＋ 1）**：① 填盘前后 `df -h /srv/trace-a3`（两次）；② 单条闩锁 `ERROR` 原文（**只出现一次**，`grep -c '\[trace-body\] ERROR'`）；③ `body_missing` 计数 vs 总数（两条 `psql` SELECT）；④ `/health`、`/ready` 返回码；⑤ 延迟直方图前后对比（**由人判定**）；⑥ 恢复后的新 spool 列表；⑦ `scratch-cleanup` 后 `findmnt` 为空、镜像已删；⑧ **进程级 A7**：第二个 `--once` 退出码 **1** ＋ 撞锁消息。
+- **回填目标**：交付报告的 A3 一节（命令 ＋ 输出原样，含日期）；并把上述四份登记文件里对应的「待宿主执行」改为「已执行（附读数）」。
+
+### U2　任务 9 —— A6-① 生产压缩比、A6-② Linux `/proc` 峰值标定、A1 的 n = 1e6 回读
+
+- **在册路径**：`cmd/trace-verify`（`decode-bench` / `scratch-*`）＋ `internal/traceverify/{budget.go,vmhwm.go}`；契约面 = `tests/traceverify/*` ＋ `p4-task-9-{budget,vmhwm}`。
+- **宿主要求**：**生产宿主**（`/usr/bin/zstd --version` = **v1.4.8**；`--expected-zstd-version 1.4.8` 会强制它，版本不符即**响亮失败**）＋ **Linux 的 `/proc/<pid>/status`** ＋ 真实 PG ＋ 真实封块产物。
+- **待执行项**：① **A6-①**：`touch -d '5 hours ago' <spool>`（**不得**改 `--min-age`，那是 R8 的承重参数）后 `trace-sealer --root <copy> --zstd-binary /usr/bin/zstd --expected-zstd-version 1.4.8 --min-age 3h --once`，抄 per-part `rows`/`uncompressed_bytes`/`artifact_bytes`/`ratio` 与汇总行，并与规格 §16 第 7 条门槛（9×，或难压日实测下界 10.26×）**并列**；② **A6-②**：`decode-bench --artifact <真实产物> --concurrency 1,2,3 --gc-modes on,off`，取 **K = 1/2/3** 各自的 `peak_vmhwm_bytes`，并**先**取 **K = 0** 空读 RSS 作为基线；③ **A1（n = 1e6 读回，口径 = 计划 3 的 H19）**：固定 seed 抽 1,000 行**逐字节**比对（比对源 = **封块前 spool 行的原字节**，D57），覆盖 ≥2 part / ≥2 dt / 1 个越界样本（`ErrNotArchived`）/ 1 条 `body_missing=true`（`ErrBodyMissing`），**1000/1000 相等，不得 SKIP，不得降低抽样数或改写用例**。
+- **回填目标**：报告 A6/A1 一节 ＋ 交接 **H5 / H10**（回填给计划 3 的 `TRACE_BODY_READ_MAX_CONCURRENT`）。
+
+### U3　任务 10 —— 4.1 真实流量行数分布、4.4 A3 人工构造 `too_many_rows` 样本（三条决策门）
+
+- **在册路径**：`internal/tracesealer/footer.go` ＋ `runner.go` 的 `observeSealedPart`；契约面 = `tests/tracesealer/{footer,constants_contract,observability}_test.go` ＋ `p4-task-10-{footer,contract,observability}`。
+- **宿主要求**：真实流量 ＋ 真实 `zstd` **1.4.8** 的宿主（4.4 的人造样本另需 A3 环境）。
+- **待执行项**：① **4.1**：`grep 'sealed part' <日志>` 抽出全部 `rows`，算 min/p50/p95/max 与 `bytes_per_row` 分布；② **4.4**：在 A3 环境把 `TRACE_BODY_BLOCK_MB` 调到极小 ＋ 平均行 < 192 B，**人工构造**一条 `too_many_rows` 样本（**禁止**在生产上复现）并抄录日志原文（`reason=too_many_rows`）；③ **三条决策门**：`max(rows) < 4,194,304`（> 2 倍余量）⇒ **不改**计划 2 代码；`4,194,304 ≤ max(rows) < 8,388,608`（50%–100%）⇒ 在运行手册登记「需要按行数滚动」的后续项并给建议参数；**`max(rows) ≥ 8,388,608`（≥ 上界）⇒ 必须改 `internal/gateway/observability/spooler.go` 增加按行数滚动，并在同一提交里重跑 `p2-task-5` 与 `p2-task-8-spooler` 两个集合并重记 sha256**。
+- **回填目标**：报告 A8 一节 ＋ 运行手册（触发第二/第三条门时）。
+
+### U4　任务 11 —— 4.3 「挂载消失 ≤1 tick」实测（**当前不可执行**）
+
+- **在册路径**：`docs/deployment.md` 的《调用链正文（`/datalog`）运行手册》一节 ＋ `tests/deploy/trace_runbook_test.go` ＋ `p4-task-11-runbook`。
+- **宿主要求**：生产（或 A3）宿主上**已启用写侧**（`TRACE_BODY_ROOT` 非空且 root 目录在场）的**非活跃、已摘流**颜色；**只允许**测试环境或**无真实流量**的生产窗口（该实验本身在持续丢正文）。
+- **待执行项**：撤挂载后连续观察 **≥3 个 tick**，确认：① `root_unavailable` / `root-identity-mismatch` ERROR **只跳变一次**（不是每 tick 反复刷）；② spool **始终没有**新文件；③ 此后每行 `body_missing=true` 且 `body_missing_rows` **单调**递增；④ **累计丢失行数**（期望 **0**；非 0 ⇒ 按事故复盘且不得作为验收证据）；⑤ 「窗口内流量为零」留证；⑥ 活跃颜色 `/health` 仍 200；⑦ 重启后恢复写盘；⑧ 停止点 A（禁止切换蓝绿流量）由人工值守。
+- **为什么当前不可执行（不是「跳过」）**：写侧在部署配置里**关闭**（`deploy/blue-green/docker-compose.{blue,green}.yml` 的 `TRACE_BODY_ROOT` 两处都注释着）⇒ `sink == nil` ⇒ `TraceSpooler` **根本不构造** ⇒ 期望的 ERROR **恒不出现**，观察断言**恒真（空过）**。⇒ 本项登记为「**读侧就绪（D73 硬门）后的启用门禁**」，**不得**宣称已通过。
+- **回填目标**：`p4-task-11-host-deferral-*.txt`（把 4.3 / 4b / 5 / 6 行改为「已执行（附读数）」）＋ 报告。
+
+### U5　跨计划依赖 —— A6-② 在 `GOGC=off` 下的 K = 2 停止点
+
+- **判据**：若 A6-② 在 **`GOGC=off`** 下 **K = 2** 的峰值 **≥ 2 GiB** ⇒ **不得**宣称 2 并发安全：`MaxConcurrent` 的结论取 **1**，且**必须**把**计划 3**（`docs/superpowers/plans/2026-09-25-trace-point-read-service.md`）的 `TRACE_BODY_READ_MAX_CONCURRENT` **由 2 改为 1**（或提高控制面限额）。
+- **在册路径**：`internal/traceverify/budget.go`（算术）＋ `cmd/trace-verify decode-bench`（读数）＋ 计划 3 的 H15 / 本计划的 H5 / H10。
+- **状态**：**未触发（也还没有读数）** —— 本轮只有算术面（`PerReadPeakBytes() = 512 + 64 + 64 = 640 MiB`、`MaxConcurrent(2 GiB, 300 MiB, 256 MiB) = 2`），**这两个数字不是结论**。⇒ 停止点保持**挂起**，判定与回填都在 U2 之后。

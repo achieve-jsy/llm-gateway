@@ -395,7 +395,7 @@ grep -l '^PACKAGES.*tests/traceverify' tools/trace-mutate/sets/p4-task-*.py | wc
 
 ## 13. 存疑与已知风险（不隐藏）
 
-1. **R1 未关闭**：隔离旧 timer 期间 `/datalog` **没有任何 retention**；停止点 1.5 的量化门必须在 `--confirm` 前过（§8）。
+1. **R1 未关闭**：隔离旧 timer 期间 `/datalog` **没有任何 retention**；停止点 1.5 的量化门必须在 `--confirm` 前过（§8；**E76④ 已把它补进交接清单 = U6**）。
 2. **R2 的真实读数未取**：镜像容量/设备的**执行后** `df -h` 随 A3 一起挂在宿主上（§8）。
 3. **`RequiresMountsFor=` 在「手工 umount」时是否可靠地停掉 unit 属纵深防御、未验证**；主防线是进程内护栏。
 4. **容器 uid 与 `/datalog` 属主未实测**（首轮用 root，D74）。
@@ -405,3 +405,69 @@ grep -l '^PACKAGES.*tests/traceverify' tools/trace-mutate/sets/p4-task-*.py | wc
    `TestFooterRowCountOnHandBuiltFooter` 承重，且 E76② 已把该判据正式在册；见 §5.5）。
 7. **本报告没有给出任何生产读数** —— 所有 `df -h` / `findmnt` / `zstd --version` / `is-active` / 压缩比 / 内存峰值
    **一律待宿主执行**（§2 / §6 / §9）。
+
+## 14. E76（计划 4 最终收尾轮 —— 五条：加法串订正 / 偏移判据在册 / 表述收窄 / 交接补 U6 / 残留复核）
+
+> **本轮改动面（已核实，命令见行内）**：**集合面** = `tools/trace-mutate/sets/p4-task-10-footer.py`
+> （新增变异 `m09` ＋ `REQUIREMENTS` / `COVERAGE_GAPS` / 文件头同步；`MANIFEST_FILES` 与 names 清单
+> **内容未变** —— m09 的点名杀手 `TestFooterRowCountOnHandBuiltFooter` 已在 `footer_test.go` 里）；
+> **报告面** = 本文件（§0 / §1 / §5.5 / §9 / §11 / §13 / 本节）；**计划面** = 文末交接节补 U6；
+> **证据面** = 见本节末的工件清单。
+> **实现面零改动**：`git diff --name-only 0078d238..HEAD -- internal/ cmd/` = **0 个文件**
+> （0078d238 = E76 之前的 HEAD）；`git diff --stat 0bfb130f..HEAD -- internal/tracearchive/` = 空；
+> `tools/trace-mutate/trace_mutate.py` sha256 仍为 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`。
+> **本轮提交（枚举，不写「共 N 个」—— 与 E74① 同一纪律；计数一律以当场 `git log --oneline 0078d238..HEAD` 为准，
+> 本节自身的提交会使它 +1）**：`78fe1e39`（E76①）→ `21df604a`（E76② 集合）→ `beee46b9`（E76② 证据/报告）
+> → `0a3466d3`（E76③）→ `306977cd`（E76④）→ 本节。
+
+| # | 位置 | 改前 | 改后（可复核） |
+|---|---|---|---|
+| **E76①** | 本报告 §11 A 段的加法串 | `7+2+3+6+3+8+5+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11` —— **只有 26 项、实和 129**，却写「= 136」 | 补入漏项（第 **10** 项，按集合名的 `ls` 字典序 = **`p4-task-3-loop` = 7**）⇒ **27 项**：`7+2+3+6+3+8+5+7+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11 = 136`。**headline 136 不变**（结论本来就对，错的只是项数与和数）。逐表取值 ＋ machine 加法落盘 `e76-addition-derivation-at-5650d28c.txt`（`terms=27 / sum=136`） |
+| **E76②** | `tools/trace-mutate/sets/p4-task-10-footer.py` ＋ 本报告 §0 / §1 / §11 | 集合 **8** 条变异；「row_count 偏移 ↔ trailer_len 偏移互串」这条判据只被登记成**覆盖缺口** | **新增 `m09_row_count偏移改成trailer_len偏移`**：`("sub","b[18:22]","b[14:18]")`；点名杀手 = 在册用例 **`TestFooterRowCountOnHandBuiltFooter`**（`footer_test.go:81` 用 `buildFooter(4242, 4096-32, 0)` ⇒ trailer_len=0 ≠ row_count=4242；`:85` 断言 4242）。`REQUIREMENTS` 加一条（row_count 必须读 `[18:22)`，不得错读成同为 4 字节的 `[14:18)`）、`COVERAGE_GAPS` 加 `gap-2`（**把原覆盖缺口改写为「已关闭」**）、文件头同步。按 **E59 重跑重绑**：`p4-task-10-footer-authoritative-at-21df604a.txt`（`table_exit=0`；**变异总数 9 = 9 断言支撑的红 + 0 崩溃/超时/编译红 + 0 允许的绿 + 0 未登记的绿 + 0 证据无效**；m09 行 = 红 / `names=8 ran=8 diff=0 PASS=6 SKIP=0 FAIL=2` / 杀手 = `TestFooterRowCountOnHandBuiltFooter` ＋ `TestFooterRejectsNegativeRowCount`）＋ `p4-task-10-footer-check-at-21df604a.txt`（`check_exit=0`；**9** 条模式在 HEAD 上唯一定位）。集合文件 sha256 `49a04f7f328e…` → `035f45bf887012d901afada7fe7a15d46e56dd9978752995999c6d3d75bf5486`；`footer.go` sha256 未变（`fa10f80dfc995b64…`）。**该集合条数 8 → 9；全项目总量 136 → 137**（`136 − 8 + 9 = 137`，落盘 `e76-addition-derivation-at-21df604a.txt`：`terms=27 / sum=137`） |
+| **E76③** | 本报告 §5.5 第 5 条第二点 ＋ §13 第 6 条 ＋ 探针记录 `p4-task-12-probe-at-5650d28c.txt` 的 P3 | 「把 `b[18:22]` 改成 `b[14:18]` 读不出差别、用例仍绿 ⇒ 该 fixture **区分不了** trailer_len 与 row_count」被登记为**覆盖缺口**（读起来像「这条判据不可证伪」） | **收窄**为「**仅在 `-run TestFooterParsesCommittedRealArtifact` 的单测口径下**为负结果（该 fixture 的 trailer_len == row_count == 3 ⇒ **该单测**区分不了两字段）；**包级已由 `TestFooterRowCountOnHandBuiltFooter` 承重**」——评审以 `go test -overlay` 把 `footer.go:107` 改成 `b[14:18]` 跑**整包** ⇒ **exit=1、6 条顶层 FAIL**；本轮以同口径复跑并**自己数了一遍**：整包 `RUN=73 / PASS=67 / FAIL=6 / SKIP=0 / 编译错误行=0`（`73 − 6 = 67` ✓，落盘 `e76-m09-wholepackage-at-21df604a.txt`）。**不再**称作「不可证伪的覆盖缺口」 |
+| **E76④** | 计划文末「交接：未关闭验收项」（U1–U5） | **缺 R1** —— 「停止点 1.5 未执行」只在报告 §8 / §13 第 1 条 / §4 D65 有记载，交接清单里**没有**对应项 | 补 **U6**（计划 ＋ 本报告 §9 同步）：R1 = **停止点 1.5 未执行 ⇒ R1 量化仍挂起**；写明它是「**唯一可能失控的路径**」（其余未关闭项是「读数未取」或「纵深防御未验证」），并引报告 **§8 / §13 第 1 条 / §4 D65**。行号只标**评审时点**值（`:198` / `:350`）并注明**不随编辑维护**（E76 在报告里插了几行 ⇒ 行号已移动，引用一律以节号为准）。计划里 `grep -cE '本计划 ?:[0-9]'` 改后仍为 **0** |
+| **E76⑤** | 全仓残留复核 | — | 见下 |
+
+**E76⑤ 残留复核（命令与结果，原文）**：
+
+```
+$ grep -rn "7+2+3+6+3+8+5+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11" . | grep -v '/\.git/'
+  ⇒ 唯一命中 = .superpowers/.../e76-addition-derivation-at-5650d28c.txt 里**引用「原串」的那一行**（订正证据本身）
+    ⇒ 全仓**没有任何活的口径**再用 26 项串
+$ grep -rIn '15 = 15' . | grep -v '/\.git/'        ⇒ **0 命中** ✓
+$ grep -rn '129' docs/superpowers/plans/2026-10-08-trace-sealer-deployment*.md
+  ⇒ 只出现在 §11 的「实和 = 129（136 − 7）」（订正登记）与计划 E73⑤ 的**历史勘误**（26 张表 = 129，已订正为 136）
+    ⇒ **没有**把 129 当成 136 的残留
+$ grep -rn "7+2+3+6+3+8+5+7+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11" .
+  ⇒ 计划 E73⑤ / 本报告 §11（订正后）/ e76-addition-derivation-at-5650d28c.txt ⇒ 与重绑后逐表取值一致
+```
+
+**E76 的回归读数**（本轮对 `internal/**`/`cmd/**` **零改动** ⇒ 只做回归确认；`gofmt` 无输出）：
+
+```
+go build ./internal/... ./cmd/...                                    build_exit=0
+go vet ./internal/tracesealer/ ./internal/traceverify/ ./internal/tracearchive/ \
+       ./tests/tracesealer/ ./tests/traceverify/ ./tests/deploy/      vet_exit=0
+go test ./tests/tracesealer/... ./tests/traceverify/... ./tests/deploy/... -count=1 -v
+  顶层 PASS=153  FAIL=0  SKIP=0  包级 ok=3  包级 FAIL=0  no tests to run=0   focused_test_exit=0
+go test ./internal/tracearchive/ -count=1 -v  顶层 PASS=31  FAIL=0  tracearchive_test_exit=0
+go fmt 检查：gofmt -l <上述聚焦目录> = 空
+落盘：e76-build-vet-test-at-306977cd.txt
+```
+
+**E76 的落盘工件（全部在 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/`）**：
+
+```
+p4-task-10-footer-authoritative-at-21df604a.txt   table_exit=0（9 = 9 断言红 / 0 编译红 / 0 允许的绿 / 0 证据无效）
+p4-task-10-footer-check-at-21df604a.txt           check_exit=0（9 条唯一定位）
+e76-e62-probe-at-21df604a.txt                     改坏→断言红→还原（还原后 footer.go sha256 与改前一致；改动后行号 = 107）
+e76-m09-wholepackage-at-21df604a.txt              整包口径 exit=1 / 6 条顶层 FAIL（73 − 6 = 67）
+e76-addition-derivation-at-5650d28c.txt           原串 26 项 129 ＋ 漏项 p4-task-3-loop=7 ⇒ 27 项 136
+e76-addition-derivation-at-21df604a.txt           E76② 后 27 项 = 137（136 − 8 + 9）
+e76-build-vet-test-at-306977cd.txt                build / 聚焦 vet / 聚焦测试 / gofmt
+（另：p4-task-12-probe-at-5650d28c.txt 的 P3 段与「结论」块被 E76③ **就地批注收窄**，测量事实未改）
+```
+
+> **E76 之后的口径**：§11 A 段那个 `136`、`check_exit=0 / table_exit=0 各 27/27`、`名字清单条数 191`
+> 都是 **Task 12 时点（`5650d28c` 的 27 张表）** 的值；**当前**（E76② 后）总量 = **137**（见 §11 的 E76② 块）。
+> E76 只重出**内容变了的那个集合**的表（E59：绑定 = 内容哈希），其余 26 个集合的表**仍是 `5650d28c` 的**。

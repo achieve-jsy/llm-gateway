@@ -1,5 +1,5 @@
 ### E76② 重绑后的全项目总量自证（数据来源：其余 26 张 *-authoritative-at-5650d28c.txt ＋ 重绑后的
-### p4-task-10-footer-authoritative-at-21df604a.txt）
+### p4-task-10-footer-authoritative-at-9c7e4ce1.txt）
 # 命令：对 27 个集合名按 ls 字典序，逐表 grep '^变异总数' 取尾数，再 machine 相加
 
 集合名（ls 字典序）      变异总数
@@ -36,6 +36,8 @@ p4-task-9-vmhwm                  11
 项数 terms = 27   和 sum = 137
 
 交叉验算：136 - 8 + 9 = 137
+# 说明：本集合在 9c7e4ce1 又重绑了一次（只订正 gap-2 里的用例行号 :79→:75，变异数与判定不变）
+#       ⇒ 集合 sha256 035f45bf… → 68c4cd017f2d…；权威表 -at-21df604a 为上一版绑定，保留为历史。
 集合 self-证明（重绑表 tab 尾）：
   变异总数                 = 9
   合计: 9 = 9 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿

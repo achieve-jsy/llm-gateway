@@ -56,7 +56,7 @@
 | 9 | `49baf6b2` | `p4-task-9-budget` | `ef39eb5dcf78…` | 4 | `internal/traceverify/budget.go` | `eef473b43d16bd68ee8473ed1ea58cb8d8e9207063c0bc705534c31069727e99` |
 | 9 | `49baf6b2` | `p4-task-9-vmhwm` | `f7bdd9e3e939…` | 11 | `internal/traceverify/vmhwm.go` | `09726c96be4472d37c771fd502bbfdfb9cb643f0beb100e259a5aa70af7dbede` |
 | 10 | `2bba38ab` | `p4-task-10-contract` | `10dfb5251428…` | 3 | `internal/tracesealer/options.go` | `b3a0909d3169349a23b94e11289224c3de641fb1c67ce028bd7849593d1bfa2e` |
-| 10 | `2bba38ab` | `p4-task-10-footer` | `49a04f7f328e…` → **`035f45bf8870…`（E76② 重绑）** | 8 → **9** | `internal/tracesealer/footer.go` | `fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15`（未变） |
+| 10 | `2bba38ab` | `p4-task-10-footer` | `49a04f7f328e…` → **`68c4cd017f2d…`（E76② 重绑 ＋ E76⑤ 行号订正后再绑）** | 8 → **9** | `internal/tracesealer/footer.go` | `fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15`（未变） |
 | 10 | `2bba38ab` | `p4-task-10-observability` | `17582377948f…` | 5 | `internal/tracesealer/runner.go` | `dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab` |
 | 11 | `4a9ffbf4` | `p4-task-11-runbook` | `c006add3a096…` | 7 | `docs/deployment.md` | `cde05ffbc546467ba881a343a3b2cdae5d5b525a96b8e3ba13a5880824c47fb2` |
 
@@ -64,9 +64,13 @@
 
 > **E76② 重绑（E59）**：`p4-task-10-footer` 的集合文件在 **E76 收尾轮**被改（新增 `m09`）⇒ 按 E59
 > **重跑重绑**，重出权威表与 `--check`：
-> `.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-10-footer-authoritative-at-21df604a.txt`
+> `.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-10-footer-authoritative-at-9c7e4ce1.txt`
 > （`table_exit=0`；变异总数 **9** = 9 断言红 + 0 编译红 + 0 允许的绿 + 0 证据无效）与
-> `p4-task-10-footer-check-at-21df604a.txt`（`check_exit=0`；9 条模式在 HEAD 上唯一定位）。
+> `p4-task-10-footer-check-at-9c7e4ce1.txt`（`check_exit=0`；9 条模式在 HEAD 上唯一定位）。
+> **E76⑤ 又重绑了一次**：同一集合文件里 `gap-2` 的用例行号写错（`:79` → 实际 **`:75`**）⇒ E59 的
+> 「动了集合就必须重跑重绑」同样适用，故在 `9c7e4ce1` 上再出一份（上表本行取的就是这一份；
+> 变异数/判定/杀死的用例**逐条不变**，变的只有 `set sha256`）。第一版绑定
+> `-at-21df604a`（`set sha256 = 035f45bf…`）**保留为历史**，当前以 **`-at-9c7e4ce1`** 为准。
 > 上表这一行的 `set sha256` / 变异数已按**新表**更新；`目标文件 sha256`（`footer.go`）**未变**
 > （E76 对 `internal/**` / `cmd/**` **零改动**）。上表其余 **26** 行的 sha256 / 变异数**仍是
 > `5650d28c` 表**的值（E59：只有内容变了的集合才需要重绑）。
@@ -165,7 +169,7 @@
      复跑并**自己数了一遍**：整包 73 条顶层用例 ⇒ RUN=73 / PASS=67 / **FAIL=6** / SKIP=0 / 编译错误行=0
      （落盘 `e76-m09-wholepackage-at-21df604a.txt`，73 − 6 = 67 ✓）。
      E76② 已把这条判据**正式在册**（集合新增变异 `m09_row_count偏移改成trailer_len偏移` ＋ 点名杀手
-     `TestFooterRowCountOnHandBuiltFooter`，见 `p4-task-10-footer-authoritative-at-21df604a.txt` 的 m09 行：
+     `TestFooterRowCountOnHandBuiltFooter`，见 `p4-task-10-footer-authoritative-at-9c7e4ce1.txt` 的 m09 行：
      红 / names=8 ran=8 diff=0 PASS=6 SKIP=0 FAIL=2）。⇒ **不再**把它称作「不可证伪的覆盖缺口」
      （此前**不**记成断言红、**不**安杀手名，是因为当时只跑了那条单测，不是因为该判据没有承载者）。
      （镜像与冻结包的其余一致性由手工拼 32 字节 footer 的用例 ＋ `FooterSize` 常量契约 ＋ 真产物解析共同钉住。）
@@ -314,10 +318,11 @@ check_exit=0 : 27 / 27   table_exit=0 : 27 / 27
 > **当前**全项目总量 = **137**。两种算法互相印证（E60）：
 > ① 逐表增量法：`136 − 8 + 9 = **137**`；
 > ② 27 项重加法：把上面那个 27 项算式里的**第 6 项 `8`（= `p4-task-10-footer`）换成 `9`**，
->    machine 加法得 `terms=27 / sum=137`（落盘 `e76-addition-derivation-at-21df604a.txt`）。
-> 该集合重绑后的权威表：`p4-task-10-footer-authoritative-at-21df604a.txt`（`table_exit=0`；
+>    machine 加法得 `terms=27 / sum=137`（落盘 `e76-addition-derivation-at-9c7e4ce1.txt`）。
+> 该集合重绑后的权威表：`p4-task-10-footer-authoritative-at-9c7e4ce1.txt`（`table_exit=0`；
 > **9 = 9 断言红 + 0 崩溃/超时/编译红 + 0 允许的绿 + 0 未登记的绿 + 0 证据无效**）与
-> `p4-task-10-footer-check-at-21df604a.txt`（`check_exit=0`）。
+> `p4-task-10-footer-check-at-9c7e4ce1.txt`（`check_exit=0`）。
+> （首版 `-at-21df604a` 因 E76⑤ 订正 `gap-2` 里的用例行号而再绑一次，保留为历史 —— 见 §1 的注。）
 > 上面那个 `136` 是 **Task 12 时点（`5650d28c` 的 27 张表）** 的值 —— `check_exit/table_exit 27/27`、
 > `= 136`、`清单条数 191` 都**只对那个时点**成立；E76 之后这四项的当前值见本块与 §14。
 
@@ -417,13 +422,14 @@ grep -l '^PACKAGES.*tests/traceverify' tools/trace-mutate/sets/p4-task-*.py | wc
 > （0078d238 = E76 之前的 HEAD）；`git diff --stat 0bfb130f..HEAD -- internal/tracearchive/` = 空；
 > `tools/trace-mutate/trace_mutate.py` sha256 仍为 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`。
 > **本轮提交（枚举，不写「共 N 个」—— 与 E74① 同一纪律；计数一律以当场 `git log --oneline 0078d238..HEAD` 为准，
-> 本节自身的提交会使它 +1）**：`78fe1e39`（E76①）→ `21df604a`（E76② 集合）→ `beee46b9`（E76② 证据/报告）
-> → `0a3466d3`（E76③）→ `306977cd`（E76④）→ 本节。
+> 本节自身的提交与之后的勘误提交都会使它 +1）**：`78fe1e39`（E76①）→ `21df604a`（E76② 集合）→ `beee46b9`
+> （E76② 证据/报告）→ `0a3466d3`（E76③）→ `306977cd`（E76④）→ 本节 → `b146a73a`（E76⑤ 残留复核收口）
+> → `9c7e4ce1`（`gap-2` 用例行号订正 → 按 E59 再绑一次）。**以当场命令为准**（E73⑤/E74① 同一纪律）。
 
 | # | 位置 | 改前 | 改后（可复核） |
 |---|---|---|---|
 | **E76①** | 本报告 §11 A 段的加法串 | **26 项**（= 本行的 27 项串**删去第 10 项 `p4-task-3-loop` 的那个 `7`**）、**实和 129**，却写「= 136」；其**字面串见 git 历史** `git show 78fe1e39^:<本报告>` 的「变异总数逐表」行（树内**不再重抄**该字面串，以免 E76⑤ 的残留复核 grep 自匹配） | 补入漏项（第 **10** 项，按集合名的 `ls` 字典序 = **`p4-task-3-loop` = 7**）⇒ **27 项**：`7+2+3+6+3+8+5+7+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11 = 136`（`136 − 7 = 129`）。**headline 136 不变**（结论本来就对，错的只是项数与和数）。逐表取值 ＋ machine 加法落盘 `e76-addition-derivation-at-5650d28c.txt`（`terms=27 / sum=136`） |
-| **E76②** | `tools/trace-mutate/sets/p4-task-10-footer.py` ＋ 本报告 §0 / §1 / §11 | 集合 **8** 条变异；「row_count 偏移 ↔ trailer_len 偏移互串」这条判据只被登记成**覆盖缺口** | **新增 `m09_row_count偏移改成trailer_len偏移`**：`("sub","b[18:22]","b[14:18]")`；点名杀手 = 在册用例 **`TestFooterRowCountOnHandBuiltFooter`**（`footer_test.go:81` 用 `buildFooter(4242, 4096-32, 0)` ⇒ trailer_len=0 ≠ row_count=4242；`:85` 断言 4242）。`REQUIREMENTS` 加一条（row_count 必须读 `[18:22)`，不得错读成同为 4 字节的 `[14:18)`）、`COVERAGE_GAPS` 加 `gap-2`（**把原覆盖缺口改写为「已关闭」**）、文件头同步。按 **E59 重跑重绑**：`p4-task-10-footer-authoritative-at-21df604a.txt`（`table_exit=0`；**变异总数 9 = 9 断言支撑的红 + 0 崩溃/超时/编译红 + 0 允许的绿 + 0 未登记的绿 + 0 证据无效**；m09 行 = 红 / `names=8 ran=8 diff=0 PASS=6 SKIP=0 FAIL=2` / 杀手 = `TestFooterRowCountOnHandBuiltFooter` ＋ `TestFooterRejectsNegativeRowCount`）＋ `p4-task-10-footer-check-at-21df604a.txt`（`check_exit=0`；**9** 条模式在 HEAD 上唯一定位）。集合文件 sha256 `49a04f7f328e…` → `035f45bf887012d901afada7fe7a15d46e56dd9978752995999c6d3d75bf5486`；`footer.go` sha256 未变（`fa10f80dfc995b64…`）。**该集合条数 8 → 9；全项目总量 136 → 137**（`136 − 8 + 9 = 137`，落盘 `e76-addition-derivation-at-21df604a.txt`：`terms=27 / sum=137`） |
+| **E76②** | `tools/trace-mutate/sets/p4-task-10-footer.py` ＋ 本报告 §0 / §1 / §11 | 集合 **8** 条变异；「row_count 偏移 ↔ trailer_len 偏移互串」这条判据只被登记成**覆盖缺口** | **新增 `m09_row_count偏移改成trailer_len偏移`**：`("sub","b[18:22]","b[14:18]")`；点名杀手 = 在册用例 **`TestFooterRowCountOnHandBuiltFooter`**（`footer_test.go:75`；`:81` 调 `writeArtifactWithFooter(..., 4096, 4242)` → `:65` 组 `buildFooter(4242, 4096-32, 0)` ⇒ trailer_len=0 ≠ row_count=4242；`:85` 断言 4242）。`REQUIREMENTS` 加一条（row_count 必须读 `[18:22)`，不得错读成同为 4 字节的 `[14:18)`）、`COVERAGE_GAPS` 加 `gap-2`（**把原覆盖缺口改写为「已关闭」**）、文件头同步。按 **E59 重跑重绑**（第一版 `-at-21df604a`，行号订正后再绑一次）：`p4-task-10-footer-authoritative-at-9c7e4ce1.txt`（`table_exit=0`；**变异总数 9 = 9 断言支撑的红 + 0 崩溃/超时/编译红 + 0 允许的绿 + 0 未登记的绿 + 0 证据无效**；m09 行 = 红 / `names=8 ran=8 diff=0 PASS=6 SKIP=0 FAIL=2` / 杀手 = `TestFooterRowCountOnHandBuiltFooter` ＋ `TestFooterRejectsNegativeRowCount`）＋ `p4-task-10-footer-check-at-9c7e4ce1.txt`（`check_exit=0`；**9** 条模式在 HEAD 上唯一定位）。集合文件 sha256 `49a04f7f328e…` → `035f45bf8870…`（m09）→ **`68c4cd017f2d7233a57e63d9337fb5a37f6de8bff99372cee92416396a433cf6`**（行号订正后再绑）；`footer.go` sha256 未变（`fa10f80dfc995b64…`）。**该集合条数 8 → 9；全项目总量 136 → 137**（`136 − 8 + 9 = 137`，落盘 `e76-addition-derivation-at-9c7e4ce1.txt`：`terms=27 / sum=137`） |
 | **E76③** | 本报告 §5.5 第 5 条第二点 ＋ §13 第 6 条 ＋ 探针记录 `p4-task-12-probe-at-5650d28c.txt` 的 P3 | 「把 `b[18:22]` 改成 `b[14:18]` 读不出差别、用例仍绿 ⇒ 该 fixture **区分不了** trailer_len 与 row_count」被登记为**覆盖缺口**（读起来像「这条判据不可证伪」） | **收窄**为「**仅在 `-run TestFooterParsesCommittedRealArtifact` 的单测口径下**为负结果（该 fixture 的 trailer_len == row_count == 3 ⇒ **该单测**区分不了两字段）；**包级已由 `TestFooterRowCountOnHandBuiltFooter` 承重**」——评审以 `go test -overlay` 把 `footer.go:107` 改成 `b[14:18]` 跑**整包** ⇒ **exit=1、6 条顶层 FAIL**；本轮以同口径复跑并**自己数了一遍**：整包 `RUN=73 / PASS=67 / FAIL=6 / SKIP=0 / 编译错误行=0`（`73 − 6 = 67` ✓，落盘 `e76-m09-wholepackage-at-21df604a.txt`）。**不再**称作「不可证伪的覆盖缺口」 |
 | **E76④** | 计划文末「交接：未关闭验收项」（U1–U5） | **缺 R1** —— 「停止点 1.5 未执行」只在报告 §8 / §13 第 1 条 / §4 D65 有记载，交接清单里**没有**对应项 | 补 **U6**（计划 ＋ 本报告 §9 同步）：R1 = **停止点 1.5 未执行 ⇒ R1 量化仍挂起**；写明它是「**唯一可能失控的路径**」（其余未关闭项是「读数未取」或「纵深防御未验证」），并引报告 **§8 / §13 第 1 条 / §4 D65**。行号只标**评审时点**值（`:198` / `:350`）并注明**不随编辑维护**（E76 在报告里插了几行 ⇒ 行号已移动，引用一律以节号为准）。计划里 `grep -cE '本计划 ?:[0-9]'` 改后仍为 **0** |
 | **E76⑤** | 全仓残留复核 | — | 见下 |
@@ -461,15 +467,22 @@ go fmt 检查：gofmt -l <上述聚焦目录> = 空
 **E76 的落盘工件（全部在 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/`）**：
 
 ```
-p4-task-10-footer-authoritative-at-21df604a.txt   table_exit=0（9 = 9 断言红 / 0 编译红 / 0 允许的绿 / 0 证据无效）
-p4-task-10-footer-check-at-21df604a.txt           check_exit=0（9 条唯一定位）
+p4-task-10-footer-authoritative-at-9c7e4ce1.txt   table_exit=0（9 = 9 断言红 / 0 编译红 / 0 允许的绿 / 0 证据无效）← **当前绑定**
+p4-task-10-footer-check-at-9c7e4ce1.txt           check_exit=0（9 条唯一定位）← **当前绑定**
+p4-task-10-footer-authoritative-at-21df604a.txt   上一版绑定（E76⑤ 行号订正前；set sha256 = 035f45bf…）—— 保留为历史
+p4-task-10-footer-check-at-21df604a.txt           同上（历史）
 e76-e62-probe-at-21df604a.txt                     改坏→断言红→还原（还原后 footer.go sha256 与改前一致；改动后行号 = 107）
 e76-m09-wholepackage-at-21df604a.txt              整包口径 exit=1 / 6 条顶层 FAIL（73 − 6 = 67）
 e76-addition-derivation-at-5650d28c.txt           原串 26 项 129 ＋ 漏项 p4-task-3-loop=7 ⇒ 27 项 136
-e76-addition-derivation-at-21df604a.txt           E76② 后 27 项 = 137（136 − 8 + 9）
+e76-addition-derivation-at-9c7e4ce1.txt           E76② 后 27 项 = 137（136 − 8 + 9）
 e76-build-vet-test-at-306977cd.txt                build / 聚焦 vet / 聚焦测试 / gofmt
 （另：p4-task-12-probe-at-5650d28c.txt 的 P3 段与「结论」块被 E76③ **就地批注收窄**，测量事实未改）
 ```
+
+> **E76⑤ 的第二次重绑**：集合文件在 `9c7e4ce1` 被改（只订正 `COVERAGE_GAPS gap-2` 里的用例行号
+> `:79` → `:75`，**不是**改变异/清单）⇒ 按 E59 仍**必须重跑重绑** ⇒ 当前绑定取 `-at-9c7e4ce1`
+> （`set sha256 = 68c4cd017f2d…`）；`-at-21df604a`（`035f45bf…`）保留为历史。
+> 两次的判定逐条相同：**9 = 9 断言红 / 0 编译红 / 0 允许的绿 / 0 证据无效**、`check_exit=0`。
 
 > **E76 之后的口径**：§11 A 段那个 `136`、`check_exit=0 / table_exit=0 各 27/27`、`名字清单条数 191`
 > 都是 **Task 12 时点（`5650d28c` 的 27 张表）** 的值；**当前**（E76② 后）总量 = **137**（见 §11 的 E76② 块）。

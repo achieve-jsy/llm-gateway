@@ -3,7 +3,9 @@
 还原口径：**不**用 git checkout / reset / stash（全局约束禁止）—— 原字节先 cp 到 /tmp，改完
           写回原文件后**复算 sha256** 并核 git status（footer.go 不在脏文件列表里）。
 在册用例（点名杀手）= TestFooterRowCountOnHandBuiltFooter
-  tests/tracesealer/footer_test.go:79（函数）/ :81 buildFooter(4242, 4096-32, 0) / :85 断言 4242
+  tests/tracesealer/footer_test.go:75（函数 TestFooterRowCountOnHandBuiltFooter）/
+    :81 writeArtifactWithFooter(t, path, 4096, 4242) → :65 buildFooter(4242, 4096-32, 0) ⇒ trailer_len=0 /
+    :85 断言 4242【E76⑤ 订正：原写「:79（函数）/ :81 buildFooter(...)」不准 —— 函数在 :75，:81 是调用点】
 被改目标 = internal/tracesealer/footer.go
 改前 sha256 = fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15（= 权威表绑定的同一 sha）
 

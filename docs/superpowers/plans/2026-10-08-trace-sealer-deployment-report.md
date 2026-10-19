@@ -422,7 +422,7 @@ grep -l '^PACKAGES.*tests/traceverify' tools/trace-mutate/sets/p4-task-*.py | wc
 
 | # | 位置 | 改前 | 改后（可复核） |
 |---|---|---|---|
-| **E76①** | 本报告 §11 A 段的加法串 | `7+2+3+6+3+8+5+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11` —— **只有 26 项、实和 129**，却写「= 136」 | 补入漏项（第 **10** 项，按集合名的 `ls` 字典序 = **`p4-task-3-loop` = 7**）⇒ **27 项**：`7+2+3+6+3+8+5+7+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11 = 136`。**headline 136 不变**（结论本来就对，错的只是项数与和数）。逐表取值 ＋ machine 加法落盘 `e76-addition-derivation-at-5650d28c.txt`（`terms=27 / sum=136`） |
+| **E76①** | 本报告 §11 A 段的加法串 | **26 项**（= 本行的 27 项串**删去第 10 项 `p4-task-3-loop` 的那个 `7`**）、**实和 129**，却写「= 136」；其**字面串见 git 历史** `git show 78fe1e39^:<本报告>` 的「变异总数逐表」行（树内**不再重抄**该字面串，以免 E76⑤ 的残留复核 grep 自匹配） | 补入漏项（第 **10** 项，按集合名的 `ls` 字典序 = **`p4-task-3-loop` = 7**）⇒ **27 项**：`7+2+3+6+3+8+5+7+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11 = 136`（`136 − 7 = 129`）。**headline 136 不变**（结论本来就对，错的只是项数与和数）。逐表取值 ＋ machine 加法落盘 `e76-addition-derivation-at-5650d28c.txt`（`terms=27 / sum=136`） |
 | **E76②** | `tools/trace-mutate/sets/p4-task-10-footer.py` ＋ 本报告 §0 / §1 / §11 | 集合 **8** 条变异；「row_count 偏移 ↔ trailer_len 偏移互串」这条判据只被登记成**覆盖缺口** | **新增 `m09_row_count偏移改成trailer_len偏移`**：`("sub","b[18:22]","b[14:18]")`；点名杀手 = 在册用例 **`TestFooterRowCountOnHandBuiltFooter`**（`footer_test.go:81` 用 `buildFooter(4242, 4096-32, 0)` ⇒ trailer_len=0 ≠ row_count=4242；`:85` 断言 4242）。`REQUIREMENTS` 加一条（row_count 必须读 `[18:22)`，不得错读成同为 4 字节的 `[14:18)`）、`COVERAGE_GAPS` 加 `gap-2`（**把原覆盖缺口改写为「已关闭」**）、文件头同步。按 **E59 重跑重绑**：`p4-task-10-footer-authoritative-at-21df604a.txt`（`table_exit=0`；**变异总数 9 = 9 断言支撑的红 + 0 崩溃/超时/编译红 + 0 允许的绿 + 0 未登记的绿 + 0 证据无效**；m09 行 = 红 / `names=8 ran=8 diff=0 PASS=6 SKIP=0 FAIL=2` / 杀手 = `TestFooterRowCountOnHandBuiltFooter` ＋ `TestFooterRejectsNegativeRowCount`）＋ `p4-task-10-footer-check-at-21df604a.txt`（`check_exit=0`；**9** 条模式在 HEAD 上唯一定位）。集合文件 sha256 `49a04f7f328e…` → `035f45bf887012d901afada7fe7a15d46e56dd9978752995999c6d3d75bf5486`；`footer.go` sha256 未变（`fa10f80dfc995b64…`）。**该集合条数 8 → 9；全项目总量 136 → 137**（`136 − 8 + 9 = 137`，落盘 `e76-addition-derivation-at-21df604a.txt`：`terms=27 / sum=137`） |
 | **E76③** | 本报告 §5.5 第 5 条第二点 ＋ §13 第 6 条 ＋ 探针记录 `p4-task-12-probe-at-5650d28c.txt` 的 P3 | 「把 `b[18:22]` 改成 `b[14:18]` 读不出差别、用例仍绿 ⇒ 该 fixture **区分不了** trailer_len 与 row_count」被登记为**覆盖缺口**（读起来像「这条判据不可证伪」） | **收窄**为「**仅在 `-run TestFooterParsesCommittedRealArtifact` 的单测口径下**为负结果（该 fixture 的 trailer_len == row_count == 3 ⇒ **该单测**区分不了两字段）；**包级已由 `TestFooterRowCountOnHandBuiltFooter` 承重**」——评审以 `go test -overlay` 把 `footer.go:107` 改成 `b[14:18]` 跑**整包** ⇒ **exit=1、6 条顶层 FAIL**；本轮以同口径复跑并**自己数了一遍**：整包 `RUN=73 / PASS=67 / FAIL=6 / SKIP=0 / 编译错误行=0`（`73 − 6 = 67` ✓，落盘 `e76-m09-wholepackage-at-21df604a.txt`）。**不再**称作「不可证伪的覆盖缺口」 |
 | **E76④** | 计划文末「交接：未关闭验收项」（U1–U5） | **缺 R1** —— 「停止点 1.5 未执行」只在报告 §8 / §13 第 1 条 / §4 D65 有记载，交接清单里**没有**对应项 | 补 **U6**（计划 ＋ 本报告 §9 同步）：R1 = **停止点 1.5 未执行 ⇒ R1 量化仍挂起**；写明它是「**唯一可能失控的路径**」（其余未关闭项是「读数未取」或「纵深防御未验证」），并引报告 **§8 / §13 第 1 条 / §4 D65**。行号只标**评审时点**值（`:198` / `:350`）并注明**不随编辑维护**（E76 在报告里插了几行 ⇒ 行号已移动，引用一律以节号为准）。计划里 `grep -cE '本计划 ?:[0-9]'` 改后仍为 **0** |
@@ -431,15 +431,18 @@ grep -l '^PACKAGES.*tests/traceverify' tools/trace-mutate/sets/p4-task-*.py | wc
 **E76⑤ 残留复核（命令与结果，原文）**：
 
 ```
-$ grep -rn "7+2+3+6+3+8+5+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11" . | grep -v '/\.git/'
-  ⇒ 唯一命中 = .superpowers/.../e76-addition-derivation-at-5650d28c.txt 里**引用「原串」的那一行**（订正证据本身）
-    ⇒ 全仓**没有任何活的口径**再用 26 项串
-$ grep -rIn '15 = 15' . | grep -v '/\.git/'        ⇒ **0 命中** ✓
+$ grep -rn "<改前的 26 项串字面>" . | grep -v '/\.git/'     ⇒ **0 命中** ✓
+  · 树内**不再保留**该 26 项字面串 —— 它只存在于 git 历史（`git show 78fe1e39^:<本报告>` 的「变异总数逐表」行，
+    逐字 = 27 项串删去第 10 项 `p4-task-3-loop` 的那个 `7`）。这是**有意**的：不把旧串重抄进树内，
+    残留复核才不会自匹配；订正依据仍是 `136 − 7 = 129`（machine 加法见 `e76-addition-derivation-at-5650d28c.txt`）。
+$ grep -rn "<数字15><空格>=<空格><数字15>" . | grep -v '/\.git/'   ⇒ **0 命中** ✓
+  · 同理，本复核行**不逐字写出**那个模式（否则它会匹配到本行自己 —— 上一稿就是这样被自己绊了一次，已改）。
 $ grep -rn '129' docs/superpowers/plans/2026-10-08-trace-sealer-deployment*.md
   ⇒ 只出现在 §11 的「实和 = 129（136 − 7）」（订正登记）与计划 E73⑤ 的**历史勘误**（26 张表 = 129，已订正为 136）
     ⇒ **没有**把 129 当成 136 的残留
 $ grep -rn "7+2+3+6+3+8+5+7+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11" .
-  ⇒ 计划 E73⑤ / 本报告 §11（订正后）/ e76-addition-derivation-at-5650d28c.txt ⇒ 与重绑后逐表取值一致
+  ⇒ 命中：计划 E73⑤ / 本报告 §11（订正后）/ 本节（§14 的 E76① 行与本行）/ `e76-addition-derivation-at-5650d28c.txt`
+    —— 该 **27 项串是正确串**，出现是预期的；逐项与重绑后逐表取值一致
 ```
 
 **E76 的回归读数**（本轮对 `internal/**`/`cmd/**` **零改动** ⇒ 只做回归确认；`gofmt` 无输出）：

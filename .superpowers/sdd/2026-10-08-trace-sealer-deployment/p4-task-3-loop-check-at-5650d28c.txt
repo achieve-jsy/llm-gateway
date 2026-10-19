@@ -1,0 +1,10 @@
+定位校验（基于 HEAD:internal/tracesealer/runner.go，sha256=dcf19c8e0491ff90）
+OK  m01_先等再跑
+OK  m02_环境失败退出
+OK  m03_护栏失败继续封块
+OK  m04_取消后仍开新块
+OK  m05_不标记根不可用
+OK  m06_跑一轮就退出
+OK  m07_轮次并行
+全部 7 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

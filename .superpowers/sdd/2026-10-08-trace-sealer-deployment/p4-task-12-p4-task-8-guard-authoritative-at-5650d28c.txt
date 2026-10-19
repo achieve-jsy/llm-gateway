@@ -1,0 +1,80 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = 5650d28c2b79c2cd8782e5e051d8975546798b5b
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 2dbe4a5ce77c949c93959da2b53df07b4f943df3048e54c93ded8ba395a06391  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-8-guard.py)
+名字清单 sha256          = 61276b656605bf54ce7fde6e06b364001bd6647a9265c48cd38445a114cb103a  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-8-guard-names.txt)
+名字清单条数             = 10
+清单推导命令             = grep -h '^func Test' tests/traceverify/guard_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 10 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-13pegh3b
+被测文件 sha256          = d17822980703e86d89f7ab7899fab257cb6dbab61d1bc01f7eb820fcfd0a6695  internal/traceverify/guard.go
+测试文件 sha256          = 33d4bd33c8c184317bfbff6604eccca227e47d0e2363ada98f6f2949b709c1e0  tests/traceverify/budget_test.go
+测试文件 sha256          = 766fc96a5e07ca47523ef2745d778e5a28eb8164b14bd72a953c58f257341816  tests/traceverify/guard_test.go
+测试文件 sha256          = 40797ec3e18e29dfa713ac052741fa9a9e7b8a8fd32387405c96fc13b9835898  tests/traceverify/vmhwm_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] 护栏不得跳过读不到设备号的路径
+      文件=internal/traceverify/guard.go  正则=的设备号读不到  期望=present  实际=命中 '的设备号读不到'
+      理由=计划任务 8 步骤 3 的保守拒绝口径：拿不到设备号就**无法证明**目标与 `/`、`/datalog` 不同设备 ⇒ 必须拒绝（「读不到」必须红，不许放行、不许跳过）。**存在性**要求 ⇒ 静态检查；同一批语义的行为由在册用例 `TestGuardRejectsWhenDeviceCannotBeRead`（三条路径：目标读不到 / forbidden 读不到 / 回调为 nil）承载。
+- [PASS] 容量预检必须解析尺寸后缀
+      文件=internal/traceverify/guard.go  正则=func ParseSize  期望=present  实际=命中 'func ParseSize'
+      理由=计划任务 8 步骤 3 第 1 步「容量预检（statfs 断言可用空间 ≥ size + 1 GiB 余量；见 R2）」的前置：`--size 1G` 必须被解析成 bytes。**存在性**要求 ⇒ 静态检查（行为由 `TestParseSizeAcceptsBinarySuffixes` / `TestParseSizeRejectsMalformed` 承载）。
+- [PASS] 容量判据必须含1GiB余量
+      文件=internal/traceverify/guard.go  正则=ScratchCapacityMarginBytes int64 = 1 << 30  期望=present  实际=命中 'ScratchCapacityMarginBytes int64 = 1 << 30'
+      理由=风险登记 R2：护栏只护**挂载点**，镜像文件（约 1 GiB）落在 `/srv` 所在文件系统上、不受设备护栏保护 ⇒ 容量预检是它唯一的前置防线，余量口径必须是 **1 GiB**。**存在性**要求 ⇒ 静态检查（边界两侧由 `TestScratchCapacityMarginIncludesReserve` 承载）。
+- [PASS] trace-verify必须调用护栏
+      文件=cmd/trace-verify/main.go  正则=traceverify\.GuardScratchTarget  期望=present  实际=命中 'traceverify.GuardScratchTarget'
+      理由=计划任务 8 步骤 3：`scratch-prepare` 必须在 `mount -o loop` **成功之后**调 `GuardScratchTarget` 复核设备号。没有这次调用，A3 的安全边界就只是文档。**存在性**要求 ⇒ 静态检查；**次序**（在 mount 之后、建归档根之前）另由 `TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot` 与静态检查 `工具源里护栏必须在mount之后`（`p4-task-8-runsh.py`）钉住。
+- [PASS] trace-verify破坏性删除面不得递归
+      文件=cmd/trace-verify/main.go  正则=(?m)^(?!\s*(?://|#))(?=.*\brm\b)(?=.*(?:--recursive\b|(?<!-)-[a-zA-Z]*[rR][a-zA-Z]*\b)).*  期望=absent  实际=未命中
+      理由=计划任务 8 步骤 3：`scratch-cleanup` 是唯一允许删镜像/目录的入口，删除面必须**有界**（只删命令行给出的那一个镜像文件 + `rmdir` 空挂载点 —— `rmdir` 对非空目录会失败）。**不存在性**要求 ⇒ 静态检查，正则刻意**跳过注释行**（E68：注释里说明「刻意不用它」是合法且有价值的；第一版写法 `rm -rf` 正是踩了这个坑，只命中两行注释）。
+【E70① 补齐】第一版只钉 `-rf`（`r` 紧跟 `f`）⇒ `rm -r X`、`runCmd("rm","-r",…)`、`--recursive`、`-fr`、`rm -v -r` 全部漏网。本轮**选择把正则补全**，而不是「把 `-r` 边界登记进 why」：E68 要求门禁是**语义**判据（「删除面有界」= **任何**递归删除形态都不许出现），只钉一种拼写等于把检查退化成对某一行文本的巧合，下一轮换个写法又能绕过。新判据 = 同一行同时出现 `\brm\b` 与递归开关（`--recursive` 或**单横线**短开关簇含 `r`/`R`）；`(?<!-)` 把 `--force` 这类长开关排除在外（它的名字里含 `r`，会被 `-*[rR]*` 式写法误判）。误报成本可控：两个目标文件都是本仓库自己的源码，补全后实测 0 命中（见 `p4-task-9-probe-at-*.txt` 的 E70① 探针表）。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 护栏：目标是文件系统根（`/`）⇒ 拒（2026-09-24 的事故形态） | `m01_去掉根目录判断` | — | 杀手 = TestGuardRejectsFilesystemRoot（该用例的 forbidden 不含 `/`，设备号刻意取成不同值 ⇒ 唯一能拒它的就是这条判据）。 |
+| 护栏：目标与 forbidden 之一同一个设备 ⇒ 拒（含 forbidden 里包含目标自己的情形） | `m02_去掉设备号比较` | — | 杀手 = TestGuardRejectsSameDeviceAsForbidden；同时打红 TestGuardRejectsTargetOnSameDeviceAsForbiddenSelf（两条都是断言红 —— 如实登记，不隐瞒连带）。 |
+| 护栏：没有 confirm ⇒ 拒（连准备动作都不许做） | `m03_去掉confirm检查` | — | 杀手 = TestGuardRequiresExplicitConfirm（两条断言：必须报错 + **stat 一次都不许调用**）。 |
+| 护栏：专用文件系统（与全部 forbidden 不同设备）＋ confirm ⇒ 通过 | `m04_设备比较反向` | — | 杀手 = TestGuardAcceptsDedicatedFilesystem（反向比较会把唯一合法的回环 ext4 也拒掉）。 |
+| 护栏：设备号读不到（stat 失败 / 回调为 nil）⇒ 保守拒绝（读不到必须红，不许放行） | — | `护栏不得跳过读不到设备号的路径` | **存在性**要求 ⇒ 静态检查；行为由在册用例 `TestGuardRejectsWhenDeviceCannotBeRead` （三条路径）承载，可失败性由探针实测。 |
+| 容量预检：`--size` 支持 K/M/G/T（1024 进制），非法 / 溢出必须报错 | — | `容量预检必须解析尺寸后缀` | **存在性**要求 ⇒ 静态检查；行为由在册用例 `TestParseSizeAcceptsBinarySuffixes` 与 `TestParseSizeRejectsMalformed`（10 个非法输入）承载。 |
+| 容量预检：可用空间 ≥ 镜像 + **1 GiB 余量**（R2） | — | `容量判据必须含1GiB余量` | **存在性**要求 ⇒ 静态检查；边界两侧由在册用例 `TestScratchCapacityMarginIncludesReserve` 承载。 |
+| `cmd/trace-verify scratch-prepare` 必须真正调用护栏（否则 A3 一步都跑不了） | — | `trace-verify必须调用护栏` | **存在性**要求 ⇒ 静态检查；次序要求见 `p4-task-8-runsh.py` 的两条静态检查与`TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot`。 |
+| `scratch-cleanup` 是唯一允许删镜像/目录的入口，删除面有界（`rm -f` 具体镜像 + `rmdir`） | — | `trace-verify破坏性删除面不得递归` | **不存在性**要求 ⇒ 静态检查（**非注释行**里不得出现递归删除的调用形态；注释里的说明文字不算）。 |
+
+计划要求总数 = 9；引用到的变异 = 4；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=10 ran=10 diff=0 PASS=10 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_去掉根目录判断 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestGuardRejectsFilesystemRoot |
+| m02_去掉设备号比较 | 红 | names=10 ran=10 diff=0 PASS=8 SKIP=0 FAIL=2 | TestGuardRejectsSameDeviceAsForbidden, TestGuardRejectsTargetOnSameDeviceAsForbiddenSelf |
+| m03_去掉confirm检查 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestGuardRequiresExplicitConfirm |
+| m04_设备比较反向 | 红 | names=10 ran=10 diff=0 PASS=9 SKIP=0 FAIL=1 | TestGuardAcceptsDedicatedFilesystem |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 4
+集合里的变异总数          = 4（本次运行 == 全集 ✓）
+断言支撑的红             = 4 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 4 = 4 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

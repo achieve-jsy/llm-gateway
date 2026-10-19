@@ -1,0 +1,93 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = 5650d28c2b79c2cd8782e5e051d8975546798b5b
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 818a1811de176388ac0a4ba177748a513dd9bbf95509eaf1d905aec3325f9fc7  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-3-rootguard.py)
+名字清单 sha256          = 2ed180af5c7b30414f11ca8c6caf4c8742a72e64d5ed1582c5a0e9c3fde28450  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-3-rootguard-names.txt)
+名字清单条数             = 8
+清单推导命令             = grep -h '^func Test' tests/tracesealer/rootguard_test.go internal/tracesealer/covers_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 8 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-staqq0df
+被测文件 sha256          = ff0c9e85b8406b72f4221b8ecd82079e5aafa90be77a6f9d68695b1b34923699  internal/tracesealer/rootguard.go
+测试文件 sha256          = afe67365b4da72aa7b8da4dccf9517f5a7870ed8e9d1f27110120ce642a9c8ab  internal/tracesealer/covers_test.go
+测试文件 sha256          = 22f21e27b31f645d06c288ec796b38da0c8a2c8f12fb3165b8cff81a8abf0406  tests/tracesealer/alert_test.go
+测试文件 sha256          = 0e36d92d813eb0af6d4caa658c1bd0fb235be03362bf690f4f54afed5be56515  tests/tracesealer/classify_test.go
+测试文件 sha256          = 6ec687db153fbdebe474d5c9280a68f0d21f28cb2069b52d607438b748a178b5  tests/tracesealer/concurrent_test.go
+测试文件 sha256          = e81e8605d8acb8a83e6399015e5e9bd258d2e7d7685c08b06c2fc13e436ca5e1  tests/tracesealer/constants_contract_test.go
+测试文件 sha256          = f3bfdacf089c1cf0acf0706d54e8a58de454414f2e99880b852ad508152d077f  tests/tracesealer/exit_test.go
+测试文件 sha256          = b9af6a1d0fe826f5f6a4c19eb341aa091ee57d510984ab033503c00fdea1edab  tests/tracesealer/footer_artifact_test.go
+测试文件 sha256          = f9b5169bad2128e746c00206d68654e27e393464b3fccb281af698540d12373a  tests/tracesealer/footer_roundtrip_test.go
+测试文件 sha256          = 684ac9518781b94d8f2cea29c79fc5ece0c216359ab5871c0da56286719b1a03  tests/tracesealer/footer_test.go
+测试文件 sha256          = 7bd98c1223b58280f9a6b88ad8561f7d5812e6dd7ae7b2f3d2aeab578f91137f  tests/tracesealer/lock_test.go
+测试文件 sha256          = 142965aca3858955488752e512f1f418ece44e129b7d2b384e81b0bba3a72099  tests/tracesealer/loop_test.go
+测试文件 sha256          = 11483eb2f8738d27cf52039f7b7a2c3637a2197d7af6811383a20737271fc264  tests/tracesealer/observability_test.go
+测试文件 sha256          = 64d07b52eb0b863dfa5d417471bf3ab3b83b79f8f16f8a3e2c76cc3714abe7c1  tests/tracesealer/options_test.go
+测试文件 sha256          = 451ce4de0d1e563c1548e9ff85ea7eb03b6d68f1d113938997fb9c6e9cb1c58c  tests/tracesealer/rootguard_test.go
+测试文件 sha256          = af3af343207b05f43948abe79a136be3795bea101259949e7e46dedd4e677c67  tests/tracesealer/round_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] rootguard不得建目录
+      文件=internal/tracesealer/rootguard.go  正则=\bMkdir[A-Za-z]*\s*\(  期望=absent  实际=未命中
+      理由=D70 / 2026-09-24 事故同类：替运维「补一个」根目录 = 把已经消失的挂载点在**宿主根文件系统**上重建，正文随后写进那片没人会去看的空间。这是**不存在性**要求 ⇒ 只能静态检查；承重证据是行为用例 TestRootGuardNeverCreatesRoot 与变异 m06（唯一允许的建目录变异，用来证明那条断言真的能看见违规）。本行扫整个文件文本（含注释）。
+- [PASS] covers必须特判根挂载点
+      文件=internal/tracesealer/rootguard.go  正则=(?m)^\tif mp == "/" \{$  期望=present  实际=命中 '\tif mp == "/" {'
+      理由=根挂载点是唯一的以 "/" 结尾的挂载点；不特判就会走 strings.HasPrefix(p, "//") 这条恒假分支 ⇒ 「路径其实就在根文件系统上」这种最危险的情形反而取不到身份。**它的承重证据是包内行为用例 internal/tracesealer/covers_test.go 的 TestCoversRootMountCoversPathsUnderRoot**（`covers` 是未导出函数 ⇒ 按 Q3 放包内；**E64① 订正**：原先「darwin 不可达 ⇒ 只能登记为允许的绿」是错判 —— `covers` 是纯字符串函数，与 /proc/self/mountinfo 无关），变异 m04 是它的**断言红**杀手；本行静态检查**另外**钉住该分支的**存在性**（整段特判被删掉即红，与 m04 只改条件的形态互补）。
+- [PASS] Options.Identity可注入
+      文件=internal/tracesealer/options.go  正则=Identity\s+func\(string\) \(string, error\)  期望=present  实际=命中 'Identity  func(string) (string, error)'
+      理由=护栏的可测性完全建立在这个注入点上：真实身份是「这台机器当前的挂载表」的函数，测试无法为同一路径复现「撤掉挂载」（umount 要 root，且会把整台机器卷进来）。删掉它 ⇒ 上表所有「运行中身份变化」用例都造不出来。接线要求 ⇒ 静态检查。
+- [PASS] covers_test.go不得建目录
+      文件=internal/tracesealer/covers_test.go  正则=\bMkdir[A-Za-z]*\s*\(  期望=absent  实际=未命中
+      理由=**D70 的「整包零建目录」**（**E67** 补齐）：`covers_test.go` 是本计划按 **E64①** 新增到 `internal/tracesealer/` 的**包内测试文件**（`E64①` 那条裁定的产物），它是该目录下的第 9 个 `.go` 文件、此前没有任何一行 D70 静态检查覆盖它 —— 而 `go test` 会编译并执行它，包内测试同样能「用建目录修复消失的挂载点」。`E66③` 声称覆盖两个目录的每一个源文件 ⇒ **E67** 把测试文件也纳入，使「每一个 `.go` 文件一行」字面成立。**不存在性**要求 ⇒ 静态检查；可失败性由 **E67 的临时仓库探针**实测（在 `covers_test.go` 里插入 `os.MkdirAll(root, 0o755)` 并提交 ⇒ 本行 FAIL、退出 1）。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 根目录是文件系统根 `/` 必须在构造期被拒（2026-09-24 事故同类） | `m01_允许文件系统根` | — | 杀手 = TestRootGuardRejectsFilesystemRoot。 |
+| 根目录必须是绝对路径（systemd 的 WorkingDirectory 不等于你以为的那个） | `m02_允许相对路径` | — | 杀手 = TestRootGuardRejectsRelativePath。 |
+| 根目录不存在必须响亮失败，且**绝不得**把它创建出来 | `m06_用建目录修复缺失根` | `rootguard不得建目录` | 杀手 = TestRootGuardNeverCreatesRoot（断言缺失的根目录事后仍然不存在）。「本文件没有建目录调用」是不存在性要求 ⇒ 另有静态检查行。 |
+| 取不到启动基线必须响亮失败（不得拿空基线继续，把「取基线失败」伪装成「挂载换了」） | `m05_取不到基线也放行` | — | 杀手 = TestRootGuardRejectsWhenBaselineCannotBeTaken（本轮按 E63④ 新增）。 |
+| 每轮复检：目录还在但背后的挂载换了（umount）必须报身份不符 | `m03_不比对身份` | — | 杀手 = TestRootGuardCheckDetectsIdentityChange。 |
+| 每轮复检：根目录整个消失必须报「不可用」（与「身份不符」分成两个哨兵） | `m07_根目录消失静默放行` | — | 杀手 = TestRootGuardCheckReportsVanishedRoot；m07 是本轮按 E63⑤ 新增的变异。 |
+| 启动基线必须可抄进日志（排障时对比「启动基线 vs 现在」） | `m08_基线返回root` | — | 杀手 = TestRootGuardBaselineIsNonEmpty；m08 是本轮按 E63⑤ 新增的变异。 |
+| Identity 取最长前缀覆盖 path 的挂载点，返回 "<挂载点>|<设备号>|<文件系统类型>"；根挂载点 "/" 也必须覆盖其下路径 | `m04_去掉根挂载点特判` | `covers必须特判根挂载点` | 杀手 = TestCoversRootMountCoversPathsUnderRoot（**包内**用例 internal/tracesealer/covers_test.go，断言 covers("/", "/tmp/x") 为真 + 根/前缀边界；E64① 订正：`covers` 是纯字符串函数，可按计划 Q3 在包内直调 ⇒ 不存在「平台不可达」，m04 为**断言红**）。静态检查 covers必须特判根挂载点 另钉住特判分支的**存在性**。 |
+| 身份探针必须可注入（Options.Identity），否则「运行中挂载被撤掉」造不出来 | — | `Options.Identity可注入` | 接线/可测性前提 ⇒ 静态检查（它的运行时效果由上表各「运行中」用例承载）。 |
+| 计划 4 全局约束第 27 条（D70 整包零建目录）：internal/tracesealer/covers_test.go | — | `covers_test.go不得建目录` | **E67** 补齐：`E66③` 的「覆盖每一个源文件」名不副实；`covers_test.go` 是 **E64①** 新增到该目录的包内测试文件，同样被 `go test` 编译执行、同样能「用建目录修复消失的挂载点」，故一并纳入逐文件覆盖。不存在性要求 ⇒ 静态检查；可失败性由 E67 的临时仓库探针实测。 |
+
+计划要求总数 = 10；引用到的变异 = 8；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=8 ran=8 diff=0 PASS=8 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_允许文件系统根 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRootGuardRejectsFilesystemRoot |
+| m02_允许相对路径 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRootGuardRejectsRelativePath |
+| m03_不比对身份 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRootGuardCheckDetectsIdentityChange |
+| m04_去掉根挂载点特判 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestCoversRootMountCoversPathsUnderRoot |
+| m05_取不到基线也放行 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRootGuardRejectsWhenBaselineCannotBeTaken |
+| m06_用建目录修复缺失根 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRootGuardNeverCreatesRoot |
+| m07_根目录消失静默放行 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRootGuardCheckReportsVanishedRoot |
+| m08_基线返回root | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRootGuardBaselineIsNonEmpty |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 8
+集合里的变异总数          = 8（本次运行 == 全集 ✓）
+断言支撑的红             = 8 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 8 = 8 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

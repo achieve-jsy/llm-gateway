@@ -1,0 +1,677 @@
+### 任务 12 步骤 3：构建 / vet / 聚焦测试 / 冻结包行为（HEAD=5650d28c2b79c2cd8782e5e051d8975546798b5b）
+生成时点：2026-10-09T04:53:54Z
+口径：基线 go build ./... 本身有既存失败（见计划全局约束）⇒ 以 go build ./internal/... ./cmd/... 为准；
+      vet 同样给 ./... 的原样读数与聚焦包的读数。
+
+## ① go build ./...（原样，预期**基线失败**）
+# github.com/example/llm-gateway/test
+test/bedrock_model_id_check.go:98:23: undefined: bedrock.NewListFoundationModelsPaginator
+build_all_exit=1
+
+## ② go build ./internal/... ./cmd/...
+build_exit=0
+
+## ③ go vet ./...（原样）
+# github.com/example/llm-gateway/tests/contract_test
+# [github.com/example/llm-gateway/tests/contract_test]
+vet: tests/contract/model_tier_budget_contract_test.go:253:48: cannot use budgetService (variable of type *contractBudgetTierService) as handler.BudgetTierHandlerService value in argument to handler.NewBudgetTierHandler: *contractBudgetTierService does not implement handler.BudgetTierHandlerService (missing method QueryScopedTierUsage)
+# github.com/example/llm-gateway/tests/gateway/orchestrator_test
+# [github.com/example/llm-gateway/tests/gateway/orchestrator_test]
+vet: tests/gateway/orchestrator/group_auth_test.go:44:71: cannot use sch (variable of type *fakeScheduler) as orchestrator.Scheduler value in argument to orchestrator.NewGroupAwareDispatcherWithBindingAndTier: *fakeScheduler does not implement orchestrator.Scheduler (wrong type for method UpdateSticky)
+		have UpdateSticky(context.Context, string, string, string)
+		want UpdateSticky(context.Context, string, string, string, string) bool
+# github.com/example/llm-gateway/test
+# [github.com/example/llm-gateway/test]
+vet: test/bedrock_model_id_check.go:98:23: undefined: bedrock.NewListFoundationModelsPaginator
+# github.com/example/llm-gateway/tests/gateway/handler_test
+# [github.com/example/llm-gateway/tests/gateway/handler_test]
+vet: tests/gateway/handler/embeddings_test.go:84:46: cannot use sch (variable of type *fakeEmbeddingScheduler) as orchestrator.Scheduler value in argument to orchestrator.NewGroupAwareDispatcher: *fakeEmbeddingScheduler does not implement orchestrator.Scheduler (wrong type for method UpdateSticky)
+		have UpdateSticky(context.Context, string, string, string)
+		want UpdateSticky(context.Context, string, string, string, string) bool
+# github.com/example/llm-gateway/tests/controlplane/handler_test
+# [github.com/example/llm-gateway/tests/controlplane/handler_test]
+vet: tests/controlplane/handler/model_tier_handler_test.go:336:22: cannot use groupSvc (variable of type *fakeGroupBudgetTierService) as handler.GroupBudgetTierServiceInterface value in argument to handler.NewModelTierHandler(&fakeModelTierService{…}).WithGroupService: *fakeGroupBudgetTierService does not implement handler.GroupBudgetTierServiceInterface (missing method ListEnabledGroupsWithModels)
+vet_all_exit=1
+
+## ④ go vet 聚焦包
+vet_exit=0
+
+## ⑤ go test ./tests/tracesealer/... ./tests/traceverify/... ./tests/deploy/... -count=1 -v
+=== RUN   TestSummarizeCleanRoundIsSilent
+--- PASS: TestSummarizeCleanRoundIsSilent (0.00s)
+=== RUN   TestSummarizePartExistsAloneIsSilent
+--- PASS: TestSummarizePartExistsAloneIsSilent (0.00s)
+=== RUN   TestSummarizeRetryableFailureIsWarn
+--- PASS: TestSummarizeRetryableFailureIsWarn (0.00s)
+=== RUN   TestSummarizeTooManyRowsIsErrorAndNamed
+--- PASS: TestSummarizeTooManyRowsIsErrorAndNamed (0.00s)
+=== RUN   TestSummarizeUnknownFailureIsError
+--- PASS: TestSummarizeUnknownFailureIsError (0.00s)
+=== RUN   TestSummarizeFieldsAreStable
+--- PASS: TestSummarizeFieldsAreStable (0.00s)
+=== RUN   TestRoundTooManyRowsEmitsErrorAlertLine
+--- PASS: TestRoundTooManyRowsEmitsErrorAlertLine (0.00s)
+=== RUN   TestRoundRetryableFailureEmitsWarnAlertLine
+--- PASS: TestRoundRetryableFailureEmitsWarnAlertLine (0.00s)
+=== RUN   TestRoundCleanRoundEmitsOnlyHeartbeat
+--- PASS: TestRoundCleanRoundEmitsOnlyHeartbeat (0.00s)
+=== RUN   TestClassifyPartExistsIsIdempotent
+--- PASS: TestClassifyPartExistsIsIdempotent (0.00s)
+=== RUN   TestClassifyRowMismatchIsRetryable
+--- PASS: TestClassifyRowMismatchIsRetryable (0.00s)
+=== RUN   TestClassifySealFailedIsRetryable
+--- PASS: TestClassifySealFailedIsRetryable (0.00s)
+=== RUN   TestClassifyTooManyRowsIsPermanent
+--- PASS: TestClassifyTooManyRowsIsPermanent (0.00s)
+=== RUN   TestClassifyUnknownIsLoudAndRetryable
+--- PASS: TestClassifyUnknownIsLoudAndRetryable (0.00s)
+=== RUN   TestClassifyUsesErrorsIsNotEquality
+--- PASS: TestClassifyUsesErrorsIsNotEquality (0.00s)
+=== RUN   TestA7NoRefPointsToNothing
+--- PASS: TestA7NoRefPointsToNothing (0.00s)
+=== RUN   TestA7WriterNeverAppendsToAHandedOffPart
+--- PASS: TestA7WriterNeverAppendsToAHandedOffPart (0.00s)
+=== RUN   TestA7RestartAfterSealStartsAtNextPart
+--- PASS: TestA7RestartAfterSealStartsAtNextPart (0.00s)
+=== RUN   TestA7RoundIsSerializedWithLock
+--- PASS: TestA7RoundIsSerializedWithLock (0.00s)
+=== RUN   TestA7NoPartIsSealedTwiceConcurrently
+2026/10/09 12:54:17 time=2026-10-09T12:54:17.323+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000000 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently2941030077/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently2941030077/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently2941030077/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst: no such file or directory"
+2026/10/09 12:54:17 time=2026-10-09T12:54:17.325+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000001 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently2941030077/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently2941030077/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently2941030077/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst: no such file or directory"
+2026/10/09 12:54:17 time=2026-10-09T12:54:17.328+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000002 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently2941030077/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently2941030077/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently2941030077/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst: no such file or directory"
+2026/10/09 12:54:17 time=2026-10-09T12:54:17.328+08:00 level=INFO msg="trace-sealer round" reason="" eligible=3 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=0 seal_failed=0 sealed=3 too_many_rows=0 unknown_failed=0 duration=7.248709ms
+--- PASS: TestA7NoPartIsSealedTwiceConcurrently (0.01s)
+=== RUN   TestSealerMaxTrailerEntriesMatchesFrozenReader
+--- PASS: TestSealerMaxTrailerEntriesMatchesFrozenReader (0.00s)
+=== RUN   TestSealerGatewayRollBoundMatchesConfig
+--- PASS: TestSealerGatewayRollBoundMatchesConfig (0.00s)
+=== RUN   TestSealerDefaultMinAgeMatchesFrozenDefault
+--- PASS: TestSealerDefaultMinAgeMatchesFrozenDefault (0.00s)
+=== RUN   TestSealerFooterSizeMatchesFrozenPackage
+--- PASS: TestSealerFooterSizeMatchesFrozenPackage (0.00s)
+=== RUN   TestExitCodeZeroOnCleanRound
+--- PASS: TestExitCodeZeroOnCleanRound (0.00s)
+=== RUN   TestExitCodeOneOnFatalError
+--- PASS: TestExitCodeOneOnFatalError (0.00s)
+=== RUN   TestExitCodeTwoWhenOnceHasFailures
+--- PASS: TestExitCodeTwoWhenOnceHasFailures (0.00s)
+=== RUN   TestFooterParsesCommittedRealArtifact
+--- PASS: TestFooterParsesCommittedRealArtifact (0.06s)
+=== RUN   TestFooterRoundTripOnRealArtifact
+--- PASS: TestFooterRoundTripOnRealArtifact (0.10s)
+=== RUN   TestFooterRowCountOnHandBuiltFooter
+--- PASS: TestFooterRowCountOnHandBuiltFooter (0.01s)
+=== RUN   TestFooterRejectsShortFile
+--- PASS: TestFooterRejectsShortFile (0.00s)
+=== RUN   TestFooterRejectsBadMagic
+--- PASS: TestFooterRejectsBadMagic (0.00s)
+=== RUN   TestFooterRejectsUnknownFormatVersion
+--- PASS: TestFooterRejectsUnknownFormatVersion (0.00s)
+=== RUN   TestFooterRejectsTrailerNotAdjacentFooter
+--- PASS: TestFooterRejectsTrailerNotAdjacentFooter (0.00s)
+=== RUN   TestFooterRejectsNegativeRowCount
+--- PASS: TestFooterRejectsNegativeRowCount (0.00s)
+=== RUN   TestFooterRejectsMissingFile
+--- PASS: TestFooterRejectsMissingFile (0.00s)
+=== RUN   TestLockIsExclusive
+--- PASS: TestLockIsExclusive (0.00s)
+=== RUN   TestLockReleasedAllowsReacquire
+--- PASS: TestLockReleasedAllowsReacquire (0.00s)
+=== RUN   TestLockReleaseIsIdempotent
+--- PASS: TestLockReleaseIsIdempotent (0.00s)
+=== RUN   TestNewRunnerRefusesWhenLockHeld
+--- PASS: TestNewRunnerRefusesWhenLockHeld (0.00s)
+=== RUN   TestNewRunnerReleasesLockOnClose
+--- PASS: TestNewRunnerReleasesLockOnClose (0.00s)
+=== RUN   TestNewRunnerCloseIsIdempotent
+--- PASS: TestNewRunnerCloseIsIdempotent (0.00s)
+=== RUN   TestNewRunnerReleasesLockWhenSealerFails
+--- PASS: TestNewRunnerReleasesLockWhenSealerFails (0.00s)
+=== RUN   TestNewRunnerNeverCreatesRoot
+--- PASS: TestNewRunnerNeverCreatesRoot (0.00s)
+=== RUN   TestLoopRunsFirstRoundImmediately
+--- PASS: TestLoopRunsFirstRoundImmediately (0.05s)
+=== RUN   TestLoopRepeatsRoundsOnPollInterval
+--- PASS: TestLoopRepeatsRoundsOnPollInterval (0.12s)
+=== RUN   TestLoopStopsOnContextCancel
+--- PASS: TestLoopStopsOnContextCancel (0.10s)
+=== RUN   TestLoopKeepsRunningWhenRootIsUnavailable
+--- PASS: TestLoopKeepsRunningWhenRootIsUnavailable (0.06s)
+=== RUN   TestLoopStopsSealingAfterCancel
+--- PASS: TestLoopStopsSealingAfterCancel (0.00s)
+=== RUN   TestLoopReportsRootUnavailable
+--- PASS: TestLoopReportsRootUnavailable (0.00s)
+=== RUN   TestLoopNeverOverlapsRounds
+--- PASS: TestLoopNeverOverlapsRounds (0.17s)
+=== RUN   TestObserveTracksMinimumBytesPerRow
+--- PASS: TestObserveTracksMinimumBytesPerRow (0.01s)
+=== RUN   TestObserveTracksMaxRowsAndMinRatio
+--- PASS: TestObserveTracksMaxRowsAndMinRatio (0.00s)
+=== RUN   TestObserveWarnsAtHalfOfRowCap
+--- PASS: TestObserveWarnsAtHalfOfRowCap (0.00s)
+=== RUN   TestObserveLogsOneInfoLinePerSealedPart
+--- PASS: TestObserveLogsOneInfoLinePerSealedPart (0.00s)
+=== RUN   TestObserveSkipsUnreadableArtifact
+--- PASS: TestObserveSkipsUnreadableArtifact (0.00s)
+=== RUN   TestObserveSkipsDegenerateDenominator
+--- PASS: TestObserveSkipsDegenerateDenominator (0.00s)
+=== RUN   TestNewRunnerDefaultsMinAgeToThreeHours
+--- PASS: TestNewRunnerDefaultsMinAgeToThreeHours (0.00s)
+=== RUN   TestNewRunnerRejectsMinAgeAtOrBelowGatewayRollUpperBound
+--- PASS: TestNewRunnerRejectsMinAgeAtOrBelowGatewayRollUpperBound (0.00s)
+=== RUN   TestNewRunnerRejectsNonPowerOfTwoWindow
+--- PASS: TestNewRunnerRejectsNonPowerOfTwoWindow (0.00s)
+=== RUN   TestRootGuardRejectsFilesystemRoot
+--- PASS: TestRootGuardRejectsFilesystemRoot (0.00s)
+=== RUN   TestRootGuardRejectsRelativePath
+--- PASS: TestRootGuardRejectsRelativePath (0.00s)
+=== RUN   TestRootGuardNeverCreatesRoot
+--- PASS: TestRootGuardNeverCreatesRoot (0.00s)
+=== RUN   TestRootGuardCheckDetectsIdentityChange
+--- PASS: TestRootGuardCheckDetectsIdentityChange (0.00s)
+=== RUN   TestRootGuardCheckReportsVanishedRoot
+--- PASS: TestRootGuardCheckReportsVanishedRoot (0.00s)
+=== RUN   TestRootGuardBaselineIsNonEmpty
+--- PASS: TestRootGuardBaselineIsNonEmpty (0.00s)
+=== RUN   TestRootGuardRejectsWhenBaselineCannotBeTaken
+--- PASS: TestRootGuardRejectsWhenBaselineCannotBeTaken (0.00s)
+=== RUN   TestRoundSealsEveryEligiblePart
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.037+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000000 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart795980094/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart795980094/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart795980094/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst: no such file or directory"
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.037+08:00 level=ERROR msg="trace-sealer 封块失败" kind=seal_failed note="可重试（保留 spool，等下一轮）" ref=2026-10-08/blue/part-000001 spool="/datalog/trace-archive-v4/spool/dt=2026-10-08/inst=blue/part-000001.jsonl" err="tracearchive: 封块失败: 子进程退出 37"
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.037+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000002 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart795980094/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart795980094/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart795980094/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst: no such file or directory"
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.037+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000003 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart795980094/001/dt=2026-10-08/inst=blue/part-000003.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart795980094/001/dt=2026-10-08/inst=blue/part-000003.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart795980094/001/dt=2026-10-08/inst=blue/part-000003.jsonl.zst: no such file or directory"
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.038+08:00 level=INFO msg="trace-sealer round" reason=round_failed eligible=4 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=0 seal_failed=1 sealed=3 too_many_rows=0 unknown_failed=0 duration=142.417µs
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.038+08:00 level=WARN msg="trace-sealer 轮次告警" reason=round_failed eligible=4 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=0 seal_failed=1 sealed=3 too_many_rows=0 unknown_failed=0 duration=142.417µs
+--- PASS: TestRoundSealsEveryEligiblePart (0.00s)
+=== RUN   TestRoundTreatsPartExistsAsIdempotentNoop
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.038+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000001 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundTreatsPartExistsAsIdempotentNoop1245210119/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundTreatsPartExistsAsIdempotentNoop1245210119/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundTreatsPartExistsAsIdempotentNoop1245210119/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst: no such file or directory"
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.038+08:00 level=INFO msg="trace-sealer round" reason="" eligible=2 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=1 row_mismatch=0 seal_failed=0 sealed=1 too_many_rows=0 unknown_failed=0 duration=52.542µs
+--- PASS: TestRoundTreatsPartExistsAsIdempotentNoop (0.00s)
+=== RUN   TestRoundSeparatesPermanentFromRetryable
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.039+08:00 level=ERROR msg="trace-sealer 封块失败" kind=too_many_rows note=永久（需人工介入，重试不会成功） ref=2026-10-08/blue/part-000000 spool="/datalog/trace-archive-v4/spool/dt=2026-10-08/inst=blue/part-000000.jsonl" err="tracearchive: spool 行数超过 trailer 条目数上界: 行数=8388609"
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.039+08:00 level=ERROR msg="trace-sealer 封块失败" kind=row_count_mismatch note="可重试（保留 spool，等下一轮）" ref=2026-10-08/blue/part-000001 spool="/datalog/trace-archive-v4/spool/dt=2026-10-08/inst=blue/part-000001.jsonl" err="tracearchive: 行数不符: 行数不符"
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.039+08:00 level=INFO msg="trace-sealer round" reason=too_many_rows eligible=2 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=1 seal_failed=0 sealed=0 too_many_rows=1 unknown_failed=0 duration=36.167µs
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.039+08:00 level=ERROR msg="trace-sealer 轮次告警" reason=too_many_rows eligible=2 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=1 seal_failed=0 sealed=0 too_many_rows=1 unknown_failed=0 duration=36.167µs
+--- PASS: TestRoundSeparatesPermanentFromRetryable (0.00s)
+=== RUN   TestRoundCountsUnknownFailuresAsFailures
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.039+08:00 level=ERROR msg="trace-sealer 封块失败" kind=unknown note=未分类（按最坏处理） ref=2026-10-08/blue/part-000000 spool="/datalog/trace-archive-v4/spool/dt=2026-10-08/inst=blue/part-000000.jsonl" err="EIO：底层 IO 抖动"
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.040+08:00 level=INFO msg="trace-sealer round" reason=unknown_failure eligible=1 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=0 seal_failed=0 sealed=0 too_many_rows=0 unknown_failed=1 duration=82.458µs
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.040+08:00 level=ERROR msg="trace-sealer 轮次告警" reason=unknown_failure eligible=1 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=0 seal_failed=0 sealed=0 too_many_rows=0 unknown_failed=1 duration=82.458µs
+--- PASS: TestRoundCountsUnknownFailuresAsFailures (0.00s)
+=== RUN   TestRoundCancellationStopsBeforeNextSeal
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.040+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000000 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundCancellationStopsBeforeNextSeal1449030225/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundCancellationStopsBeforeNextSeal1449030225/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundCancellationStopsBeforeNextSeal1449030225/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst: no such file or directory"
+--- PASS: TestRoundCancellationStopsBeforeNextSeal (0.00s)
+=== RUN   TestRoundDoesNotSwallowListError
+2026/10/09 12:54:18 time=2026-10-09T12:54:18.041+08:00 level=ERROR msg="trace-sealer 列举待封块失败" err="读 spool 根目录失败: permission denied"
+--- PASS: TestRoundDoesNotSwallowListError (0.00s)
+PASS
+ok  	github.com/example/llm-gateway/tests/tracesealer	0.759s
+=== RUN   TestPerReadPeakMatchesSpecBudget
+--- PASS: TestPerReadPeakMatchesSpecBudget (0.00s)
+=== RUN   TestMaxConcurrentMatchesControlPlaneBudget
+--- PASS: TestMaxConcurrentMatchesControlPlaneBudget (0.00s)
+=== RUN   TestMaxConcurrentIsAtLeastOne
+--- PASS: TestMaxConcurrentIsAtLeastOne (0.00s)
+=== RUN   TestMaxConcurrentRejectsNonPositivePerRead
+--- PASS: TestMaxConcurrentRejectsNonPositivePerRead (0.00s)
+=== RUN   TestGuardRejectsFilesystemRoot
+--- PASS: TestGuardRejectsFilesystemRoot (0.00s)
+=== RUN   TestGuardRejectsSameDeviceAsForbidden
+--- PASS: TestGuardRejectsSameDeviceAsForbidden (0.00s)
+=== RUN   TestGuardRequiresExplicitConfirm
+--- PASS: TestGuardRequiresExplicitConfirm (0.00s)
+=== RUN   TestGuardAcceptsDedicatedFilesystem
+--- PASS: TestGuardAcceptsDedicatedFilesystem (0.00s)
+=== RUN   TestGuardRejectsTargetOnSameDeviceAsForbiddenSelf
+--- PASS: TestGuardRejectsTargetOnSameDeviceAsForbiddenSelf (0.00s)
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead/目标读不到
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead/forbidden读不到
+=== RUN   TestGuardRejectsWhenDeviceCannotBeRead/stat回调为空
+--- PASS: TestGuardRejectsWhenDeviceCannotBeRead (0.00s)
+    --- PASS: TestGuardRejectsWhenDeviceCannotBeRead/目标读不到 (0.00s)
+    --- PASS: TestGuardRejectsWhenDeviceCannotBeRead/forbidden读不到 (0.00s)
+    --- PASS: TestGuardRejectsWhenDeviceCannotBeRead/stat回调为空 (0.00s)
+=== RUN   TestGuardUnsafeErrorIsSentinel
+--- PASS: TestGuardUnsafeErrorIsSentinel (0.00s)
+=== RUN   TestParseSizeAcceptsBinarySuffixes
+=== RUN   TestParseSizeAcceptsBinarySuffixes/1G
+=== RUN   TestParseSizeAcceptsBinarySuffixes/1g
+=== RUN   TestParseSizeAcceptsBinarySuffixes/980M
+=== RUN   TestParseSizeAcceptsBinarySuffixes/512
+=== RUN   TestParseSizeAcceptsBinarySuffixes/_2T_
+=== RUN   TestParseSizeAcceptsBinarySuffixes/1K
+--- PASS: TestParseSizeAcceptsBinarySuffixes (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/1G (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/1g (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/980M (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/512 (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/_2T_ (0.00s)
+    --- PASS: TestParseSizeAcceptsBinarySuffixes/1K (0.00s)
+=== RUN   TestParseSizeRejectsMalformed
+=== RUN   TestParseSizeRejectsMalformed/#00
+=== RUN   TestParseSizeRejectsMalformed/___
+=== RUN   TestParseSizeRejectsMalformed/0
+=== RUN   TestParseSizeRejectsMalformed/-1
+=== RUN   TestParseSizeRejectsMalformed/1.5G
+=== RUN   TestParseSizeRejectsMalformed/abc
+=== RUN   TestParseSizeRejectsMalformed/1X
+=== RUN   TestParseSizeRejectsMalformed/G
+=== RUN   TestParseSizeRejectsMalformed/99999999999999999999
+=== RUN   TestParseSizeRejectsMalformed/9223372036854775807T
+--- PASS: TestParseSizeRejectsMalformed (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/#00 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/___ (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/0 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/-1 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/1.5G (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/abc (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/1X (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/G (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/99999999999999999999 (0.00s)
+    --- PASS: TestParseSizeRejectsMalformed/9223372036854775807T (0.00s)
+=== RUN   TestScratchCapacityMarginIncludesReserve
+--- PASS: TestScratchCapacityMarginIncludesReserve (0.00s)
+=== RUN   TestParseVmHWMReadsPeakResidentBytes
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/真实形态
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/零值
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/单空格
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/多空格
+=== RUN   TestParseVmHWMReadsPeakResidentBytes/重复行取第一条
+--- PASS: TestParseVmHWMReadsPeakResidentBytes (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/真实形态 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/零值 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/单空格 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/多空格 (0.00s)
+    --- PASS: TestParseVmHWMReadsPeakResidentBytes/重复行取第一条 (0.00s)
+=== RUN   TestParseVmHWMRejectsMalformedStatus
+=== RUN   TestParseVmHWMRejectsMalformedStatus/空文本
+=== RUN   TestParseVmHWMRejectsMalformedStatus/缺VmHWM行
+=== RUN   TestParseVmHWMRejectsMalformedStatus/只有键没有值
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值非数字
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值带前缀符号
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值为负
+=== RUN   TestParseVmHWMRejectsMalformedStatus/单位不是kB
+=== RUN   TestParseVmHWMRejectsMalformedStatus/缺单位
+=== RUN   TestParseVmHWMRejectsMalformedStatus/值溢出int64
+--- PASS: TestParseVmHWMRejectsMalformedStatus (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/空文本 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/缺VmHWM行 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/只有键没有值 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值非数字 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值带前缀符号 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值为负 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/单位不是kB (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/缺单位 (0.00s)
+    --- PASS: TestParseVmHWMRejectsMalformedStatus/值溢出int64 (0.00s)
+=== RUN   TestParseVmHWMReadsPeakResidentNotVirtual
+--- PASS: TestParseVmHWMReadsPeakResidentNotVirtual (0.00s)
+=== RUN   TestParseVmHWMConvertsKilobytesToBytes
+--- PASS: TestParseVmHWMConvertsKilobytesToBytes (0.00s)
+=== RUN   TestParseVmHWMErrorsOnMissingField
+--- PASS: TestParseVmHWMErrorsOnMissingField (0.00s)
+=== RUN   TestPeakVmHWMTracksMaximumAcrossSamples
+--- PASS: TestPeakVmHWMTracksMaximumAcrossSamples (0.01s)
+=== RUN   TestPeakVmHWMReadsStatusFilesUnderRoot
+--- PASS: TestPeakVmHWMReadsStatusFilesUnderRoot (0.00s)
+=== RUN   TestPeakVmHWMRejectsInvalidArguments
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/pids为空
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/samples为零
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/samples为负
+=== RUN   TestPeakVmHWMRejectsInvalidArguments/interval为负
+--- PASS: TestPeakVmHWMRejectsInvalidArguments (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/pids为空 (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/samples为零 (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/samples为负 (0.00s)
+    --- PASS: TestPeakVmHWMRejectsInvalidArguments/interval为负 (0.00s)
+=== RUN   TestPeakVmHWMPropagatesReadErrors
+=== RUN   TestPeakVmHWMPropagatesReadErrors/reader报错
+=== RUN   TestPeakVmHWMPropagatesReadErrors/文本缺VmHWM行
+=== RUN   TestPeakVmHWMPropagatesReadErrors/默认根下不存在的pid
+--- PASS: TestPeakVmHWMPropagatesReadErrors (0.00s)
+    --- PASS: TestPeakVmHWMPropagatesReadErrors/reader报错 (0.00s)
+    --- PASS: TestPeakVmHWMPropagatesReadErrors/文本缺VmHWM行 (0.00s)
+    --- PASS: TestPeakVmHWMPropagatesReadErrors/默认根下不存在的pid (0.00s)
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/#00
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/___
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/1,,2
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/a
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/1,a
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/0
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/-1
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/65
+=== RUN   TestParseConcurrencyLevelsNormalizesAndRejects/2,2
+--- PASS: TestParseConcurrencyLevelsNormalizesAndRejects (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/#00 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/___ (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/1,,2 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/a (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/1,a (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/0 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/-1 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/65 (0.00s)
+    --- PASS: TestParseConcurrencyLevelsNormalizesAndRejects/2,2 (0.00s)
+=== RUN   TestDecodeArtifactRoundTripsRealArtifact
+--- PASS: TestDecodeArtifactRoundTripsRealArtifact (0.00s)
+=== RUN   TestPointReadLoadRunsConcurrentlyAndRandomly
+--- PASS: TestPointReadLoadRunsConcurrentlyAndRandomly (0.06s)
+=== RUN   TestPointReadLoadRejectsInvalidArguments
+=== RUN   TestPointReadLoadRejectsInvalidArguments/Read为空
+=== RUN   TestPointReadLoadRejectsInvalidArguments/Rows为零
+=== RUN   TestPointReadLoadRejectsInvalidArguments/Rows为负
+=== RUN   TestPointReadLoadRejectsInvalidArguments/Concurrency为零
+=== RUN   TestPointReadLoadRejectsInvalidArguments/Rounds为零
+--- PASS: TestPointReadLoadRejectsInvalidArguments (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Read为空 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rows为零 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rows为负 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Concurrency为零 (0.00s)
+    --- PASS: TestPointReadLoadRejectsInvalidArguments/Rounds为零 (0.00s)
+=== RUN   TestPointReadLoadPropagatesReadErrors
+--- PASS: TestPointReadLoadPropagatesReadErrors (0.00s)
+=== RUN   TestArtifactRowsBinaryProbesRowCount
+=== RUN   TestArtifactRowsBinaryProbesRowCount/rows=1
+=== RUN   TestArtifactRowsBinaryProbesRowCount/rows=2
+=== RUN   TestArtifactRowsBinaryProbesRowCount/rows=3
+=== RUN   TestArtifactRowsBinaryProbesRowCount/rows=5
+=== RUN   TestArtifactRowsBinaryProbesRowCount/rows=1000
+--- PASS: TestArtifactRowsBinaryProbesRowCount (0.00s)
+    --- PASS: TestArtifactRowsBinaryProbesRowCount/rows=1 (0.00s)
+    --- PASS: TestArtifactRowsBinaryProbesRowCount/rows=2 (0.00s)
+    --- PASS: TestArtifactRowsBinaryProbesRowCount/rows=3 (0.00s)
+    --- PASS: TestArtifactRowsBinaryProbesRowCount/rows=5 (0.00s)
+    --- PASS: TestArtifactRowsBinaryProbesRowCount/rows=1000 (0.00s)
+=== RUN   TestArtifactRowsPropagatesNonRangeErrors
+--- PASS: TestArtifactRowsPropagatesNonRangeErrors (0.00s)
+=== RUN   TestPointReadLoadAbortsWhenPeakReachesLimit
+--- PASS: TestPointReadLoadAbortsWhenPeakReachesLimit (0.00s)
+=== RUN   TestPointReadLoadPropagatesPeakErrors
+--- PASS: TestPointReadLoadPropagatesPeakErrors (0.00s)
+PASS
+ok  	github.com/example/llm-gateway/tests/traceverify	0.086s
+=== RUN   TestA3ComposeDisablesWatermarkSoRealEnospcHappensFirst
+--- PASS: TestA3ComposeDisablesWatermarkSoRealEnospcHappensFirst (0.00s)
+=== RUN   TestA3ComposeHasNoConnectionDefaults
+--- PASS: TestA3ComposeHasNoConnectionDefaults (0.00s)
+=== RUN   TestA3ComposeUsesIsolatedNamesAndPorts
+--- PASS: TestA3ComposeUsesIsolatedNamesAndPorts (0.00s)
+=== RUN   TestA3ComposeNeverMountsProductionDatalog
+--- PASS: TestA3ComposeNeverMountsProductionDatalog (0.00s)
+=== RUN   TestA3RunScriptAlwaysCleansUp
+--- PASS: TestA3RunScriptAlwaysCleansUp (0.00s)
+=== RUN   TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep
+--- PASS: TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep (0.00s)
+=== RUN   TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot
+--- PASS: TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot (0.00s)
+=== RUN   TestBlueGreenRunbookCoversSwitch
+--- PASS: TestBlueGreenRunbookCoversSwitch (0.00s)
+=== RUN   TestBlueGreenRunbookCoversRollback
+--- PASS: TestBlueGreenRunbookCoversRollback (0.00s)
+=== RUN   TestBlueGreenRunbookCoversFeatureOffByteIdentical
+--- PASS: TestBlueGreenRunbookCoversFeatureOffByteIdentical (0.00s)
+=== RUN   TestBlueGreenRunbookHasReadSideHardGate
+--- PASS: TestBlueGreenRunbookHasReadSideHardGate (0.00s)
+=== RUN   TestBlueGreenRunbookCoversOldColorDrain
+--- PASS: TestBlueGreenRunbookCoversOldColorDrain (0.00s)
+=== RUN   TestBlueGreenRunbookNeverMentionsSealInterval
+--- PASS: TestBlueGreenRunbookNeverMentionsSealInterval (0.00s)
+=== RUN   TestMakefileBuildsSealerForLinux
+--- PASS: TestMakefileBuildsSealerForLinux (0.00s)
+=== RUN   TestMakefileBuildTargetsIncludeSealer
+--- PASS: TestMakefileBuildTargetsIncludeSealer (0.00s)
+=== RUN   TestCICIBuildsAndInstallsSealer
+--- PASS: TestCICIBuildsAndInstallsSealer (0.00s)
+=== RUN   TestCICIDoesNotEnableSealerUnit
+--- PASS: TestCICIDoesNotEnableSealerUnit (0.00s)
+=== RUN   TestComposeGatewayMountsDatalogReadWrite
+--- PASS: TestComposeGatewayMountsDatalogReadWrite (0.00s)
+=== RUN   TestComposeControlPlaneMountsDatalogReadOnly
+--- PASS: TestComposeControlPlaneMountsDatalogReadOnly (0.00s)
+=== RUN   TestComposeBluePinsInstBlue
+--- PASS: TestComposeBluePinsInstBlue (0.00s)
+=== RUN   TestComposeGreenPinsInstGreen
+--- PASS: TestComposeGreenPinsInstGreen (0.00s)
+=== RUN   TestComposeColorFilesCarrySpecTraceBodyValues
+--- PASS: TestComposeColorFilesCarrySpecTraceBodyValues (0.00s)
+=== RUN   TestComposeRootComposeDoesNotEnableTraceBody
+--- PASS: TestComposeRootComposeDoesNotEnableTraceBody (0.00s)
+=== RUN   TestComposeTraceBodyRootParentIsMounted
+--- PASS: TestComposeTraceBodyRootParentIsMounted (0.00s)
+=== RUN   TestComposeNeverCarriesSealIntervalKey
+--- PASS: TestComposeNeverCarriesSealIntervalKey (0.00s)
+=== RUN   TestIsolateScriptDefaultIsDryRun
+--- PASS: TestIsolateScriptDefaultIsDryRun (0.00s)
+=== RUN   TestIsolateScriptRefusesWhenDeletionPredicateTouchesNewRoot
+--- PASS: TestIsolateScriptRefusesWhenDeletionPredicateTouchesNewRoot (0.00s)
+=== RUN   TestIsolateScriptStopsAndMasksTimer
+--- PASS: TestIsolateScriptStopsAndMasksTimer (0.00s)
+=== RUN   TestRestoreScriptUnmasksAndEnables
+--- PASS: TestRestoreScriptUnmasksAndEnables (0.00s)
+=== RUN   TestIsolateAndRestoreScriptsAreExecutable
+--- PASS: TestIsolateAndRestoreScriptsAreExecutable (0.00s)
+=== RUN   TestRunbookDocumentsMountLossPrecondition
+--- PASS: TestRunbookDocumentsMountLossPrecondition (0.00s)
+=== RUN   TestRunbookDocumentsMountLossLatchesWithinOneTick
+--- PASS: TestRunbookDocumentsMountLossLatchesWithinOneTick (0.00s)
+=== RUN   TestRunbookDocumentsDiskSwapNeedsGatewayRestart
+--- PASS: TestRunbookDocumentsDiskSwapNeedsGatewayRestart (0.00s)
+=== RUN   TestRunbookDocumentsShutdownSixSecondBound
+--- PASS: TestRunbookDocumentsShutdownSixSecondBound (0.00s)
+=== RUN   TestRunbookDocumentsFeatureOffIsByteIdentical
+--- PASS: TestRunbookDocumentsFeatureOffIsByteIdentical (0.00s)
+=== RUN   TestRunbookDocumentsRetentionAndSpaceBudget
+--- PASS: TestRunbookDocumentsRetentionAndSpaceBudget (0.00s)
+=== RUN   TestRunbookDocumentsSealerHeartbeatAndPermanentFailure
+--- PASS: TestRunbookDocumentsSealerHeartbeatAndPermanentFailure (0.00s)
+=== RUN   TestRunbookNeverMentionsSealInterval
+--- PASS: TestRunbookNeverMentionsSealInterval (0.00s)
+=== RUN   TestSealerUnitIsResidentLoopWithRestart
+--- PASS: TestSealerUnitIsResidentLoopWithRestart (0.00s)
+=== RUN   TestSealerUnitPinsZstdBinaryLevelAndVersion
+--- PASS: TestSealerUnitPinsZstdBinaryLevelAndVersion (0.00s)
+=== RUN   TestSealerUnitPinsMinAgeAboveGatewayRollBound
+--- PASS: TestSealerUnitPinsMinAgeAboveGatewayRollBound (0.00s)
+=== RUN   TestSealerUnitKnowsItsRootAndLockFile
+--- PASS: TestSealerUnitKnowsItsRootAndLockFile (0.00s)
+=== RUN   TestSealerUnitRequiresDatalogMount
+--- PASS: TestSealerUnitRequiresDatalogMount (0.00s)
+=== RUN   TestSealerUnitConfinesWritesToDatalog
+--- PASS: TestSealerUnitConfinesWritesToDatalog (0.00s)
+=== RUN   TestSealerUnitLimitsMemoryCpuAndIO
+--- PASS: TestSealerUnitLimitsMemoryCpuAndIO (0.00s)
+=== RUN   TestSealerUnitLogsToJournal
+--- PASS: TestSealerUnitLogsToJournal (0.00s)
+=== RUN   TestSealerUnitNeverUsesSealIntervalKey
+--- PASS: TestSealerUnitNeverUsesSealIntervalKey (0.00s)
+=== RUN   TestSealerUnitNeverPreparesFilesystem
+--- PASS: TestSealerUnitNeverPreparesFilesystem (0.00s)
+PASS
+ok  	github.com/example/llm-gateway/tests/deploy	0.012s
+focused_test_exit=0
+
+## ⑥ go test ./internal/tracearchive/ -count=1 -v（证明冻结包行为未被改动）
+=== RUN   TestGoEncoderPeakRSS
+    calib_test.go:50: 编码器堆占用 1058 MB（预算 1200 MB）
+--- PASS: TestGoEncoderPeakRSS (2.67s)
+=== RUN   TestGoEncoderRatioRegression
+    calib_test.go:81: 压缩比 8097.3x（下界 50.0x），17158144 字节 → 2119 字节
+--- PASS: TestGoEncoderRatioRegression (0.08s)
+=== RUN   TestFooterRoundTrip
+--- PASS: TestFooterRoundTrip (0.00s)
+=== RUN   TestFooterGoldenBytes
+--- PASS: TestFooterGoldenBytes (0.00s)
+=== RUN   TestFooterRowCountRoundTrip
+--- PASS: TestFooterRowCountRoundTrip (0.00s)
+=== RUN   TestDecodeFooterRejectsNegativeRowCount
+--- PASS: TestDecodeFooterRejectsNegativeRowCount (0.00s)
+=== RUN   TestDecodeFooterRejectsNegativeOffsetOrLen
+=== RUN   TestDecodeFooterRejectsNegativeOffsetOrLen/负_trailer_offset
+=== RUN   TestDecodeFooterRejectsNegativeOffsetOrLen/负_trailer_len
+--- PASS: TestDecodeFooterRejectsNegativeOffsetOrLen (0.00s)
+    --- PASS: TestDecodeFooterRejectsNegativeOffsetOrLen/负_trailer_offset (0.00s)
+    --- PASS: TestDecodeFooterRejectsNegativeOffsetOrLen/负_trailer_len (0.00s)
+=== RUN   TestDecodeFooterRejectsWrongLength
+=== RUN   TestDecodeFooterRejectsWrongLength/少一字节
+=== RUN   TestDecodeFooterRejectsWrongLength/多一字节
+--- PASS: TestDecodeFooterRejectsWrongLength (0.00s)
+    --- PASS: TestDecodeFooterRejectsWrongLength/少一字节 (0.00s)
+    --- PASS: TestDecodeFooterRejectsWrongLength/多一字节 (0.00s)
+=== RUN   TestDecodeFooterRejectsBadMagic
+--- PASS: TestDecodeFooterRejectsBadMagic (0.00s)
+=== RUN   TestDecodeFooterRejectsUnknownVersion
+--- PASS: TestDecodeFooterRejectsUnknownVersion (0.00s)
+=== RUN   TestTrailerRoundTrip
+=== RUN   TestTrailerRoundTrip/单行
+=== RUN   TestTrailerRoundTrip/两行
+=== RUN   TestTrailerRoundTrip/等长多行
+=== RUN   TestTrailerRoundTrip/长度悬殊
+=== RUN   TestTrailerRoundTrip/零长度行
+=== RUN   TestTrailerRoundTrip/大偏移
+--- PASS: TestTrailerRoundTrip (0.00s)
+    --- PASS: TestTrailerRoundTrip/单行 (0.00s)
+    --- PASS: TestTrailerRoundTrip/两行 (0.00s)
+    --- PASS: TestTrailerRoundTrip/等长多行 (0.00s)
+    --- PASS: TestTrailerRoundTrip/长度悬殊 (0.00s)
+    --- PASS: TestTrailerRoundTrip/零长度行 (0.00s)
+    --- PASS: TestTrailerRoundTrip/大偏移 (0.00s)
+=== RUN   TestDecodeTrailerRejectsWrongCount
+--- PASS: TestDecodeTrailerRejectsWrongCount (0.00s)
+=== RUN   TestDecodeTrailerRejectsOversizedCount
+--- PASS: TestDecodeTrailerRejectsOversizedCount (0.00s)
+=== RUN   TestDecodeTrailerRejectsNonMonotonic
+=== RUN   TestDecodeTrailerRejectsNonMonotonic/差分为负且偏移变负
+=== RUN   TestDecodeTrailerRejectsNonMonotonic/差分为负但偏移仍非负
+--- PASS: TestDecodeTrailerRejectsNonMonotonic (0.00s)
+    --- PASS: TestDecodeTrailerRejectsNonMonotonic/差分为负且偏移变负 (0.00s)
+    --- PASS: TestDecodeTrailerRejectsNonMonotonic/差分为负但偏移仍非负 (0.00s)
+=== RUN   TestDecodeTrailerRejectsTruncated
+--- PASS: TestDecodeTrailerRejectsTruncated (0.00s)
+=== RUN   TestDecodeTrailerRejectsTrailingGarbage
+--- PASS: TestDecodeTrailerRejectsTrailingGarbage (0.00s)
+=== RUN   TestDecodeTrailerRejectsNegativeOrWrappedOffset
+=== RUN   TestDecodeTrailerRejectsNegativeOrWrappedOffset/首条偏移溢出为负
+=== RUN   TestDecodeTrailerRejectsNegativeOrWrappedOffset/累加回绕为负
+--- PASS: TestDecodeTrailerRejectsNegativeOrWrappedOffset (0.00s)
+    --- PASS: TestDecodeTrailerRejectsNegativeOrWrappedOffset/首条偏移溢出为负 (0.00s)
+    --- PASS: TestDecodeTrailerRejectsNegativeOrWrappedOffset/累加回绕为负 (0.00s)
+=== RUN   TestReaderRejectsOversizedTrailerLen
+--- PASS: TestReaderRejectsOversizedTrailerLen (0.00s)
+=== RUN   TestReaderRejectsTrailerEntryCountOverBound
+--- PASS: TestReaderRejectsTrailerEntryCountOverBound (0.12s)
+=== RUN   TestReaderReleasesConcurrencySlots
+--- PASS: TestReaderReleasesConcurrencySlots (0.19s)
+=== RUN   TestReaderHonorsContextCancelWhileWaitingForSlot
+--- PASS: TestReaderHonorsContextCancelWhileWaitingForSlot (0.16s)
+=== RUN   TestParsePartSeq
+--- PASS: TestParsePartSeq (0.00s)
+=== RUN   TestParsePartSeqRejectsIllegalNames
+=== RUN   TestParsePartSeqRejectsIllegalNames/index.jsonl
+=== RUN   TestParsePartSeqRejectsIllegalNames/000042.jsonl
+=== RUN   TestParsePartSeqRejectsIllegalNames/part-.jsonl.zst
+=== RUN   TestParsePartSeqRejectsIllegalNames/part-abc.jsonl.zst
+=== RUN   TestParsePartSeqRejectsIllegalNames/part-00004a.jsonl
+=== RUN   TestParsePartSeqRejectsIllegalNames/part-+00042.jsonl
+=== RUN   TestParsePartSeqRejectsIllegalNames/part-000042
+=== RUN   TestParsePartSeqRejectsIllegalNames/part-1234567.jsonl
+=== RUN   TestParsePartSeqRejectsIllegalNames/part-1234.jsonl
+=== RUN   TestParsePartSeqRejectsIllegalNames/part-000042.jsonl.zst.tmp
+=== RUN   TestParsePartSeqRejectsIllegalNames/part-000042.ZST
+=== RUN   TestParsePartSeqRejectsIllegalNames/part--00042.jsonl
+=== RUN   TestParsePartSeqRejectsIllegalNames/part-000042.jsonl.gz
+--- PASS: TestParsePartSeqRejectsIllegalNames (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/index.jsonl (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/000042.jsonl (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/part-.jsonl.zst (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/part-abc.jsonl.zst (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/part-00004a.jsonl (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/part-+00042.jsonl (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/part-000042 (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/part-1234567.jsonl (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/part-1234.jsonl (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/part-000042.jsonl.zst.tmp (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/part-000042.ZST (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/part--00042.jsonl (0.00s)
+    --- PASS: TestParsePartSeqRejectsIllegalNames/part-000042.jsonl.gz (0.00s)
+=== RUN   TestSealIsAtomicOnCrash
+--- PASS: TestSealIsAtomicOnCrash (0.04s)
+=== RUN   TestParsePartSeqUsedBySealer
+--- PASS: TestParsePartSeqUsedBySealer (0.00s)
+=== RUN   TestSealRefusesSpoolOverTrailerEntryBound
+=== RUN   TestSealRefusesSpoolOverTrailerEntryBound/超限/可用编码器
+=== RUN   TestSealRefusesSpoolOverTrailerEntryBound/超限/编码器不可用
+=== RUN   TestSealRefusesSpoolOverTrailerEntryBound/恰好等于上界/可封块
+--- PASS: TestSealRefusesSpoolOverTrailerEntryBound (0.72s)
+    --- PASS: TestSealRefusesSpoolOverTrailerEntryBound/超限/可用编码器 (0.22s)
+    --- PASS: TestSealRefusesSpoolOverTrailerEntryBound/超限/编码器不可用 (0.18s)
+    --- PASS: TestSealRefusesSpoolOverTrailerEntryBound/恰好等于上界/可封块 (0.32s)
+=== RUN   TestWriterWriteFailureLeavesNoResidualLine
+--- PASS: TestWriterWriteFailureLeavesNoResidualLine (0.00s)
+=== RUN   TestWriterPoisonedBlockCannotBeSealed
+--- PASS: TestWriterPoisonedBlockCannotBeSealed (0.00s)
+=== RUN   TestWriterTruncatesWholeFileWhenNoLineBoundaryExists
+--- PASS: TestWriterTruncatesWholeFileWhenNoLineBoundaryExists (0.00s)
+=== RUN   TestWriterQuarantineRenameFailureEmptiesSpool
+--- PASS: TestWriterQuarantineRenameFailureEmptiesSpool (0.00s)
+=== RUN   TestWriterMarkSealedClosesPreviousFileHandle
+--- PASS: TestWriterMarkSealedClosesPreviousFileHandle (0.00s)
+PASS
+ok  	github.com/example/llm-gateway/internal/tracearchive	4.007s
+tracearchive_test_exit=0
+
+## ⑦ gofmt -l（聚焦目录；空 = 已格式化）
+gofmt_exit=0
+
+## ⑧ 冻结包零改动（base 0bfb130f..HEAD 与 3a2301ad..HEAD）
+-- git diff --stat 3a2301ad..HEAD -- internal/tracearchive/（期望空）
+frozen_a_exit=0
+-- git diff --stat 0bfb130f..HEAD -- internal/tracearchive/（期望空）
+frozen_b_exit=0
+
+## ⑨ 工具 sha256（必须仍为 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8）
+10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  tools/trace-mutate/trace_mutate.py
+
+## ⑩ 主检出未被触碰（只读查询）
+-- 主检出 HEAD / 分支：08ecc9c54ef201cd474df09382ab4bf2a860fd42 / fix/budget-next-period-409
+-- 主检出未提交改动行数：229
+step3_wrap_exit=0
+
+## ⑪ 聚焦测试的派生计数
+  顶层 PASS 行数 = 153
+  顶层 FAIL 行数 = 0
+  SKIP 行数       = 0
+  包级 ok 行数    = 3
+  包级 FAIL 行数  = 0
+  no tests to run = 0
+
+## ⑫ 基线失败的归因（E68：语义判据，不拿「本平台不可达」开脱）
+本计划自己的区间 0bfb130f..HEAD 对下列包的改动行数**全部为 0** ⇒ `go build ./...` 与 `go vet ./...` 的失败
+是**分支继承的既存基线**，与本计划无关，也不因本计划而恶化：
+  tests/contract            -> 0 行
+  tests/gateway             -> 0 行
+  test                      -> 0 行
+  tests/controlplane        -> 0 行
+失败包与原因（原样见 ①/③）：
+  · go build ./...  : test/bedrock_model_id_check.go:98:23: undefined: bedrock.NewListFoundationModelsPaginator
+  · go vet   ./...  : tests/contract_test（缺 QueryScopedTierUsage）/ tests/gateway/orchestrator_test（UpdateSticky 签名）
+                      / test（同上 bedrock）/ tests/gateway/handler_test（UpdateSticky 签名）
+                      / tests/controlplane/handler_test（缺 ListEnabledGroupsWithModels）
+⇒ 计划口径「go build ./... 的既存基线失败用 go build ./internal/... ./cmd/...」在本轮**照做**（② build_exit=0、④ vet_exit=0）。
+
+## ⑬ E59③ 跨任务连带自查（先自查后报告）
+命令：grep -l '^PACKAGES.*<pkg>' tools/trace-mutate/sets/p4-task-*.py | wc -l
+  ./tests/tracesealer/ = 12 个集合（p4-task-1-{classify,exit,options,round}、p4-task-2-alert、
+                                  p4-task-3-{loop,rootguard}、p4-task-4-{lock,runner}、
+                                  p4-task-10-{contract,footer,observability}）
+  ./tests/deploy/      = 12 个集合（p4-task-5-{build,ci,isolate,restore,unit}、p4-task-6-{blue,green,root}、
+                                  p4-task-7-bluegreen、p4-task-8-{compose,runsh}、p4-task-11-runbook）
+  ./tests/traceverify/ =  3 个集合（p4-task-8-guard、p4-task-9-{budget,vmhwm}）
+  12 + 12 + 3 = 27 = 全部集合数（无重叠地覆盖全部 27 个集合）
+本轮（任务 12）对 internal/**、cmd/**、tests/**、tools/trace-mutate/sets/** 的改动**为 0** ⇒
+**没有**由内容变更触发的连带重出；但任务 12 步骤 2 本身要求「在最终 HEAD 上全量重跑」⇒ 27 个集合
+**全部**重出（`p4-task-12-*` 与规范名两套同名文件），不是「按需最小重跑」。
+
+## ⑭ 与上一轮（at-761c5a81）的绑定差异
+逐一比对 27 个集合的 `变异集合 sha256`、`被测文件 sha256`、`测试文件 sha256`：
+  差异条数 = 0（集合/被测文件/测试文件三者**逐条相同**）
+⇒ 与 E59 一致：本轮只有纯计划文本提交 ⇒ 内容哈希未变，绑定不失效；本轮重出只是 Task 12 步骤 2 的独立要求。

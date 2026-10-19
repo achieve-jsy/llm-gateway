@@ -1,0 +1,7 @@
+定位校验（基于 HEAD:internal/traceverify/budget.go，sha256=eef473b43d16bd68）
+OK  m01_峰值少加一项
+OK  m02_商改成向上取整
+OK  m03_删掉下限1
+OK  m04_非法分母兜底被放宽
+全部 4 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

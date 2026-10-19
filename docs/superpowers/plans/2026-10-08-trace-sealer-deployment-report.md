@@ -11,6 +11,9 @@
 - **代码与契约面已交付、自动门禁全绿**：**27** 个变异集合在最终 HEAD 全量重出，`check_exit=0` / `table_exit=0`
   各 **27/27**；**136 = 136 断言支撑的红 + 0 崩溃/超时/编译红 + 0 允许的绿 + 0 未登记的绿 + 0 证据无效**；
   聚焦测试 **153 PASS / 0 FAIL / 0 SKIP**；冻结包 `internal/tracearchive/**` **零改动**。
+  - **E76② 之后的当前值（与上面的 136 不矛盾）**：`p4-task-10-footer` 的变异数 **8 → 9**（新增 m09）
+    ⇒ 全项目**当前**总量 = **137**（算式 136 − 8 + 9 = 137）。上面那个 `136` 是
+    **Task 12 时点（`5650d28c` 的 27 张表）**的值，**不是**「当前值」—— 与 E73⑤ / E74① 同一纪律。
 - **五项真实验收（A3 / A6 / A7 / A8 / 挂载消失 ≤1 tick）本轮一项都没有产生读数** —— 本机是 darwin/arm64，
   缺 Linux ＋ root ＋ 回环 ext4 ＋ docker 引擎 ＋ 真实 `/proc` ＋ 真实 PG ＋ zstd **1.4.8**。
   按 **E64** 口径全部**逐条登记为宿主执行清单**（§2、§6、§9），**不冒充、不用「形状」代替读数**。
@@ -53,11 +56,20 @@
 | 9 | `49baf6b2` | `p4-task-9-budget` | `ef39eb5dcf78…` | 4 | `internal/traceverify/budget.go` | `eef473b43d16bd68ee8473ed1ea58cb8d8e9207063c0bc705534c31069727e99` |
 | 9 | `49baf6b2` | `p4-task-9-vmhwm` | `f7bdd9e3e939…` | 11 | `internal/traceverify/vmhwm.go` | `09726c96be4472d37c771fd502bbfdfb9cb643f0beb100e259a5aa70af7dbede` |
 | 10 | `2bba38ab` | `p4-task-10-contract` | `10dfb5251428…` | 3 | `internal/tracesealer/options.go` | `b3a0909d3169349a23b94e11289224c3de641fb1c67ce028bd7849593d1bfa2e` |
-| 10 | `2bba38ab` | `p4-task-10-footer` | `49a04f7f328e…` | 8 | `internal/tracesealer/footer.go` | `fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15` |
+| 10 | `2bba38ab` | `p4-task-10-footer` | `49a04f7f328e…` → **`035f45bf8870…`（E76② 重绑）** | 8 → **9** | `internal/tracesealer/footer.go` | `fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15`（未变） |
 | 10 | `2bba38ab` | `p4-task-10-observability` | `17582377948f…` | 5 | `internal/tracesealer/runner.go` | `dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab` |
 | 11 | `4a9ffbf4` | `p4-task-11-runbook` | `c006add3a096…` | 7 | `docs/deployment.md` | `cde05ffbc546467ba881a343a3b2cdae5d5b525a96b8e3ba13a5880824c47fb2` |
 
 （任务 12 自身不落任何实现/测试/集合：它的提交见 §11。）
+
+> **E76② 重绑（E59）**：`p4-task-10-footer` 的集合文件在 **E76 收尾轮**被改（新增 `m09`）⇒ 按 E59
+> **重跑重绑**，重出权威表与 `--check`：
+> `.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-10-footer-authoritative-at-21df604a.txt`
+> （`table_exit=0`；变异总数 **9** = 9 断言红 + 0 编译红 + 0 允许的绿 + 0 证据无效）与
+> `p4-task-10-footer-check-at-21df604a.txt`（`check_exit=0`；9 条模式在 HEAD 上唯一定位）。
+> 上表这一行的 `set sha256` / 变异数已按**新表**更新；`目标文件 sha256`（`footer.go`）**未变**
+> （E76 对 `internal/**` / `cmd/**` **零改动**）。上表其余 **26** 行的 sha256 / 变异数**仍是
+> `5650d28c` 表**的值（E59：只有内容变了的集合才需要重绑）。
 
 ## 2. 五项验收（A3 / A6 / A7 / A8 / 挂载消失 ≤1 tick）的真实输出
 
@@ -281,6 +293,18 @@ check_exit=0 : 27 / 27   table_exit=0 : 27 / 27
    一律以当场 `git log --oneline 5650d28c~1..HEAD` 为准）：`5650d28c`（E74 计划收口）→ `73dae7c5`（证据）
    → 交付报告提交 → （若有）报告文本微调提交
 ```
+
+> **E76② 更新（E76 收尾轮的当前值；与上面的 136 不矛盾）**：E76② 把 **`p4-task-10-footer`** 的变异数
+> 由 **8 → 9**（新增 `m09_row_count偏移改成trailer_len偏移`，点名杀手 `TestFooterRowCountOnHandBuiltFooter`）。
+> **当前**全项目总量 = **137**。两种算法互相印证（E60）：
+> ① 逐表增量法：`136 − 8 + 9 = **137**`；
+> ② 27 项重加法：把上面那个 27 项算式里的**第 6 项 `8`（= `p4-task-10-footer`）换成 `9`**，
+>    machine 加法得 `terms=27 / sum=137`（落盘 `e76-addition-derivation-at-21df604a.txt`）。
+> 该集合重绑后的权威表：`p4-task-10-footer-authoritative-at-21df604a.txt`（`table_exit=0`；
+> **9 = 9 断言红 + 0 崩溃/超时/编译红 + 0 允许的绿 + 0 未登记的绿 + 0 证据无效**）与
+> `p4-task-10-footer-check-at-21df604a.txt`（`check_exit=0`）。
+> 上面那个 `136` 是 **Task 12 时点（`5650d28c` 的 27 张表）** 的值 —— `check_exit/table_exit 27/27`、
+> `= 136`、`清单条数 191` 都**只对那个时点**成立；E76 之后这四项的当前值见本块与 §14。
 
 **B. 测试**
 

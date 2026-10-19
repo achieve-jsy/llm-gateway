@@ -1,0 +1,44 @@
+### E76② 重绑后的全项目总量自证（数据来源：其余 26 张 *-authoritative-at-5650d28c.txt ＋ 重绑后的
+### p4-task-10-footer-authoritative-at-21df604a.txt）
+# 命令：对 27 个集合名按 ls 字典序，逐表 grep '^变异总数' 取尾数，再 machine 相加
+
+集合名（ls 字典序）      变异总数
+-----------------------------------------
+p4-task-1-classify               7
+p4-task-1-exit                   2
+p4-task-1-options                3
+p4-task-1-round                  6
+p4-task-10-contract              3
+p4-task-10-footer                9   <= E76② 重绑（原 8）
+p4-task-10-observability         5
+p4-task-11-runbook               7
+p4-task-2-alert                  7
+p4-task-3-loop                   7
+p4-task-3-rootguard              8
+p4-task-4-lock                   4
+p4-task-4-runner                 4
+p4-task-5-build                  3
+p4-task-5-ci                     2
+p4-task-5-isolate                4
+p4-task-5-restore                1
+p4-task-5-unit                   14
+p4-task-6-blue                   6
+p4-task-6-green                  2
+p4-task-6-root                   2
+p4-task-7-bluegreen              5
+p4-task-8-compose                4
+p4-task-8-guard                  4
+p4-task-8-runsh                  3
+p4-task-9-budget                 4
+p4-task-9-vmhwm                  11
+
+逐表串（27 项，E76② 后）= 7+2+3+6+3+9+5+7+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11
+项数 terms = 27   和 sum = 137
+
+交叉验算：136 - 8 + 9 = 137
+集合 self-证明（重绑表 tab 尾）：
+  变异总数                 = 9
+  合计: 9 = 9 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+  table_exit=0
+
+derivation_exit=0

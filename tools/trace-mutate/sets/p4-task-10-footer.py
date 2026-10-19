@@ -15,10 +15,12 @@ r"""计划 4 / 任务 10 的变异集合 A：产物 footer 的**只读镜像解�
 
 编号一经发布不再改动；匹配一律用字符串（不用行号）。
 
-## 与计划文本的一致性（如实登记：一处**新增**，零处削弱）
+## 与计划文本的一致性（如实登记：两处**新增**（m04–m08 ＋ E76② 的 m09），零处削弱）
 
 计划任务 10 步骤 5 的 `p4-task-10-footer.py` 逐字给出三条变异与各自杀手（m01–m03），本文件逐字采用，
-并**新增** m04–m08：把 footer 的五条字段自洽判据各自改成空操作。
+并**新增** m04–m08：把 footer 的五条字段自洽判据各自改成空操作；**E76② 再新增** m09：
+把 row_count 的字段偏移 `b[18:22]` 错写成 trailer_len 的 `b[14:18]`（两者都是 4 字节
+`uint32`、类型相同 ⇒ **编译通过**，只能红在断言上）。
 
 > **为什么加**：这五条判据都由在册用例承载（`TestFooterRejectsBadMagic` / `...UnknownFormatVersion` /
 > `...NegativeRowCount` / `...TrailerNotAdjacentFooter` / `...MissingFile`）。按 E62「行为要求必须由
@@ -50,13 +52,16 @@ r"""计划 4 / 任务 10 的变异集合 A：产物 footer 的**只读镜像解�
 
 ## 允许的绿
 
-无（`EXPECTED_GREEN` 为空）。八条变异都必须红成**断言红**；任何编译红 / panic / 超时都要就地改写变异
+无（`EXPECTED_GREEN` 为空）。九条变异都必须红成**断言红**；任何编译红 / panic / 超时都要就地改写变异
 字符串（E70 约定 2），不得登记为允许的绿。
 """
 
 NAME = "p4-task-10-footer"
 TARGET = "internal/tracesealer/footer.go"
 PACKAGES = ["./tests/tracesealer/"]
+# E76② 核对（**清单无需变更**）：m09 的点名杀手 `TestFooterRowCountOnHandBuiltFooter`
+# 在 `footer_test.go` 里 ⇒ 它**已经**在本清单中；本清单与 names 清单的**内容**在 E76②
+# 一字未动（工具仍按 MANIFEST_DERIVATION 现推并逐条比对）。E76② 改的是 MUTATIONS（8 → 9 条）。
 MANIFEST_FILES = [
     "tests/tracesealer/footer_test.go",
     "tests/tracesealer/footer_artifact_test.go",
@@ -131,6 +136,16 @@ MUTATIONS["m08_文件不存在返回0而不是错误"] = [
     ("sub", 'return 0, fmt.Errorf("tracesealer: 打开产物 %s 失败: %w", artifactPath, err)', "return 0, nil"),
 ]
 
+# m09（**E76② 新增**）row_count 的字段偏移写成 trailer_len 的偏移（`b[18:22]` → `b[14:18]`）。
+#     `trailer_len` 与 `row_count` 都是 4 字节 `uint32`、类型相同 ⇒ **编译通过**；但读出来的数
+#     就是**另一个字段**。手工拼的 footer 里 trailer_len=0、row_count=4242 ⇒ 解析结果 0 ≠ 4242。
+#     杀手：TestFooterRowCountOnHandBuiltFooter（在册：`buildFooter(4242, 4096-32, 0)`，即
+#     trailer_len=0 ≠ row_count=4242）。这就是探针 P3 曾登记为「覆盖缺口」的那条判据 ——
+#     E76② 之后它**正式在册**（见 REQUIREMENTS 与 COVERAGE_GAPS gap-2、报告 §5.5 的 E76③ 收窄）。
+MUTATIONS["m09_row_count偏移改成trailer_len偏移"] = [
+    ("sub", "b[18:22]", "b[14:18]"),
+]
+
 # 变异测不到的那条要求（「镜像长度 == 冻结包已导出常量」）配一条**存在性**静态检查（E62：静态检查
 # 只承载存在/不存在类要求；行为由在册用例承载，见 COVERAGE_GAPS）。
 CHECKS = [
@@ -162,6 +177,18 @@ REQUIREMENTS = [
         "checks": [],
         "note": ("**行为**要求 ⇒ 在册用例 `TestFooterRowCountOnHandBuiltFooter`（按冻结布局手工拼 32 字节 + "
                  "显式断言 FooterSize == 32）。m01 会让常量断言与解析断言至少一条转红；m02 让 magic 检查红。"),
+    },
+    {
+        "plan": "row_count 必须读 footer 的 [18:22) —— 不得错读成同为 4 字节的 trailer_len [14:18)（E76② 新增）",
+        "mutations": ["m09_row_count偏移改成trailer_len偏移"],
+        "checks": [],
+        "note": ("**行为**要求 ⇒ 在册用例 `TestFooterRowCountOnHandBuiltFooter`"
+                 "（`buildFooter(4242, 4096-32, 0)`：trailer_len = 0 ≠ row_count = 4242；"
+                 "换偏移后读出 0 ⇒ 与 4242 不等 ⇒ 断言红）。"
+                 "**它正是探针 P3 / 报告 §5.5.5 曾登记为「覆盖缺口」的那条判据**：已提交的真实产物 "
+                 "fixture 的 trailer_len == row_count == 3 ⇒ 在 `-run TestFooterParsesCommittedRealArtifact` "
+                 "的单测口径下区分不了；**包级**由本变异 + 本用例承重 ⇒ E76② 之后该判据正式在册"
+                 "（见 COVERAGE_GAPS gap-2 与报告 §5.5 的 E76③ 收窄）。"),
     },
     {
         "plan": "文件不足 32 字节 ⇒ 报错（不是返回 0）",
@@ -233,5 +260,44 @@ COVERAGE_GAPS = [
                           "「杀死的用例」栏直接给出（m01/m02 都点名它）。"),
         "owner": ("本轮只登记：产出方向保留为人工复核项。升格路径 = CI 镜像保证装有 C 版 zstd 且断言"
                   "「zstd 缺失 ⇒ FAIL 而不是 Skip」，或把产出步骤移到一个单独的、带 zstd 的 job。"),
+    },
+    {
+        "id": "gap-2-row_count偏移与trailer_len偏移互串（**E76② 后已关闭**）",
+        "title": ("**改写此前的「覆盖缺口」登记**（原登记不在本文件里，而在交付报告 §5.5 第 5 条第二点"
+                  "与探针记录 `p4-task-12-probe-at-5650d28c.txt` 的 P3）："
+                  "「把 `footer.go` 的 row_count 偏移 `b[18:22]` 错写成 trailer_len 的 `b[14:18]`」"
+                  "这条判据**现已正式在册** —— E76② 新增变异 `m09_row_count偏移改成trailer_len偏移`，"
+                  "点名杀手 = 在册用例 `TestFooterRowCountOnHandBuiltFooter`（名字清单里、每次运行都真的执行）。"
+                  "⇒ 该判据**不再是**覆盖缺口。"),
+        "where": [
+            "tools/trace-mutate/sets/p4-task-10-footer.py  MUTATIONS[\"m09_row_count偏移改成trailer_len偏移\"]",
+            "tests/tracesealer/footer_test.go:79  TestFooterRowCountOnHandBuiltFooter"
+            "（:81 buildFooter(4242, 4096-32, 0) ⇒ trailer_len=0；:85 断言解析值 == 4242）",
+            "internal/tracesealer/footer.go:107  rowCount := int32(binary.BigEndian.Uint32(b[18:22]))",
+        ],
+        "reachable": ("本机**可达**：`m09` 的权威表判定 = 红（**断言红**，非编译红）；"
+                      "names=8 ran=8 diff=0 PASS=6 SKIP=0 FAIL=2。"
+                      "**杀死的用例** = `TestFooterRowCountOnHandBuiltFooter`（点名杀手）"
+                      "＋ `TestFooterRejectsNegativeRowCount`（字段互串后负 row_count 读不出来）。"),
+        "no_killer": (
+            "**改写前（原登记）**：探针 P3 把第 107 行 `b[18:22]` 改成 `b[14:18]` 后在**已提交的真实产物 fixture** 上"
+            "「读不出差别、用例仍绿」⇒ 登记为覆盖缺口。**改写后（E76②）**：该负结果**只在 "
+            "`-run TestFooterParsesCommittedRealArtifact` 的单测口径下**成立（该 fixture 的 "
+            "trailer_len == row_count == 3 ⇒ 换偏移读出同一个数）；**包级**由 "
+            "`TestFooterRowCountOnHandBuiltFooter` 承重（手工拼的 footer：trailer_len = 0 ≠ row_count = 4242）"
+            "⇒ 该判据已在册、有断言红变异。**不再**称其为「不可证伪的覆盖缺口」。"
+        ),
+        "falsifiability": (
+            "**E76② 实跑（`go test -overlay` 打补丁，不动工作树）**：\n"
+            "  · 包级：`names=8 ran=8 PASS=6 SKIP=0 FAIL=2` ⇒ exit=1，`--- FAIL: TestFooterRowCountOnHandBuiltFooter`\n"
+            "    ＋ `--- FAIL: TestFooterRejectsNegativeRowCount`（无编译错误行）；\n"
+            "  · 单测口径：`-run '^TestFooterRowCountOnHandBuiltFooter$'` ⇒ exit=1、"
+            "`footer_test.go:85` 报 `expected: 4242 / actual: 0` ⇒ **断言红**。\n"
+            "  权威表（整集合）见 `p4-task-10-footer-authoritative-at-<sha>.txt` 的 m09 行；\n"
+            "  E62 探针（改坏 → 转红 → 还原 + 还原后 sha256）见 `e76-e62-probe-at-<sha>.txt`。"
+        ),
+        "owner": ("E76② 关闭本缺口。**残留边界**（明确、不夸大）：已提交 fixture 的 "
+                  "trailer_len == row_count == 3 ⇒ **该 fixture 的单测**区分不了两字段；"
+                  "这不影响包级判定（由手工拼 footer 的用例承重），也不再是「无承载者」的缺口。"),
     },
 ]

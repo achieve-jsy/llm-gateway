@@ -1,0 +1,29 @@
+### E76③ 承重证据：m09（footer.go:107 的 b[18:22] → b[14:18]）在**整包**口径下的红
+
+口径：go test -overlay=<把 footer.go 换成 m09 版的补丁> ./tests/tracesealer/ -count=1 -v
+      （不动工作树；footer.go 的 sha256 保持 fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15）
+
+整包（tests/tracesealer 的**全部** 73 条顶层用例，不只是本集合 8 条清单）：
+  exit = 1
+  顶层 RUN  = 73
+  顶层 PASS = 67
+  顶层 FAIL = 6
+  SKIP      = 0
+  编译错误行 = 0 ⇒ **断言红，不是编译红**
+  73 - 6 = 67（PASS）✓
+
+6 条顶层 FAIL（逐字）：
+  --- FAIL: TestFooterRowCountOnHandBuiltFooter (0.00s)
+  --- FAIL: TestFooterRejectsNegativeRowCount (0.00s)
+  --- FAIL: TestObserveTracksMinimumBytesPerRow (0.00s)
+  --- FAIL: TestObserveTracksMaxRowsAndMinRatio (0.00s)
+  --- FAIL: TestObserveWarnsAtHalfOfRowCap (0.00s)
+  --- FAIL: TestObserveLogsOneInfoLinePerSealedPart (0.00s)
+
+点名杀手 TestFooterRowCountOnHandBuiltFooter 在其中，且报错位置 = footer_test.go:85
+（expected: 4242 / actual: 0）⇒ 「包级已由 TestFooterRowCountOnHandBuiltFooter 承重」成立。
+
+对照（pristine，无 overlay）：exit=0 ->   ok  	github.com/example/llm-gateway/tests/tracesealer	0.691s
+（pristine 行原文：ok  	github.com/example/llm-gateway/tests/tracesealer	0.691s）
+
+wholepackage_exit=0

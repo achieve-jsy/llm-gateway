@@ -1,5 +1,10 @@
 ### 任务 12 / E74② 的「改坏 → 转红 → 还原」探针（HEAD=5650d28c）
 
+【E76③ 批注】本文件在 E76 收尾轮被**就地批注**：只收窄 P3 段的**结论适用范围**与「结论」块的对应条目，
+            **测量事实（退出码 / SKIP / sha256）一字未改**。收窄内容 = P3 的负结果**仅在
+            `-run TestFooterParsesCommittedRealArtifact` 的单测口径下**成立；**包级**由
+            `TestFooterRowCountOnHandBuiltFooter` 承重，且该判据已在 E76② 正式在册（新增变异 m09）。
+
 还原口径：**不**用 git checkout / reset / stash（全局约束禁止）—— 原字节先读进内存，
            改完写回原字节后**复算 sha256**，并核 `git status --porcelain` 为空。
 在册用例 = `TestFooterParsesCommittedRealArtifact`（`tests/tracesealer/footer_artifact_test.go`，
@@ -27,9 +32,21 @@ fixture 末尾 32 字节（xxd，用于解释 P3 的负结果）：
 
 ## P3（**负结果，如实登记**）：把第 107 行 row_count 的字段偏移 `b[18:22]` 改成 `b[14:18]`
     —— 这是 E62 意义上「**不能失败**」的改坏：该 fixture 的 **trailer_len == row_count == 3**
-    （见上 xxd）⇒ 换偏移读出同一个数 ⇒ 用例仍绿。**该改法不得被当作杀手，也不得记成断言红。**
-  ① go test 退出码 = 0（0 = 仍绿，正是本负结果）
-     判定行：（无 --- FAIL 行 ⇒ 用例没红）
+    （见上 xxd）⇒ 换偏移读出同一个数 ⇒ **该单测**仍绿。
+    【E76③ 就地把本段收窄】（本文件的测量事实未改，只收窄结论的适用范围）：
+      · 该负结果**仅在 `-run TestFooterParsesCommittedRealArtifact` 的单测口径下**成立
+        —— **这个 fixture 的单测**区分不了 trailer_len 与 row_count。
+      · **包级已由 `TestFooterRowCountOnHandBuiltFooter` 承重**：评审以 `go test -overlay` 把
+        `footer.go:107` 改成 `b[14:18]` 跑**整包** ⇒ **exit = 1、6 条顶层 FAIL**；E76② 同口径复跑、
+        自己数了一遍：整包 73 条顶层用例 ⇒ RUN=73 / PASS=67 / **FAIL=6** / SKIP=0 / 编译错误行=0
+        （落盘 `e76-m09-wholepackage-at-21df604a.txt`，73 − 6 = 67 ✓），其中点名杀手是
+        `TestFooterRowCountOnHandBuiltFooter`（`footer_test.go:85`：expected 4242 / actual 0）。
+      · ⇒ 本条**不再**是「不可证伪的覆盖缺口」；E76② 已把该判据**正式在册**（集合 `p4-task-10-footer`
+        新增变异 `m09_row_count偏移改成trailer_len偏移`，见 `p4-task-10-footer-authoritative-at-21df604a.txt`）。
+      · 原句「该改法不得被当作杀手、也不得记成断言红」是**只跑了单测**时的结论；**收窄后**的正确表述是
+        「**在该 fixture 的单测口径下**它不红；**包级红，且已在册并有点名杀手**」。
+  ① go test 退出码 = 0（**单测口径**：`-run TestFooterParsesCommittedRealArtifact` 仍绿 —— 正是本负结果）
+     判定行：（无 --- FAIL 行 ⇒ 该单测没红）
   ② SKIP 行数 = 0
   ③ 还原：internal/tracesealer/footer.go sha256 = fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15（与改前一致 = True）
 
@@ -60,9 +77,11 @@ fixture 末尾 32 字节（xxd，用于解释 P3 的负结果）：
   · P1 / P2 / P4 / P5 四条改坏**全部**让在册用例 `TestFooterParsesCommittedRealArtifact` 转红（退出码 1、`--- FAIL`）。
   · **缺失/读不到产物 = FAIL，不是 SKIP**（四条改坏的 SKIP 行数都是 0）。
   · P4（BigEndian→LittleEndian，改**字节序**但保留符号引用）与 P5（改自洽校验右式）都**不是编译红**，红在断言上。
-  · **P3 是负结果**：offset 由 `[18:22]` 改成 `[14:18]` 在该 fixture 上**读不出差别**（trailer_len == row_count == 3）
-    ⇒ 如实登记；它**不**被记成断言红、**不**被安杀手名。由此得出的覆盖缺口（fixture 区分不了 trailer_len 与 row_count）
-    写进交付报告的「诚实的覆盖缺口」一节。
+  · **P3 是负结果（E76③ 收窄为「单测口径」）**：offset 由 `[18:22]` 改成 `[14:18]` 在**该 fixture 的
+    `-run TestFooterParsesCommittedRealArtifact` 单测**上**读不出差别**（trailer_len == row_count == 3）
+    ⇒ 如实登记。**包级已由 `TestFooterRowCountOnHandBuiltFooter` 承重**（整包口径 exit=1、6 条顶层 FAIL；
+    E76② 同口径复跑，落盘 `e76-m09-wholepackage-at-21df604a.txt`），且 E76② 已把该判据**正式在册**
+    （新增变异 m09 + 点名杀手）。⇒ **不再**称其为「不可证伪的覆盖缺口」；交付报告 §5.5 与 §13.6 已同步收窄。
   · 全部还原后 sha256 与改前一致、`git status --porcelain` 为空。
   · 【如实登记】Task 12 本身**不新增任何行为断言**（它是收口/重跑/交接轮）⇒ 本探针复验的是本轮**唯一新增的声明**
     （E74②：fixture 的**解析方向**由在册用例承载、其产出过程不可自动复现）所依赖的那条在册用例的可失败性；

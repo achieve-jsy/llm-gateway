@@ -147,7 +147,7 @@
 4. **没有任何自动用例覆盖的路径**：① A3 真实填盘与恢复；② 进程级 A7（两个**真** `--once` 撞锁）；
    ③ 挂载消失的观察（≥3 tick）与「累计丢失行数」；④ 旧定时器隔离脚本的**真机执行**（只由契约用例 ＋ dry-run 钉住）；
    ⑤ D73 硬门本身（部署决策，非代码）。
-5. **`fixture` 的两条真实缺口（本轮新发现 ＋ E74②）**：
+5. **`fixture` 的事实登记（如实登记：一条真实缺口（E74②）＋ 一条**E76③ 已收窄/关闭**的旧登记）**：
    - **E74②：`tests/tracesealer/testdata/footer_roundtrip_real.jsonl.zst` 的「产出过程」不可自动复现。**
      仓库里没有任何脚本/输入能重建这 104 字节 —— 复现它需要「真 Sealer ＋ 与本机版本一致的 zstd ＋ 当时的输入行」，
      而这两样都不在仓库里。**可自动验证的只有解析方向**（在册用例 `TestFooterParsesCommittedRealArtifact`
@@ -155,10 +155,19 @@
      用镜像 `RowCount` 与冻结读侧 `GetBody` 读回 3 行、越界行报 `ErrNotArchived`）。冻结包不可变 ⇒ 该形态**可接受**，
      但**不得**暗示它可复现。**来源**：真 Sealer 预产、产出机 zstd **v1.5.7**、产出时点 `4a9ffbf4`、
      定位键 `dt=2026-10-08 / inst=blue / part=7`。
-   - **本轮探针 P3 的负结果（新发现）**：该 fixture 的 `trailer_len` 与 `row_count` **都等于 3**
-     （末尾 32 字节：`… 0000 0003 0000 0003 …`）⇒ 把 `footer.go` 第 107 行的字段偏移由 `b[18:22]` 改成 `b[14:18]`
-     **读不出差别、用例仍绿**。因此该 fixture **区分不了 trailer_len 与 row_count**。如实登记为覆盖缺口；
-     该改法**不**被记成断言红、**不**被安杀手名（E64「变异死于编译失败不许安杀手名」的同族纪律）。
+   - **本轮探针 P3 的负结果（**E76③ 收窄**）**：该 fixture 的 `trailer_len` 与 `row_count` **都等于 3**
+     （末尾 32 字节：`… 0000 0003 0000 0003 …`）⇒ 把 `footer.go` 第 107 行的字段偏移由 `b[18:22]` 改成 `b[14:18]`，
+     **仅在 `-run TestFooterParsesCommittedRealArtifact` 的单测口径下**读不出差别、**该单测**仍绿 ——
+     即「**这个 fixture 的单测**区分不了 trailer_len 与 row_count」，**不是**「这条判据不可证伪」。
+     **包级已由 `TestFooterRowCountOnHandBuiltFooter` 承重**：手工拼的 footer 里 trailer_len = 0
+     ≠ row_count = 4242 ⇒ 换偏移后解析值 0 ≠ 4242 ⇒ **断言红**。评审口径的复核（`go test -overlay`
+     把 `footer.go:107` 改成 `b[14:18]` 跑**整包**）⇒ **exit = 1、6 条顶层 FAIL**；本报告 E76② 以同口径
+     复跑并**自己数了一遍**：整包 73 条顶层用例 ⇒ RUN=73 / PASS=67 / **FAIL=6** / SKIP=0 / 编译错误行=0
+     （落盘 `e76-m09-wholepackage-at-21df604a.txt`，73 − 6 = 67 ✓）。
+     E76② 已把这条判据**正式在册**（集合新增变异 `m09_row_count偏移改成trailer_len偏移` ＋ 点名杀手
+     `TestFooterRowCountOnHandBuiltFooter`，见 `p4-task-10-footer-authoritative-at-21df604a.txt` 的 m09 行：
+     红 / names=8 ran=8 diff=0 PASS=6 SKIP=0 FAIL=2）。⇒ **不再**把它称作「不可证伪的覆盖缺口」
+     （此前**不**记成断言红、**不**安杀手名，是因为当时只跑了那条单测，不是因为该判据没有承载者）。
      （镜像与冻结包的其余一致性由手工拼 32 字节 footer 的用例 ＋ `FooterSize` 常量契约 ＋ 真产物解析共同钉住。）
 6. **生产门槛值**：压缩比门槛（9× / 10.26×）与水位换算**逐字取自规格**，本计划**不代抄**、也不替判定人下结论。
 
@@ -385,6 +394,8 @@ grep -l '^PACKAGES.*tests/traceverify' tools/trace-mutate/sets/p4-task-*.py | wc
 3. **`RequiresMountsFor=` 在「手工 umount」时是否可靠地停掉 unit 属纵深防御、未验证**；主防线是进程内护栏。
 4. **容器 uid 与 `/datalog` 属主未实测**（首轮用 root，D74）。
 5. **换盘/改挂载点后网关会永久闩锁到重启为止**（已写进运行手册，未修）。
-6. **fixture 的产出过程不可自动复现**，且该 fixture **区分不了 `trailer_len` 与 `row_count`**（§5.5）。
+6. **fixture 的产出过程不可自动复现**；该 fixture 的 **trailer_len == row_count == 3** ⇒ **它在单测口径下**
+   区分不了这两个字段（**E76③ 收窄**：这只影响该 fixture 的分辨力，**不影响**该判据的承重 —— 包级已由
+   `TestFooterRowCountOnHandBuiltFooter` 承重，且 E76② 已把该判据正式在册；见 §5.5）。
 7. **本报告没有给出任何生产读数** —— 所有 `df -h` / `findmnt` / `zstd --version` / `is-active` / 压缩比 / 内存峰值
    **一律待宿主执行**（§2 / §6 / §9）。

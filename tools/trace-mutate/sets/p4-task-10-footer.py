@@ -271,8 +271,9 @@ COVERAGE_GAPS = [
                   "⇒ 该判据**不再是**覆盖缺口。"),
         "where": [
             "tools/trace-mutate/sets/p4-task-10-footer.py  MUTATIONS[\"m09_row_count偏移改成trailer_len偏移\"]",
-            "tests/tracesealer/footer_test.go:79  TestFooterRowCountOnHandBuiltFooter"
-            "（:81 buildFooter(4242, 4096-32, 0) ⇒ trailer_len=0；:85 断言解析值 == 4242）",
+            "tests/tracesealer/footer_test.go:75  TestFooterRowCountOnHandBuiltFooter"
+            "（:81 writeArtifactWithFooter(..., 4096, 4242) → :65 buildFooter(4242, 4096-32, 0) ⇒ trailer_len=0；"
+            " :85 断言解析值 == 4242）",
             "internal/tracesealer/footer.go:107  rowCount := int32(binary.BigEndian.Uint32(b[18:22]))",
         ],
         "reachable": ("本机**可达**：`m09` 的权威表判定 = 红（**断言红**，非编译红）；"

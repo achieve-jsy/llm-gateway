@@ -3292,3 +3292,13 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 - **判据**：若 A6-② 在 **`GOGC=off`** 下 **K = 2** 的峰值 **≥ 2 GiB** ⇒ **不得**宣称 2 并发安全：`MaxConcurrent` 的结论取 **1**，且**必须**把**计划 3**（`docs/superpowers/plans/2026-09-25-trace-point-read-service.md`）的 `TRACE_BODY_READ_MAX_CONCURRENT` **由 2 改为 1**（或提高控制面限额）。
 - **在册路径**：`internal/traceverify/budget.go`（算术）＋ `cmd/trace-verify decode-bench`（读数）＋ 计划 3 的 H15 / 本计划的 H5 / H10。
 - **状态**：**未触发（也还没有读数）** —— 本轮只有算术面（`PerReadPeakBytes() = 512 + 64 + 64 = 640 MiB`、`MaxConcurrent(2 GiB, 300 MiB, 256 MiB) = 2`），**这两个数字不是结论**。⇒ 停止点保持**挂起**，判定与回填都在 U2 之后。
+
+### U6　风险 R1 —— 停止点 1.5 未执行 ⇒ R1 的量化仍挂起（**唯一可能失控的路径**）
+
+- **判据**：隔离旧定时器（`isolate-old-trace-archive.sh --confirm`）会让 `/datalog` 在隔离窗口内**没有任何 retention**（`mask trace-archive.timer`）⇒ **`--confirm` 之前必须先过停止点 1.5 的量化门**：在生产机对 `/datalog` 取**两次 `du -sb`（间隔 ≥ 24h）**，外推增长速率与「按当前容量还能撑几天」，并据此在 R1 的三个选项（**mask / 保留清理 / 另设 unit**）里**显式选定一个**写进上线记录。
+- **在册路径**：`deploy/systemd/isolate-old-trace-archive.sh`（默认 dry-run ＋ 删除谓词审查 ＋ 命中新树 exit 3）＋ `deploy/systemd/restore-old-trace-archive.sh`（回滚）；契约面 = `tests/deploy/*` ＋ `p4-task-5-{isolate,restore}` 共 **5** 条断言红；次序（任务 6 挂载核对 → 任务 5 隔离）写在 `deploy/blue-green/README.md`，由 `p4-task-7-bluegreen` 钉住。
+- **待执行项**：① 两次 `du -sb /datalog`（间隔 ≥ 24h）＋ 外推速率与可撑天数；② 选定 R1 选项并写理由（**必须在 `--confirm` 之前**）；③ 隔离脚本**真机执行**（dry-run → `--confirm`）＋ 回滚验证；④ 隔离窗口内 `/datalog` 的容量水位观察（无 retention 的直接后果）。
+- **为什么当前不可执行（不是「跳过」）**：本机没有生产宿主、没有 `/datalog` ⇒ 两次采样（间隔 ≥ 24h）只能在生产机做。**可执行面已交付、量化门未过** —— 这不是「本机跑不了就不需要跑」（E64）。
+- **为什么它单列（本节的目的）**：R1 是**唯一可能失控的路径** —— 其余未关闭项要么是「读数未取」（U1/U2/U3、R2 的执行后 `df -h`），要么是「纵深防御未验证」（`RequiresMountsFor=` 在手工 `umount` 时是否可靠）。只有 R1 的量化门**不过就可能真的把盘写满**。它已记载在交付报告 **§8（「R1 未关闭」，评审时点行号 `:198`）**、**§13 第 1 条（`§13.1`，评审时点行号 `:350`）** 与 **§4 的 D65**；本节把它**收进交接清单**，使「未关闭验收项」与报告逐条对应、自洽可读。
+  **（行号口径）**：上面两个行号是**评审时点**的值，**不随本计划的后续编辑维护** —— 引用一律以**节号**（`§8` / `§13` 第 1 条 / `§4 D65`）为准（避免自引用行号级联）。
+- **回填目标**：交付报告 §8 的 R1 表（两次 `du -sb` 读数 ＋ 选定选项与理由）＋ 上线记录；并把对应的宿主挂起登记改为「已执行（附读数）」。

@@ -1,0 +1,8 @@
+定位校验（基于 HEAD:internal/tracesealer/runner.go，sha256=dcf19c8e0491ff90）
+OK  m01_预警阈值改成100%
+OK  m02_每行字节数取成最大值
+OK  m03_每行字节数分母加一
+OK  m04_读不出footer当成1行
+OK  m05_非法分母守卫摘掉0行
+全部 5 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

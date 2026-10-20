@@ -1,0 +1,108 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = d1bc8e8d46b5f3c41a6f7a4bd968c8ef1463c9e1
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 2f71a22c5baace396a68ff3a0325aeb32af157d94d89c636411b0167a415802e  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-8-runsh.py)
+名字清单 sha256          = d4b2f720bd791d3ee023beb19967bc1cafb0eaa99a8383cd0db198a52fc98e69  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-8-runsh-names.txt)
+名字清单条数             = 3
+清单推导命令             = grep -hE '^func TestA3(RunScript|ScratchPrepare)' tests/deploy/trace_a3_compose_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 3 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-hd1i0hsk
+被测文件 sha256          = c9aca492a69ab6e75b6bed8837024690ef75737cd79ed853189d618b9b3cce92  deploy/verify/trace-a3/run.sh
+测试文件 sha256          = 036dce9bc18421c897f7b368c74c610a909f051171367ca96e8d87cab5fba5aa  tests/deploy/trace_a3_compose_test.go
+测试文件 sha256          = 8121fdce81c2d3ba4257fbb7b4c3c570e56effc318e4e979c272a302097b8416  tests/deploy/trace_bluegreen_runbook_test.go
+测试文件 sha256          = 9ba416fe158cb34c2088239aea330bad631d8a388024cd49eb322b30881e0ccb  tests/deploy/trace_build_contract_test.go
+测试文件 sha256          = e9540b2e80c284d53cf6525b749117ed26a469d035951924b88215ba2ce8360b  tests/deploy/trace_compose_mount_test.go
+测试文件 sha256          = 12b7a0726ea1bbb8c058bdafc2e50aa98b887b6450270ebe715a3a290a584862  tests/deploy/trace_isolate_script_test.go
+测试文件 sha256          = 28418e7dcc2a4654061af42af882529b743d74894ab952ba96f6c4abaf17214a  tests/deploy/trace_sealer_unit_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] run.sh必须开严格模式
+      文件=deploy/verify/trace-a3/run.sh  正则=set -euo pipefail  期望=present  实际=命中 'set -euo pipefail'
+      理由=计划任务 8 步骤 4：中途失败必须**立刻**停下来交给 `trap` 清理（不许带错继续）。**存在性**要求 ⇒ 静态检查。
+- [PASS] run.sh不得递归删除
+      文件=deploy/verify/trace-a3/run.sh  正则=(?m)^(?!\s*(?://|#)).*\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b  期望=absent  实际=未命中
+      理由=删除面必须**有界**：镜像由 `scratch-cleanup` 的 `rm -f <具体文件>` 删、挂载点由 `rmdir` 删（非空即失败）。**不存在性**要求 ⇒ 静态检查；正则刻意**跳过注释行**（E68：注释里说明「为什么不用它」是合法的）。
+- [PASS] run.sh必须打印每步命令
+      文件=deploy/verify/trace-a3/run.sh  正则=run\(\) \{  期望=present  实际=命中 'run() {'
+      理由=A3 的证据是「命令 + 真实输出」的逐条抄录 ⇒ 每一步都必须经 `run()` 打印。**存在性**要求 ⇒ 静态检查。
+- [PASS] run.sh必须给出停止点
+      文件=deploy/verify/trace-a3/run.sh  正则=⛔ 停止点  期望=present  实际=命中 '⛔ 停止点'
+      理由=计划任务 8 步骤 4 反复强调「只能在测试环境跑」⇒ 脚本必须在关键节点显式停手让操作者确认环境。**存在性**要求 ⇒ 静态检查。
+- [PASS] run.sh必须复核设备号
+      文件=deploy/verify/trace-a3/run.sh  正则=stat -c '%d %n'  期望=present  实际=命中 "stat -c '%d %n'"
+      理由=步骤 2 的复核：归档根所在设备号必须与 `/`、`/datalog` **两两不同**（这是护栏之外的第二道人工可见证据）。**存在性**要求 ⇒ 静态检查。
+- [PASS] run.sh必须含归档根复核
+      文件=deploy/verify/trace-a3/run.sh  正则=findmnt -T /srv/trace-a3/trace-archive-v4  期望=present  实际=命中 'findmnt -T /srv/trace-a3/trace-archive-v4'
+      理由=步骤 2 计划原文：复核归档根确实落在回环 FS 上（TARGET 必须是 `/srv/trace-a3`）。**存在性**要求 ⇒ 静态检查（次序由两个用例的 `indexOf` 断言承载）。
+- [PASS] run.sh必须起隔离实例并等健康
+      文件=deploy/verify/trace-a3/run.sh  正则=up -d --wait  期望=present  实际=命中 'up -d --wait'
+      理由=步骤 3 计划原文：起隔离实例（只跑 gateway）。**存在性**要求 ⇒ 静态检查。
+- [PASS] run.sh必须真正填盘
+      文件=deploy/verify/trace-a3/run.sh  正则=fallocate -l "\$FILL_SIZE" "\$FILL"  期望=present  实际=命中 'fallocate -l "$FILL_SIZE" "$FILL"'
+      理由=步骤 5 计划原文：先 `fallocate -l 980M` 把 1 GiB 的文件系统占到只剩几十 MB，再靠写入吃掉最后的空间 —— 这是「真实 ENOSPC」的承重步骤。**存在性**要求 ⇒ 静态检查。
+- [PASS] run.sh必须观察闩锁
+      文件=deploy/verify/trace-a3/run.sh  正则=\[trace-body\] ERROR  期望=present  实际=命中 '[trace-body] ERROR'
+      理由=步骤 6 计划原文：`docker logs … | grep '[trace-body] ERROR'`（期望**只报一次**）。**存在性**要求 ⇒ 静态检查。
+- [PASS] run.sh必须观察降级
+      文件=deploy/verify/trace-a3/run.sh  正则=body_missing IS TRUE  期望=present  实际=命中 'body_missing IS TRUE'
+      理由=步骤 7 计划原文：`SELECT count(*) … WHERE body_missing = true AND body_ref_part IS NULL` 与总数对比。**存在性**要求 ⇒ 静态检查。
+- [PASS] run.sh必须观察恢复
+      文件=deploy/verify/trace-a3/run.sh  正则=正文落盘已恢复  期望=present  实际=命中 '正文落盘已恢复'
+      理由=步骤 9 计划原文：删掉 `fill.bin`、等 1–2 个 tick、看闩锁日志出现「已恢复」（`internal/gateway/observability/trace_event.go:356` 的真实措辞）。**存在性**要求 ⇒ 静态检查。
+- [PASS] run.sh必须做A7撞锁
+      文件=deploy/verify/trace-a3/run.sh  正则=已有另一个 sealer 持有锁  期望=present  实际=命中 '已有另一个 sealer 持有锁'
+      理由=步骤 10 计划原文：第二个 `--once` 必须以退出码 1 失败且 stderr 含该消息（措辞取自 `internal/tracesealer/lock.go:11` 的 `ErrAnotherSealerRunning`）。**存在性**要求 ⇒ 静态检查。
+- [PASS] 工具源里护栏必须在mount之后
+      文件=cmd/trace-verify/main.go  正则=(?s)"mount", "-o", "loop".*?traceverify\.GuardScratchTarget\(  期望=present  实际=命中 '"mount", "-o", "loop", *image, *mnt); err != nil {\n\t\treturn err\n\t}\n\n\t// ⑥ ⛔ 设备号护栏必须在**挂载成功之后**：挂载前 `*mnt` 只是宿主根 FS 上的普通\n\t// 目录（与 `/` 同设备）⇒ 校验必然误拒；挂载后护栏看到的才是回环 ext4 的设备号。\n\tif err := traceverify.GuardScratchTarget('
+      理由=任务 8 步骤 3 的次序（并见步骤 6 的注）：护栏必须在 `mount -o loop` **成功之后**调用（挂载前校验必然误拒）。**次序存在性**要求 ⇒ 静态检查；同一批语义由 `TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot` 承载。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| `trap` 清理必须在**第一个破坏性步骤之前**注册（中途失败也要卸载/删镜像） | `m01_删掉trap清理` | — | 杀手 = TestA3RunScriptAlwaysCleansUp（trap 位置 < `scratch-prepare` 位置；并钉住 cleanup 的两条收尾与两条复核）。 |
+| 护栏调用必须在「复核归档根 → 起实例 → 填盘」之前（且不得被删掉） | `m02_删掉护栏调用` | — | 杀手 = TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep（护栏行必须存在 + 四条 `indexOf` 次序）；**连带**：同一条变异也打红 TestA3RunScriptAlwaysCleansUp —— 该用例以 `scratch-prepare` 行的位置作为「第一个破坏性步骤」的锚点，锚点被删就无从比较先后 ⇒ 如实登记，不隐瞒连带（表里 m02 的 FAIL=2）。 |
+| 护栏调用必须带 `--confirm`（破坏性准备动作要显式确认） | `m03_摘掉confirm` | — | 杀手 = 同一条用例的 `Contains(…--confirm)` 断言。 |
+| 工具源：护栏必须在 `mount -o loop` **之后**调用（挂载前校验必然误拒） | — | `工具源里护栏必须在mount之后` | **次序存在性**要求 ⇒ 静态检查；行为/次序由在册用例 `TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot` 承载。 |
+| 严格模式（`set -euo pipefail`）＋ 每一步都打印真实命令（`run()`） | — | `run.sh必须开严格模式`, `run.sh必须打印每步命令` | **存在性**要求 ⇒ 静态检查。 |
+| 关键节点必须有「停止点」，由操作者确认只在测试环境跑 | — | `run.sh必须给出停止点` | **存在性**要求 ⇒ 静态检查。 |
+| 删除面不得递归（镜像 `rm -f`、挂载点 `rmdir`） | — | `run.sh不得递归删除` | **不存在性**要求 ⇒ 静态检查（`rm -rf` 在 run.sh 里不得出现）。 |
+| 步骤 2：复核归档根落在回环 FS 上（`findmnt` + 设备号两两不同） | — | `run.sh必须含归档根复核`, `run.sh必须复核设备号` | **存在性**要求 ⇒ 静态检查；次序由两个用例承载。 |
+| 步骤 3：起隔离实例并等健康（`up -d --wait`） | — | `run.sh必须起隔离实例并等健康` | **存在性**要求 ⇒ 静态检查；被起的编排本身由 `p4-task-8-compose.py` 钉住。 |
+| 步骤 5：先 `fallocate` 占盘再靠写入吃满（真实 ENOSPC） | — | `run.sh必须真正填盘` | **存在性**要求 ⇒ 静态检查。 |
+| 步骤 6/7/9：观察闩锁（恰好一条 ERROR）、降级（`body_missing`）、恢复（「已恢复」） | — | `run.sh必须观察闩锁`, `run.sh必须观察降级`, `run.sh必须观察恢复` | **存在性**要求 ⇒ 静态检查（读数本身属 A3 宿主的运行期证据，见 COVERAGE_GAPS）。 |
+| 步骤 10：A7 进程级撞锁（第二个 `--once` 退出码 1 + 撞锁消息） | — | `run.sh必须做A7撞锁` | **存在性**要求 ⇒ 静态检查。 |
+
+计划要求总数 = 12；引用到的变异 = 3；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=3 ran=3 diff=0 PASS=3 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_删掉trap清理 | 红 | names=3 ran=3 diff=0 PASS=2 SKIP=0 FAIL=1 | TestA3RunScriptAlwaysCleansUp |
+| m02_删掉护栏调用 | 红 | names=3 ran=3 diff=0 PASS=1 SKIP=0 FAIL=2 | TestA3RunScriptAlwaysCleansUp, TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep |
+| m03_摘掉confirm | 红 | names=3 ran=3 diff=0 PASS=2 SKIP=0 FAIL=1 | TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 3
+集合里的变异总数          = 3（本次运行 == 全集 ✓）
+断言支撑的红             = 3 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 3 = 3 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

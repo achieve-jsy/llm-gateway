@@ -1,0 +1,31 @@
+### E76 build/vet/test evidence (HEAD=306977cd4f6246c72d27bea858c4cb5fd9f7913c)
+生成时点：2026-10-09T05:05:30Z
+口径：E76 对 internal/** 与 cmd/** 零改动（纯文本/集合改动）⇒ 本段只做回归确认：
+      build 与聚焦 vet/测试必须与 E76 之前一致地绿。
+
+## ① go build ./internal/... ./cmd/...
+build_exit=0
+
+## ② go vet 聚焦包
+$ go vet ./internal/tracesealer/ ./internal/traceverify/ ./internal/tracearchive/ ./tests/tracesealer/ ./tests/traceverify/ ./tests/deploy/
+vet_exit=0
+
+## ③ go test ./tests/tracesealer/... ./tests/traceverify/... ./tests/deploy/... -count=1 -v
+focused_test_exit=0
+顶层 PASS = 153
+顶层 FAIL = 0
+SKIP      = 0
+包级 ok   = 3
+包级 FAIL = 0
+no tests to run = 0
+
+## ④ go test ./internal/tracearchive/ -count=1 -v（冻结包）
+tracearchive_test_exit=0
+顶层 PASS = 31
+顶层 FAIL = 0
+
+## ⑤ gofmt -l 聚焦目录
+$ gofmt -l internal/tracesealer internal/traceverify tests/tracesealer tests/traceverify tests/deploy
+gofmt_exit=0（无输出 = 空）
+
+build_vet_test_exit=0

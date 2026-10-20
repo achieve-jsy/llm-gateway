@@ -1,0 +1,43 @@
+### E76② 的「改坏 → 转红 → 还原」探针（HEAD=21df604a；E62：断言必须能失败）
+
+还原口径：**不**用 git checkout / reset / stash（全局约束禁止）—— 原字节先 cp 到 /tmp，改完
+          写回原文件后**复算 sha256** 并核 git status（footer.go 不在脏文件列表里）。
+在册用例（点名杀手）= TestFooterRowCountOnHandBuiltFooter
+  tests/tracesealer/footer_test.go:75（函数 TestFooterRowCountOnHandBuiltFooter）/
+    :81 writeArtifactWithFooter(t, path, 4096, 4242) → :65 buildFooter(4242, 4096-32, 0) ⇒ trailer_len=0 /
+    :85 断言 4242【E76⑤ 订正：原写「:79（函数）/ :81 buildFooter(...)」不准 —— 函数在 :75，:81 是调用点】
+被改目标 = internal/tracesealer/footer.go
+改前 sha256 = fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15（= 权威表绑定的同一 sha）
+
+改法（= 集合 m09 的操作，逐字）：("sub", "b[18:22]", "b[14:18]")
+  即第 107 行 rowCount := int32(binary.BigEndian.Uint32(b[18:22])) → b[14:18]
+改坏后 sha256 = a456018d3291a674b2aeec118aaf60f552a7d9b8d3a00ca23071b89aab75cc3e
+行数：改前 121 → 改后 121（**同行就地替换 ⇒ 无行号位移**）；改动后行号 = **107**
+改动后第 107 行逐字 = '	rowCount := int32(binary.BigEndian.Uint32(b[14:18]))'
+
+① 单测口径 go test ./tests/tracesealer/ -count=1 -v -run '^TestFooterRowCountOnHandBuiltFooter$'
+   退出码 = 1（必须非 0）
+   判定行：--- FAIL: TestFooterRowCountOnHandBuiltFooter (0.00s)
+   断言报文（逐字）：
+         footer_test.go:85: 
+             	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/tracesealer/footer_test.go:85
+             	            	expected: 4242
+             	            	actual  : 0
+             	Messages:   	解析出的行数必须就是 footer 里写进去的 row_count
+② SKIP 行数 = 0（必须为 0：改坏必须 FAIL，不许 SKIP —— E62）
+③ 编译红 = 否（无 'build failed/cannot use/undefined:/syntax error' 行）⇒ **断言红**，非编译红
+④ 还原：internal/tracesealer/footer.go sha256 = fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15
+        （与改前一致 = True）；git status --porcelain 只列本轮新落盘的两份证据文件，footer.go 不在其中
+
+⑤ 包级口径（整集合清单，8 条顶层用例；go test -overlay 打补丁跑，不动工作树）：
+   names=8 ran=8 diff=0 PASS=6 SKIP=0 FAIL=2  ⇒ **断言红**
+   杀死的用例 = TestFooterRowCountOnHandBuiltFooter（点名杀手）, TestFooterRejectsNegativeRowCount
+   完整证据 = p4-task-10-footer-authoritative-at-21df604a.txt 的 m09 行
+
+## 结论
+  · m09（b[18:22] → b[14:18]）让点名杀手 TestFooterRowCountOnHandBuiltFooter 在第一处解析断言转红：
+    expected 4242 / actual 0（reader 读到了 trailer_len=0）。
+  · 它是**断言红**，不是编译红；SKIP = 0；还原后 sha256 与改前逐字节一致。
+  · 探针只改 footer.go 一行、且同行替换 ⇒ 行数不变、改动后行号 = 107（E62 要求标「改动后行号」）。
+
+probe_exit=0

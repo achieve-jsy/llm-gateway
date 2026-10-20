@@ -1,0 +1,7 @@
+定位校验（基于 HEAD:internal/tracesealer/runner.go，sha256=dd80de132255fafb）
+OK  m06_装配不取锁
+OK  m07_先建根目录再取锁
+OK  m08_Close不释放锁
+OK  m09_装配失败不释放锁
+全部 4 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

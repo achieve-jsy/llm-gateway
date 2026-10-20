@@ -1,0 +1,28 @@
+## 任务 6 步骤 4：改动后全绿证据
+git rev-parse HEAD = 35f9d42af334633c29076eda97787067744ecad6
+git status --porcelain = 
+sha256 = 4de889fa98e4778928e2fa10f93f7ad54a91575e1842dfd9c0c62f82dd73e7f8  deploy/blue-green/docker-compose.blue.yml
+sha256 = 048ca0a7ddad893ad85259f57df549771c0fd19f8d5448e5166e8400630011e0  deploy/blue-green/docker-compose.green.yml
+sha256 = 5edffa954c90e5f479ed78fd9b84065ce68fe35f18e299569f6b1e0cdffad5e0  docker-compose.yml
+sha256 = e9540b2e80c284d53cf6525b749117ed26a469d035951924b88215ba2ce8360b  tests/deploy/trace_compose_mount_test.go
+命令 = go test ./tests/deploy/ -run 'TestCompose' -count=1 -v
+
+=== RUN   TestComposeGatewayMountsDatalogReadWrite
+--- PASS: TestComposeGatewayMountsDatalogReadWrite (0.00s)
+=== RUN   TestComposeControlPlaneMountsDatalogReadOnly
+--- PASS: TestComposeControlPlaneMountsDatalogReadOnly (0.00s)
+=== RUN   TestComposeBluePinsInstBlue
+--- PASS: TestComposeBluePinsInstBlue (0.00s)
+=== RUN   TestComposeGreenPinsInstGreen
+--- PASS: TestComposeGreenPinsInstGreen (0.00s)
+=== RUN   TestComposeColorFilesCarrySpecTraceBodyValues
+--- PASS: TestComposeColorFilesCarrySpecTraceBodyValues (0.00s)
+=== RUN   TestComposeRootComposeDoesNotEnableTraceBody
+--- PASS: TestComposeRootComposeDoesNotEnableTraceBody (0.00s)
+=== RUN   TestComposeTraceBodyRootParentIsMounted
+--- PASS: TestComposeTraceBodyRootParentIsMounted (0.00s)
+=== RUN   TestComposeNeverCarriesSealIntervalKey
+--- PASS: TestComposeNeverCarriesSealIntervalKey (0.00s)
+PASS
+ok  	github.com/example/llm-gateway/tests/deploy	0.007s
+test_exit=0

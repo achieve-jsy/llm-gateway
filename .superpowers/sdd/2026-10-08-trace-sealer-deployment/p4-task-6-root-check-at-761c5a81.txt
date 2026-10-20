@@ -1,0 +1,5 @@
+定位校验（基于 HEAD:docker-compose.yml，sha256=7dd281034ceba32d）
+OK  m06_根编排插入生效ROOT
+OK  m08_删掉根cp挂载
+全部 2 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

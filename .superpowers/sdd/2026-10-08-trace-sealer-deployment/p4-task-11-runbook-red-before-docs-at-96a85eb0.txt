@@ -1,0 +1,65 @@
+=== RUN   TestRunbookDocumentsMountLossPrecondition
+    trace_runbook_test.go:70: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:56
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:70
+        	Error:      	"-1" is not greater than or equal to "0"
+        	Test:       	TestRunbookDocumentsMountLossPrecondition
+        	Messages:   	docs/deployment.md：必须存在「调用链正文（`/datalog`）运行手册」一节（任务 11 步骤 3 的交付物）
+--- FAIL: TestRunbookDocumentsMountLossPrecondition (0.00s)
+=== RUN   TestRunbookDocumentsMountLossLatchesWithinOneTick
+    trace_runbook_test.go:105: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:56
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:105
+        	Error:      	"-1" is not greater than or equal to "0"
+        	Test:       	TestRunbookDocumentsMountLossLatchesWithinOneTick
+        	Messages:   	docs/deployment.md：必须存在「调用链正文（`/datalog`）运行手册」一节（任务 11 步骤 3 的交付物）
+--- FAIL: TestRunbookDocumentsMountLossLatchesWithinOneTick (0.00s)
+=== RUN   TestRunbookDocumentsDiskSwapNeedsGatewayRestart
+    trace_runbook_test.go:153: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:56
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:153
+        	Error:      	"-1" is not greater than or equal to "0"
+        	Test:       	TestRunbookDocumentsDiskSwapNeedsGatewayRestart
+        	Messages:   	docs/deployment.md：必须存在「调用链正文（`/datalog`）运行手册」一节（任务 11 步骤 3 的交付物）
+--- FAIL: TestRunbookDocumentsDiskSwapNeedsGatewayRestart (0.00s)
+=== RUN   TestRunbookDocumentsShutdownSixSecondBound
+    trace_runbook_test.go:172: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:56
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:172
+        	Error:      	"-1" is not greater than or equal to "0"
+        	Test:       	TestRunbookDocumentsShutdownSixSecondBound
+        	Messages:   	docs/deployment.md：必须存在「调用链正文（`/datalog`）运行手册」一节（任务 11 步骤 3 的交付物）
+--- FAIL: TestRunbookDocumentsShutdownSixSecondBound (0.00s)
+=== RUN   TestRunbookDocumentsFeatureOffIsByteIdentical
+    trace_runbook_test.go:193: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:56
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:193
+        	Error:      	"-1" is not greater than or equal to "0"
+        	Test:       	TestRunbookDocumentsFeatureOffIsByteIdentical
+        	Messages:   	docs/deployment.md：必须存在「调用链正文（`/datalog`）运行手册」一节（任务 11 步骤 3 的交付物）
+--- FAIL: TestRunbookDocumentsFeatureOffIsByteIdentical (0.00s)
+=== RUN   TestRunbookDocumentsRetentionAndSpaceBudget
+    trace_runbook_test.go:210: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:56
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:210
+        	Error:      	"-1" is not greater than or equal to "0"
+        	Test:       	TestRunbookDocumentsRetentionAndSpaceBudget
+        	Messages:   	docs/deployment.md：必须存在「调用链正文（`/datalog`）运行手册」一节（任务 11 步骤 3 的交付物）
+--- FAIL: TestRunbookDocumentsRetentionAndSpaceBudget (0.00s)
+=== RUN   TestRunbookDocumentsSealerHeartbeatAndPermanentFailure
+    trace_runbook_test.go:229: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:56
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_runbook_test.go:229
+        	Error:      	"-1" is not greater than or equal to "0"
+        	Test:       	TestRunbookDocumentsSealerHeartbeatAndPermanentFailure
+        	Messages:   	docs/deployment.md：必须存在「调用链正文（`/datalog`）运行手册」一节（任务 11 步骤 3 的交付物）
+--- FAIL: TestRunbookDocumentsSealerHeartbeatAndPermanentFailure (0.00s)
+=== RUN   TestRunbookNeverMentionsSealInterval
+--- PASS: TestRunbookNeverMentionsSealInterval (0.00s)
+FAIL
+FAIL	github.com/example/llm-gateway/tests/deploy	0.007s
+FAIL
+test_exit=1
+--- 摘要（本节由执行者追加，原文见上）---
+7 FAIL / 1 PASS（节不存在 ⇒ 断言红）；唯一 PASS = TestRunbookNeverMentionsSealInterval（absent 类，节不存在时天然为真，其可失败性由 m05 承载）
+head=96a85eb0

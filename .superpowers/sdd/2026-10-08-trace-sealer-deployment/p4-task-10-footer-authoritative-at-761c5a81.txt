@@ -1,0 +1,82 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = 761c5a81ce1aece0ab6b66cf73a1ff32aeed7900
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 49a04f7f328e04abf0f7b3f05c779ae99141e272af7771115db53fed720777cc  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-10-footer.py)
+名字清单 sha256          = 2b9b395f3dd5162f4d0d31c682f6e9a7025899396c3421f0e71cf8b813554d20  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-10-footer-names.txt)
+名字清单条数             = 8
+清单推导命令             = grep -h '^func Test' tests/tracesealer/footer_test.go tests/tracesealer/footer_artifact_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 8 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-080hmjhi
+被测文件 sha256          = fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15  internal/tracesealer/footer.go
+测试文件 sha256          = 22f21e27b31f645d06c288ec796b38da0c8a2c8f12fb3165b8cff81a8abf0406  tests/tracesealer/alert_test.go
+测试文件 sha256          = 0e36d92d813eb0af6d4caa658c1bd0fb235be03362bf690f4f54afed5be56515  tests/tracesealer/classify_test.go
+测试文件 sha256          = 6ec687db153fbdebe474d5c9280a68f0d21f28cb2069b52d607438b748a178b5  tests/tracesealer/concurrent_test.go
+测试文件 sha256          = e81e8605d8acb8a83e6399015e5e9bd258d2e7d7685c08b06c2fc13e436ca5e1  tests/tracesealer/constants_contract_test.go
+测试文件 sha256          = f3bfdacf089c1cf0acf0706d54e8a58de454414f2e99880b852ad508152d077f  tests/tracesealer/exit_test.go
+测试文件 sha256          = b9af6a1d0fe826f5f6a4c19eb341aa091ee57d510984ab033503c00fdea1edab  tests/tracesealer/footer_artifact_test.go
+测试文件 sha256          = f9b5169bad2128e746c00206d68654e27e393464b3fccb281af698540d12373a  tests/tracesealer/footer_roundtrip_test.go
+测试文件 sha256          = 684ac9518781b94d8f2cea29c79fc5ece0c216359ab5871c0da56286719b1a03  tests/tracesealer/footer_test.go
+测试文件 sha256          = 7bd98c1223b58280f9a6b88ad8561f7d5812e6dd7ae7b2f3d2aeab578f91137f  tests/tracesealer/lock_test.go
+测试文件 sha256          = 142965aca3858955488752e512f1f418ece44e129b7d2b384e81b0bba3a72099  tests/tracesealer/loop_test.go
+测试文件 sha256          = 11483eb2f8738d27cf52039f7b7a2c3637a2197d7af6811383a20737271fc264  tests/tracesealer/observability_test.go
+测试文件 sha256          = 64d07b52eb0b863dfa5d417471bf3ab3b83b79f8f16f8a3e2c76cc3714abe7c1  tests/tracesealer/options_test.go
+测试文件 sha256          = 451ce4de0d1e563c1548e9ff85ea7eb03b6d68f1d113938997fb9c6e9cb1c58c  tests/tracesealer/rootguard_test.go
+测试文件 sha256          = af3af343207b05f43948abe79a136be3795bea101259949e7e46dedd4e677c67  tests/tracesealer/round_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] 镜像长度契约用例在册
+      文件=tests/tracesealer/constants_contract_test.go  正则=func TestSealerFooterSizeMatchesFrozenPackage\(  期望=present  实际=命中 'func TestSealerFooterSizeMatchesFrozenPackage('
+      理由=`FooterSize` 是唯一一个冻结包**已导出**的镜像常量 ⇒ 「镜像 == 冻结包」这条要求有一条不需要读源码的强证据用例。它不在本集合的清单里（在 p4-task-10-contract 的清单里）⇒ 存在性由静态检查钉住。
+- [PASS] 真实产物往返测在册
+      文件=tests/tracesealer/footer_roundtrip_test.go  正则=func TestFooterRoundTripOnRealArtifact\(  期望=present  实际=命中 'func TestFooterRoundTripOnRealArtifact('
+      理由=**产出方向**的人工复核项（需要本机 zstd：当场用冻结 Sealer 封一块）。它**仍未进任何 MANIFEST_FILES**（缺 zstd 的机器上会 Skip ⇒ 塞进清单会让整张表判「证据无效」）⇒ 存在性由静态检查钉住。**E73① 之后**：它**不再**是「冻结包真按此布局写」这条行为要求的唯一承载者 —— 该要求由在册用例 `TestFooterParsesCommittedRealArtifact`（`footer_artifact_test.go`，已提交的真实产物 fixture、不依赖 zstd）承载，故本条不再构成 E62 缺口。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| RowCount 只读产物末尾的固定长度 footer，返回其 row_count（偏移必须精确到字节） | `m01_footer长度32改24`, `m02_读取偏移差一个字节` | — | **行为**要求 ⇒ 在册用例 `TestFooterRowCountOnHandBuiltFooter`（按冻结布局手工拼 32 字节 + 显式断言 FooterSize == 32）。m01 会让常量断言与解析断言至少一条转红；m02 让 magic 检查红。 |
+| 文件不足 32 字节 ⇒ 报错（不是返回 0） | `m03_短文件返回0而不是错误` | — | **行为**要求 ⇒ 在册用例 `TestFooterRejectsShortFile`（0 / 1 / 31 三档，断言 Error + ErrorIs(ErrFooterCorrupt) + 返回零值）。 |
+| footer 与文件不相容（坏 magic / 未知版本 / 负 row_count / trailer 未紧邻 footer）⇒ 报错 | `m04_magic判据空操作`, `m05_版本判据空操作`, `m06_负行数判据空操作`, `m07_trailer紧邻判据空操作` | — | **行为**要求 ⇒ 在册用例 `TestFooterRejectsBadMagic` / `TestFooterRejectsUnknownFormatVersion` / `TestFooterRejectsNegativeRowCount` / `TestFooterRejectsTrailerNotAdjacentFooter`，**每条判据各有一个点名杀手**（各负例产物只违反一条判据，见文件头「前置的用例侧修正」）。 |
+| 「这个 part 还没封」（文件不存在）与「产物损坏」必须分开：前者不得被折成 0 行的读数 | `m08_文件不存在返回0而不是错误` | — | **行为**要求 ⇒ 在册用例 `TestFooterRejectsMissingFile`（断言不是 ErrFooterCorrupt、且返回零值）。 |
+| 镜像的 footer 长度必须等于冻结包已导出的 tracearchive.FooterSize（跨包镜像不漂移） | — | `镜像长度契约用例在册`, `真实产物往返测在册` | **行为**要求（跨包常量一致性）⇒ 在册用例 `TestSealerFooterSizeMatchesFrozenPackage`（在 `tests/tracesealer/constants_contract_test.go`，由集合 `p4-task-10-contract` 的清单承载）；另有**产出方向**的人工复核项 `TestFooterRoundTripOnRealArtifact`（**仍未进任何 MANIFEST_FILES**，需 zstd）。两条用例的**存在性**分别由同名静态检查钉住。 |
+| **冻结包真按此布局写**（E62 / E73① 的修法）：在**已提交的真实产物**上，镜像 `RowCount` 读出封块时的行数，且冻结读侧 `GetBody` 逐字节取回每一行原文 | `m01_footer长度32改24`, `m02_读取偏移差一个字节` | — | **行为**要求 ⇒ 在册用例 `TestFooterParsesCommittedRealArtifact`（`footer_artifact_test.go`，**在名字清单里**，每次运行都真的执行、不依赖 zstd）。它同时钉住 fixture 的 sha256（换掉字节会先红）与越界行号报 `ErrNotArchived`。m01/m02 改坏镜像的偏移/长度 ⇒ 该用例的 `RowCount` 断言转红（实测见权威表的「杀死的用例」栏：两条变异都把本用例列进 FAIL 集）。 |
+
+计划要求总数 = 6；引用到的变异 = 8；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=8 ran=8 diff=0 PASS=8 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_footer长度32改24 | 红 | names=8 ran=8 diff=0 PASS=6 SKIP=0 FAIL=2 | TestFooterParsesCommittedRealArtifact, TestFooterRowCountOnHandBuiltFooter |
+| m02_读取偏移差一个字节 | 红 | names=8 ran=8 diff=0 PASS=6 SKIP=0 FAIL=2 | TestFooterParsesCommittedRealArtifact, TestFooterRowCountOnHandBuiltFooter |
+| m03_短文件返回0而不是错误 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestFooterRejectsShortFile |
+| m04_magic判据空操作 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestFooterRejectsBadMagic |
+| m05_版本判据空操作 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestFooterRejectsUnknownFormatVersion |
+| m06_负行数判据空操作 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestFooterRejectsNegativeRowCount |
+| m07_trailer紧邻判据空操作 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestFooterRejectsTrailerNotAdjacentFooter |
+| m08_文件不存在返回0而不是错误 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestFooterRejectsMissingFile |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 8
+集合里的变异总数          = 8（本次运行 == 全集 ✓）
+断言支撑的红             = 8 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 8 = 8 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

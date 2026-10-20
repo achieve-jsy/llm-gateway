@@ -1,0 +1,17 @@
+定位校验（基于 HEAD:deploy/systemd/trace-sealer.service，sha256=6b64100976143211）
+OK  m01_常驻改oneshot
+OK  m02_失败不重启
+OK  m03_zstd版本漂移
+OK  m04_zstd走PATH
+OK  m05_min-age过小
+OK  m06_挂载依赖错位
+OK  m07_可写面放大到根
+OK  m08_取消ProtectSystem
+OK  m09_去掉内存上限
+OK  m10_改syslog标识
+OK  m11_塞入无效配置键
+OK  m12_锁文件挪出root
+OK  m13_zstd级别改小
+OK  m14_zstd窗口改小
+全部 14 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

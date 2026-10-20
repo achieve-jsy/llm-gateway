@@ -1,0 +1,3 @@
+TestNewRunnerDefaultsMinAgeToThreeHours
+TestNewRunnerRejectsMinAgeAtOrBelowGatewayRollUpperBound
+TestNewRunnerRejectsNonPowerOfTwoWindow

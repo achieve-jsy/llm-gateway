@@ -1,0 +1,24 @@
+# 任务 8 的构建 / vet / 脚本语法（HEAD=��命令 + 真实输出 + 退出码）
+
+$ bash -n deploy/verify/trace-a3/run.sh
+bashn_exit=0
+
+$ go build ./internal/... ./cmd/...
+build_exit=0
+
+$ go build -o /tmp/p4-task-8-verifybin ./cmd/trace-verify
+build_verify_exit=0
+
+$ go vet ./internal/traceverify/ ./cmd/trace-verify/ ./tests/traceverify/ ./tests/deploy/
+vet_exit=0
+
+$ go test ./tests/traceverify/ -count=1
+ok  	github.com/example/llm-gateway/tests/traceverify	0.022s
+traceverify_test_exit=0
+
+$ go test ./tests/deploy/ -count=1
+ok  	github.com/example/llm-gateway/tests/deploy	0.010s
+deploy_test_exit=0
+
+$ git status --porcelain（生成本文件时工作树必须干净）
+porcelain_lines=0

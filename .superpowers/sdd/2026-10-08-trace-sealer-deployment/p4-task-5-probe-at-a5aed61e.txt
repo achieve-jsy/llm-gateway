@@ -1,0 +1,67 @@
+== 探针克隆 = /tmp/t5probe-a5aed61e
+== 克隆 HEAD = edec5ccf（工作树脏行数 = 0）==
+
+== 真实工作树的 5 个产物 sha256（探针**前**；探针全程只动克隆，不动工作树）==
+6b64100976143211657f72f487ba33e28524259875cb278c8c58d78be5738ca2  /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/systemd/trace-sealer.service
+3be89f11ef11ce3d21909cef85d79d1d7aefc307f019381485da95c59e72aba0  /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/systemd/isolate-old-trace-archive.sh
+50ea35c1ce5e6e98036a58a28ae7799dcd19513ef53781e43327380e09b8c57c  /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/systemd/restore-old-trace-archive.sh
+c1a1bbab40512e148fae98d0660d8608ce0fe1daa7261e6db09a0021880c3ec1  /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/Makefile
+d6797599470656c4e79bc00f143c5240d991c20d5c349ecc0042545cd88eba7d  /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.gitlab-ci.yml
+
+############ 探针 B：13 条静态检查逐条可失败
+（做法：在一个克隆里把 13 条要求**逐条反向破坏**，然后跑五个集合并读静态检查段）
+13 条要求已逐条反向破坏（文件改动完成）
+克隆 HEAD（探针提交）= 78527006
+
+probeB_unit_exit=1
+- [FAIL] unit钉住zstd级别
+- [FAIL] unit钉住zstd窗口
+- [FAIL] unit不得有ExecStartPre
+- [FAIL] unit不得出现TRACE_BODY_ROOT
+!!! 静态检查失败 ⇒ 整轮失败
+
+probeB_isolate_exit=1
+- [FAIL] 隔离脚本必须fail-fast
+- [FAIL] 删除谓词审查覆盖find-delete
+- [FAIL] 删除谓词审查覆盖rsync-delete
+!!! 静态检查失败 ⇒ 整轮失败
+
+probeB_restore_exit=1
+- [FAIL] 回滚脚本必须fail-fast
+- [FAIL] 回滚必须复核list-timers
+!!! 静态检查失败 ⇒ 整轮失败
+
+probeB_build_exit=1
+- [FAIL] SEALER_BIN必须定义
+- [FAIL] VERIFY_BIN必须定义
+- [FAIL] 验收工具不进build
+!!! 静态检查失败 ⇒ 整轮失败
+
+probeB_ci_exit=1
+- [FAIL] CI不得enable-sealer
+!!! 静态检查失败 ⇒ 整轮失败
+
+探针 B 合计：FAIL 行数 = 13；PASS 行数 = 0
+探针 B 合计：整轮失败行数 = 5
+
+############ 探针 A：产物文件不存在 ⇒ 用例 FAIL（计划任务 5 步骤 3）
+（做法：删掉三份测试读的全部 5 个产物文件，再跑 go test -v）
+probeA_go_test_exit=1
+FAIL 用例数 = 19；PASS 用例数 = 0；SKIP 用例数 = 0
+--- 失败样例（前 3 条的错误首行）---
+        	Messages:   	读不到产物文件 Makefile：它必须存在（缺失 ⇒ 失败，不是跳过）
+        	Messages:   	读不到产物文件 .gitlab-ci.yml：它必须存在（缺失 ⇒ 失败，不是跳过）
+        	Messages:   	读不到产物文件 .gitlab-ci.yml：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- go test 结尾 ---
+FAIL	github.com/example/llm-gateway/tests/deploy	0.007s
+FAIL
+
+== 真实工作树的 5 个产物 sha256（探针**后**，应与上面逐字一致）+ 工作树状态 ==
+6b64100976143211657f72f487ba33e28524259875cb278c8c58d78be5738ca2  /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/systemd/trace-sealer.service
+3be89f11ef11ce3d21909cef85d79d1d7aefc307f019381485da95c59e72aba0  /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/systemd/isolate-old-trace-archive.sh
+50ea35c1ce5e6e98036a58a28ae7799dcd19513ef53781e43327380e09b8c57c  /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/systemd/restore-old-trace-archive.sh
+c1a1bbab40512e148fae98d0660d8608ce0fe1daa7261e6db09a0021880c3ec1  /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/Makefile
+d6797599470656c4e79bc00f143c5240d991c20d5c349ecc0042545cd88eba7d  /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.gitlab-ci.yml
+SRC 工作树脏行数 = 0（0 = 干净）
+SRC HEAD = edec5ccf
+探针总结：探针 B 13/13 条静态检查可失败；探针 A 19/19 条用例 FAIL 且 0 SKIP；工作树 0 改动

@@ -1,0 +1,81 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = 4a9ffbf46f8fa80b3126f62faef45f067658af5e
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = c006add3a0966bd952dc9e0f853b25c9de93323ffdb4ee8c94d84401a5269d1d  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-11-runbook.py)
+名字清单 sha256          = bb19e674df6d20b2642ff0b5d7d3ce54c50cda5b01bf15d74f26f95754d95d3c  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-11-runbook-names.txt)
+名字清单条数             = 8
+清单推导命令             = grep -h '^func Test' tests/deploy/trace_runbook_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 8 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-xjh556u5
+被测文件 sha256          = cde05ffbc546467ba881a343a3b2cdae5d5b525a96b8e3ba13a5880824c47fb2  docs/deployment.md
+测试文件 sha256          = 036dce9bc18421c897f7b368c74c610a909f051171367ca96e8d87cab5fba5aa  tests/deploy/trace_a3_compose_test.go
+测试文件 sha256          = 8121fdce81c2d3ba4257fbb7b4c3c570e56effc318e4e979c272a302097b8416  tests/deploy/trace_bluegreen_runbook_test.go
+测试文件 sha256          = 9ba416fe158cb34c2088239aea330bad631d8a388024cd49eb322b30881e0ccb  tests/deploy/trace_build_contract_test.go
+测试文件 sha256          = e9540b2e80c284d53cf6525b749117ed26a469d035951924b88215ba2ce8360b  tests/deploy/trace_compose_mount_test.go
+测试文件 sha256          = 12b7a0726ea1bbb8c058bdafc2e50aa98b887b6450270ebe715a3a290a584862  tests/deploy/trace_isolate_script_test.go
+测试文件 sha256          = 4822214387ab4458c9f88c660042904a197c9e704bd2f20d9a626eb6e39fa0bc  tests/deploy/trace_runbook_test.go
+测试文件 sha256          = 28418e7dcc2a4654061af42af882529b743d74894ab952ba96f6c4abaf17214a  tests/deploy/trace_sealer_unit_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] 手册必须含两种降级不对称与补救动作
+      文件=docs/deployment.md  正则=两种降级不对称  期望=present  实际=命中 '两种降级不对称'
+      理由=计划任务 11 步骤 1 的 `TestRunbookDocumentsMountLossLatchesWithinOneTick` 要求写出「两种降级不对称」：`sink == nil` ⇒ 无损；spool 失败 / 根身份闩锁 ⇒ 丢正文；「把写侧关掉让正文回落 jsonb」只是**补救动作**。**存在性**要求 ⇒ 静态检查；行为要求由在册用例 `TestRunbookDocumentsMountLossLatchesWithinOneTick` 承载（它在名字清单里，每次运行都真的执行）。
+- [PASS] 手册必须含保留与空间预算口径
+      文件=docs/deployment.md  正则=df -h /datalog  期望=present  实际=命中 'df -h /datalog'
+      理由=计划任务 11 步骤 1 的 `TestRunbookDocumentsRetentionAndSpaceBudget` 要求写出保留口径（minAge 3h × 写入速率 + 产物 + 余量）并给出 `/datalog` 的余量检查命令。**存在性**要求 ⇒ 静态检查；行为要求由在册用例 `TestRunbookDocumentsRetentionAndSpaceBudget`承载（它在名字清单里，每次运行都真的执行）。
+- [PASS] 手册必须含sealer心跳与永久失败处置
+      文件=docs/deployment.md  正则=too_many_rows  期望=present  实际=命中 'too_many_rows'
+      理由=计划任务 11 步骤 1 的 `TestRunbookDocumentsSealerHeartbeatAndPermanentFailure` 要求写出心跳缺失（>3×poll 无「轮次结束」）⇒ 告警、`too_many_rows` ⇒ 人工介入（拆块 / 调小BLOCK_MB 并重新标定）、隔离件处置。**存在性**要求 ⇒ 静态检查；行为要求由在册用例`TestRunbookDocumentsSealerHeartbeatAndPermanentFailure` 承载。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 前置条件：`TRACE_BODY_ROOT` 非空且 root 目录在场（构造期 rootExists）；功能关闭时 sink==nil、TraceSpooler 不构造 ⇒ 观察断言恒真；位置 = 「读侧就绪（D73）→ 启用写侧 → 立即执行」 | `m06_删掉前置条件段落` | — | 杀手 = TestRunbookDocumentsMountLossPrecondition（m06 整段剪掉 ⇒ 十条断言失去文字）。**门禁声明的存在性**：它验证的是手册里「有这段前提」，不是运行时防护。 |
+| 撤掉挂载：≤1 个 tick（= TRACE_BODY_FLUSH_INTERVAL，生产 1m）内闩锁、不再写盘、正文降级 body_missing=true；可粘贴观察命令（日志正则 + 文件系统断言） | `m02_把一个tick放宽成十分钟` | — | 杀手 = TestRunbookDocumentsMountLossLatchesWithinOneTick（m02 把「≤1 个 tick」改成「≤10 分钟」⇒ 该断言转红）。 |
+| 停止点：「验证窗口内禁止切换蓝绿流量」是**丢正文防护**（不是仅降级），窗口内必须有人值守 | `m07_删掉禁止切流停止点` | — | 杀手 = TestRunbookDocumentsMountLossLatchesWithinOneTick（m07 剪掉停止点 A ⇒「禁止切换蓝绿流量」「丢正文防护」「不得运行 deploy-blue-green.sh」三条断言转红）。**门禁声明的存在性**：运行时防护由门槛二（摘流留证）与人工值守承担。 |
+| 两种降级不对称：「关掉写侧让正文回落 jsonb」只是**事后补救动作**，闩锁期间已写下的行无法找回；实验只允许测试环境或无真实流量的生产窗口，并留证流量为零与累计丢失行数（期望 0） | — | `手册必须含两种降级不对称与补救动作` | **存在性**要求 ⇒ 静态检查（`两种降级不对称`）；**行为/文本**要求由在册用例 TestRunbookDocumentsMountLossLatchesWithinOneTick 的④⑤ 两组断言承载（测试矩阵、补救动作、测试环境、留证、累计丢失行数、期望增量 = 0）；本集合没有为它们单独编号变异（七条编号已占满），其可失败性由探针实测（`p4-task-11-runbook-probe-at-*.txt`）。 |
+| 换盘 / 改挂载点（dev/fstype 变化）⇒ 身份基线永久不匹配 ⇒ 一直闩锁到重启；处置 = 蓝绿切对端颜色 / 重启容器；必须重启后才能恢复写盘 | `m01_删掉需要重启一句` | — | 杀手 = TestRunbookDocumentsDiskSwapNeedsGatewayRestart（m01 删掉该句 ⇒ 断言转红）。 |
+| 关停：6s（traceSpoolCloseWait）内没排空 ⇒ 该批降级 body_missing=true + 一条 ERROR；给出观察命令与处置 | `m04_把6s改成60s` | — | 杀手 = TestRunbookDocumentsShutdownSixSecondBound（m04 把 6s 改成 60s ⇒`Contains("traceSpoolCloseWait\` = 6s")` 与 `NotContains("60s")` 双双转红）。 |
+| 功能关闭 = 逐字节相同：body_ref_part IS NULL AND body_missing = false 的行数等于总行数、正文出现在 jsonb 列（可粘贴 SQL） | `m03_删掉SQL比对` | — | 杀手 = TestRunbookDocumentsFeatureOffIsByteIdentical（m03 删掉 SQL 块 ⇒ 断言转红）。 |
+| 保留与空间预算：minAge 3h × 写入速率 + 产物 + 余量；/datalog 的余量检查命令；引用 2026-10-08 的生产基线（407G 已用 / 153G 可用）时必须标注日期 | — | `手册必须含保留与空间预算口径` | **存在性**要求 ⇒ 静态检查（`df -h /datalog`）；行为要求由在册用例 TestRunbookDocumentsRetentionAndSpaceBudget 承载（它另断言 2026-10-08 与「407G 已用 / 153G 可用」必须同现）。 |
+| sealer 侧：心跳缺失（>3×poll 无「轮次结束」）⇒ 告警；too_many_rows ⇒ 人工介入（拆块 / 调小 BLOCK_MB 并重新标定）；隔离件（spool 目录里的明文 .jsonl.zst）处置 | — | `手册必须含sealer心跳与永久失败处置` | **存在性**要求 ⇒ 静态检查（`too_many_rows`）；行为要求由在册用例 TestRunbookDocumentsSealerHeartbeatAndPermanentFailure 承载（心跳 / journalctl /隔离件形态 / ErrNotArchived / 不得当产物解码）。 |
+| D71：手册里不得出现已被裁定的无效键（封块间隔键） | `m05_插入无效键` | — | 杀手 = TestRunbookNeverMentionsSealInterval（`require.NotContains`）。 |
+
+计划要求总数 = 10；引用到的变异 = 7；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=8 ran=8 diff=0 PASS=8 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_删掉需要重启一句 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRunbookDocumentsDiskSwapNeedsGatewayRestart |
+| m02_把一个tick放宽成十分钟 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRunbookDocumentsMountLossLatchesWithinOneTick |
+| m03_删掉SQL比对 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRunbookDocumentsFeatureOffIsByteIdentical |
+| m04_把6s改成60s | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRunbookDocumentsShutdownSixSecondBound |
+| m05_插入无效键 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRunbookNeverMentionsSealInterval |
+| m06_删掉前置条件段落 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRunbookDocumentsMountLossPrecondition |
+| m07_删掉禁止切流停止点 | 红 | names=8 ran=8 diff=0 PASS=7 SKIP=0 FAIL=1 | TestRunbookDocumentsMountLossLatchesWithinOneTick |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 7
+集合里的变异总数          = 7（本次运行 == 全集 ✓）
+断言支撑的红             = 7 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 7 = 7 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

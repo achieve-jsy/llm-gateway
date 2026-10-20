@@ -1,0 +1,75 @@
+### 任务 12 步骤 1：机械核对「没有欠账」（HEAD=5650d28c2b79c2cd8782e5e051d8975546798b5b）
+生成时点：2026-10-09T04:50:10Z
+
+## ① 冻结包零改动：git diff --stat 3a2301ad..HEAD -- internal/tracearchive/（期望空）
+  命中行数 = 0
+
+## ② 计划 2 的写侧代码是否被本计划动过
+### ②-raw（计划原文命令）：git diff --stat 3a2301ad..HEAD -- internal/gateway/observability/ internal/gateway/config/trace_body.go
+ internal/gateway/config/trace_body.go              | 168 ++++++
+ internal/gateway/observability/spool_gate.go       | 243 ++++++++
+ internal/gateway/observability/spooler.go          | 621 +++++++++++++++++++++
+ .../gateway/observability/spooler_internal_test.go | 178 ++++++
+ internal/gateway/observability/trace_event.go      | 609 +++++++++++++++++++-
+ internal/gateway/observability/trace_line.go       | 143 +++++
+ .../observability/trace_line_internal_test.go      | 305 ++++++++++
+ 7 files changed, 2257 insertions(+), 10 deletions(-)
+  命中行数 = 8
+### ②-语义（E68：本计划自己的区间 = 分支基点 0bfb130f..HEAD）：同一命令换成 0bfb130f..HEAD
+  命中行数 = 0
+### ②-归因：3a2301ad..HEAD 的这 2257 行全部来自已知的计划 2 实现提交，不在本计划的区间内
+  3a2301ad..0bfb130f 的提交数 = 80（80 = 计划 2 与计划 1 收尾的历史，属分支基线）
+  结论：本计划（0bfb130f..HEAD）对计划 2 写侧代码的改动 = 0 行 ⇒ 无需重跑 p2-task-5 / p2-task-8-spooler
+
+## ③ sealer 侧没有建目录调用形态：grep -rnE '\bMkdir[A-Za-z]*\s*\(' internal/tracesealer/ cmd/trace-sealer/ || echo OK
+OK: 无
+
+## ④ 零迁移
+### ④-raw（计划原文命令，期望空）：git diff --stat 3a2301ad..HEAD -- atlas-migrations/
+ atlas-migrations/20260924074930_add_trace_body_ref.sql | 2 ++
+ atlas-migrations/atlas.sum                             | 3 ++-
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+  命中行数 = 3
+### ④-语义（E68：本计划自己的区间 0bfb130f..HEAD）：git diff --stat 0bfb130f..HEAD -- atlas-migrations/ migrations/
+  命中行数 = 0
+### ④-归因：raw 里的 20260924074930_add_trace_body_ref.sql 由计划 2 的提交引入，早于本计划基点
+7971b3c1 feat(db): call_traces 增加正文定位键 6 列（计划 2/4 任务 1）
+  该迁移在 3a2301ad..0bfb130f（基线）内 ⇒ 不是本计划新增的迁移（H7：本计划零新增）
+
+## ⑤ 未清的 TODO/占位：grep -rn 'TODO\|FIXME\|占位' internal/tracesealer/ cmd/trace-sealer/
+OK: 无
+
+## ⑥ 无效键不得出现在任何部署产物里（D71）：grep -rn 'TRACE_BODY_SEAL_INTERVAL\|SEAL_INTERVAL' deploy/ docs/deployment.md
+OK: 无
+  命中行数 = 0
+### ⑥-边界（如实登记）：该键在别处**故意**出现，且都在查禁范围内之外
+./.env.example
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-unit-authoritative-at-1b6c7d6e.txt
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-unit-authoritative-at-761c5a81.txt
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-unit-authoritative-at-7c853dbf.txt
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-unit-authoritative-at-a5aed61e.txt
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-unit-authoritative-at-d1bc8e8d.txt
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-unit-authoritative-at-e854528c.txt
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-6-blue-authoritative-at-1b6c7d6e.txt
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-6-blue-authoritative-at-761c5a81.txt
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-6-blue-authoritative-at-7c853dbf.txt
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-6-blue-authoritative-at-d1bc8e8d.txt
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-6-blue-authoritative-at-e854528c.txt
+./.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-6-shortsyntax-probe-at-7c853dbf.txt
+./docs/superpowers/plans/2026-09-24-trace-gateway-write-path.md
+./docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md
+./docs/superpowers/specs/2026-09-23-trace-body-direct-write-design.md
+./tests/deploy/trace_bluegreen_runbook_test.go
+./tests/deploy/trace_compose_mount_test.go
+./tests/deploy/trace_runbook_test.go
+./tests/deploy/trace_sealer_unit_test.go
+./tools/trace-mutate/sets/p4-task-11-runbook.py
+./tools/trace-mutate/sets/p4-task-5-unit.py
+./tools/trace-mutate/sets/p4-task-6-blue.py
+./tools/trace-mutate/sets/p4-task-7-bluegreen.py
+  · 集合里出现 = 变异**插入**该键以证明它会被拒（D71 的四处钉子）
+  · 测试里出现 = 断言 unit/compose/剧本/手册**不含**该键
+  · 计划/规格里出现 = 登记 D64/D71 的「不是有效键名」正文
+  · .env.example:50 是注释（逐字：'# 不是规格 §11.1 的 TRACE_BODY_SEAL_INTERVAL'）
+  · __pycache__ 已排除（未跟踪的编译缓存）
+step1_exit=0

@@ -1,0 +1,62 @@
+### 步骤 2 证据：README 缺失 ⇒ 断言红（缺失即 FAIL，不是允许的绿）
+git rev-parse HEAD = 62077f328bd0983e0bb5cfac66b6d5cb3748fda3
+命令 = go test ./tests/deploy/ -run 'TestBlueGreenRunbook' -count=1 -v
+
+=== RUN   TestBlueGreenRunbookCoversSwitch
+    trace_bluegreen_runbook_test.go:43: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:43
+        	Error:      	Received unexpected error:
+        	            	open /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/blue-green/README.md: no such file or directory
+        	Test:       	TestBlueGreenRunbookCoversSwitch
+        	Messages:   	读不到产物文件 deploy/blue-green/README.md：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestBlueGreenRunbookCoversSwitch (0.00s)
+=== RUN   TestBlueGreenRunbookCoversRollback
+    trace_bluegreen_runbook_test.go:79: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:79
+        	Error:      	Received unexpected error:
+        	            	open /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/blue-green/README.md: no such file or directory
+        	Test:       	TestBlueGreenRunbookCoversRollback
+        	Messages:   	读不到产物文件 deploy/blue-green/README.md：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestBlueGreenRunbookCoversRollback (0.00s)
+=== RUN   TestBlueGreenRunbookCoversFeatureOffByteIdentical
+    trace_bluegreen_runbook_test.go:103: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:103
+        	Error:      	Received unexpected error:
+        	            	open /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/blue-green/README.md: no such file or directory
+        	Test:       	TestBlueGreenRunbookCoversFeatureOffByteIdentical
+        	Messages:   	读不到产物文件 deploy/blue-green/README.md：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestBlueGreenRunbookCoversFeatureOffByteIdentical (0.00s)
+=== RUN   TestBlueGreenRunbookHasReadSideHardGate
+    trace_bluegreen_runbook_test.go:123: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:123
+        	Error:      	Received unexpected error:
+        	            	open /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/blue-green/README.md: no such file or directory
+        	Test:       	TestBlueGreenRunbookHasReadSideHardGate
+        	Messages:   	读不到产物文件 deploy/blue-green/README.md：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestBlueGreenRunbookHasReadSideHardGate (0.00s)
+=== RUN   TestBlueGreenRunbookCoversOldColorDrain
+    trace_bluegreen_runbook_test.go:142: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:142
+        	Error:      	Received unexpected error:
+        	            	open /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/blue-green/README.md: no such file or directory
+        	Test:       	TestBlueGreenRunbookCoversOldColorDrain
+        	Messages:   	读不到产物文件 deploy/blue-green/README.md：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestBlueGreenRunbookCoversOldColorDrain (0.00s)
+=== RUN   TestBlueGreenRunbookNeverMentionsSealInterval
+    trace_bluegreen_runbook_test.go:158: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_sealer_unit_test.go:46
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:158
+        	Error:      	Received unexpected error:
+        	            	open /Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/deploy/blue-green/README.md: no such file or directory
+        	Test:       	TestBlueGreenRunbookNeverMentionsSealInterval
+        	Messages:   	读不到产物文件 deploy/blue-green/README.md：它必须存在（缺失 ⇒ 失败，不是跳过）
+--- FAIL: TestBlueGreenRunbookNeverMentionsSealInterval (0.00s)
+FAIL
+FAIL	github.com/example/llm-gateway/tests/deploy	0.007s
+FAIL
+test_exit=1

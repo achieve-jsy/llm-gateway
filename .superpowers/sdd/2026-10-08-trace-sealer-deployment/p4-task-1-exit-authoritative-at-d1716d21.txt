@@ -1,0 +1,65 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = d1716d217db84ed03ea4249e8350997ab43ffd23
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = f6e34539d40a394f98a88716872d4c59fea0adad2dfe37b6e672b1c9ba3dba77  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-1-exit.py)
+名字清单 sha256          = e9347579c1fdd5cd16fa1f7f53912076e7d2ed19e7fab65b008eaa1ccbc474f1  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-1-exit-names.txt)
+名字清单条数             = 3
+清单推导命令             = grep -h '^func Test' tests/tracesealer/exit_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 3 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-pdced9kc
+被测文件 sha256          = 4204ee5e2684a97fbe95c8ac3f7179e5d417cee4eee4c7c9c7830bbc371b7cc4  internal/tracesealer/exit.go
+测试文件 sha256          = 22f21e27b31f645d06c288ec796b38da0c8a2c8f12fb3165b8cff81a8abf0406  tests/tracesealer/alert_test.go
+测试文件 sha256          = 0e36d92d813eb0af6d4caa658c1bd0fb235be03362bf690f4f54afed5be56515  tests/tracesealer/classify_test.go
+测试文件 sha256          = 6ec687db153fbdebe474d5c9280a68f0d21f28cb2069b52d607438b748a178b5  tests/tracesealer/concurrent_test.go
+测试文件 sha256          = f3bfdacf089c1cf0acf0706d54e8a58de454414f2e99880b852ad508152d077f  tests/tracesealer/exit_test.go
+测试文件 sha256          = 7bd98c1223b58280f9a6b88ad8561f7d5812e6dd7ae7b2f3d2aeab578f91137f  tests/tracesealer/lock_test.go
+测试文件 sha256          = 142965aca3858955488752e512f1f418ece44e129b7d2b384e81b0bba3a72099  tests/tracesealer/loop_test.go
+测试文件 sha256          = 64d07b52eb0b863dfa5d417471bf3ab3b83b79f8f16f8a3e2c76cc3714abe7c1  tests/tracesealer/options_test.go
+测试文件 sha256          = 451ce4de0d1e563c1548e9ff85ea7eb03b6d68f1d113938997fb9c6e9cb1c58c  tests/tracesealer/rootguard_test.go
+测试文件 sha256          = af3af343207b05f43948abe79a136be3795bea101259949e7e46dedd4e677c67  tests/tracesealer/round_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] main不自己决定退出码
+      文件=cmd/trace-sealer/main.go  正则=os\.Exit\([0-9]  期望=absent  实际=未命中
+      理由=退出码契约只允许有一份（internal/tracesealer/exit.go 的 ExitOK/ExitFatal/ExitFailed）。main 里出现字面量就等于把契约复制成两份，改一处漏一处。这是**不存在性**要求 ⇒ 只能静态检查（变异无法证明「没写」）。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 退出码：--once 跑完但本轮有失败（可重试或永久）⇒ 2；PartExists 不算失败 ⇒ 0 | `m01_有失败也退0` | — | 杀手 = TestExitCodeTwoWhenOnceHasFailures（含 PartExists:3 ⇒ ExitOK 的反向断言）；TestExitCodeZeroOnCleanRound 在被变异下仍绿，是隔离探针。 |
+| 退出码：启动期/环境级致命错误 ⇒ 1（与「某一轮有失败」区分） | `m02_致命错误退0` | — | 杀手 = TestExitCodeOneOnFatalError。 |
+| main 是薄壳：退出码只由 ExitCode 决定（不存在性要求） | — | `main不自己决定退出码` | 不存在性无法用变异证明 ⇒ 静态检查。 |
+
+计划要求总数 = 3；引用到的变异 = 2；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=3 ran=3 diff=0 PASS=3 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_有失败也退0 | 红 | names=3 ran=3 diff=0 PASS=2 SKIP=0 FAIL=1 | TestExitCodeTwoWhenOnceHasFailures |
+| m02_致命错误退0 | 红 | names=3 ran=3 diff=0 PASS=2 SKIP=0 FAIL=1 | TestExitCodeOneOnFatalError |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 2
+集合里的变异总数          = 2（本次运行 == 全集 ✓）
+断言支撑的红             = 2 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 2 = 2 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

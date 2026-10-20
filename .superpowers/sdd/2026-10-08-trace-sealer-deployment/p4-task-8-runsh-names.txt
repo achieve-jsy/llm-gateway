@@ -1,0 +1,3 @@
+TestA3RunScriptAlwaysCleansUp
+TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep
+TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot

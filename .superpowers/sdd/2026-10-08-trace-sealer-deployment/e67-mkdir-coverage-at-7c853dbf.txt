@@ -1,0 +1,35 @@
+## E67：D70「整包零建目录」静态检查的覆盖清单
+git rev-parse HEAD     = 7c853dbf6391e850d154e3b0e2a075b992a2e2c2
+git status --porcelain = []
+
+枚举命令 = ls -1 internal/tracesealer/*.go cmd/trace-sealer/*.go | sort
+---- 原样输出 ----
+cmd/trace-sealer/main.go
+internal/tracesealer/alert.go
+internal/tracesealer/classify.go
+internal/tracesealer/covers_test.go
+internal/tracesealer/exit.go
+internal/tracesealer/lock.go
+internal/tracesealer/options.go
+internal/tracesealer/rootguard.go
+internal/tracesealer/runner.go
+---- 文件数 = 9 ----
+
+对映命令 = python3 -W ignore（import 每个 tools/trace-mutate/sets/p4-task-*.py，
+           取 CHECKS 里 pattern 含 'Mkdir' 且 expect=absent 的行，按 file 归并）
+---- 原样输出 ----
+承载该检查的集合（去重）= ['p4-task-1-classify.py', 'p4-task-1-exit.py', 'p4-task-1-options.py', 'p4-task-1-round.py', 'p4-task-2-alert.py', 'p4-task-3-rootguard.py', 'p4-task-4-lock.py', 'p4-task-4-runner.py']
+逐文件对映（file -> 集合:检查名）:
+  cmd/trace-sealer/main.go                   ['p4-task-1-exit.py:main不得建目录']
+  internal/tracesealer/alert.go              ['p4-task-2-alert.py:alert.go不得建目录']
+  internal/tracesealer/classify.go           ['p4-task-1-classify.py:classify.go不得建目录']
+  internal/tracesealer/covers_test.go        ['p4-task-3-rootguard.py:covers_test.go不得建目录']
+  internal/tracesealer/exit.go               ['p4-task-1-exit.py:exit.go不得建目录']
+  internal/tracesealer/lock.go               ['p4-task-4-lock.py:lock.go不得建目录']
+  internal/tracesealer/options.go            ['p4-task-1-options.py:options.go不得建目录']
+  internal/tracesealer/rootguard.go          ['p4-task-3-rootguard.py:rootguard不得建目录']
+  internal/tracesealer/runner.go             ['p4-task-1-round.py:sealer侧零建目录调用', 'p4-task-4-lock.py:runner不得有第二处锁实现', 'p4-task-4-runner.py:runner不得有第二处锁实现']
+覆盖表里的额外文件（不属于两个目录）= []
+目录文件集合 == 覆盖文件集合 ? True
+全部覆盖: True
+---- 对映输出结束 ----

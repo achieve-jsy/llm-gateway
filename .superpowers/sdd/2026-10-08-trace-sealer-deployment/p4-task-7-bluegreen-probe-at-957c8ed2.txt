@@ -1,0 +1,135 @@
+### 任务 7 探针：逐条改坏 → 转红 → 还原（README 的「改动后行号」= 本表 grep -n 的值）
+
+README sha256（提交 HEAD:deploy/blue-green/README.md） = f4d9704ae50a79a09638e01074efa6fdd725a3c415a4980474589344593334a0
+README sha256（探针开始前工作树） = f4d9704ae50a79a09638e01074efa6fdd725a3c415a4980474589344593334a0
+工作树 README 与提交逐字节一致 = True
+
+命令（每个用例集） = go test ./tests/deploy/ -run TestBlueGreenRunbook -count=1 -v
+（先跑一次原始侧，确认 6 条全绿；再逐条改坏）
+
+原始侧（不改坏）：exit=0 红名单=（无）
+
+探针 01  期望转红 = TestBlueGreenRunbookCoversSwitch
+          README 行号（改动后）= [19]；原文出现次数 = 1
+          改坏 = 'blue 文件 ⇒ `TRACE_BODY_INST=blue`；green 文件 ⇒ `TRACE_BODY_INST=green`' → 'blue 文件 ⇒ `TRACE_BODY_INST=green`；green 文件 ⇒ `TRACE_BODY_INST=blue`'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversSwitch']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:47:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:47
+            --- FAIL: TestBlueGreenRunbookCoversSwitch (0.00s)
+
+探针 02  期望转红 = TestBlueGreenRunbookCoversSwitch
+          README 行号（改动后）= [20]；原文出现次数 = 1
+          改坏 = '重启后新颜色接管的仍是它自己的 inst' → '重启后新颜色会接管任意 inst'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversSwitch']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:52:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:52
+            --- FAIL: TestBlueGreenRunbookCoversSwitch (0.00s)
+
+探针 03  期望转红 = TestBlueGreenRunbookCoversSwitch
+          README 行号（改动后）= [32]；原文出现次数 = 1
+          改坏 = '启动新颜色 → `/health` + `/ready` → nginx 原子切流 → drain 旧颜色 → 停旧颜色' → '起新 → 切流 → 停旧'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversSwitch']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:56:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:56
+            --- FAIL: TestBlueGreenRunbookCoversSwitch (0.00s)
+
+探针 04  期望转红 = TestBlueGreenRunbookCoversSwitch
+          README 行号（改动后）= [30, 34, 52]；原文出现次数 = 3
+          改坏 = 'cat ${DEPLOY_DIR}/.active-color' → 'cat ${DEPLOY_DIR}/.color-state'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversSwitch']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:61:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:61
+            --- FAIL: TestBlueGreenRunbookCoversSwitch (0.00s)
+
+探针 05  期望转红 = TestBlueGreenRunbookCoversSwitch
+          README 行号（改动后）= [111]；原文出现次数 = 1
+          改坏 = '不得在两个颜色里设同一个 `inst`' → '两个颜色可以共用一个 `inst`'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversSwitch']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:71:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:71
+            --- FAIL: TestBlueGreenRunbookCoversSwitch (0.00s)
+
+探针 06  期望转红 = TestBlueGreenRunbookCoversRollback
+          README 行号（改动后）= [43]；原文出现次数 = 1
+          改坏 = 'KEEP_OLD_ENV=true ./deploy-blue-green.sh --rollback' → './deploy-blue-green.sh --rollback'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversRollback']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:82:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:82
+            --- FAIL: TestBlueGreenRunbookCoversRollback (0.00s)
+
+探针 07  期望转红 = TestBlueGreenRunbookCoversRollback
+          README 行号（改动后）= [47]；原文出现次数 = 1
+          改坏 = '旧 inst 的数据仍在' → '旧 inst 的数据会被新颜色覆盖'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversRollback']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:86:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:86
+            --- FAIL: TestBlueGreenRunbookCoversRollback (0.00s)
+
+探针 08  期望转红 = TestBlueGreenRunbookCoversRollback
+          README 行号（改动后）= [49]；原文出现次数 = 1
+          改坏 = '不需要重建任何数据' → '需要把数据全部重建一次'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversRollback']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:90:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:90
+            --- FAIL: TestBlueGreenRunbookCoversRollback (0.00s)
+
+探针 09  期望转红 = TestBlueGreenRunbookCoversFeatureOffByteIdentical
+          README 行号（改动后）= [64]；原文出现次数 = 1
+          改坏 = '`body_ref_*` 四列全 NULL、`body_missing=false`、正文在 jsonb 列' → '`body_ref_*` 四列全 NULL'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversFeatureOffByteIdentical']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:106:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:106
+            --- FAIL: TestBlueGreenRunbookCoversFeatureOffByteIdentical (0.00s)
+
+探针 10  期望转红 = TestBlueGreenRunbookCoversOldColorDrain
+          README 行号（改动后）= [103]；原文出现次数 = 1
+          改坏 = 'drain 期间旧颜色功能仍是关闭的' → 'drain 期间旧颜色功能可以开启'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversOldColorDrain']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:144:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:144
+            --- FAIL: TestBlueGreenRunbookCoversOldColorDrain (0.00s)
+
+探针 11  期望转红 = TestBlueGreenRunbookCoversOldColorDrain
+          README 行号（改动后）= [104]；原文出现次数 = 1
+          改坏 = '正文继续进 jsonb' → '正文继续进 `/datalog`'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversOldColorDrain']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:146:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:146
+            --- FAIL: TestBlueGreenRunbookCoversOldColorDrain (0.00s)
+
+探针 12  期望转红 = TestBlueGreenRunbookCoversOldColorDrain
+          README 行号（改动后）= [104]；原文出现次数 = 1
+          改坏 = '无数据损失' → '有少量数据损失'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversOldColorDrain']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:148:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:148
+            --- FAIL: TestBlueGreenRunbookCoversOldColorDrain (0.00s)
+
+探针 13  期望转红 = TestBlueGreenRunbookCoversOldColorDrain
+          README 行号（改动后）= [107]；原文出现次数 = 1
+          改坏 = '两个颜色最终都按新路径写' → '只有新颜色按新路径写'
+          go test exit=1；红名单=['TestBlueGreenRunbookCoversOldColorDrain']；只红点名用例=True；判定=OK（断言可失败）
+          失败行（go test 输出摘录）：
+            trace_bluegreen_runbook_test.go:150:
+            Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_bluegreen_runbook_test.go:150
+            --- FAIL: TestBlueGreenRunbookCoversOldColorDrain (0.00s)
+
+还原：README sha256（探针结束后） = f4d9704ae50a79a09638e01074efa6fdd725a3c415a4980474589344593334a0
+还原后与提交逐字节一致 = True
+还原后工作树 status（README 不应出现） = 
+（空）
+
+探针总判定 = 全部可失败（每条改坏都让点名用例转红）
+probe_exit=0

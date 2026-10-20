@@ -1,0 +1,76 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = e854528ca3bdf960ca2e141200bbd119c86004a4
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 2ab968c4210a1fce8ed9f5582c4c42e26107fc4f31d39408c283a43ae6513177  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-1-options.py)
+名字清单 sha256          = 13b726fec4f4ad6a4283907610c11e09eec38a7e38b3698d00de61783ede71ac  (/tmp/p4t11-evi/p4-task-1-options-names.txt)
+名字清单条数             = 3
+清单推导命令             = grep -h '^func Test' tests/tracesealer/options_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 3 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-klb_w4oe
+被测文件 sha256          = b3a0909d3169349a23b94e11289224c3de641fb1c67ce028bd7849593d1bfa2e  internal/tracesealer/options.go
+测试文件 sha256          = 22f21e27b31f645d06c288ec796b38da0c8a2c8f12fb3165b8cff81a8abf0406  tests/tracesealer/alert_test.go
+测试文件 sha256          = 0e36d92d813eb0af6d4caa658c1bd0fb235be03362bf690f4f54afed5be56515  tests/tracesealer/classify_test.go
+测试文件 sha256          = 6ec687db153fbdebe474d5c9280a68f0d21f28cb2069b52d607438b748a178b5  tests/tracesealer/concurrent_test.go
+测试文件 sha256          = e81e8605d8acb8a83e6399015e5e9bd258d2e7d7685c08b06c2fc13e436ca5e1  tests/tracesealer/constants_contract_test.go
+测试文件 sha256          = f3bfdacf089c1cf0acf0706d54e8a58de454414f2e99880b852ad508152d077f  tests/tracesealer/exit_test.go
+测试文件 sha256          = b9af6a1d0fe826f5f6a4c19eb341aa091ee57d510984ab033503c00fdea1edab  tests/tracesealer/footer_artifact_test.go
+测试文件 sha256          = f9b5169bad2128e746c00206d68654e27e393464b3fccb281af698540d12373a  tests/tracesealer/footer_roundtrip_test.go
+测试文件 sha256          = 684ac9518781b94d8f2cea29c79fc5ece0c216359ab5871c0da56286719b1a03  tests/tracesealer/footer_test.go
+测试文件 sha256          = 7bd98c1223b58280f9a6b88ad8561f7d5812e6dd7ae7b2f3d2aeab578f91137f  tests/tracesealer/lock_test.go
+测试文件 sha256          = 142965aca3858955488752e512f1f418ece44e129b7d2b384e81b0bba3a72099  tests/tracesealer/loop_test.go
+测试文件 sha256          = 11483eb2f8738d27cf52039f7b7a2c3637a2197d7af6811383a20737271fc264  tests/tracesealer/observability_test.go
+测试文件 sha256          = 64d07b52eb0b863dfa5d417471bf3ab3b83b79f8f16f8a3e2c76cc3714abe7c1  tests/tracesealer/options_test.go
+测试文件 sha256          = 451ce4de0d1e563c1548e9ff85ea7eb03b6d68f1d113938997fb9c6e9cb1c58c  tests/tracesealer/rootguard_test.go
+测试文件 sha256          = af3af343207b05f43948abe79a136be3795bea101259949e7e46dedd4e677c67  tests/tracesealer/round_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] min-age错误文案指向R8契约
+      文件=internal/tracesealer/options.go  正则=min-age=%s 必须严格大于网关滚动间隔上界  期望=present  实际=命中 'min-age=%s 必须严格大于网关滚动间隔上界'
+      理由=错误文案是运维可见面：运维看到这句话才知道被违反的是 R8（sealer 与网关之间唯一的次序保护），而不是一个泛泛的「配置非法」。用例只断言 ErrorContains 的片段 ⇒ 不存在能删除整句的变异形态，按全局约束第 6/7 条静态检查。
+- [PASS] options.go不得建目录
+      文件=internal/tracesealer/options.go  正则=\bMkdir[A-Za-z]*\s*\(  期望=absent  实际=未命中
+      理由=**D70 的「整包零建目录」**（**E66③** 补齐）：原先只有 `runner.go`（`p4-task-1-round.py:93`）与 `rootguard.go`（`p4-task-3-rootguard.py:133`）各有该行，`options.go` 缺；而计划全局约束第 27 条要求 `internal/tracesealer/` 的**每一个**源文件都不得出现建目录调用形态（`normalize()` 是最容易被顺手加上「root 不存在就先建出来」的地方 —— 那正是把消失的挂载点重建到宿主根 FS 上的形态，2026-09-24 事故同族）。**不存在性**要求 ⇒ 静态检查；**工具只在 pristine 树求值**（`trace_mutate.py:574`）⇒ 变异不可能让它变红，可失败性由 **E66③ 的临时仓库探针**实测（插入 `os.MkdirAll(o.Root, 0o755)` 并提交 ⇒ 本行 FAIL、退出 1）。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| R8：min-age 必须严格大于网关滚动间隔上界（1h），违反即启动失败 | `m01_去掉min-age下界` | — | 杀手 = TestNewRunnerRejectsMinAgeAtOrBelowGatewayRollUpperBound（1m/30m/1h 三例；边界相等也必须被拒）。 |
+| 默认 min-age = 3h（= 冻结包 defaultSealMinAge 的镜像值） | `m02_默认min-age缩到30m` | — | 杀手 = TestNewRunnerDefaultsMinAgeToThreeHours。 |
+| zstd --long=<log2> 的前提：窗口必须是 2 的幂（启动期拒绝，而不是封块时才炸） | `m03_不校验2的幂` | — | 杀手 = TestNewRunnerRejectsNonPowerOfTwoWindow。 |
+| 配置错误一律响亮失败，错误文案点明被违反的契约（运维可见面） | — | `min-age错误文案指向R8契约` | 文案取值要求 ⇒ 静态检查。 |
+| D70：整包零建目录 —— `options.go`（含 `normalize()`）不得出现任何建目录调用 | — | `options.go不得建目录` | 不存在性要求 ⇒ 静态检查（**E66③** 补齐）。可失败性由 E66③ 的临时仓库探针承载 —— 工具只在 pristine 树求值 `CHECKS`（`trace_mutate.py:574`）。 |
+
+计划要求总数 = 5；引用到的变异 = 3；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=3 ran=3 diff=0 PASS=3 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_去掉min-age下界 | 红 | names=3 ran=3 diff=0 PASS=2 SKIP=0 FAIL=1 | TestNewRunnerRejectsMinAgeAtOrBelowGatewayRollUpperBound |
+| m02_默认min-age缩到30m | 红 | names=3 ran=3 diff=0 PASS=2 SKIP=0 FAIL=1 | TestNewRunnerDefaultsMinAgeToThreeHours |
+| m03_不校验2的幂 | 红 | names=3 ran=3 diff=0 PASS=2 SKIP=0 FAIL=1 | TestNewRunnerRejectsNonPowerOfTwoWindow |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 3
+集合里的变异总数          = 3（本次运行 == 全集 ✓）
+断言支撑的红             = 3 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 3 = 3 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

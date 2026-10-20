@@ -1,0 +1,9 @@
+定位校验（基于 HEAD:internal/tracesealer/runner.go，sha256=d9f6630b475aab00）
+OK  m01_PartExists计入失败
+OK  m02_坏块中断整轮
+OK  m03_忽略ctx取消
+OK  m04_吞掉发现错误
+OK  m05_永久混入可重试
+OK  m06_漏计未分类失败
+全部 6 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

@@ -1,0 +1,72 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = 7740bdbf5a82df2fe0137860d11fa2ecfa0d4785
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = f7bdd9e3e9395bc8a42896bfabd1c085d4ffa03baf30b0dc6d256e2f0c85a17f  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-9-vmhwm.py)
+名字清单 sha256          = 94993812cac124dc7f3e4f18c3c363a13a55cde6b851207c7646c98bbb3621ce  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-9-vmhwm-names.txt)
+名字清单条数             = 18
+清单推导命令             = grep -h '^func Test' tests/traceverify/vmhwm_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 18 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-0a9i6ba7
+被测文件 sha256          = 09726c96be4472d37c771fd502bbfdfb9cb643f0beb100e259a5aa70af7dbede  internal/traceverify/vmhwm.go
+测试文件 sha256          = 33d4bd33c8c184317bfbff6604eccca227e47d0e2363ada98f6f2949b709c1e0  tests/traceverify/budget_test.go
+测试文件 sha256          = 766fc96a5e07ca47523ef2745d778e5a28eb8164b14bd72a953c58f257341816  tests/traceverify/guard_test.go
+测试文件 sha256          = 40797ec3e18e29dfa713ac052741fa9a9e7b8a8fd32387405c96fc13b9835898  tests/traceverify/vmhwm_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| ParseVmHWM 取 VmHWM（峰值常驻），不是 VmPeak（峰值虚拟） | `m01_取VmPeak而不是VmHWM` | — | **行为**要求 ⇒ 在册用例 `TestParseVmHWMReadsPeakResidentNotVirtual`。 |
+| kB → B 必须乘 1024（A6/C5 的预算与 peak_vmhwm_bytes 都按 bytes 比较） | `m02_少乘1024` | — | **行为**要求 ⇒ 在册用例 `TestParseVmHWMConvertsKilobytesToBytes`（1 kB 与 640 MiB 两个量级）。 |
+| 缺 VmHWM 行 / 读不懂 ⇒ 报错（绝不返回 0 冒充读数） | `m03_缺字段返回0nil` | — | **行为**要求 ⇒ 在册用例 `TestParseVmHWMErrorsOnMissingField`（四条缺字段形态 + 错误身份 `ErrVmHWMMissing`）。 |
+| decode-bench：K 个 goroutine × 每 goroutine Rounds × PointsPerGoroutine 次**随机**点读 | `m04_行号固定为0`, `m05_多起一个goroutine` | — | **行为**要求 ⇒ 在册用例 `TestPointReadLoadRunsConcurrentlyAndRandomly`（点数跑满 / 实测在飞峰值 == K / DistinctRows > 1 / 行号落在 [0, rows)）。 |
+| decode-bench：任一次点读失败 ⇒ 原样上抛（不返回半个读数） | `m06_点读错误被忽略` | — | **行为**要求 ⇒ 在册用例 `TestPointReadLoadPropagatesReadErrors`。 |
+| decode-bench：用公开 API 的错误身份探测块内行数（越界 ⇒ ErrNotArchived、标记行 ⇒ ErrBodyMissing） | `m07_行数探测差一行` | — | **行为**要求 ⇒ 在册用例 `TestArtifactRowsBinaryProbesRowCount`（1 / 2 / 3 / 5 / 1000 五档 + 中点为标记行）与 `TestArtifactRowsPropagatesNonRangeErrors`（未知错误原样上抛）。 |
+| decode-bench：峰值读不到 ⇒ 报错（不许把「没有证据」洗成「内存很小」） | `m08_峰值采样失败被忽略` | — | **行为**要求 ⇒ 在册用例 `TestPointReadLoadPropagatesPeakErrors`。 |
+| decode-bench：峰值到 AbortAtBytes ⇒ 中止负载并置 Aborted（不是失败），留下已观测峰值 | `m09_到限不中止` | — | **行为**要求 ⇒ 在册用例 `TestPointReadLoadAbortsWhenPeakReachesLimit`（`NoError` + `Aborted` + `PeakBytes ≥ 阈值` + 点数未跑满）。 |
+| 参数非法 ⇒ 在任何点读之前报错（Read 为空 / Rows / Concurrency / Rounds ≤ 0） | `m10_档位零被放行` | — | **行为**要求 ⇒ 在册用例 `TestPointReadLoadRejectsInvalidArguments`（四个子用例，并断言一次读都没发生）。另外三条守卫没有专属变异（会红成崩溃）⇒ 按 E64② 登记在文末的 `COVERAGE_GAPS`，可失败性由人工探针承载。 |
+| 行数探测：未知错误必须原样上抛（不许当成「行号越界」） | `m11_未知错误当成越界` | — | **行为**要求 ⇒ 在册用例 `TestArtifactRowsPropagatesNonRangeErrors`。 |
+
+计划要求总数 = 10；引用到的变异 = 11；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=18 ran=18 diff=0 PASS=18 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_取VmPeak而不是VmHWM | 红 | names=18 ran=18 diff=0 PASS=12 SKIP=0 FAIL=6 | TestParseVmHWMConvertsKilobytesToBytes, TestParseVmHWMReadsPeakResidentBytes, TestParseVmHWMReadsPeakResidentNotVirtual, TestParseVmHWMRejectsMalformedStatus, TestPeakVmHWMReadsStatusFilesUnderRoot, TestPeakVmHWMTracksMaximumAcrossSamples |
+| m02_少乘1024 | 红 | names=18 ran=18 diff=0 PASS=13 SKIP=0 FAIL=5 | TestParseVmHWMConvertsKilobytesToBytes, TestParseVmHWMReadsPeakResidentBytes, TestParseVmHWMReadsPeakResidentNotVirtual, TestPeakVmHWMReadsStatusFilesUnderRoot, TestPeakVmHWMTracksMaximumAcrossSamples |
+| m03_缺字段返回0nil | 红 | names=18 ran=18 diff=0 PASS=14 SKIP=0 FAIL=4 | TestParseVmHWMErrorsOnMissingField, TestParseVmHWMReadsPeakResidentNotVirtual, TestParseVmHWMRejectsMalformedStatus, TestPeakVmHWMPropagatesReadErrors |
+| m04_行号固定为0 | 红 | names=18 ran=18 diff=0 PASS=17 SKIP=0 FAIL=1 | TestPointReadLoadRunsConcurrentlyAndRandomly |
+| m05_多起一个goroutine | 红 | names=18 ran=18 diff=0 PASS=17 SKIP=0 FAIL=1 | TestPointReadLoadRunsConcurrentlyAndRandomly |
+| m06_点读错误被忽略 | 红 | names=18 ran=18 diff=0 PASS=17 SKIP=0 FAIL=1 | TestPointReadLoadPropagatesReadErrors |
+| m07_行数探测差一行 | 红 | names=18 ran=18 diff=0 PASS=17 SKIP=0 FAIL=1 | TestArtifactRowsBinaryProbesRowCount |
+| m08_峰值采样失败被忽略 | 红 | names=18 ran=18 diff=0 PASS=17 SKIP=0 FAIL=1 | TestPointReadLoadPropagatesPeakErrors |
+| m09_到限不中止 | 红 | names=18 ran=18 diff=0 PASS=17 SKIP=0 FAIL=1 | TestPointReadLoadAbortsWhenPeakReachesLimit |
+| m10_档位零被放行 | 红 | names=18 ran=18 diff=0 PASS=17 SKIP=0 FAIL=1 | TestPointReadLoadRejectsInvalidArguments |
+| m11_未知错误当成越界 | 红 | names=18 ran=18 diff=0 PASS=17 SKIP=0 FAIL=1 | TestArtifactRowsPropagatesNonRangeErrors |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 11
+集合里的变异总数          = 11（本次运行 == 全集 ✓）
+断言支撑的红             = 11 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 11 = 11 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

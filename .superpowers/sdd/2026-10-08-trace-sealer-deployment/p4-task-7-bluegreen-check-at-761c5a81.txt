@@ -1,0 +1,8 @@
+定位校验（基于 HEAD:deploy/blue-green/README.md，sha256=f4d9704ae50a79a0）
+OK  m01_删掉硬门段落
+OK  m02_回滚可停sealer
+OK  m03_删掉SQL比对
+OK  m04_改用配置里的inst
+OK  m05_插入无效键
+全部 5 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

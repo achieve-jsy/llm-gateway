@@ -1,0 +1,7 @@
+定位校验（基于 HEAD:deploy/verify/trace-a3/docker-compose.yml，sha256=9b4c933135220083）
+OK  m01_水位从99改90
+OK  m02_连接串改成有默认值
+OK  m03_容器名撞控制面
+OK  m04_挂载源改生产盘
+全部 4 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

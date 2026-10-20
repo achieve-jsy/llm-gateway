@@ -1,0 +1,53 @@
+## 任务 6 步骤 2：断言红证据（改动前：三个 compose 还没有 /datalog 挂载）
+git rev-parse HEAD = 45170bc6af2eaa157284d9b6e06e6f869a971533
+git status --porcelain = 
+测试文件 sha256 = e9540b2e80c284d53cf6525b749117ed26a469d035951924b88215ba2ce8360b  tests/deploy/trace_compose_mount_test.go
+命令 = go test ./tests/deploy/ -run 'TestCompose' -count=1 -v
+
+=== RUN   TestComposeGatewayMountsDatalogReadWrite
+    trace_compose_mount_test.go:253: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_compose_mount_test.go:128
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_compose_mount_test.go:253
+        	Error:      	Should not be: -1
+        	Test:       	TestComposeGatewayMountsDatalogReadWrite
+        	Messages:   	deploy/blue-green/docker-compose.blue.yml 的服务 "gateway" 没有 volumes: 段（挂载必须存在：缺失 ⇒ 失败）
+--- FAIL: TestComposeGatewayMountsDatalogReadWrite (0.00s)
+=== RUN   TestComposeControlPlaneMountsDatalogReadOnly
+    trace_compose_mount_test.go:266: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_compose_mount_test.go:128
+        	            				/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_compose_mount_test.go:266
+        	Error:      	Should not be: -1
+        	Test:       	TestComposeControlPlaneMountsDatalogReadOnly
+        	Messages:   	deploy/blue-green/docker-compose.blue.yml 的服务 "control-plane" 没有 volumes: 段（挂载必须存在：缺失 ⇒ 失败）
+--- FAIL: TestComposeControlPlaneMountsDatalogReadOnly (0.00s)
+=== RUN   TestComposeBluePinsInstBlue
+    trace_compose_mount_test.go:278: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_compose_mount_test.go:278
+        	Error:      	Should be true
+        	Test:       	TestComposeBluePinsInstBlue
+        	Messages:   	deploy/blue-green/docker-compose.blue.yml：gateway 必须**显式**注入 TRACE_BODY_INST
+--- FAIL: TestComposeBluePinsInstBlue (0.00s)
+=== RUN   TestComposeGreenPinsInstGreen
+    trace_compose_mount_test.go:288: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_compose_mount_test.go:288
+        	Error:      	Should be true
+        	Test:       	TestComposeGreenPinsInstGreen
+        	Messages:   	deploy/blue-green/docker-compose.green.yml：gateway 必须**显式**注入 TRACE_BODY_INST
+--- FAIL: TestComposeGreenPinsInstGreen (0.00s)
+=== RUN   TestComposeColorFilesCarrySpecTraceBodyValues
+    trace_compose_mount_test.go:307: 
+        	Error Trace:	/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tests/deploy/trace_compose_mount_test.go:307
+        	Error:      	Should be true
+        	Test:       	TestComposeColorFilesCarrySpecTraceBodyValues
+        	Messages:   	deploy/blue-green/docker-compose.blue.yml：gateway 必须**显式**写出 TRACE_BODY_BLOCK_MB（C2：生产配置不靠代码默认值）
+--- FAIL: TestComposeColorFilesCarrySpecTraceBodyValues (0.00s)
+=== RUN   TestComposeRootComposeDoesNotEnableTraceBody
+--- PASS: TestComposeRootComposeDoesNotEnableTraceBody (0.00s)
+=== RUN   TestComposeTraceBodyRootParentIsMounted
+--- PASS: TestComposeTraceBodyRootParentIsMounted (0.00s)
+=== RUN   TestComposeNeverCarriesSealIntervalKey
+--- PASS: TestComposeNeverCarriesSealIntervalKey (0.00s)
+FAIL
+FAIL	github.com/example/llm-gateway/tests/deploy	0.010s
+FAIL
+test_exit=1

@@ -33,6 +33,16 @@ services:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL required (CI/CD 变量注入)}
       CONTROL_PLANE_URL: http://127.0.0.1:${CONTROL_PLANE_PORT:-8081}
       AUTH_URL: http://127.0.0.1:${CONTROL_PLANE_PORT:-8081}
+    volumes:
+      # 长语法（不是 `-v`）：source/target 显式，且**绝不**让 Docker 去创建宿主路径。
+      # 部署前必须先 `findmnt -T /datalog` 证明挂载在场（见计划 4 任务 6 步骤 5）。
+      # 【根编排只给挂载、不给开关】没有颜色概念 ⇒ 这里不写任何生效的 TRACE_BODY_ 系列键
+      # （门禁口径是「非注释生效行 = 0」，见计划 4 E68①；文本 grep 不是门禁）：
+      # 设了「写侧开关」而配套的「实例名」缺失，等于再造一个写者到 inst 未定义、
+      # 启动直接失败的状态。完整键名见 deploy/blue-green 的两份颜色编排。
+      - type: bind
+        source: /datalog
+        target: /datalog
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:${GATEWAY_PORT:-8080}/health"]
       interval: 10s
@@ -70,6 +80,12 @@ services:
       OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-http://192.0.2.10:9080/auth/callback}
       OAUTH_SCOPES: ${OAUTH_SCOPES:-openid profile email}
       FRONTEND_URL: ${FRONTEND_URL:-http://192.0.2.10:9080}
+    volumes:
+      # 控制面只点读（冻结包 reader 全程不写文件）⇒ 只读挂载即可。
+      - type: bind
+        source: /datalog
+        target: /datalog
+        read_only: true
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:${CONTROL_PLANE_PORT:-8081}/healthz"]
       interval: 10s

@@ -1,0 +1,5 @@
+定位校验（基于 HEAD:deploy/blue-green/docker-compose.green.yml，sha256=048ca0a7ddad893a）
+OK  m05_绿inst改成blue
+OK  m05b_绿ROLL改2h
+全部 2 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

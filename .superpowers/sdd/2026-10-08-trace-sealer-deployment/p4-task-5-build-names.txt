@@ -1,0 +1,4 @@
+TestCICIBuildsAndInstallsSealer
+TestCICIDoesNotEnableSealerUnit
+TestMakefileBuildTargetsIncludeSealer
+TestMakefileBuildsSealerForLinux

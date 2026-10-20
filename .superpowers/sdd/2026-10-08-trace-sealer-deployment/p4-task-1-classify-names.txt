@@ -1,0 +1,6 @@
+TestClassifyPartExistsIsIdempotent
+TestClassifyRowMismatchIsRetryable
+TestClassifySealFailedIsRetryable
+TestClassifyTooManyRowsIsPermanent
+TestClassifyUnknownIsLoudAndRetryable
+TestClassifyUsesErrorsIsNotEquality

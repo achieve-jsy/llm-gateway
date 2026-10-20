@@ -1,0 +1,5 @@
+定位校验（基于 HEAD:internal/tracesealer/exit.go，sha256=4204ee5e2684a97f）
+OK  m01_有失败也退0
+OK  m02_致命错误退0
+全部 2 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

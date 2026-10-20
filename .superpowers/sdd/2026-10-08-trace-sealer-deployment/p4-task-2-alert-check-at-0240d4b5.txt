@@ -1,0 +1,10 @@
+定位校验（基于 HEAD:internal/tracesealer/alert.go，sha256=4abf4a6ed0732d63）
+OK  m01_全绿也报WARN
+OK  m02_PartExists计入告警
+OK  m03_可重试升级成ERROR
+OK  m04_永久降级成WARN
+OK  m05_Reason拼细节
+OK  m06_Fields漏一个键
+OK  m07_未分类不再ERROR
+全部 7 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

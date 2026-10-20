@@ -1,0 +1,11 @@
+定位校验（基于 HEAD:internal/tracesealer/rootguard.go，sha256=ff0c9e85b8406b72）
+OK  m01_允许文件系统根
+OK  m02_允许相对路径
+OK  m03_不比对身份
+OK  m04_去掉根挂载点特判
+OK  m05_取不到基线也放行
+OK  m06_用建目录修复缺失根
+OK  m07_根目录消失静默放行
+OK  m08_基线返回root
+全部 8 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

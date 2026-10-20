@@ -1,0 +1,79 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = 5650d28c2b79c2cd8782e5e051d8975546798b5b
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 17582377948f24f5189712e264f2df10718133dbfbee6214eaa063983976a351  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-10-observability.py)
+名字清单 sha256          = 71427ee1c5d931952b2e1adbf952ab4457f73f90a381beafee61aff688725c5a  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-10-observability-names.txt)
+名字清单条数             = 6
+清单推导命令             = grep -h '^func Test' tests/tracesealer/observability_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 6 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-i00rutpc
+被测文件 sha256          = dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab  internal/tracesealer/runner.go
+测试文件 sha256          = 22f21e27b31f645d06c288ec796b38da0c8a2c8f12fb3165b8cff81a8abf0406  tests/tracesealer/alert_test.go
+测试文件 sha256          = 0e36d92d813eb0af6d4caa658c1bd0fb235be03362bf690f4f54afed5be56515  tests/tracesealer/classify_test.go
+测试文件 sha256          = 6ec687db153fbdebe474d5c9280a68f0d21f28cb2069b52d607438b748a178b5  tests/tracesealer/concurrent_test.go
+测试文件 sha256          = e81e8605d8acb8a83e6399015e5e9bd258d2e7d7685c08b06c2fc13e436ca5e1  tests/tracesealer/constants_contract_test.go
+测试文件 sha256          = f3bfdacf089c1cf0acf0706d54e8a58de454414f2e99880b852ad508152d077f  tests/tracesealer/exit_test.go
+测试文件 sha256          = b9af6a1d0fe826f5f6a4c19eb341aa091ee57d510984ab033503c00fdea1edab  tests/tracesealer/footer_artifact_test.go
+测试文件 sha256          = f9b5169bad2128e746c00206d68654e27e393464b3fccb281af698540d12373a  tests/tracesealer/footer_roundtrip_test.go
+测试文件 sha256          = 684ac9518781b94d8f2cea29c79fc5ece0c216359ab5871c0da56286719b1a03  tests/tracesealer/footer_test.go
+测试文件 sha256          = 7bd98c1223b58280f9a6b88ad8561f7d5812e6dd7ae7b2f3d2aeab578f91137f  tests/tracesealer/lock_test.go
+测试文件 sha256          = 142965aca3858955488752e512f1f418ece44e129b7d2b384e81b0bba3a72099  tests/tracesealer/loop_test.go
+测试文件 sha256          = 11483eb2f8738d27cf52039f7b7a2c3637a2197d7af6811383a20737271fc264  tests/tracesealer/observability_test.go
+测试文件 sha256          = 64d07b52eb0b863dfa5d417471bf3ab3b83b79f8f16f8a3e2c76cc3714abe7c1  tests/tracesealer/options_test.go
+测试文件 sha256          = 451ce4de0d1e563c1548e9ff85ea7eb03b6d68f1d113938997fb9c6e9cb1c58c  tests/tracesealer/rootguard_test.go
+测试文件 sha256          = af3af343207b05f43948abe79a136be3795bea101259949e7e46dedd4e677c67  tests/tracesealer/round_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] 最大行数与最小压缩比用例在册
+      文件=tests/tracesealer/observability_test.go  正则=func TestObserveTracksMaxRowsAndMinRatio\(  期望=present  实际=命中 'func TestObserveTracksMaxRowsAndMinRatio('
+      理由=「MaxRows 取最大、MinRatio 取最小」是**行为**要求，由该用例承载；本集合 m01–m05 都不翻转这两个量的更新方向 ⇒ 无杀手。**存在性**要求 ⇒ 静态检查钉住（删掉该用例就会 FAIL、整轮失败）。
+- [PASS] 每块一行INFO与轮次汇总用例在册
+      文件=tests/tracesealer/observability_test.go  正则=func TestObserveLogsOneInfoLinePerSealedPart\(  期望=present  实际=命中 'func TestObserveLogsOneInfoLinePerSealedPart('
+      理由=「每个成功块一行 INFO + 每轮一行汇总带三个量」是**行为**要求，由该用例承载；它的失效形态是「删掉/改错一条日志调用」，不是「改坏一条判据」⇒ 本集合的变异杀不到它。存在性由静态检查钉住。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 行数严格超过 MaxTrailerEntries/2 ⇒ 打 WARN（带 rows / dt-inst-part / 占上界的百分比）；刚好等于一半不预警 | `m01_预警阈值改成100%` | — | **行为**要求 ⇒ 在册用例 `TestObserveWarnsAtHalfOfRowCap`（按**结构化日志字段**断言，不 grep 文本）。 |
+| MinBytesPerRow 取**最小**的「未压缩字节/行」（= 最小值，不是最大值） | `m02_每行字节数取成最大值`, `m03_每行字节数分母加一` | — | **行为**要求 ⇒ 在册用例 `TestObserveTracksMinimumBytesPerRow`（两个块给出不同的 B/行）。 |
+| MaxRows 取最大行数、MinRatio 取最小压缩比（压缩比最小 = 最难压的那一块） | — | `最大行数与最小压缩比用例在册` | **行为**要求 ⇒ 在册用例 `TestObserveTracksMaxRowsAndMinRatio`。这两条**没有**专属变异：TARGET 的 m01–m05 都不翻转这两个量的更新方向 ⇒ 按 E64② 登记进文末 `COVERAGE_GAPS` 并给出人工探针；存在性由同名静态检查钉住。 |
+| 每个成功读到行数的 part 恰好一行 INFO；每轮汇总（trace-sealer round）带上 max_rows / min_bytes_per_row / min_ratio | — | `每块一行INFO与轮次汇总用例在册` | **行为**要求 ⇒ 在册用例 `TestObserveLogsOneInfoLinePerSealedPart`（3 个块 ⇒ 3 行 INFO + 1 行汇总，并断言汇总里的三个量与 RoundResult 一致）。无专属变异（m01 只改变预警条数，不改变正常块的 INFO 条数）⇒ 按 E64② 登记进 `COVERAGE_GAPS` + 人工探针；存在性由同名静态检查钉住。 |
+| 行数读不出来（产物不足 32 字节）⇒ 本轮无样本（三个量保持零值）+ 一条 reason=footer_unreadable 的 ERROR；Sealed 计数不受影响 | `m04_读不出footer当成1行` | — | **行为**要求 ⇒ 在册用例 `TestObserveSkipsUnreadableArtifact`。 |
+| 非法分母（块内 0 行 / 未压缩字节 ≤ 0）⇒ 跳过本块 + reason=observation_skipped 的 WARN，绝不发明读数 | `m05_非法分母守卫摘掉0行` | — | **行为**要求 ⇒ 在册用例 `TestObserveSkipsDegenerateDenominator`。 |
+
+计划要求总数 = 6；引用到的变异 = 5；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=6 ran=6 diff=0 PASS=6 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_预警阈值改成100% | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestObserveWarnsAtHalfOfRowCap |
+| m02_每行字节数取成最大值 | 红 | names=6 ran=6 diff=0 PASS=4 SKIP=0 FAIL=2 | TestObserveTracksMaxRowsAndMinRatio, TestObserveTracksMinimumBytesPerRow |
+| m03_每行字节数分母加一 | 红 | names=6 ran=6 diff=0 PASS=4 SKIP=0 FAIL=2 | TestObserveTracksMaxRowsAndMinRatio, TestObserveTracksMinimumBytesPerRow |
+| m04_读不出footer当成1行 | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestObserveSkipsUnreadableArtifact |
+| m05_非法分母守卫摘掉0行 | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestObserveSkipsDegenerateDenominator |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 5
+集合里的变异总数          = 5（本次运行 == 全集 ✓）
+断言支撑的红             = 5 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 5 = 5 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

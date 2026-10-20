@@ -1,0 +1,12 @@
+定位校验（基于 HEAD:internal/tracesealer/footer.go，sha256=fa10f80dfc995b64）
+OK  m01_footer长度32改24
+OK  m02_读取偏移差一个字节
+OK  m03_短文件返回0而不是错误
+OK  m04_magic判据空操作
+OK  m05_版本判据空操作
+OK  m06_负行数判据空操作
+OK  m07_trailer紧邻判据空操作
+OK  m08_文件不存在返回0而不是错误
+OK  m09_row_count偏移改成trailer_len偏移
+全部 9 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

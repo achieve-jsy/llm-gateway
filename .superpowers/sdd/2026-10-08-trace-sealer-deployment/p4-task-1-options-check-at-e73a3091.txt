@@ -1,0 +1,6 @@
+定位校验（基于 HEAD:internal/tracesealer/options.go，sha256=21677b55f4acb3b7）
+OK  m01_去掉min-age下界
+OK  m02_默认min-age缩到30m
+OK  m03_不校验2的幂
+全部 3 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

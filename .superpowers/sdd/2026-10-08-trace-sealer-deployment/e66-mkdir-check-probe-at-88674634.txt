@@ -1,0 +1,191 @@
+## E66③ 静态检查可失败性探针（临时仓库）
+git rev-parse HEAD（探针所依据的集合与实现版本）= 88674634b106948b175db6416ea27241f51dd879
+说明：工具只在 pristine 树求值 CHECKS（trace_mutate.py:574）⇒ 变异不可能让「不得建目录」
+      这类不存在性检查变红；本探针在被克隆的临时仓库里**插入**建目录调用形态并提交，
+      使对应那一行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 1。
+      三个克隆 = /tmp/e66probe-{lock,options,main}（--shared 克隆自本工作树，基点 HEAD 同上）。
+
+================ E66③ 探针：lock（目标 internal/tracesealer/lock.go）================
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = 1071b8b75726f31a0d991faf123e6126c98e021e
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/private/tmp/e66probe-lock/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = f107049422a69181e6e44db0b813a6e5a0e23cafb2e098b6a80b6196d2ebd246  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-4-lock.py)
+名字清单 sha256          = f2e8b230f5e37434fed05b6d84a000aebdc213541b8d88fe8cd410e47bac44d6  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-4-lock-names.txt)
+名字清单条数             = 13
+清单推导命令             = grep -h '^func Test' tests/tracesealer/lock_test.go tests/tracesealer/concurrent_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 13 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-a6k5c08l
+被测文件 sha256          = 8c1fa35d3beeff36df11a795b558dd55f123df1ff39f3eb0ed2f5f7cf4114c6f  internal/tracesealer/lock.go
+测试文件 sha256          = 22f21e27b31f645d06c288ec796b38da0c8a2c8f12fb3165b8cff81a8abf0406  tests/tracesealer/alert_test.go
+测试文件 sha256          = 0e36d92d813eb0af6d4caa658c1bd0fb235be03362bf690f4f54afed5be56515  tests/tracesealer/classify_test.go
+测试文件 sha256          = 6ec687db153fbdebe474d5c9280a68f0d21f28cb2069b52d607438b748a178b5  tests/tracesealer/concurrent_test.go
+测试文件 sha256          = f3bfdacf089c1cf0acf0706d54e8a58de454414f2e99880b852ad508152d077f  tests/tracesealer/exit_test.go
+测试文件 sha256          = 7bd98c1223b58280f9a6b88ad8561f7d5812e6dd7ae7b2f3d2aeab578f91137f  tests/tracesealer/lock_test.go
+测试文件 sha256          = 142965aca3858955488752e512f1f418ece44e129b7d2b384e81b0bba3a72099  tests/tracesealer/loop_test.go
+测试文件 sha256          = 64d07b52eb0b863dfa5d417471bf3ab3b83b79f8f16f8a3e2c76cc3714abe7c1  tests/tracesealer/options_test.go
+测试文件 sha256          = 451ce4de0d1e563c1548e9ff85ea7eb03b6d68f1d113938997fb9c6e9cb1c58c  tests/tracesealer/rootguard_test.go
+测试文件 sha256          = af3af343207b05f43948abe79a136be3795bea101259949e7e46dedd4e677c67  tests/tracesealer/round_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] 锁必须用flock
+      文件=internal/tracesealer/lock.go  正则=syscall\.Flock  期望=present  实际=命中 'syscall.Flock'
+      理由=互斥必须是**内核级**的（flock）：家酿的「文件存在即认为有实例」在崩溃后留下陈旧文件，会把 sealer **永久**挡在外面（要人工删文件才能修）。它是「用哪种机制」的取值要求 ⇒ 静态检查；行为面由 m02/m03 与 TestLockIsExclusive 承载。
+- [PASS] 加锁必须非阻塞
+      文件=internal/tracesealer/lock.go  正则=LOCK_NB  期望=present  实际=命中 'LOCK_NB'
+      理由=非阻塞（LOCK_NB）是**排障可用性**要求：第二个 sealer 必须**立刻**拿到ErrAnotherSealerRunning，而不是排队等 —— 等会把一次手工排障变成一次神秘挂起。阻塞形态不能作为变异（挂死 ⇒ 超时红 ⇒ 无效证据），因此这一半只能静态检查，另一半由 m02/m03 承载。
+- [PASS] 锁文件默认落在root之内
+      文件=internal/tracesealer/options.go  正则=filepath\.Join\(o\.Root, "\.sealer\.lock"\)  期望=present  实际=命中 'filepath.Join(o.Root, ".sealer.lock")'
+      理由=root 之外没有可写保证（`ProtectSystem=strict` + `ReadWritePaths=/datalog`），而且只有落在 root 里才能被「同一个 root 只有一个写者」这条语义覆盖 ⇒ 它必须在 `normalize()` 里默认成 `<root>/.sealer.lock`（`--lock-file` 只能覆盖它，不能取消它）。取值要求 ⇒ 静态检查。
+- [PASS] A7次序不变量用例在册
+      文件=tests/tracesealer/concurrent_test.go  正则=func TestA7WriterNeverAppendsToAHandedOffPart\(  期望=present  实际=命中 'func TestA7WriterNeverAppendsToAHandedOffPart('
+      理由=计划任务 4 步骤 6 明确要求的一条：A7 的次序不变量（先 MarkSealed、后交接）必须有**可执行载体**；它的被测对象是冻结包的次序，本计划不得变异冻结包 ⇒ 这一条**只能静态检查存在性**，行为由名字清单里的该用例承载（清单里有它 ⇒ 权威表的执行集合里必有它）。**如实登记**：该用例没有变异杀手，可失败性由人工探针承载（见 COVERAGE_GAPS）。
+- [PASS] A7落点用例在册
+      文件=tests/tracesealer/concurrent_test.go  正则=func TestA7NoRefPointsToNothing\(  期望=present  实际=命中 'func TestA7NoRefPointsToNothing('
+      理由=「每一个已返回的 Ref 都必须有落点」是**行为**要求，承载它的是名字清单里的该用例（被测对象是冻结包 Writer + 替身 sealer 的次序，本计划不得变异冻结包）⇒ 静态检查只钉住它的**存在性**（防止用例被删而白单里没人发现）。
+- [PASS] A7重启续号用例在册
+      文件=tests/tracesealer/concurrent_test.go  正则=func TestA7RestartAfterSealStartsAtNextPart\(  期望=present  实际=命中 'func TestA7RestartAfterSealStartsAtNextPart('
+      理由=「产物已存在、spool 已删之后，新 Writer 必须从 part+1 继续」是行为要求，承载它的是名字清单里的该用例；静态检查只钉存在性（同上）。
+- [PASS] runner不得有第二处锁实现
+      文件=internal/tracesealer/runner.go  正则=syscall\.Flock|os\.Mkdir  期望=absent  实际=未命中
+      理由=互斥只能有**一处**实现。在 `NewRunner` 里再补一层「文件/目录存在即认为有实例」的家酿锁，会在崩溃后把 sealer 永久挡在外面（D70 同族）；在 runner 里再取一次 flock 则会让同一进程的两次装配互相拒绝。不存在性要求 ⇒ 静态检查（本行扫整个文件文本，含注释）。
+- [FAIL] lock.go不得建目录
+      文件=internal/tracesealer/lock.go  正则=\bMkdir[A-Za-z]*\s*\(  期望=absent  实际=命中 'MkdirAll('
+      理由=**D70 的「整包零建目录」**（**E66③** 补齐）：本集合原先只在 `runner.go` 上有这一行，`lock.go` 缺该行；而计划全局约束第 27 条要求 `internal/tracesealer/` 与 `cmd/trace-sealer/` 的**每一个**源文件都不得出现建目录调用形态 —— 用建目录去「修复」消失的挂载点，会把挂载点重建到**宿主根文件系统**上（2026-09-24 `/` 被写满的同族事故）。**不存在性**要求 ⇒ 只能静态检查（变异无法证明「没写」）。**工具只在 pristine 树求值**（`trace_mutate.py:574` 的 `print_checks(setmod, tree)`，`tree` 由 `git archive HEAD` 现取现解）⇒ 任何变异都不可能让本行变红；它的**可失败性**由 **E66③ 的临时仓库探针**实测（在 `lock.go` 里插入 `os.MkdirAll(o.Root, 0o755)` 并提交到临时仓库 ⇒ 本行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 1）。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 同一个 root 同时只能有一个 sealer：第二个持有者必须**立刻**失败（装配期就要挡住） | `m02_排他变共享`, `m03_冲突不返回哨兵` | — | 杀手 = TestLockIsExclusive（锁语义）；另 TestA7RoundIsSerializedWithLock （装配期语义：常驻循环持锁期间手工 --once 必须被拒）。 |
+| Release 必须真正放开锁：释放之后必须能被重新获取（否则一次排障后 sealer 永久起不来） | `m04_释放不解锁` | — | 杀手 = TestLockReleasedAllowsReacquire；另 TestNewRunnerReleasesLockOnClose（Close 走同一条 Release）。 |
+| Release 幂等：退出路径（defer + 显式）会调两次，第二次必须无害 | `m05_释放不置空` | — | 杀手 = TestLockReleaseIsIdempotent（第二次 close 已关闭的 fd ⇒ 返回错误）。 |
+| 互斥必须是内核级 flock，且必须非阻塞（阻塞会把排障变成一次神秘挂起） | `m02_排他变共享`, `m03_冲突不返回哨兵` | `锁必须用flock`, `加锁必须非阻塞` | 「用哪种机制」与「非阻塞」是结构/取值要求 ⇒ 两行静态检查；行为面由 m02/m03 + TestLockIsExclusive 承载。阻塞形态**不作变异**（挂死 ⇒ 超时红 ⇒ 无效证据，见 MUTATIONS 上方的 m01 说明）。 |
+| 锁文件必须落在 root 之内（root 之外没有可写保证，且只有 root 内才被「同一 root 单写者」覆盖） | — | `锁文件默认落在root之内` | `normalize()` 的默认值 ⇒ 取值要求 ⇒ 静态检查；`--lock-file` 只覆盖它。 |
+| 互斥只能有一处实现：`runner.go` 里不得再补一层家酿锁 | — | `runner不得有第二处锁实现` | 不存在性要求 ⇒ 静态检查（D70 同族的家酿锁会把 sealer 永久挡在外面）。 |
+| A7 次序不变量：一旦 part 被交接（先 MarkSealed 关 fd），后续 Append 绝不允许再落到它上（D7） | — | `A7次序不变量用例在册` | 在册行为用例 = TestA7WriterNeverAppendsToAHandedOffPart（名字清单里有它，权威表的执行集合里必有它）。**没有变异杀手**：被测对象是冻结包 Writer 的次序，本计划不得变异冻结包 ⇒ 按 E64①/E64② 如实登记进 COVERAGE_GAPS，并与一条静态检查（存在性）配对。 |
+| A7 落点：每一个已返回的 Ref 都必须有落点（产物在场，或 spool 在场且该行存在） | — | `A7落点用例在册` | 在册行为用例 = TestA7NoRefPointsToNothing；无变异杀手（同上，见 COVERAGE_GAPS）。 |
+| A7 重启：产物已存在、spool 已删之后，新 Writer 必须从 part+1 继续 | — | `A7重启续号用例在册` | 在册行为用例 = TestA7RestartAfterSealStartsAtNextPart；无变异杀手（同上，见 COVERAGE_GAPS）。 |
+| D70：整包零建目录 —— `lock.go` 里不得出现任何建目录调用（含注释） | — | `lock.go不得建目录` | 不存在性要求 ⇒ 静态检查（**E66③** 补齐；同族两行在 `p4-task-1-round.py` 的 `runner.go` 与 `p4-task-3-rootguard.py` 的 `rootguard.go`）。可失败性由 E66③ 的临时仓库探针承载 —— 工具只在 pristine 树求值 `CHECKS`（`trace_mutate.py:574`），变异**不可能**让它变红。 |
+
+计划要求总数 = 10；引用到的变异 = 4；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+!!! 静态检查失败 ⇒ 整轮失败
+probe_exit=1
+
+================ E66③ 探针：options（目标 internal/tracesealer/options.go）================
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = cf269d16ac726567ea239a05bb7df41f6ad9d9fc
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/private/tmp/e66probe-options/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 2ab968c4210a1fce8ed9f5582c4c42e26107fc4f31d39408c283a43ae6513177  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-1-options.py)
+名字清单 sha256          = 13b726fec4f4ad6a4283907610c11e09eec38a7e38b3698d00de61783ede71ac  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-1-options-names.txt)
+名字清单条数             = 3
+清单推导命令             = grep -h '^func Test' tests/tracesealer/options_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 3 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-70jswb6y
+被测文件 sha256          = 70d2a41f8ab49feaa092b9fa285f2a8bb31e293334a812288d6e4594c040281b  internal/tracesealer/options.go
+测试文件 sha256          = 22f21e27b31f645d06c288ec796b38da0c8a2c8f12fb3165b8cff81a8abf0406  tests/tracesealer/alert_test.go
+测试文件 sha256          = 0e36d92d813eb0af6d4caa658c1bd0fb235be03362bf690f4f54afed5be56515  tests/tracesealer/classify_test.go
+测试文件 sha256          = 6ec687db153fbdebe474d5c9280a68f0d21f28cb2069b52d607438b748a178b5  tests/tracesealer/concurrent_test.go
+测试文件 sha256          = f3bfdacf089c1cf0acf0706d54e8a58de454414f2e99880b852ad508152d077f  tests/tracesealer/exit_test.go
+测试文件 sha256          = 7bd98c1223b58280f9a6b88ad8561f7d5812e6dd7ae7b2f3d2aeab578f91137f  tests/tracesealer/lock_test.go
+测试文件 sha256          = 142965aca3858955488752e512f1f418ece44e129b7d2b384e81b0bba3a72099  tests/tracesealer/loop_test.go
+测试文件 sha256          = 64d07b52eb0b863dfa5d417471bf3ab3b83b79f8f16f8a3e2c76cc3714abe7c1  tests/tracesealer/options_test.go
+测试文件 sha256          = 451ce4de0d1e563c1548e9ff85ea7eb03b6d68f1d113938997fb9c6e9cb1c58c  tests/tracesealer/rootguard_test.go
+测试文件 sha256          = af3af343207b05f43948abe79a136be3795bea101259949e7e46dedd4e677c67  tests/tracesealer/round_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] min-age错误文案指向R8契约
+      文件=internal/tracesealer/options.go  正则=min-age=%s 必须严格大于网关滚动间隔上界  期望=present  实际=命中 'min-age=%s 必须严格大于网关滚动间隔上界'
+      理由=错误文案是运维可见面：运维看到这句话才知道被违反的是 R8（sealer 与网关之间唯一的次序保护），而不是一个泛泛的「配置非法」。用例只断言 ErrorContains 的片段 ⇒ 不存在能删除整句的变异形态，按全局约束第 6/7 条静态检查。
+- [FAIL] options.go不得建目录
+      文件=internal/tracesealer/options.go  正则=\bMkdir[A-Za-z]*\s*\(  期望=absent  实际=命中 'MkdirAll('
+      理由=**D70 的「整包零建目录」**（**E66③** 补齐）：原先只有 `runner.go`（`p4-task-1-round.py:93`）与 `rootguard.go`（`p4-task-3-rootguard.py:133`）各有该行，`options.go` 缺；而计划全局约束第 27 条要求 `internal/tracesealer/` 的**每一个**源文件都不得出现建目录调用形态（`normalize()` 是最容易被顺手加上「root 不存在就先建出来」的地方 —— 那正是把消失的挂载点重建到宿主根 FS 上的形态，2026-09-24 事故同族）。**不存在性**要求 ⇒ 静态检查；**工具只在 pristine 树求值**（`trace_mutate.py:574`）⇒ 变异不可能让它变红，可失败性由 **E66③ 的临时仓库探针**实测（插入 `os.MkdirAll(o.Root, 0o755)` 并提交 ⇒ 本行 FAIL、退出 1）。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| R8：min-age 必须严格大于网关滚动间隔上界（1h），违反即启动失败 | `m01_去掉min-age下界` | — | 杀手 = TestNewRunnerRejectsMinAgeAtOrBelowGatewayRollUpperBound（1m/30m/1h 三例；边界相等也必须被拒）。 |
+| 默认 min-age = 3h（= 冻结包 defaultSealMinAge 的镜像值） | `m02_默认min-age缩到30m` | — | 杀手 = TestNewRunnerDefaultsMinAgeToThreeHours。 |
+| zstd --long=<log2> 的前提：窗口必须是 2 的幂（启动期拒绝，而不是封块时才炸） | `m03_不校验2的幂` | — | 杀手 = TestNewRunnerRejectsNonPowerOfTwoWindow。 |
+| 配置错误一律响亮失败，错误文案点明被违反的契约（运维可见面） | — | `min-age错误文案指向R8契约` | 文案取值要求 ⇒ 静态检查。 |
+| D70：整包零建目录 —— `options.go`（含 `normalize()`）不得出现任何建目录调用 | — | `options.go不得建目录` | 不存在性要求 ⇒ 静态检查（**E66③** 补齐）。可失败性由 E66③ 的临时仓库探针承载 —— 工具只在 pristine 树求值 `CHECKS`（`trace_mutate.py:574`）。 |
+
+计划要求总数 = 5；引用到的变异 = 3；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+!!! 静态检查失败 ⇒ 整轮失败
+probe_exit=1
+
+================ E66③ 探针：main（目标 cmd/trace-sealer/main.go）================
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = a20ee01d9c196335b4ade103988628d348b6a4ed
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/private/tmp/e66probe-main/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 3228582b1a62d23064fe1a9e8418c90eed43c2705145f76dc7820859ee2de998  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-1-exit.py)
+名字清单 sha256          = e9347579c1fdd5cd16fa1f7f53912076e7d2ed19e7fab65b008eaa1ccbc474f1  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-1-exit-names.txt)
+名字清单条数             = 3
+清单推导命令             = grep -h '^func Test' tests/tracesealer/exit_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 3 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-3r0818nc
+被测文件 sha256          = 4204ee5e2684a97fbe95c8ac3f7179e5d417cee4eee4c7c9c7830bbc371b7cc4  internal/tracesealer/exit.go
+测试文件 sha256          = 22f21e27b31f645d06c288ec796b38da0c8a2c8f12fb3165b8cff81a8abf0406  tests/tracesealer/alert_test.go
+测试文件 sha256          = 0e36d92d813eb0af6d4caa658c1bd0fb235be03362bf690f4f54afed5be56515  tests/tracesealer/classify_test.go
+测试文件 sha256          = 6ec687db153fbdebe474d5c9280a68f0d21f28cb2069b52d607438b748a178b5  tests/tracesealer/concurrent_test.go
+测试文件 sha256          = f3bfdacf089c1cf0acf0706d54e8a58de454414f2e99880b852ad508152d077f  tests/tracesealer/exit_test.go
+测试文件 sha256          = 7bd98c1223b58280f9a6b88ad8561f7d5812e6dd7ae7b2f3d2aeab578f91137f  tests/tracesealer/lock_test.go
+测试文件 sha256          = 142965aca3858955488752e512f1f418ece44e129b7d2b384e81b0bba3a72099  tests/tracesealer/loop_test.go
+测试文件 sha256          = 64d07b52eb0b863dfa5d417471bf3ab3b83b79f8f16f8a3e2c76cc3714abe7c1  tests/tracesealer/options_test.go
+测试文件 sha256          = 451ce4de0d1e563c1548e9ff85ea7eb03b6d68f1d113938997fb9c6e9cb1c58c  tests/tracesealer/rootguard_test.go
+测试文件 sha256          = af3af343207b05f43948abe79a136be3795bea101259949e7e46dedd4e677c67  tests/tracesealer/round_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] main不自己决定退出码
+      文件=cmd/trace-sealer/main.go  正则=os\.Exit\([0-9]  期望=absent  实际=未命中
+      理由=退出码契约只允许有一份（internal/tracesealer/exit.go 的 ExitOK/ExitFatal/ExitFailed）。main 里出现字面量就等于把契约复制成两份，改一处漏一处。这是**不存在性**要求 ⇒ 只能静态检查（变异无法证明「没写」）。
+- [FAIL] main不得建目录
+      文件=cmd/trace-sealer/main.go  正则=\bMkdir[A-Za-z]*\s*\(  期望=absent  实际=命中 'MkdirAll('
+      理由=**D70 的「整包零建目录」**（**E66③** 补齐）：全局约束第 27 条明确点名 `internal/tracesealer/` **与** `cmd/trace-sealer/` 两个目录都不得出现建目录调用形态；原先只有 `runner.go`（`p4-task-1-round.py:93`）与 `rootguard.go`（`p4-task-3-rootguard.py:133`）两行，薄壳 `main.go` 缺 —— 而「启动时 root不在就先建出来」正是这类事故最自然的入口。**不存在性**要求 ⇒ 静态检查；**工具只在 pristine 树求值**（`trace_mutate.py:574`）⇒ 变异不可能让它变红，可失败性由 **E66③ 的临时仓库探针**实测（插入 `os.MkdirAll(*root, 0o755)` 并提交⇒ 本行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 1）。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 退出码：--once 跑完但本轮有失败（可重试或永久）⇒ 2；PartExists 不算失败 ⇒ 0 | `m01_有失败也退0` | — | 杀手 = TestExitCodeTwoWhenOnceHasFailures（含 PartExists:3 ⇒ ExitOK 的反向断言）；TestExitCodeZeroOnCleanRound 在被变异下仍绿，是隔离探针。 |
+| 退出码：启动期/环境级致命错误 ⇒ 1（与「某一轮有失败」区分） | `m02_致命错误退0` | — | 杀手 = TestExitCodeOneOnFatalError。 |
+| main 是薄壳：退出码只由 ExitCode 决定（不存在性要求） | — | `main不自己决定退出码`, `main不得建目录` | 不存在性无法用变异证明 ⇒ 静态检查。「不得建目录」是 D70 在薄壳上的落点（**E66③** 补齐），可失败性由 E66③ 的临时仓库探针承载。 |
+
+计划要求总数 = 3；引用到的变异 = 2；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+!!! 静态检查失败 ⇒ 整轮失败
+probe_exit=1
+
+## E66④ grep 证据（「全项目」/「零允许的绿」类表述的命中数）
+范围 = --include='*.md' --include='*.py' --include='*.txt'，排除 vendor/
+
+--- 改动前（00e5c1ba，E65 提交之前）---
+全项目 = 0
+零允许的绿 = 0
+--- 改动后（9954edc9，E65 提交处）---
+全项目 = 2
+零允许的绿 = 2
+--- 命中位置（9954edc9，只印 commit:path:line；判据以改动前的 0 为准）---
+9954edc9:docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md:3096
+9954edc9:docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md:3100
+grep_done=ok

@@ -1,0 +1,36 @@
+### 任务 11 / E73 的「改坏 → 转红 → 还原」探针（HEAD=e854528c）
+
+还原口径：**不**用 git checkout / reset / stash（全局约束禁止）—— 原字节先留在内存，改完写回后复算 sha256。
+静态检查那一半在**临时克隆**里跑（工具拒绝脏工作树 ⇒ 克隆里先提交那次改坏，`--repo` 指向克隆）。
+改坏前的 docs/deployment.md sha256 = cde05ffbc546467ba881a343a3b2cdae5d5b525a96b8e3ba13a5880824c47fb2（20634 字节）
+
+## P1：把 'df -h /datalog' 改成 'df -h <root>'
+  ① 在册用例 TestRunbookDocumentsRetentionAndSpaceBudget ⇒ go test 退出码 1（必须非 0）
+     判定行：--- FAIL: TestRunbookDocumentsRetentionAndSpaceBudget (0.00s) || FAIL	github.com/example/llm-gateway/tests/deploy	0.007s
+  ② 集合静态检查行「手册必须含保留与空间预算口径」⇒ 工具退出码 1（必须非 0）
+     判定行：- [FAIL] 手册必须含保留与空间预算口径 || !!! 静态检查失败 ⇒ 整轮失败
+  ③ 还原：写回原字节后 sha256 = cde05ffbc546467ba881a343a3b2cdae5d5b525a96b8e3ba13a5880824c47fb2（与改前一致 = True）
+
+## P2：把 'too_many_rows' 改成 'too-many-rows'
+  ① 在册用例 TestRunbookDocumentsSealerHeartbeatAndPermanentFailure ⇒ go test 退出码 1（必须非 0）
+     判定行：--- FAIL: TestRunbookDocumentsSealerHeartbeatAndPermanentFailure (0.00s) || FAIL	github.com/example/llm-gateway/tests/deploy	0.007s
+  ② 集合静态检查行「手册必须含sealer心跳与永久失败处置」⇒ 工具退出码 1（必须非 0）
+     判定行：- [FAIL] 手册必须含sealer心跳与永久失败处置 || !!! 静态检查失败 ⇒ 整轮失败
+  ③ 还原：写回原字节后 sha256 = cde05ffbc546467ba881a343a3b2cdae5d5b525a96b8e3ba13a5880824c47fb2（与改前一致 = True）
+
+## P3：把 '两种降级不对称' 改成 '两种降级对称'
+  ① 在册用例 TestRunbookDocumentsMountLossLatchesWithinOneTick ⇒ go test 退出码 1（必须非 0）
+     判定行：--- FAIL: TestRunbookDocumentsMountLossLatchesWithinOneTick (0.00s) || FAIL	github.com/example/llm-gateway/tests/deploy	0.007s
+  ② 集合静态检查行「手册必须含两种降级不对称与补救动作」⇒ 工具退出码 1（必须非 0）
+     判定行：- [FAIL] 手册必须含两种降级不对称与补救动作 || !!! 静态检查失败 ⇒ 整轮失败
+  ③ 还原：写回原字节后 sha256 = cde05ffbc546467ba881a343a3b2cdae5d5b525a96b8e3ba13a5880824c47fb2（与改前一致 = True）
+
+## P4：把已提交的真实产物 fixture 移走
+改坏前 fixture sha256 = 7f4291c592b71182a90bfa25953c648b3db5fd64383fc85af14752430e2af75e（104 字节）
+  ① go test 退出码 1（必须非 0）；判定行：--- FAIL: TestFooterParsesCommittedRealArtifact (0.00s) || FAIL || FAIL	github.com/example/llm-gateway/tests/tracesealer	0.007s
+  ② SKIP 行数 = 0（必须为 0：缺产物必须 FAIL，不许 SKIP）
+  ③ 还原：fixture sha256 = 7f4291c592b71182a90bfa25953c648b3db5fd64383fc85af14752430e2af75e（与改前一致 = True）
+
+结论：三条静态检查各自的坏文本都同时让**在册用例**与**静态检查行**转红（工具在临时克隆里整轮失败、退出 1）；
+      产物缺失是 **FAIL** 而不是 SKIP（0 条 SKIP）；全部写回原字节后 sha256 与改前一致（整体 True）。
+probe_exit=0

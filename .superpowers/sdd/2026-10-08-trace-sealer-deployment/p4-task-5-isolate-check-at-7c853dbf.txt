@@ -1,0 +1,7 @@
+定位校验（基于 HEAD:deploy/systemd/isolate-old-trace-archive.sh，sha256=3be89f11ef11ce3d）
+OK  m01_默认不再dry-run
+OK  m02_命中新树不STOP
+OK  m03_mask改unmask
+OK  m04_删掉回滚提示
+全部 4 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

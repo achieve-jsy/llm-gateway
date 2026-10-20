@@ -1,0 +1,17 @@
+=== RUN   TestA3ComposeDisablesWatermarkSoRealEnospcHappensFirst
+--- PASS: TestA3ComposeDisablesWatermarkSoRealEnospcHappensFirst (0.00s)
+=== RUN   TestA3ComposeHasNoConnectionDefaults
+--- PASS: TestA3ComposeHasNoConnectionDefaults (0.00s)
+=== RUN   TestA3ComposeUsesIsolatedNamesAndPorts
+--- PASS: TestA3ComposeUsesIsolatedNamesAndPorts (0.00s)
+=== RUN   TestA3ComposeNeverMountsProductionDatalog
+--- PASS: TestA3ComposeNeverMountsProductionDatalog (0.00s)
+=== RUN   TestA3RunScriptAlwaysCleansUp
+--- PASS: TestA3RunScriptAlwaysCleansUp (0.00s)
+=== RUN   TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep
+--- PASS: TestA3RunScriptCallsGuardBeforeAnyFillOrCleanupStep (0.00s)
+=== RUN   TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot
+--- PASS: TestA3ScratchPrepareGuardsOnlyAfterMountAndBeforeArchiveRoot (0.00s)
+PASS
+ok  	github.com/example/llm-gateway/tests/deploy	0.007s
+test_exit=0

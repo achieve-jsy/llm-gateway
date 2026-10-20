@@ -14,7 +14,7 @@
 
 ## 全局约束
 
-- **范围（本计划交付什么、不交付什么）**：本计划 = ① `cmd/trace-sealer` + `internal/tracesealer`；② systemd unit 与旧归档定时器隔离；③ `/datalog` bind mount 与编排变更；④ 蓝绿切换剧本；⑤ 验收 A3 / A6 / A7 / A8 + 「撤掉挂载 ≤1 tick 闩锁」；⑥ 运行手册条目。**不交付**：读侧（点读服务，计划 3）、冷层合并（§5.5）、A1/A2/A4/A5（依赖读侧）、任何 PG schema 变更、`docs/guardrails.md` 的订正。
+- **范围（本计划交付什么、不交付什么）**：本计划 = ① `cmd/trace-sealer` + `internal/tracesealer`；② systemd unit 与旧归档定时器隔离；③ `/datalog` bind mount 与编排变更；④ 蓝绿切换剧本；⑤ 验收 A3 / A6 / A7 / A8 + 「撤掉挂载 ≤1 tick 闩锁」；⑥ 运行手册条目。**不交付**：读侧（点读服务，计划 3）、冷层合并（§5.5）、A2/A4/A5（依赖读侧）、任何 PG schema 变更、`docs/guardrails.md` 的订正；**A1 的读回半部（n = 1e6）物理测量**按发起者裁定（计划 3 的 **E52**）归**任务 9**，口径见计划 3 的交接 **H19**，环境 = 生产宿主 + 真实 PG + 真实 `zstd` **1.4.8** ⇒ 本计划只把它登记为「待宿主执行」（见 **E71**）。
 - **冻结包零改动（铁律）**：`internal/tracearchive/` 附有 142 条变异证据（R11 v3，冻结提交 `ea962a70`）。本计划**不得**新增/改名/改行为其中任何文件；只以公开 API 复用（`NewSealer` / `SealerOptions` / `Seal` / `ListPendingSeals` / `SealTask` / `ErrPartExists` / `ErrRowCountMismatch` / `ErrTooManyRows` / `ErrSealFailed` / `Ref` / `Paths` / `Writer` / `Reader`）。交付报告必须以 `git diff --stat 3a2301ad..HEAD -- internal/tracearchive/` **输出为空**为证（命令与真实输出一起抄）。
 - **计划 2 的代码同样「非必要不改」**：`internal/gateway/observability/{trace_line.go,spool_gate.go,spooler.go,trace_event.go}` 与 `internal/gateway/config/trace_body.go` 是计划 2 变异集合（`p2-task-2..8`）的被测文件。本计划**默认不改**它们；**只有**任务 10 的 A8 决策门被触发（实测证明「块内行数会超 `maxTrailerEntries`」）时才允许改 `spooler.go`，届时 `p2-task-5` / `p2-task-8-spooler` 的绑定立即失效 ⇒ **必须重跑这两个集合并重新记录 sha256**（见全局约束「变异证据绑定提交」）。
 - **跨进程次序不变量（R8 / D7）**：网关先滚动（`MarkSealed`，关 fd）→ sealer 才可能封块。网关滚动间隔 `TRACE_BODY_ROLL_INTERVAL=1h`（计划 2 已强制 ≤1h 且 <3h），实际滚动上界 = `1h + flush(1m) = 1h1m`。sealer 侧唯一的保护是 `minAge`，因此 `internal/tracesealer` **必须**对 `--min-age` 施加强制下界：`min-age > 1h`（R8 的网关滚动上界），违反即启动失败；默认值 `3h`（= 冻结包 `defaultSealMinAge`）。
@@ -46,7 +46,7 @@
   5. 每条变异必须红成**断言红**（顶层用例 FAIL）；**编译红 / panic / 30s 超时红**必须改写变异字符串（保住被引用符号的引用，例如把 `if x != nil` 改成 `if x != nil && false`）后重跑，不得记成通过。
   6. 变异测不到的要求（结构不变量、产物文本）必须有 `CHECKS` 行，写明命令与真实输出。
   7. `REQUIREMENTS` 必须把「本任务对应的每条计划/规格要求」映射到变异或检查行；**有要求无条目 ⇒ 整轮失败**；零覆盖必须登记进 `EXPECTED_GREEN` 并写理由。
-- **变异证据绑定提交（本仓库特有，必须逐字执行）**：`trace_mutate.py` 的证据模式**拒绝脏树**（`git status --porcelain` 非空即 `SystemExit`），且 `--check` 用 `git show HEAD:<target>`、pristine 树用 `git archive HEAD` 现取现解 ⇒ **权威表必须在「实现 + 测试 + 集合」提交之后运行**。因此每个任务的步骤次序是：写实现/测试/集合 → **提交** → 跑 `--check` → 跑权威表 → 把工具头部（`git rev-parse HEAD`、工具/集合/清单/被测文件 sha256）原样抄进报告。**任何后续新提交都会使此前所有绑定失效** ⇒ ①每个任务必须在自己那次提交后重跑；②任务 12 在**最终 HEAD** 上重跑全部 `p4-task-*.py`；③报告里禁止复用上一轮的表。
+- **变异证据绑定提交（本仓库特有，必须逐字执行）**：`trace_mutate.py` 的证据模式**拒绝脏树**（`git status --porcelain` 非空即 `SystemExit`），且 `--check` 用 `git show HEAD:<target>`、pristine 树用 `git archive HEAD` 现取现解 ⇒ **权威表必须在「实现 + 测试 + 集合」提交之后运行**。因此每个任务的步骤次序是：写实现/测试/集合 → **提交** → 跑 `--check` → 跑权威表 → 把工具头部（`git rev-parse HEAD`、工具/集合/清单/被测文件 sha256）原样抄进报告。**任何后续「实现 / 测试 / 集合」内容的变更都会使此前所有绑定失效**（绑定的实质是**内容哈希**，表头的 `git rev-parse HEAD` 只记**产出时点**；**纯计划文档或纯证据文本的新提交不使绑定失效** —— 见计划 3 的 **E56** 与本计划 **E59**）⇒ ①每个任务必须在自己那次提交后重跑；②任务 12 在**最终 HEAD** 上重跑全部 `p4-task-*.py`；③报告里禁止复用上一轮的表。
 - **用例名必须「互不为子串」，批次必须快（两条都是从工具实现里读出来的硬约束）**：工具把清单拼成**未锚定**的 `-run 'TestA|TestB|…'`（Go 的 `-run` 逐段做**子串**正则匹配），因此同一包内若 `TestFoo` 是 `TestFooBar` 的子串，只列 `TestFoo` 也会**连带**跑出 `TestFooBar` ⇒ 执行集合 != 清单 ⇒ **证据无效**（工具的自检 E 就是钉这个骗法的）。**动手前必须自证同包内任两个顶层用例名互不为子串**：
 ```bash
 grep -h '^func Test' tests/<pkg>/*_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort | \
@@ -94,7 +94,7 @@ python3 -c "import sys;ns=[l.strip() for l in sys.stdin];bad=[(a,b) for a in ns 
 | `tests/tracesealer/*_test.go` | **B 层**（9 个文件）：分类 / 选项 / 退出码 / 轮次 / 告警 / 护栏 / 循环 / 锁与 A7 / footer / 常量契约 / 观测 | ~1100 行 |
 | `tests/traceverify/*_test.go` | **B 层**（3 个文件）：目标护栏 / `VmHWM` 解析 / C5 预算算术 | ~400 行 |
 | `tests/deploy/*_test.go` | **B 层**（8 个文件）：unit 文本 / 隔离与恢复脚本 / 构建（Makefile+CI）/ 三个生产 compose / `trace_a3_compose_test.go`（A3 隔离实例编排）/ 蓝绿剧本 / 运行手册 | ~1300 行 |
-| `tools/trace-mutate/sets/p4-task-*.py` | **新建**（git-tracked）：26 个变异集合（一个集合只变异**一个**文件，见全局约束） | 每个 120–280 行 |
+| `tools/trace-mutate/sets/p4-task-*.py` | **新建**（git-tracked）：**27** 个变异集合（一个集合只变异**一个**文件，见全局约束；**E66⑥ 订正**：原写 26 —— 任务 4 已按 **E65(d)** 拆成 `p4-task-4-lock.py` ＋ `p4-task-4-runner.py` 两个集合，「26」少算了它） | 每个 120–280 行 |
 
 ## 验收项归属（本计划承担哪几项、在哪做、证据是什么）
 
@@ -107,7 +107,7 @@ python3 -c "import sys;ns=[l.strip() for l in sys.stdin];bad=[(a,b) for a in ns 
 | **A7** 跨进程验证 | 任务 4（自动化：次序/锁/串行）+ 任务 8 run.sh 步骤 10（进程级：两个 `--once` 撞锁 + 边写边封） | 本机（自动化）/ A3 隔离实例（进程级） | 用例通过的清单 + 第二个 `--once` 的退出码 1 与 stderr | 出现「ref 无落点」或两个 sealer 同时封同一 part ⇒ **停止上线** |
 | **A8** 行数分布 | 任务 10（footer 解析 + 契约钉住 + 决策门） | 测试环境/生产（只读日志） | 每个 part 的 `rows` 分布（min/p50/p95/max）与 `bytes_per_row` | 越界或落到 50%–100% ⇒ 按决策门三级处置（含改 `spooler.go` 并重跑 p2 集合） |
 | **新增：撤掉挂载 ≤1 tick 闩锁** | 任务 11（先在测试环境/A3 实例做，再在**已摘流**的非活跃颜色上确认） | **只允许**测试环境，或**无真实流量**的生产窗口（非活跃且已摘流）；**该实验本身会持续丢正文**（见下），禁止在有正常流量的生产颜色上执行 | ≤1 个 tick 内的 ERROR + 不再出现新文件 + 活跃颜色无影响 + 重启后恢复 + 「流量为零」留证 + **闩锁期间累计丢失行数（期望 0）** | 未在 ≤1 tick 内闩锁 ⇒ 停下来查 `checkRoot` 的调用点（计划 2 的 `FlushAndRoll`）；丢失行数非 0 ⇒ 停手并按事故复盘 |
-| A1 / A2 / A4 / A5 | ❌ 不在本计划（属计划 3 读侧） | — | — | — |
+| A1 / A2 / A4 / A5 | **A1 的读回半部（n = 1e6）物理测量 = 任务 9**（口径 = 计划 3 的交接 **H19**；环境 = 生产宿主 + 真实 PG + 真实 `zstd` **1.4.8**）；**A2 / A5** 的对外映射归计划 3；**A4** 由计划 1 覆盖（计划 3 的 E52③ 欠账在本轮销账，见 **E71**） | 任务 9 / 生产宿主 | 抽样 1,000 行逐字节比对表 + `zstd --version` | 任一格不成立 ⇒ 未通过（不得降低抽样数或改写用例） |
 | A9 冷热分层 | ❌ 不在本计划（D68） | — | — | — |
 
 > ⚠️ **「撤掉挂载 ≤1 tick 闩锁」的前置条件（不可省，否则该验收恒空）**：本项只有在**写侧已启用**时才有意义 —— 即 `TRACE_BODY_ROOT` 非空**且**该 root 目录已存在（`internal/gateway/observability/spooler.go:144` 的 `rootExists` 在**构造期**就要求目录在场）。功能关闭时 `cmd/gateway/main.go:275` 的 `sink` 为 **nil**、`TraceSpooler` **根本不会构造** ⇒ 它的根身份护栏（`spooler.go` 的 `checkRoot`）从不运行 ⇒ 期望的 `root_unavailable` / `root-identity-mismatch` ERROR **永不出现**，断言恒真（空过）。因此本项**不得**排在写侧启用之前，也不是计划 4 在「功能关闭」阶段就能交付的验收；它的编排位置是：**读侧就绪（D73 硬门）→ 开启写侧 → 立即执行本门禁**（见任务 11 步骤 4 与文末「生产上的执行次序」）。另有两个不可省的约束：**① 该实验本身在持续丢正文**（闩锁期间正文既不进 `/datalog` 也不回退 jsonb，只落 `body_missing=true`）⇒ 只允许在测试环境或**无真实流量**的生产窗口执行；**② 证据里必须含「闩锁期间累计丢失行数」（期望 0）**。
@@ -121,7 +121,7 @@ python3 -c "import sys;ns=[l.strip() for l in sys.stdin];bad=[(a,b) for a in ns 
 **文件：**
 - 新建：`internal/tracesealer/options.go`、`internal/tracesealer/classify.go`、`internal/tracesealer/exit.go`、`internal/tracesealer/runner.go`（本轮只实现 `Round`，不含 `Loop`/锁/护栏）
 - 新建：`cmd/trace-sealer/main.go`（薄壳：flag → `Round` → `ExitCode`）
-- 测试：`tests/tracesealer/classify_test.go`、`tests/tracesealer/round_test.go`、`tests/tracesealer/exit_test.go`（B 层）
+- 测试：`tests/tracesealer/classify_test.go`、`tests/tracesealer/round_test.go`、`tests/tracesealer/exit_test.go`、`tests/tracesealer/options_test.go`（B 层）
 
 **接口：**
 - 依赖输入：冻结包公开 API `NewSealer(SealerOptions) (*Sealer, error)`、`(*Sealer).ListPendingSeals() ([]SealTask, error)`、`(*Sealer).Seal(ctx, SealTask) error`、`SealerOptions{Root, ZstdBinary, ZstdLevel, ZstdWindowBytes, MinAge, ExpectedZstdVersion}`、`SealTask{DT, Inst, Part, SpoolPath, Rows, UncompressedBytes}`。
@@ -930,9 +930,16 @@ func TestNewRunnerRejectsMinAgeAtOrBelowGatewayRollUpperBound(t *testing.T) {
 
 // TestNewRunnerRejectsNonPowerOfTwoWindow 窗口要换算成 zstd 的 --long=<log2>，
 // 非 2 的幂没有对应参数 ⇒ 必须在这里（启动时）拒绝，而不是几小时后封块时才炸。
+//
+// 【MinAge 必须显式给值，不能留零值去继承 DefaultMinAge】normalize 里 min-age 下界
+// 的判定在窗口 2 的幂判定**之前**，所以若本用例让 MinAge 留零值，它就同时依赖两条
+// 互不相干的契约：把 DefaultMinAge 从 3h 改小（变异 D-m02）会让它在 min-age 那一关
+// 先失败 ⇒ 这条「窗口」用例被连带杀红，集合 D 的 m02 就不再只杀点名的
+// TestNewRunnerDefaultsMinAgeToThreeHours，而多出一个非点名的连带牺牲者（实测 FAIL=2）。
+// 显式给 3h（> MinAgeFloor）把本用例钉回「只测窗口的 2 的幂」这一件事上。
 func TestNewRunnerRejectsNonPowerOfTwoWindow(t *testing.T) {
 	_, err := tracesealer.NewRunner(tracesealer.Options{
-		Root: t.TempDir(), ZstdWindowMB: 300, NewSealer: stubSealer,
+		Root: t.TempDir(), ZstdWindowMB: 300, MinAge: 3 * time.Hour, NewSealer: stubSealer,
 	})
 	require.ErrorContains(t, err, "2 的幂")
 }
@@ -1013,11 +1020,11 @@ EXPECTED_GREEN = {}
 | 编号 | 变异 | 杀手（顶层用例） |
 |---|---|---|
 | m01 | `KindPartExists` 分支把 `res.PartExists++` 改成 `res.SealFailed++` | `TestRoundTreatsPartExistsAsIdempotentNoop` |
-| m02 | `KindSealFailed` 分支后补一句 `return res, err`（一个坏块中断整轮） | `TestRoundSealsEveryEligiblePart` |
+| m02 | `KindSealFailed` 分支的**自有语句之后、该分支日志之前**补一句 `return res, err`（匹配串是 `case KindSealFailed:` 紧接 `res.SealFailed++`，插入点在这两行之后 —— 这两行是该分支的起始两行、各自唯一；**E61③**：任务 2 已把该分支的日志从 `r.opts.Logf(` 换成 slog，故不再用日志行做锚点；语义 = 一个坏块中断整轮） | `TestRoundSealsEveryEligiblePart` |
 | m03 | 把 `if err := ctx.Err(); err != nil {` 改成 `if false {`（忽略取消） | `TestRoundCancellationStopsBeforeNextSeal` |
 | m04 | `return res, fmt.Errorf("列举待封块失败: %w", err)` 改成 `return res, nil` | `TestRoundDoesNotSwallowListError` |
 | m05 | `KindTooManyRows` 分支的 `res.TooManyRows++` 改成 `res.RowMismatch++`（永久与可重试混在一起） | `TestRoundSeparatesPermanentFromRetryable` |
-| m06 | `Failed()` 的求和里删掉 `+ res.UnknownFailed` | `TestRoundCountsUnknownFailuresAsFailures` |
+| m06 | `Failed()` 的求和里删掉 `+ r.UnknownFailed`（**接收者名是 `r` 不是 `res`**：`func (r RoundResult) Failed() int`，`runner.go:32-34`；实现里求和写在**一行**上 —— `r.RowMismatch + r.SealFailed + r.TooManyRows + r.UnknownFailed`） | `TestRoundCountsUnknownFailuresAsFailures` |
 
 `REQUIREMENTS`：上表逐条 + 「一个坏块不得中断整轮」（m02）+ 「ctx 取消后不得再开新块」（m03）+ 「未分类失败也计入失败」（m06）；
 `CHECKS`：`internal/tracesealer/runner.go` 内 `\bMkdir[A-Za-z]*\s*\(` **absent**（理由见下文全局约束的 D70 条；承重证据是 Task 3 的 `TestRootGuardNeverCreatesRoot`，这里只是启发式旁证）。
@@ -1092,7 +1099,8 @@ done
 ### Task 2：轮次汇总与告警（结构化日志、心跳、永久失败的上报面）
 
 **文件：**
-- 修改：`internal/tracesealer/runner.go`（把 `r.opts.Logf` 换成 `slog` 结构化字段；新增 `Summarize`）
+- 修改：`internal/tracesealer/runner.go`（把 `r.opts.Logf` 换成 `slog` 结构化字段；接入 `Summarize` —— 它的本体在新建的 `alert.go`）
+- 修改：`internal/tracesealer/options.go`（新增 `Options.Slog *slog.Logger` —— 字段只能落在 `Options` 所在的文件；**E61①**：原清单漏列本文件）
 - 新建：`internal/tracesealer/alert.go`（把 `RoundResult` 映射成「该不该告警、告警级别、稳定字段」）
 - 测试：`tests/tracesealer/alert_test.go`
 
@@ -1117,7 +1125,7 @@ done
 
 - [ ] **步骤 1：写失败的测试**
 
-新建 `tests/tracesealer/alert_test.go`，每个属性一个顶层用例：
+新建 `tests/tracesealer/alert_test.go`：下面是 `Summarize` 的 6 个顶层用例；`Round` 的**运行时告警线**另有 3 条行为用例（注入 `Options.Slog` 捕获 sink，钉具体级别与 reason 串），见 **E62**：
 
 ```go
 package tracesealer_test
@@ -1183,12 +1191,12 @@ func TestSummarizeFieldsAreStable(t *testing.T) {
 
 `internal/tracesealer/alert.go`：`Summarize` 用 `res.TooManyRows > 0 ⇒ SeverityError/too_many_rows`，否则 `res.UnknownFailed > 0 ⇒ SeverityError/unknown_failure`，否则 `res.RowMismatch+res.SealFailed > 0 ⇒ SeverityWarn/round_failed`，否则 `SeverityNone`。`Fields` 恒含上面 10 个键（用 `map[string]any` 显式字面量，不用反射）。
 
-`runner.go` 的日志换成 `slog`（`slog.Info`/`Warn`/`Error`，`"reason"` 用 `Alert.Reason`），**保留** `opts.Logf` 供测试注入：实现方式是新增 `Options.Slog *slog.Logger`（nil ⇒ `slog.Default()`），`Logf` 仅在 `Slog == nil` 时使用。**Round 每轮结束必须打**一条 `slog.Info("trace-sealer round", ...)`——这条是**心跳**：运维侧的告警规则是「>3 × poll-interval 没有看到这条」⇒ 进程挂了/被 mask 了。
+`runner.go` 的日志换成 `slog`（`slog.Info`/`Warn`/`Error`，`"reason"` 用 `Alert.Reason`），**保留** `opts.Logf` 供测试注入：实现方式是新增 `Options.Slog *slog.Logger`（与 `Logf` 都缺省 ⇒ `slog.Default()`；`Logf` 由 `normalize` 默认成 `log.Printf` ⇒ 正常路径上 `Slog == nil` 就是走 `Logf` —— **E61②**：三级优先级 `Slog > Logf > slog.Default()`），`Logf` 仅在 `Slog == nil` 时使用。**Round 每轮结束必须打**一条 `slog.Info("trace-sealer round", ...)`——这条是**心跳**：运维侧的告警规则是「>3 × poll-interval 没有看到这条」⇒ 进程挂了/被 mask 了。
 
 - [ ] **步骤 4：跑测试**
 
 运行：`go test ./tests/tracesealer/ -count=1 -v`
-预期：PASS（新增 6 个顶层用例）。
+预期：PASS（新增 9 个顶层用例 = `Summarize` 6 条 + 运行时告警线 3 条，见 **E62**）。
 
 - [ ] **步骤 5：写本任务的变异集合**
 
@@ -1205,13 +1213,13 @@ func TestSummarizeFieldsAreStable(t *testing.T) {
 | m07 | 未分类失败不再报 ERROR | `TestSummarizeUnknownFailureIsError` |
 
 `CHECKS`：`reason` 字面量必须是 `too_many_rows`/`unknown_failure`/`round_failed` 三个稳定串（正则 present）；`internal/tracesealer/alert.go` 不得出现 `fmt.Sprintf` 拼 reason。
-`REQUIREMENTS`：每条计划要求 → 上表变异；「心跳日志每轮必打」→ CHECKS（正则断言 `runner.go` 里 `trace-sealer round` 出现一次且不在任何 `if` 内 —— 这条只能靠静态检查，已如实登记）。
+`REQUIREMENTS`：每条计划要求 → 上表变异；「心跳日志每轮必打」→ CHECKS（正则断言 `runner.go` 里 `trace-sealer round` 出现一次且不在任何 `if` 内）+ 运行时「每轮恰好一次」由行为用例 `TestRoundCleanRoundEmitsOnlyHeartbeat` 承载；「告警线级别随 `Severity`、reason 取自 `Alert.Reason`」→ `m01/m03/m04/m05`（两者见 **E62**）。
 
 - [ ] **步骤 6：提交 → 跑证据（次序同 Task 1 步骤 10/11）**
 
 ```bash
-git add internal/tracesealer/alert.go internal/tracesealer/runner.go tests/tracesealer/alert_test.go \
-        tools/trace-mutate/sets/p4-task-2-alert.py
+git add internal/tracesealer/alert.go internal/tracesealer/options.go internal/tracesealer/runner.go \
+        tests/tracesealer/alert_test.go tools/trace-mutate/sets/p4-task-2-alert.py
 git commit -m "feat(trace): sealer 轮次汇总与告警分级（计划 4/4 任务 2）
 
 PartExists 幂等无害不告警；可重试失败 WARN；TooManyRows/未分类 ERROR。
@@ -1597,7 +1605,7 @@ func (g *RootGuard) Baseline() string { return g.baseline }
 // 就出现在日志里，而不是等一个 poll 周期（默认 5 分钟）之后。
 //
 // 【为什么环境级失败不退出】退出会被 systemd 按 RestartSec 反复拉起，形成更密的重试；
-// 而根目录不可用是环境问题，重启不会修好它。心（每轮一条汇总）才是它的告警面。
+// 而根目录不可用是环境问题，重启不会修好它。心跳（每轮一条汇总）才是它的告警面。
 func (r *Runner) Loop(ctx context.Context) error {
 	ticker := time.NewTicker(r.opts.PollInterval)
 	defer ticker.Stop()
@@ -1606,7 +1614,7 @@ func (r *Runner) Loop(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil // 收到 SIGTERM：干净退出，封到一半的那块由 ctx 取消路径处理
 			}
-			r.logf("[trace-sealer] ERROR 本轮失败，%s 后重试: %v", r.opts.PollInterval, err)
+			r.logger.Error("trace-sealer 本轮失败，下一个周期重试", "err", err, "poll_interval", r.opts.PollInterval.String())
 		}
 		select {
 		case <-ctx.Done():
@@ -1629,27 +1637,30 @@ func (r *Runner) Loop(ctx context.Context) error {
 - [ ] **步骤 5：跑测试**
 
 运行：`go test ./tests/tracesealer/ -count=1 -v`
-预期：PASS（新增 6 + 5 = 11 个顶层用例；整批仍在 30s 之内）。
+预期：PASS（新增 7 + 7 = 14 个顶层用例；整批仍在 30s 之内）。
 **顺便验证 `--once` 与常驻两种形态都还在**：`go run ./cmd/trace-sealer --root /tmp/does-not-exist --once; echo $?` ⇒ 期望 `1`（根目录不存在 + 启动期致命），这正是「不创建目录」的外部可见行为。
 
 - [ ] **步骤 6：写变异集合（两个）**
 
-**`p4-task-3-rootguard.py`**（`TARGET = "internal/tracesealer/rootguard.go"`，`MANIFEST_FILES = ["tests/tracesealer/rootguard_test.go"]`）：
+**`p4-task-3-rootguard.py`**（`TARGET = "internal/tracesealer/rootguard.go"`，`PACKAGES = ["./tests/tracesealer/", "./internal/tracesealer/"]`，`MANIFEST_FILES = ["tests/tracesealer/rootguard_test.go", "internal/tracesealer/covers_test.go"]`；**E64① 订正**：`covers` 不是平台不可达，包内用例进名字清单与证据绑定）：
 
 | 编号 | 变异 | 杀手（顶层用例） |
 |---|---|---|
 | m01 | 去掉 `filepath.Clean(root) == "/"` 的拒绝（`if filepath.Clean(root) == "/" {` → `if false {`） | `TestRootGuardRejectsFilesystemRoot` |
 | m02 | 去掉绝对路径校验（`if !filepath.IsAbs(root) {` → `if false {`） | `TestRootGuardRejectsRelativePath` |
 | m03 | `Check()` 的身份比较改成 `if false && id != g.baseline {`（撤挂载不再被发现） | `TestRootGuardCheckDetectsIdentityChange` |
-| m04 | `covers` 去掉 `mp == "/"` 特判（根挂载点覆盖不到任何路径） | `TestRootGuardCheckDetectsIdentityChange`、`TestRootGuardBaselineIsNonEmpty`（见 note） |
-| m05 | `NewRootGuard` 的身份取失败时不再报错（`return nil, fmt.Errorf(...)` → `return &RootGuard{...}, nil`） | `TestRootGuardBaselineIsNonEmpty` |
+| m04 | `covers` 去掉 `mp == "/"` 特判（根挂载点覆盖不到任何路径） | `TestCoversRootMountCoversPathsUnderRoot`（**E64① 订正**：`covers` 是**纯字符串函数**、与 `/proc/self/mountinfo` 无关，按 Q3 在**包内**新增 `internal/tracesealer/covers_test.go` 直调它 ⇒ 本变异为**断言红**；原登记的两半「darwin 不可达」与「在 Linux 上会杀掉依赖真实 `Identity` 的用例」均已证伪，`EXPECTED_GREEN` 清空） |
+| m05 | `NewRootGuard` 的身份取失败时不再报错（`return nil, fmt.Errorf(...)` → `return &RootGuard{...}, nil`） | `TestRootGuardRejectsWhenBaselineCannotBeTaken`（E63④ 新增：本行原点名的 `TestRootGuardBaselineIsNonEmpty` 注入的 identity **成功**返回 ⇒ 走不到本变异动的分支） |
 | m06 | **（唯一允许的「建目录」变异，用来证明杀手真的能看见）** 在 `os.Stat(root)` 失败分支前插入 `_ = os.MkdirAll(root, 0o755)` | `TestRootGuardNeverCreatesRoot` |
+| m07 | **（E63⑤ 新增）** `Check()` 的 stat 失败被静默放行（`return fmt.Errorf("%w: %w", ErrRootUnavailable, err)` → `return nil`） | `TestRootGuardCheckReportsVanishedRoot`（本行原点名它却没有杀手：m03 只动身份比对） |
+| m08 | **（E63⑤ 新增）** `Baseline()` 返回 `g.root` 而不是 `g.baseline`（排障抄下来的「启动基线」永远是根路径） | `TestRootGuardBaselineIsNonEmpty`（本行原点名它是 m04 的杀手，实测 m04 杀不到它） |
 
 > **m06 的说明（重要）**：这是本计划唯一一处**故意**把违规代码作为变异注入，用来证明「护栏不得建目录」这条要求真的被测到了（否则那条断言只是「碰巧没过那段代码」）。它的变异串必须包含 `os.MkdirAll`，而这恰好也是本集合 `CHECKS` 里那条 `absent` 正则要抓的形态 —— 变异是在 pristine 树的**临时副本**上做的，所以 `CHECKS` 仍然对 `HEAD` 原文生效，两者不冲突。
 
 `CHECKS`（本集合）：
 - `internal/tracesealer/rootguard.go` 内 `\bMkdir[A-Za-z]*\s*\(` **absent**（理由同上；承重证据是 `TestRootGuardNeverCreatesRoot`）。
 - `internal/tracesealer/options.go` 内 `Identity *func` / `Identity func` **present**（护栏的可注入点是它可测的前提）。
+- `internal/tracesealer/rootguard.go` 内 `(?m)^\tif mp == "/" \{$` **present**（**E64① 订正**：`covers` 的根挂载点特判**不是**平台不可达 —— 它的**行为**证据是包内用例 `TestCoversRootMountCoversPathsUnderRoot`、变异 m04 是**断言红**；本行静态检查**另外**钉住该分支的**存在性**；删掉整段特判即红，已实测）。
 
 **`p4-task-3-loop.py`**（`TARGET = "internal/tracesealer/runner.go"`，`MANIFEST_FILES = ["tests/tracesealer/loop_test.go"]`）：
 
@@ -1658,8 +1669,10 @@ func (r *Runner) Loop(ctx context.Context) error {
 | m01 | `Loop` 改成先等再跑（把 `select` 挪到 `Round` 之前） | `TestLoopRunsFirstRoundImmediately` |
 | m02 | 环境级失败改成 `return err`（退出而不是继续） | `TestLoopKeepsRunningWhenRootIsUnavailable` |
 | m03 | `Round` 的护栏失败分支不再 `return`（继续往下走 ⇒ 根目录不可用时仍会 Seal） | `TestLoopKeepsRunningWhenRootIsUnavailable` |
-| m04 | `Round` 内的 `ctx.Err()` 检查删掉（取消后仍开新块 —— Task 1 已有杀手，这里钉住 `Loop` 侧） | `TestLoopStopsOnContextCancel`（配合 Task 1 的 `TestRoundCancellationStopsBeforeNextSeal`） |
-| m05 | `Round` 去掉 `res.RootUnavailable = true` | 无（**登记进 `EXPECTED_GREEN`**：该字段目前只被日志与将来的看板消费，无用例断言 ⇒ 如实登记，不假装覆盖） |
+| m04 | `Round` 内的 `ctx.Err()` 检查删掉（取消后仍开新块 —— Task 1 已有杀手，这里钉住 `Loop` 侧） | `TestLoopStopsSealingAfterCancel`（E63⑦ 新增：本行原点名的 `TestLoopStopsOnContextCancel` 实测在 m04 下**仍绿**，且 Task 1 的 `TestRoundCancellationStopsBeforeNextSeal` **不在本集合的名字清单里**） |
+| m05 | `Round` 去掉 `res.RootUnavailable = true` | `TestLoopReportsRootUnavailable`（E63⑧：补了在册行为用例后，本行原登记的 `EXPECTED_GREEN` **取消** ⇒ 本集合没有任何允许的绿） |
+| m06 | **（E63⑥ 新增）** `Loop` 跑完一轮就退出（删掉 `select`/`ticker` 那一段，`return nil`） | `TestLoopRepeatsRoundsOnPollInterval`（本行原点名的杀手都没有：m01 只是「先等再跑」，5ms 周期照样跑很多轮） |
+| m07 | **（E63⑥ 新增）** `Loop` 每轮用 goroutine 启动（轮次并行：同一 `(dt,inst,part)` 会被并发 Seal） | `TestLoopNeverOverlapsRounds`（本行原点名它却有杀手：串行是冻结包对同一三元组的硬要求） |
 
 - [ ] **步骤 7：提交 → 跑两个集合（次序同 Task 1 步骤 10/11）**
 
@@ -1926,11 +1939,12 @@ func TestA7WriterNeverAppendsToAHandedOffPart(t *testing.T) {
 
 `handoffSealer.handoff(task ta.SealTask)` 的动作（**与冻结包 `Seal` 成功路径同序**）：`os.MkdirAll` 出产物目录（**这是替身，不是 sealer 实现**；真实 MkdirAll 在冻结包里）→ 写一个占位 `part-NNNNNN.jsonl.zst`（路径由 `task.SpoolPath` 同目录的产物路径得出）→ `os.Remove(task.SpoolPath)`。`assertEveryRefLands` 逐个 Ref 判定：产物文件存在 ⇒ OK；否则 spool 文件存在且行数 > row ⇒ OK；两者皆无 ⇒ 报「Ref 丢了」。
 
-- [ ] **步骤 5：跑测试** → `go test ./tests/tracesealer/ -count=1 -v`。预期 PASS（新增 6 + 5 = 11 个用例）。若 A7 用例超过 5s，先减 Append 次数（30s 批次上限是硬约束）。
+- [ ] **步骤 5：跑测试** → `go test ./tests/tracesealer/ -count=1 -v`。预期 PASS（新增 8 + 5 = 13 个用例；**E65 订正**：原写 6 + 5 = 11，本轮按步骤 3 自己的两条要求另补了 `TestNewRunnerCloseIsIdempotent` 与 `TestNewRunnerReleasesLockWhenSealerFails`）。若 A7 用例超过 5s，先减 Append 次数（30s 批次上限是硬约束）。
 
 - [ ] **步骤 6：写变异集合与静态检查**
 
-**`p4-task-4-lock.py`**（`TARGET = "internal/tracesealer/lock.go"`，`MANIFEST_FILES = ["tests/tracesealer/lock_test.go"]`）：
+**`p4-task-4-lock.py`**（`TARGET = "internal/tracesealer/lock.go"`，`MANIFEST_FILES = ["tests/tracesealer/lock_test.go"]`）：下表 **m02–m05**。
+**`p4-task-4-runner.py`**（`TARGET = "internal/tracesealer/runner.go"`，`MANIFEST_FILES = ["tests/tracesealer/lock_test.go", "tests/tracesealer/concurrent_test.go"]`）：下表 **m06–m09**。**E66⑤**：工具一次只能变异一个文件（全局约束第 42 条）⇒ 原先把 `runner.go` 的匹配串塞进 `TARGET = lock.go` 的集合，只会在 `--check` 得到 `PATTERN-MISS: count=0`；E65(d) 已裁定拆分，本处**文本**同步（m01–m09 编号原样保留，`runner.go` 的 m06–m09 共用同一份名字清单）。
 
 | 编号 | 变异 | 杀手（顶层用例） |
 |---|---|---|
@@ -1940,16 +1954,19 @@ func TestA7WriterNeverAppendsToAHandedOffPart(t *testing.T) {
 | m04 | `Release` 不再解锁/关文件（函数体直接 `return nil`） | `TestLockReleasedAllowsReacquire` |
 | m05 | `Release` 里 `f := l.f; l.f = nil` 去掉（第二次调用 panic 或重复关） | `TestLockReleaseIsIdempotent` |
 | m06 | `NewRunner` 不再取锁（删掉那段） | `TestNewRunnerRefusesWhenLockHeld` |
-| m07 | `NewRunner` 先建 root 再取锁（顺序颠倒，插入 `os.MkdirAll`） | `TestNewRunnerNeverCreatesRoot` |
+| m07 | `NewRunner` 先建 root 再取锁（顺序颠倒，插入 `os.MkdirAll`；实现形态是先补 `"os"` 导入再插入 —— 见 E65「如实登记」第 2 条） | `TestNewRunnerNeverCreatesRoot` |
+| m08 | `Close` 不释放锁（删掉 `Release` 调用） | `TestNewRunnerReleasesLockOnClose` |
+| m09 | `NewRunner` 装配失败时不释放已取得的锁 | `TestNewRunnerReleasesLockWhenSealerFails` |
 
 > m01 的说明必须原样保留在集合里：**「让批次挂死的变异」不是好变异**，它产出的红是超时红（无效证据）。这条写进集合注释，是为了让后来者不要「顺手补上一条更强的变异」而把证据质量弄坏。
 
 `CHECKS`（本集合）：
 - `internal/tracesealer/lock.go` 内 `syscall\.Flock` **present** 且 `LOCK_NB` **present**（阻塞加锁会让整个进程无法排障）。
+- `internal/tracesealer/lock.go` 内 `\bMkdir[A-Za-z]*\s*\(` **absent**（D70「整包零建目录」；**E66③** 补齐 —— 原先只有 `runner.go`（集合 B）与 `rootguard.go`（集合 A）各有该行）。
 - `internal/tracesealer/runner.go` 内 `syscall\.Flock|os\.Mkdir` **absent**（互斥只能有一处实现；禁止在 runner 里再补一层「文件存在即认为有实例」的家酿锁 —— 那种锁在崩溃后留下的陈旧文件会让 sealer 永久起不来）。
 - `tests/tracesealer/concurrent_test.go` 内 `TestA7WriterNeverAppendsToAHandedOffPart` **present**（A7 的次序不变量有可执行载体；这条只能静态检查，因为它的被测对象是冻结包的次序，本计划不能变异冻结包 —— 如实登记）。
 
-- [ ] **步骤 7：提交 → 跑集合**（命令同 Task 1 步骤 10/11，集合名换 `p4-task-4-lock`，并**额外**登记 A7 的零覆盖说明）。
+- [ ] **步骤 7：提交 → 跑集合**（命令同 Task 1 步骤 10/11；集合名换 `p4-task-4-lock` **与** `p4-task-4-runner` —— **两个**集合各跑一次 `--check` 与一张权威表（E66⑤ 的文本同步）；并**额外**登记 A7 的零覆盖说明）。
 
 ---
 
@@ -2246,7 +2263,7 @@ build-trace-verify:
 
 **`p4-task-5-build.py`**（`TARGET = "Makefile"`，`MANIFEST_FILES = ["tests/deploy/trace_build_contract_test.go"]`）：m01 删掉 `GOOS=linux` → 杀手 `TestMakefileBuildsSealerForLinux`；m02 `build:` 依赖里去掉 `build-sealer` → 杀手 `TestMakefileBuildTargetsIncludeSealer`；m03 `./cmd/trace-sealer` → `./cmd/gateway` → 杀手 `TestMakefileBuildsSealerForLinux`；m04 **（跨文件，另起 `p4-task-5-ci.py`，`TARGET = ".gitlab-ci.yml"`）** 把 `install -m 0755 /tmp/trace-sealer.new /usr/local/bin/trace-sealer` 改成安装到 `/tmp`，或加一行 `systemctl enable --now trace-sealer` → 杀手 `TestCICIBuildsAndInstallsSealer` / `TestCICIDoesNotEnableSealerUnit`。
 
-- [ ] **步骤 7：提交 → 跑五个集合**（unit / isolate / restore / build / ci —— 实为**五**个，与步骤 6 的标题一致）。**p4 集合总数核对**：任务 1（4）+ 任务 2（1）+ 任务 3（2）+ 任务 4（1）+ 任务 5（**5**）+ 任务 6（3）+ 任务 7（1）+ 任务 8（3）+ 任务 9（2）+ 任务 10（3）+ 任务 11（1）= **26**，与「文件结构」表里的 26 个 `p4-task-*.py` 一致；任务 12 的全量重跑必须覆盖这 26 个。
+- [ ] **步骤 7：提交 → 跑五个集合**（unit / isolate / restore / build / ci —— 实为**五**个，与步骤 6 的标题一致）。**p4 集合总数核对**：任务 1（4）+ 任务 2（1）+ 任务 3（2）+ 任务 4（**2**）+ 任务 5（**5**）+ 任务 6（3）+ 任务 7（1）+ 任务 8（3）+ 任务 9（2）+ 任务 10（3）+ 任务 11（1）= **27**，与「文件结构」表里的 27 个 `p4-task-*.py` 一致；任务 12 的全量重跑必须覆盖这 27 个。（**E66⑥ 订正**：原写「任务 4（1）…= 26」—— **E66⑤** 只同步了任务 4 步骤 6/7 的集合**文本**，没同步这两处**计数**；本轮以「计划自己声明的集合名」为判据逐一点名复核：任务 1 `classify/exit/options/round`、任务 2 `alert`、任务 3 `loop/rootguard`、任务 4 `lock/runner`、任务 5 `unit/isolate/restore/build/ci`、任务 6 `blue/green/root`、任务 7 `bluegreen`、任务 8 `compose/guard/runsh`、任务 9 `budget/vmhwm`、任务 10 `contract/footer/observability`、任务 11 `runbook` = **27**；任务 5 收口时磁盘上实有 14 个 `p4-task-*.py`（任务 1–5），与算式的前五项 4+1+2+2+5 = 14 逐字一致。）
 
 ---
 
@@ -2256,7 +2273,7 @@ build-trace-verify:
 - 修改：`deploy/blue-green/docker-compose.blue.yml`、`deploy/blue-green/docker-compose.green.yml`、`docker-compose.yml`
 - 测试：`tests/deploy/trace_compose_mount_test.go`
 
-**接口：** 交付物是三个 compose 的**挂载与 env 契约**：gateway 读写挂 `/datalog`；control-plane 只读挂；蓝/绿各自注入 `TRACE_BODY_INST`；根 compose **不启用**功能；`TRACE_BODY_ROOT` 一旦出现在某个文件里，它的父目录必须正好是该文件里的某个挂载目标。
+**接口：** 交付物是三个 compose 的**挂载与 env 契约**：gateway 读写挂 `/datalog`；control-plane 只读挂；蓝/绿各自注入 `TRACE_BODY_INST`；根 compose **不启用**功能（**门禁口径 = 非注释生效行 = 0**，见 **E68①**）；`TRACE_BODY_ROOT` 一旦出现在某个文件里，它的父目录必须正好是该文件里的某个挂载目标。
 
 - [ ] **步骤 1：写失败的测试**
 
@@ -2357,7 +2374,7 @@ func TestComposeNeverCarriesSealIntervalKey(t *testing.T) { … 三个文件都�
         read_only: true
 ```
 
-`docker-compose.yml`（根编排）：给两个服务同样的挂载（gateway 读写、cp 只读），但**不加任何** `TRACE_BODY_*`（连 `TRACE_BODY_INST` 也不加 —— 根编排没有颜色概念，加了反而暗示“根编排也能开功能”）。
+`docker-compose.yml`（根编排）：给两个服务同样的挂载（gateway 读写、cp 只读），但**不加任何生效的** `TRACE_BODY_*`（连 `TRACE_BODY_INST` 也不加 —— 根编排没有颜色概念，加了反而暗示“根编排也能开功能”）。**门禁口径（E68①）**：真正的门禁是**非注释生效行 = 0**（语义测试 `TestComposeRootComposeDoesNotEnableTraceBody` 的 `effectiveAssignments` 只收非注释行），**不是** `grep -c TRACE_BODY docker-compose.yml`（注释里提到该键族前缀是允许的，文本 grep 只是辅助读数）；注释措辞统一用 `TRACE_BODY_` 前缀，**不写完整键名**。
 
 - [ ] **步骤 4：跑测试** → `go test ./tests/deploy/ -run 'TestCompose' -count=1 -v` ⇒ PASS。
 
@@ -2391,7 +2408,7 @@ func TestComposeNeverCarriesSealIntervalKey(t *testing.T) { … 三个文件都�
 | m08 | root：删掉 cp 的挂载 | `TestComposeControlPlaneMountsDatalogReadOnly` |
 | m09 | blue：插入 `TRACE_BODY_SEAL_INTERVAL: 15m` | `TestComposeNeverCarriesSealIntervalKey` |
 
-`CHECKS`：三个文件里都不得出现 `-v /datalog` 或 `volumes: ... :/datalog` 的短语法形式（长语法是「不许 Docker 代建宿主路径」的可读证据链之一）。
+`CHECKS`：三个文件里都不得出现 `-v /datalog` 或 `volumes: ... :/datalog` 的短语法形式（长语法是「不许 Docker 代建宿主路径」的可读证据链之一）。**另（E68①）**：根编排的「**非注释生效行 = 0**」在 `p4-task-6-root.py` 里补一行静态检查 —— 正则 `(?m)^\s*TRACE_BODY_[A-Z0-9_]+\s*:` **absent**（注释行以 `#` 起头、不匹配 ⇒ 这一行量的正是「生效赋值」；真正的门禁仍是语义测试，文本读数只是辅助）。
 
 - [ ] **步骤 7：提交 → 跑三个集合**。
 
@@ -2441,7 +2458,7 @@ package deploy_test
 
 - [ ] **步骤 4：跑测试** ⇒ PASS。
 
-- [ ] **步骤 5：写变异集合** `p4-task-7-bluegreen.py`（`TARGET = "deploy/blue-green/README.md"`，`MANIFEST_FILES = ["tests/deploy/trace_bluegreen_runbook_test.go"]`）：m01 删掉硬门段落 → `TestBlueGreenRunbookHasReadSideHardGate`；m02 把「sealer 必须继续运行」改成「sealer 可随功能一并停掉」→ `TestBlueGreenRunbookCoversRollback`；m03 删掉 SQL 比对 → `TestBlueGreenRunbookCoversFeatureOffByteIdentical`；m04 把 `body_ref_inst` 改成「配置里的 inst」→ `TestBlueGreenRunbookCoversSwitch`；m05 插入 `TRACE_BODY_SEAL_INTERVAL` → `TestBlueGreenRunbookNeverMentionsSealInterval`。`CHECKS`：`deploy/blue-green/deploy-blue-green.sh` 内 `TRACE_BODY` **absent**。
+- [ ] **步骤 5：写变异集合** `p4-task-7-bluegreen.py`（`TARGET = "deploy/blue-green/README.md"`，`MANIFEST_FILES = ["tests/deploy/trace_bluegreen_runbook_test.go"]`）：m01 删掉硬门段落 → `TestBlueGreenRunbookHasReadSideHardGate`；m02 把「sealer 必须继续运行」改成「sealer 可随功能一并停掉」→ `TestBlueGreenRunbookCoversRollback`；m03 删掉 SQL 比对 → `TestBlueGreenRunbookCoversFeatureOffByteIdentical`；m04 把 `body_ref_inst` 改成「配置里的 inst」→ `TestBlueGreenRunbookCoversSwitch`；m05 插入 `TRACE_BODY_SEAL_INTERVAL` → `TestBlueGreenRunbookNeverMentionsSealInterval`。`CHECKS`：`deploy/blue-green/deploy-blue-green.sh` 内 `TRACE_BODY` **absent**；**E69③（计划↔集合逐条对照）**：本集合的 `CHECKS` 共 **6 行** —— 上面这一行是本步骤明列的，另 **5 行**（剧本必须钉住颜色↔inst 静态对应、剧本必须含读侧硬门 D73、剧本必须含功能关闭的 SQL 比对、剧本必须含旧颜色 drain 无损、剧本必须含禁止事项）是按 **E62** 追加的**存在性**静态检查（静态检查只承载**存在 / 不存在**类要求）；它们的**可失败性**由交付报告的「改坏→转红→还原」探针逐条实测（输出落盘 `p4-task-7-bluegreen-probe-at-*.txt`），集合 docstring 同文登记。
 
 - [ ] **步骤 6：提交 → 跑集合**。
 
@@ -2647,7 +2664,9 @@ func MaxConcurrent(limitBytes, baselineBytes, safetyBytes, perReadBytes int64) i
 **文件：**
 - 新建：`internal/tracesealer/footer.go`
 - 修改：`internal/tracesealer/runner.go`（`observeSealedPart` 的真实实现：填 `MaxRows` / `MinBytesPerRow` / `MinRatio`，并在 50% 阈值处 WARN）
-- 测试：`tests/tracesealer/footer_test.go`、`tests/tracesealer/constants_contract_test.go`、`tests/tracesealer/observability_test.go`
+- 修改：`internal/tracesealer/options.go`（`MaxTrailerEntries` 的注释订正：任务 10 的 `observeSealedPart` 已使用它 —— 3 行注释，行为零改动；**E73③ 补登记**：原清单漏了这一项，而它在本轮的 TARGET 变更面里）
+- 测试：`tests/tracesealer/footer_test.go`、`tests/tracesealer/constants_contract_test.go`、`tests/tracesealer/observability_test.go`、`tests/tracesealer/footer_artifact_test.go`（**E73① 补登记**：在**已提交的真实产物**上解析，**不依赖 zstd**；该文件进 `p4-task-10-footer` 的 `MANIFEST_FILES`，使「冻结包真按此布局写」这条行为要求进入自动门禁）
+- 测试数据：`tests/tracesealer/testdata/footer_roundtrip_real.jsonl.zst`（**E73① 补登记**：**冻结 Sealer 预产**的 104 字节真实产物，sha256 = `7f4291c592b71182a90bfa25953c648b3db5fd64383fc85af14752430e2af75e`）
 
 **接口：**
 ```go
@@ -2718,7 +2737,7 @@ const FooterSize = 32 // 必须等于冻结包 footer.go 的 footerSize
 > ⛔ **前置条件（本任务唯一的硬前提前置，不可省）**：本任务验证的「撤掉挂载 ≤1 tick 闩锁」只在**写侧已启用**时存在。
 > - 需要的状态：`TRACE_BODY_ROOT` **非空**（即 compose 里那行已取消注释）**且**该 root 目录在场 —— `NewTraceSpooler` 在构造期就用 `rootExists` 要求目录存在（`internal/gateway/observability/spooler.go:144`）。
 > - 功能关闭时的实情：`cmd/gateway/main.go:275` 的 `sink` 是 **nil**，`TraceSpooler` **根本不构造** ⇒ 根身份护栏（`checkRoot`）从不运行 ⇒ 期望的 `root_unavailable` / `root-identity-mismatch` ERROR **永不产生**，本任务的所有观察断言**恒真（空过）**。把这一项排在写侧启用之前，就是一条**永远绿、什么都没证明**的验收。
-> - **与 D73 硬门的先后关系（如实写明）**：D73 规定「同一 root 的读侧可用之前不得设置 `TRACE_BODY_ROOT`」，而读侧（计划 3）**尚未实现**（`tracearchive.Reader` 当前只被测试引用）。因此本任务**不是**计划 4 在「挂载就位 + sealer 就位 + 功能关闭」阶段就能交付的验收；它的位置只能是：**读侧就绪（D73 硬门满足）→ 任务 7 硬门之后开启写侧 → 立即执行本门禁（在非活跃颜色上验证）**。在写侧启用之前，本任务只能交付**步骤 3 的运行手册文本**（那是文本契约，与功能开关无关），步骤 4 的观察部分必须挂起。
+> - **与 D73 硬门的先后关系（如实写明）**：D73 规定「同一 root 的读侧可用之前不得设置 `TRACE_BODY_ROOT`」，而读侧（计划 3）**尚未实现**（`tracearchive.Reader` 当前只被测试引用）。因此本任务**不是**计划 4 在「挂载就位 + sealer 就位 + 功能关闭」阶段就能交付的验收；它的位置只能是：**读侧就绪（D73 硬门满足）→ 任务 7 硬门之后开启写侧 → 立即执行本门禁（在非活跃颜色上验证）**。在写侧启用之前，本任务只能交付**步骤 3 的运行手册文本**（那是文本契约，与功能开关无关），步骤 4 的观察部分必须挂起。**（E73 订正（本轮实测，只改事实不改规格）**：读侧**代码**在 base（`main`）上**已经存在**并在 `cmd` 里接线 —— `internal/observability/service/trace_body_service.go` ＋ `cmd/trace-body/main.go`（`git merge-base --is-ancestor <该文件引入提交> 0bfb130f` ⇒ **base 已含**）⇒ 上面「读侧尚未实现 / `Reader` 当前只被测试引用」**不成立**；**不变**的是 D73 是**部署**硬门：读侧**代码**就绪 ≠ 生产读侧**已就绪可用**，且写侧在部署配置里仍是**关闭**的（`deploy/blue-green/docker-compose.{blue,green}.yml:42` 的 `TRACE_BODY_ROOT` 都注释着，`TRACE_BODY_FLUSH_INTERVAL: 1m` 在 `:38`）⇒ 步骤 4 仍然**挂起**，理由与读数登记见 E73 节与 `p4-task-11-host-deferral-at-e854528c.txt`。）
 > - 若发起者决定在读侧就绪之前不开启写侧（照 D73 的字面要求，这是默认），则本任务在计划 4 内**只交付运行手册**，并把「≤1 tick 闩锁」登记为**读侧就绪后的启用门禁**（交付报告必须如实如此陈述，不得宣称该项已通过）。
 
 - [ ] **步骤 1：写失败的测试（运行手册条目的契约）**
@@ -2793,6 +2812,10 @@ const FooterSize = 32 // 必须等于冻结包 footer.go 的 footerSize
 8. 抄录第 3–7 步的全部命令与输出。**在测试环境先做一遍**（任务 8 的 A3 实例上更安全：直接 `umount /srv/trace-a3`），生产只作为确认。
 
 - [ ] **步骤 5：写变异集合** `p4-task-11-runbook.py`（`TARGET = "docs/deployment.md"`，`MANIFEST_FILES = ["tests/deploy/trace_runbook_test.go"]`）：m01 删掉「需要重启才恢复」一句 → `TestRunbookDocumentsDiskSwapNeedsGatewayRestart`；m02 把「≤1 个 tick」改成「≤10 分钟」→ `TestRunbookDocumentsMountLossLatchesWithinOneTick`；m03 删掉 SQL 比对 → `TestRunbookDocumentsFeatureOffIsByteIdentical`；m04 把 6s 改成 60s → `TestRunbookDocumentsShutdownSixSecondBound`；m05 插入 `TRACE_BODY_SEAL_INTERVAL` → `TestRunbookNeverMentionsSealInterval`；m06 删掉前置条件段落（`TRACE_BODY_ROOT` 非空 + root 在场 + 「读侧就绪后启用」）→ `TestRunbookDocumentsMountLossPrecondition`；m07 删掉「验证窗口内禁止切换蓝绿流量（丢正文防护）」的停止点 → `TestRunbookDocumentsMountLossLatchesWithinOneTick`。
+
+> **E73 补登记的静态检查行（3 行；E69② 的计划↔集合可对照性）**：上面只登记了 m01–m07，而步骤 1 另有两条**在册用例**（`TestRunbookDocumentsRetentionAndSpaceBudget` / `TestRunbookDocumentsSealerHeartbeatAndPermanentFailure`）与一条「两种降级不对称 / 关掉写侧只是补救动作」的文本要求没有对应变异（七条编号已占满）⇒ 集合里按**约束 6** 各补一行 `expect=present` 的静态检查（`df -h /datalog` / `too_many_rows` / `两种降级不对称`）。它们只承载**存在性**，**行为**要求由那两条在册用例与 `TestRunbookDocumentsMountLossLatchesWithinOneTick` 承载（E62）；三行的可失败性由「改坏→转红→还原」探针实测（`p4-task-11-runbook-probe-at-*.txt`）。集合的 `REQUIREMENTS` 里每条计划要求都有对应条目（`--mapping` 输出「无缺口」），表格见 E73 节的登记。
+
+> **E73① 的连带登记（同轮）**：本步骤的 `MANIFEST_FILES` 只列 `tests/deploy/trace_runbook_test.go`；任务 10 的那条**行为**要求（「冻结包真按此布局写」）改由 `tests/tracesealer/footer_artifact_test.go` 的在册用例承载 ⇒ 它被登记进 **`p4-task-10-footer` 的 `MANIFEST_FILES`**（见 Task 10 文件清单的 E73① 补登记与 E73 节）。
   > **m06/m07 的效力边界（如实标注，写进 `why`）**：这两条验证的是**计划/手册文本里的门禁陈述是否存在**（`docs/deployment.md` 中必须出现「前置条件」与「禁止切流」两段），**不是**运行时行为 —— 自动用例钉不住「切流会被阻止」，只能钉住「这句话还在不在」。因此 `why` 必须写成「门禁声明的存在性」，**不得**声称它证明了运行时防护；运行时防护由门槛二（摘流留证）与停止点 A（人工值守）承担。删掉 m06/m07 会让这两条门禁失去唯一的自动覆盖 ⇒ 保留。
 
 - [ ] **步骤 6：提交 → 跑集合。**
@@ -2842,7 +2865,7 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 - [ ] **步骤 3：跑全套本地测试并抄录**：`go build ./... && go vet ./... && go test ./tests/tracesealer/... ./tests/traceverify/... ./tests/traceverify/... ./tests/deploy/... -count=1 -v`（并把 `go test ./internal/tracearchive/ -count=1` 的输出一并抄录，用来证明**没有改动**冻结包的行为）。
 
 - [ ] **步骤 4：写报告**，必须包含（缺一条即未完成）：
-1. 每个任务的**提交哈希 + 该任务全部集合的 sha256 绑定表**（工具头部原样抄；任务 5 是 5 个集合，全文共 26 个）。
+1. 每个任务的**提交哈希 + 该任务全部集合的 sha256 绑定表**（工具头部原样抄；任务 5 是 5 个集合，全文共 **27** 个 —— **E66⑥ 订正**：原写 26，少算了任务 4 拆出的 `p4-task-4-runner.py`）。
 2. A3 / A6 / A7 / A8 + 「挂载消失 ≤1 tick」五项验收的**真实输出**（命令 + 输出原样粘贴，含日期）。**其中「挂载消失 ≤1 tick」必须写明它是何时、在哪种环境下执行的**：① 若执行时写侧尚未启用（D73 硬门仍在等读侧），必须写成「未执行：前置条件（`TRACE_BODY_ROOT` 非空）不满足」并登记为读侧就绪后的启用门禁 —— **不得**因为观察命令没报错就宣称通过（功能关闭时那些命令本来就什么都不会报）；② 必须抄录「执行环境的流量为零」留证与**闩锁期间累计丢失行数**（期望 0；非 0 ⇒ 按事故复盘，且不得作为验收证据）。
 3. **跨计划契约**（下一节的三条，逐条写清「谁负责、怎么验证」）。
 4. 规格缺陷登记 D64–D74 的**实际处置**（照做了还是改了主意，为什么）。
@@ -2933,14 +2956,14 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
 - **H6**：隔离件（`part-NNNNNN.jsonl.zst` 内容是明文 JSONL）必须报 `ErrNotArchived`（500），**不得**新增哨兵（D47/D50 同族）。
 - **H7**：不得新增 `atlas-migrations/` 而不先做全库对账（D52）。
 - **H8**：缺陷编号从 **D75** 起（计划 1 用到 D41、计划 2 用到 D52、计划 3 用到 D63、本计划用到 D74）。
-- **H9**：A1/A2/A4/A5 归计划 3；A9（冷热分层，见 D68）与 §5.5 冷层合并、`/datalog/emergency-archive` 存量点读（计划 3 的 D58/H13）、管理后台 UI 归计划 5/后续。
+- **H9**：**A1 的读回半部（n = 1e6）物理测量归本计划任务 9**（口径 = 计划 3 的交接 **H19**；环境 = 生产宿主 + 真实 PG + 真实 `zstd` **1.4.8**；本轮只登记「待宿主执行」）；A2 / A5 的对外映射归计划 3、A4 由计划 1 覆盖；A9（冷热分层，见 D68）与 §5.5 冷层合并、`/datalog/emergency-archive` 存量点读（计划 3 的 D58/H13）、管理后台 UI 归计划 5/后续。
 - **H10**：本计划的 A6 解码内存实测是计划 3 的 **H15 的唯一输入**（它的默认并发 2 就是按 600 MB/并发估的）⇒ 任务 9 完成后必须把结论回填给读侧，而不是只写在本计划的报告里。
 
 ## 自检结果
 
 - **能否在不开写侧的情况下交付**：**代码与产品部分能**：任务 1–5 与任务 8–10 的自动化部分**完全不需要**触碰 `/datalog` 与生产；任务 6/7 的挂载与 sealer 就位也刻意在**功能关闭**下完成。开启写侧被收敛成任务 7 硬门之后的一个显式人工动作。**但有一项例外必须如实说明**：任务 11 的「撤掉挂载 ≤1 tick 闩锁」**观察**部分在功能关闭时恒真（sink 为 nil ⇒ `TraceSpooler` 不构造 ⇒ 期望的 ERROR 永不出现），因此它**不是**功能关闭阶段可交付的验收 —— 计划 4 在不开写侧时只交付它对应的**运行手册文本**，并把该验收登记为「读侧就绪后的启用门禁」。
 - **本计划零未决的设计选择**：sealer 形态（simple 常驻）、锁（flock）、根护栏（mountinfo 身份）、A3 的安全做法（回环 ext4）、A6 的门槛来源（规格 + 标定注释）、A8 的决策门（阈值 + 三级处置）、挂载矩阵（gateway 读写 / cp 只读）、旧定时器处置（隔离脚本 + 回滚）—— 全部在本计划内定完。
-- **已知的、被如实登记的弱覆盖**：① 「A7 的次序不变量」与「心跳每轮必打」只有静态检查（被测对象是冻结包与日志，本计划不能变异冻结包）；② `RoundResult.RootUnavailable` 无用例断言，登记进 `EXPECTED_GREEN`；③ 真实 zstd 路径的证据依赖本机是否装了 zstd，缺失时以 A3 环境的真实产物补；④ 生产门槛值（压缩比、水位换算）必须逐字取自规格，本计划不代抄；⑤ 「撤掉挂载 ≤1 tick」在写侧启用之前**不可执行**（见上一条与「验收项归属」表下方的说明）。
+- **已知的、被如实登记的弱覆盖**：① 「A7 的次序不变量」与「心跳每轮必打」只有静态检查（被测对象是冻结包与日志，本计划不能变异冻结包）；② `covers` 的根挂载点特判曾以「本机（darwin，无 `/proc/self/mountinfo`）不可达」为由把变异 `m04` 登记为 `EXPECTED_GREEN` —— **E64① 已订正并删除该登记**：`covers` 是**纯字符串函数**，包内行为用例 `TestCoversRootMountCoversPathsUnderRoot` 直调它、m04 为**断言红**（存在性另由静态检查 `covers必须特判根挂载点` 承载；`RoundResult.RootUnavailable` 已由 E63⑧ 新增的行为用例 `TestLoopReportsRootUnavailable` 承载，**不再是**弱覆盖）；③ 真实 zstd 路径的证据依赖本机是否装了 zstd，缺失时以 A3 环境的真实产物补；④ 生产门槛值（压缩比、水位换算）必须逐字取自规格，本计划不代抄；⑤ 「撤掉挂载 ≤1 tick」在写侧启用之前**不可执行**（见上一条与「验收项归属」表下方的说明）。
 - **已知风险（不隐藏）**：① 换盘/换挂载点后网关会**永久**闩锁到重启为止（已写进运行手册，未修）；② `RequiresMountsFor=` 在「手工 umount」时是否可靠地停掉 unit 属纵深防御、未验证，主防线是进程内护栏；③ 容器 uid 与 `/datalog` 属主未实测（首轮用 root，已登记 D74）；④ **隔离旧 timer 期间 `/datalog` 没有任何 retention**（R1，必须量化增长速率）；⑤ **A3 的 1 GiB 镜像落在 `/srv` 所在 FS，不受 `GuardScratchTarget` 保护**（R2，必须补容量/设备护栏）。
 
 ## 执行顺序与依赖
@@ -2972,4 +2995,311 @@ grep -c '!!! 失败' /tmp/p4-rerun.log   # 期望 0
   8. 运行手册的其余条目与任务 12 的收尾。
 - **注意次序的方向**：把任务 11 的观察部分排在写侧启用之前，得到的是一条**永远绿、什么都没证明**的验收（见「验收项归属」表下方的前置条件说明）。因此若第 5 步的读侧迟迟不就绪，本计划就**如实**只交付任务 11 的运行手册文本，并把该验收登记为「读侧就绪后的启用门禁」，**不得**宣称它已通过。
 - 任务 12 必须**在最终 HEAD 上**执行，且在它之后再有任何提交 ⇒ 全部变异绑定失效，必须重跑重记。
+- **基线（登记事实；E68②）**：本分支（`feat/trace-sealer-deployment`）的基点写的是 `main=0bfb130f`，但 `main` 引用**已前进到 `43af78b0`**（领先 `0bfb130f` **2 个提交** = `d8875bda` ＋ 合并提交 `43af78b0`），只动 **3 个文件**：`internal/gateway/authz/groups.go`、`tests/gateway/authz/groups_test.go`、`tests/gateway/orchestrator/group_auth_test.go`。本分支的改动面是 `internal/tracesealer/**` / `cmd/trace-sealer/**` / `tests/tracesealer/**` / `tests/deploy/**` / `deploy/**` / `docker-compose.yml` / `Makefile` / `.gitlab-ci.yml` / `tools/trace-mutate/**` / `docs/**` ⇒ 两者**零交集**，因此**不影响绑定与合并**（绑定的实质是**内容哈希**，见全局约束「变异证据绑定提交」与 **E59**）。本条**只登记事实**，不改任何门禁。
 
+---
+
+## 过程失误登记（E57–E58；**只登记与订正文本，不改代码**）
+
+> 编号续计划 3（`docs/superpowers/plans/2026-09-25-trace-point-read-service.md`）的 **E56**（下一份计划的 E 编号从 **E59** 起）。本表与 D 表（D64–D74）同一纪律：逐条写清「位置 / 问题 / 处置」，并写明本轮对**证据承载文件**的实际改动面。
+>
+> **本轮改动面（已核实）**：对 `internal/**`、`cmd/**`、`tools/trace-mutate/sets/**`、`atlas-migrations/**`、`migrations/**`、`internal/tracearchive/**`、`go.mod`、`go.sum` 的改动**全部为零**；`tests/**` 只改了 `tests/tracesealer/options_test.go` 一处（测试隔离，见文末「测试隔离」栏）⇒ 按全局约束「变异证据绑定提交」，`p4-task-1` 的**四个集合全部重跑重出**，绑定提交 **`651d7c2b`**，四张权威表落盘于 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/`；**上一轮的绑定（若有）一律作废、不得引用**。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E57** | 上一轮任务 1 的交付报告（其结论为「4 张 `p4-task-1` 权威表 exit=0」）；评审的独立复核（遍历 5 个工作树的 `.superpowers/sdd/*/`、全仓 `find -name '*authoritative*'`、`git status --ignored`、`TMPDIR`） | **报告声称的产物在磁盘上不存在**：`grep -rl p4-task-1` 只命中本计划与台账里的**一段摘要**，该摘要**不含** `names=… ran=… diff=… SKIP=…` 自证串，也**不含**清单 / 被测文件 / 测试文件的 sha256 ⇒ 变异这个**结论**虽被评审独立复算为真（`--check` 7/6/2/3 = 18 条唯一定位；18 个杀手具体且用例名互不为子串），但**证据没有落盘成可复核工件**。而全局约束写明 CI **完全不跑** `go test`、**变异证据是唯一验证手段** ⇒ 证据不可复核时，任务 1 在制度上等于没有证据。**这是过程失误，不是技术结论错误**（变异本身为真） | ① **本轮把四张权威表原样落盘**到 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/`，文件名 `p4-task-1-<classify\|round\|exit\|options>-authoritative-at-651d7c2b.txt`，内容 = 工具的**完整 stdout 原样**（证据绑定头 `git rev-parse HEAD` / `git status --porcelain` / 工具·集合·清单·被测文件·测试文件 sha256、清单推导命令与比对、映射表、静态检查、逐条自证串、分类计数口径），**不得删改、不得只留摘要**；与表**同目录**另有四份名字清单 `p4-task-1-<集合>-names.txt`（使表头的「名字清单 sha256」在磁盘上有可 `sha256sum` 的对应文件）与四份 `--check` 定位校验输出 `p4-task-1-<集合>-check-at-651d7c2b.txt`。② **新立一条硬规则（今后所有轮次适用）**：**任何声称的产物必须先在磁盘上可 `ls`、可复算，报告里必须逐字给出其确切路径**（相对仓库根、可直接粘贴）；只在下游结论里写「已完成 / `exit=0`」而不给路径的，**视为未完成**。③ 该规则同时约束「抄进报告」这一动作：全局约束第 5 条要求的「把工具头部原样抄进报告」是**报告内的副本**，它**不替代**磁盘上的表 —— **两者都要有**。④ **已核实的事实（本轮实测，可重跑）**：`ls -l` 见 12 个文件；四张权威表逐一 `exit=0`；分类计数 **7 / 6 / 2 / 3 = 18**，**全部为断言红**，0 崩溃/超时/编译红、0 允许的绿（`EXPECTED_GREEN` 为空）、未登记的绿 0 条、**证据无效 0 条**；`--check` 因本轮**未改任何被测实现文件**而保持 A=7 / B=6 / C=2 / D=3 |
+| **E58** | 本计划 **`:124`**、**`:1023`**、**`:1027`**、**`:931-945`**（行号为本轮订正**之后**的实时值，见本行 ⑥ 的行号位移栏）；`tools/trace-mutate/sets/p4-task-1-round.py` 的 `## 与计划文本的一致性` 文档串 | **四处「计划文本 ≠ 实现」的文本事实性缺陷**（评审点了 ②③，① 是评审同批指出的清单漏列，④ 由本轮测试隔离修正**新引入**）：① **`:124`** 任务 1 顶部文件清单只列 `classify_test.go` / `round_test.go` / `exit_test.go`，**漏列** `tests/tracesealer/options_test.go` —— 而 `:895` 的正文明确要求该文件（任务 1 步骤 7）⇒ 清单与正文自相矛盾。② **`:1023`**（集合 B 的 m02）计划只写「`KindSealFailed` 分支后补一句 `return res, err`」，**未给插入点** ⇒ 与集合里实际的匹配串**非逐字一致**（集合用 `res.SealFailed++` 紧接 `r.opts.Logf(` 做唯一定位，插入点在两者之间）。③ **`:1027`**（集合 B 的 m06）计划写 `+ res.UnknownFailed`，而实现 `runner.go:32-34` 的接收者是 **`r`**（`func (r RoundResult) Failed() int`）⇒ 计划里的串 `res.UnknownFailed` 在实现中**根本不存在**，照计划抄会「定位到 0 处」。④ **`:931-945`** 是本轮**自己造成**的：为修测试隔离给 `TestNewRunnerRejectsNonPowerOfTwoWindow` 补了 `MinAge: 3 * time.Hour`，若不同步计划里的该用例代码块，就会**新造**一处文本与实现不一致（与 ②③ 同类，只是方向相反） | ① **`:124` 就地补上** `tests/tracesealer/options_test.go`（**行数不变**）。② **`:1023` 就地写清插入点与匹配串**（`res.SealFailed++` 紧接 `r.opts.Logf(`，插入点在两者之间；并注明该分支日志与另两处 `res.Xxx++` 分支共用同一形态，故用这两段做唯一定位），使计划文本与集合**逐字一致**。③ **`:1027` 就地订正接收者**为 `r`，并把实现的**单行**求和式逐字写入（`r.RowMismatch + r.SealFailed + r.TooManyRows + r.UnknownFailed`），并注明 `Failed()` 在 `runner.go:32-34`。④ **`:931-945` 的用例代码块与本轮实现逐字同步**（补「MinAge 必须显式给值」的注释并补字段）；已实测该块与 `tests/tracesealer/options_test.go` **逐字节相同**（`diff` 为空）—— 这是**测试隔离修正在计划文本侧的必然同步**，不是新要求。⑤ **`tools/trace-mutate/sets/p4-task-1-round.py` 本轮一字未改（故意）**：它文档串里记的「两处**如实**改动（m02 插入点 / m06 匹配串）」在本行 ②③ 把计划订正为逐字一致之后**已变成历史陈述**；但该集合是**证据承载文件** —— 它的 sha256（`f0b0c059dc737039…`）正被本轮四张表绑定，改它就必须连带重跑四张表。⇒ **本轮保持该集合逐字节不变**，并把这条口径留在**此处**（而非集合内）：该文档串描述的分歧已由本计划文本订正**关闭**；后续轮次若因故重写该文档串，**必须**重跑并重记 `p4-task-1` 的全部四个集合。⑥ **行号位移（E54/E55 同一纪律）**：本轮在 `:931` 处插入 7 行注释 ⇒ **其后所有行号 `+7`**：评审所引的集合 B **m02 `:1016` → `:1023`**、**m06 `:1020` → `:1027`**；本表引用的一律是**订正后的实时行号**。已核实本计划**不含任何指向自身的行号引用**（`grep -cE '本计划 ?:[0-9]'` = **0**）⇒ 本次 `+7` 位移**不产生**新的行号自引用欠账（其余 `:NNN` 引用全部指向 `.go` / `.sh` / `deploy/` 等**其它文件**，本轮未改那些文件，故不受影响）。**⚠️ 一处需登记的例外**：`:1027` 行内引用的 `runner.go:32-34` 是**被实现文件**的行号（`runner.go` 本轮未改）⇒ 同样不受本次 `+7` 影响 |
+
+### 测试隔离（E58 ④ 的技术内容，独立成栏以免与文本订正混淆；**本轮唯一的 `tests/**` 改动**）
+
+- **缺陷**：`TestNewRunnerRejectsNonPowerOfTwoWindow` 原先只给 `Root` / `ZstdWindowMB` / `NewSealer`，让 `MinAge` 留零值去继承 `DefaultMinAge`。而 `Options.normalize` 里 **min-age 下界的判定（`options.go:99`）在窗口 2 的幂判定（`options.go:108`）之前** ⇒ 该用例**同时**依赖两条互不相干的契约，违反「每个承重属性一个顶层用例」的隔离要求。
+- **实测（修前，HEAD `12c8bd65`；命令 = 集合 D 加 `--only m02`）**：`m02_默认min-age缩到30m` 判定 = 红，自证 **`names=3 ran=3 diff=0 PASS=1 SKIP=0 FAIL=2`**，杀死的用例 = `TestNewRunnerDefaultsMinAgeToThreeHours, TestNewRunnerRejectsNonPowerOfTwoWindow` ⇒ **多出一个非点名的连带牺牲者**，与集合 D 的 `REQUIREMENTS`「m02 的杀手 = `TestNewRunnerDefaultsMinAgeToThreeHours`」（单一点名）**不符**，违反全局约束第 4 条「杀手必须是具体的顶层测试函数名，不允许不点名」。
+- **修法**：给该用例显式加 `MinAge: 3 * time.Hour`（严格大于 `MinAgeFloor = 1h`），把它钉回「只测窗口的 2 的幂」这一件事上。
+- **实测（修后，HEAD `651d7c2b`；权威表 `p4-task-1-options-authoritative-at-651d7c2b.txt`）**：`m02` 自证 **`names=3 ran=3 diff=0 PASS=2 SKIP=0 FAIL=1`**，杀死的用例 = **`TestNewRunnerDefaultsMinAgeToThreeHours`**（**FAIL 2 → 1，只剩点名杀手**）；同表的 `m03_不校验2的幂` 仍是**红**且杀手仍是 `TestNewRunnerRejectsNonPowerOfTwoWindow` ⇒ **隔离没有把 m03 的杀手弄丢**，集合 D 仍是 `3 = 3 断言支撑`。
+- **重绑**：`tests/tracesealer/options_test.go` 是**证据承载文件** ⇒ 四张 `p4-task-1-*` 权威表**全部重出**（表头「测试文件 sha256」四项中该项变为 `64d07b52eb0b863d…`；另三项与上一轮相同），旧表**作废、不得引用**。
+
+---
+
+## 过程失误登记与新增约定（E59–E60；**Task 1 收口轮**）
+
+> 编号续本计划 **E58**（上一节的 E57–E58 是「声称产物未落盘」轮）。与 E57–E58、D 表（D64–D74）同一纪律：逐条写清「位置 / 问题 / 处置」，并如实登记本轮对**证据承载文件**的实际改动面。本轮的两条都来自任务 1 独立复审的三条**非阻断项**（复审结论是「阻断项已闭合、可现在合并」）。
+>
+> **本轮改动面（已核实）**：对 `internal/**`（含冻结包 `internal/tracearchive/**`）、`tests/**`、`cmd/**`、`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum` 的改动**全部为零**；`tools/trace-mutate/trace_mutate.py` **未动**（sha256 仍是 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）；`tools/trace-mutate/sets/**` 只改 `sets/p4-task-1-exit.py` 一处（②：`PACKAGES` 纳入薄壳包 `./cmd/trace-sealer/`，用**既有字段**、不新增字段名）；`docs/**` 只改本计划。因改了集合 ⇒ 按全局约束第 8 条四张 `p4-task-1-*` 权威表**全部重出**（新表 `*-at-<sha>.txt`，表末含 `table_exit=`；`--check` 四份同理含 `check_exit=`，见 E60），`-at-651d7c2b` 的四张表与四份 `--check` **作废、不得引用**（文件保留在证据目录里备查）。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E59** | 本计划 **`:49`**（本轮订正**前**的实时值；订正为**原地改写**——该行仍是 1 行 ⇒ 订正**后**的实时值同样是 `:49`） | **绑定口径自相矛盾**：`:49` 原文的加粗句「**任何后续新提交都会使此前所有绑定失效**」与计划 3（`docs/superpowers/plans/2026-09-25-trace-point-read-service.md`）的 **E56** 直接冲突 —— E56 的口径是「绑定跟**内容**走：绑定的实质是**内容哈希**、表头 `git rev-parse HEAD` 只记**产出时点**、**纯计划文档 / 纯证据文本提交不使绑定失效**」。按 `:49` 的字面口径，本计划从 E54 起那些「只改计划文本的提交」都会把上一轮的绑定判成失效（而实际执行口径是**不失效**），且会推出「证据表永远无法在任何 tip 上成立」的结论（表落盘本身也是提交）。触发点 = 任务 1 独立复审的非阻断项 ③ | **把 `:49` 的「提交」改写为「实现 / 测试 / 集合内容的变更」**，并把「纯文档/纯证据提交不使绑定失效」写进同一句，与计划 3 **E56** 显式对齐。**改前**（逐字）：`**任何后续新提交都会使此前所有绑定失效** ⇒ ①…`；**改后**（逐字）：`**任何后续「实现 / 测试 / 集合」内容的变更都会使此前所有绑定失效**（绑定的实质是**内容哈希**，表头的 \`git rev-parse HEAD\` 只记**产出时点**；**纯计划文档或纯证据文本的新提交不使绑定失效** —— 见计划 3 的 **E56** 与本计划 **E59**）⇒ ①…`。该行末尾的 ①②③ 三条执行纪律与其余字面**未动**。**无行号级联（已实测）**：改前 `grep -cE '本计划 ?:[0-9]' docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md` = **0**；且本轮只在 `:49` 原地改写、在文件末尾追加本节 ⇒ 全部既有行号引用（E58 的 `:124` / `:1023` / `:1027` / `:931-945` 等）**零位移** |
+| **E60** | 本计划的证据制度（全局约束第 8 条 + 任务 1 步骤 11 的命令块）与四张 `p4-task-1-*` 权威表；触发证据 = 本轮实测 `grep -rc 'table_exit\|check_exit' .superpowers/sdd/2026-10-08-trace-sealer-deployment/` ⇒ **12 个文件全为 0**（`TOTAL=0`） | **报告里的数字在工件里查不到**（同族于 E57「声称的产物未落盘」）：`trace_mutate.py` 的 stdout **不自印退出码**（它只保证「0 = 全部转红 + 静态检查通过 + 清单推导一致 + 证据有效」）。原先四张表（`-at-651d7c2b`）里 `table_exit=` / `check_exit=` **一次都没出现**，而交付报告声称「四表 `table_exit=0` / `check_exit=0`」⇒ 这句话**无法由工件自证**，读者只能选择相信报告。这不是工具缺陷，而是**表落盘时的记录口径缺失** | **新增约定（此后每张权威表、每份 `--check` 输出都必须遵守）**：① **权威表的表末必须记录 `table_exit=`、`--check` 输出的表末必须记录 `check_exit=`**，取的是**工具进程的真实退出码**、紧跟在工具命令之后写：`python3 tools/trace-mutate/trace_mutate.py --repo . --manifest <清单> --mutation-set <集合> > <表>.txt 2>&1; echo "table_exit=$?" >> <表>.txt`（`--check` 同理记 `check_exit=$?`）；② **报告里引用的任何退出码或计数都必须能在工件（表）内查到** —— 退出码 = 表末的 `table_exit=` / `check_exit=` 行，计数 = 表内「自证串」/「计数口径」/「合计」段；**查不到就不得声称**。③ **表内其余段一律原样保留**（逐条自证串、映射表、静态检查、sha256 段），本约定**只追加、不改写**工具输出。④ **不改工具**：`trace_mutate.py` 是被权威表绑定的**证据承载文件**，「字段名不许自创」的纪律同样适用于集合 ⇒ 本条只用 `echo` 追加，不新增字段、不改工具代码。⑤ **本轮已按此执行**：四张 `p4-task-1-*-authoritative-at-<sha>.txt` 与四份 `p4-task-1-*-check-at-<sha>.txt` 全部重出，表末均带 `table_exit=` / `check_exit=`。**已知残余（如实登记）**：任务 1 步骤 11 的命令块**仍是没有 `echo` 的旧形态** —— 本轮**未**改它（避免把「新增约定」扩写成对执行步骤的重写）；执行者以本条为准，后续轮次若重排步骤 11，应把 `echo` 一并补进命令块 |
+
+## 过程失误登记与新增约定（E61；**Task 2 收口轮**）
+
+> 编号续本计划 **E60**。与 E57–E58、E59–E60、D 表（D64–D74）同一纪律：逐条写清「位置 / 问题 / 处置」，并如实登记本轮对**证据承载文件**与**计划文本**的实际改动面。
+>
+> **本轮改动面（已核实）**：`internal/tracearchive/**`（冻结包）、`migrations/**`、`go.mod`、`go.sum`、`tools/trace-mutate/trace_mutate.py` 的改动**全部为零**；实现面只动 `internal/tracesealer/{alert.go(新建),options.go,runner.go}` 与 `tests/tracesealer/alert_test.go(新建)`；集合面新增 `tools/trace-mutate/sets/p4-task-2-alert.py`、并按本表 ③ 重新锚定 `tools/trace-mutate/sets/p4-task-1-round.py` 的 m02。本轮共跑 5 个集合（`p4-task-2-alert` + `p4-task-1` 全部四个）的 `--check` 与权威表，**5 个 `check_exit=0` / 5 个 `table_exit=0`**，25 条变异**全部断言红**（0 崩溃/超时/编译红、0 未登记的绿、0 证据无效）。**③ 的连带后果**：按 E58⑤ 的口径，改 `p4-task-1-round.py` 必须重跑并重记 `p4-task-1` 的**全部四个**集合 ⇒ 本轮已重出四表四 check（`-at-e73a3091`），上一轮的 `-at-d05978f6` 版本按全局约束第 49 条作废（绑定是内容哈希）。**E60 口径的本轮执行**：五张表与五份 check 的表末都带 `table_exit=` / `check_exit=`。**行号位移（E54/E55/E58⑥ 同一纪律）**：本轮在 **`:1102`** 之前净增 1 行（把一个「修改：」拆成两行）⇒ **其后所有行号 `+1`**：任务 2 步骤 3 正文 **`:1193` → `:1194`**、步骤 6 的 `git add` 块 **`:1220-1221` → `:1221-1222`**；本表引用的一律是**订正后的实时行号**（并在括号里给出订正前的值）。已复核本计划**不含任何指向自身的行号引用**（`grep -cE '本计划 ?:[0-9]'` = **0**）⇒ 本次 `+1` 位移不产生新的自引用欠账；任务 1 的 `:1023`（集合 B 的 m02）在本轮**之前**，不受位移影响。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E61①** | 本计划 **`:1102`**（任务 2 的文件清单）与 **`:1221-1222`**（步骤 6 的 `git add` 命令块；订正前为 `:1220-1221`，见本节行号位移栏） | 两处都**漏列** `internal/tracesealer/options.go`，而 **`:1194`**（步骤 3 正文；订正前为 `:1193`，见本节行号位移栏）明确要求「新增 `Options.Slog *slog.Logger`」—— Go 的字段只能声明在 `Options` 所在的文件里 ⇒ 照清单执行**无法**产出要求的 `Options.Slog`（清单与正文自相矛盾，与 **E58①** 同族）。同一行还有一处措辞不实：`runner.go` 的改动写作「新增 `Summarize`」，而 `Summarize` 按本任务的接口块与 `alert.go` 的定义**只能是新建文件**，`runner.go` 只是它的调用方 | **`:1102` 就地补一行**「修改：`internal/tracesealer/options.go`（新增 `Options.Slog`）」，并把 `runner.go` 那句的「新增 `Summarize`」订正为「接入 `Summarize` —— 它的本体在新建的 `alert.go`」（**净增 1 行**，其后行号 `+1`）；**`:1220-1221` 的命令块就地补上** `internal/tracesealer/options.go`。本轮提交 `959f5441` 已按订正后的清单落盘（`git show --name-only` 含该文件） |
+| **E61②** | 本计划 **`:1194`**（任务 2 步骤 3；订正前为 `:1193`） | **口径自相矛盾**：「（nil ⇒ `slog.Default()`）」与同一句的「`Logf` 仅在 `Slog == nil` 时使用」**不能同时按字面成立**：`Options.normalize`（任务 1）把 `Logf` 默认成 `log.Printf` ⇒ 正常路径上 `Logf` 恒非 nil ⇒ 若 `Slog == nil` 就回落 `Logf`，则 `slog.Default()` 永远到不了；若 `Slog == nil` 就回落 `slog.Default()`，则 `Logf` 永远用不上（等于删掉了任务 1 的注入面）。**实测**：本轮实现按三级优先级取值，`resolveLogger` 的第三级确实是**防御分支**（走 `NewRunner` 的正常路径到不了，因为 normalize 已保证 `Logf` 非 nil） | **`:1194` 的就地订正**：把「（nil ⇒ `slog.Default()`）」改写为「（与 `Logf` 都缺省 ⇒ `slog.Default()`；`Logf` 由 `normalize` 默认成 `log.Printf` ⇒ 正常路径上 `Slog == nil` 就是走 `Logf` —— **E61②**：三级优先级 `Slog > Logf > slog.Default()`）」，使计划文本与本轮实现（`runner.go` 的 `resolveLogger`）**逐字一致**；实现侧把第三级的「正常路径到不了」这一事实写在 `resolveLogger` 的注释里，并为它加了两条静态检查（`Slog优先于Logf` / `缺省回落slog.Default`） |
+| **E61③** | 本计划 **`:1023`**（任务 1 集合 B 的 m02）与 `tools/trace-mutate/sets/p4-task-1-round.py` | **跨任务耦合**：任务 1 的 m02 用「`res.SealFailed++` 紧接 `r.opts.Logf(`」做唯一定位，而任务 2 步骤 3 要求把**同一个分支**的日志从 `r.opts.Logf(...)` 换成 slog ⇒ 该匹配串在任务 2 的实现里**不再存在**（本轮实测 `grep -c 'r.opts.Logf(' internal/tracesealer/runner.go` = **0**）⇒ 集合 B 会以 `PATTERN-MISS`（`定位到 0 处`）失败，且任务 12 的「最终 HEAD 全量重跑」必然踩到。原集合文档串里那句「匹配串 `res.SealFailed++` 紧接 `r.opts.Logf(`」也随之失真 | **集合 B 的 m02 就地重新锚定**（**语义一字未改**）：匹配串改为「`case KindSealFailed:` 紧接 `res.SealFailed++`」（该分支的起始两行、各自唯一，在任务 2 **前后**的实现上都唯一、都红成 `TestRoundSealsEveryEligiblePart`——两侧均已实测），并在集合文档串里按 E58⑤ 的纪律如实登记这次改动与「必须重跑四个集合」的后果；本计划 **`:1023` 同步订正**为新的匹配串描述并指向本条。**如实登记**：改集合即改证据承载文件 ⇒ 本轮重跑了 `p4-task-1` 全部四个集合（见本轮改动面） |
+
+---
+
+## 过程失误登记与新增约定（E62；**Task 2 行为证据收口轮**）
+
+> 编号续 **E61**。与 E57–E58、E59–E60、E61 同一纪律：逐条写清「位置 / 问题 / 处置」，并如实登记本轮对**证据承载文件**与**计划文本**的实际改动面。
+
+> **本轮改动面（已核实）**：`internal/**`（含冻结包 `internal/tracearchive/**`）与 `cmd/**` **零改动**；`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum` **零改动**；`tools/trace-mutate/trace_mutate.py` **未动**（sha256 仍是 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）；测试面只改 `tests/tracesealer/alert_test.go`（新增三条 `Round` 的**行为**用例）；集合面只改 `tools/trace-mutate/sets/p4-task-2-alert.py`（docstring 订正 + `REQUIREMENTS` 新增第 10 条）；清单 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-2-alert-names.txt` **6 → 9**。因改了**测试与集合内容** ⇒ 按 **E59**（绑定跟内容哈希走）**重跑重绑**：新表 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-2-alert-authoritative-at-df0b9d06.txt`（表末 `table_exit=0`）与 `p4-task-2-alert-check-at-df0b9d06.txt`（表末 `check_exit=0`）；`-at-e73a3091` 版本按内容哈希口径**作废**，但**留档不删**。**另（同一口径的连带面）**：`tests/tracesealer/alert_test.go` 同时出现在**全部** `p4-task-1-*` 表的「测试文件 sha256」段（工具对包内所有 `*_test.go` 取哈希）⇒ 该文件的变更使那四张表的绑定一并失效，因此四张 `p4-task-1-*` 表与四份 check 也**已重出**（`-at-ee4a60e4`，八个产物 `table_exit=0` / `check_exit=0`；分类计数 7/6/2/3 = 18 条全部断言红，0 崩溃/超时/编译红），`-at-e73a3091` 同样留档不删。分类计数 **7 = 7 断言支撑红 + 0 崩溃/超时/编译红 + 0 允许的绿**，未登记的绿 0、证据无效 0；pristine 侧 `names=9 ran=9 diff=0 PASS=9 SKIP=0 FAIL=0`。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E62** | `tools/trace-mutate/sets/p4-task-2-alert.py` 的 docstring（原句：「承重的运行时证据是 Task 2 的人工核验……该核验用的是**临时**测试文件，未进提交，故不在此作为杀手登记」）与它的 `REQUIREMENTS`；触发 = 计划 4 任务 2 的独立评审（结论「可合并」）留下的那条实质缺口，发起者裁定**成立、必须修** | `runner.go` 的「按 `Alert.Severity` 打 WARN/ERROR 告警线、`reason` 取自 `Alert.Reason`」是一条**运行时行为**要求，而原 9 条 `REQUIREMENTS` 只覆盖 `Summarize`、心跳（静态）、`Slog`/`Logf` 接线（静态）⇒ 这条行为在册**没有任何证据**；集合 docstring 自述靠**未进提交的临时测试**核验。按全局约束第 7 条「有要求无条目 ⇒ 整轮不合格」，这必须升级为修复项（「临时测试已验」不构成证据：它不在任何权威表的名字清单里，第三方无法复算） | ① 在 `tests/tracesealer/alert_test.go` 新增三条注入 `Options.Slog` 捕获 sink 的**行为**用例：`TestRoundTooManyRowsEmitsErrorAlertLine`（`slog.LevelError` + `reason=too_many_rows`）、`TestRoundRetryableFailureEmitsWarnAlertLine`（`slog.LevelWarn` + `reason=round_failed`）、`TestRoundCleanRoundEmitsOnlyHeartbeat`（**零**告警线 + 心跳恰好一次）⇒ 断言的是**具体级别与具体 reason 串**，不是「有输出」；② 它们**不需要新增变异**：现有变异逐条杀死它们（`m01` ⇒ 全绿轮出现告警线、`m03` ⇒ 可重试线变 ERROR、`m04`/`m05` ⇒ 永久失败的级别/reason 变），实测 `FAIL` 分布与重出表一致（3/1/2/2/2/1/1）；③ 集合 docstring 删去「临时测试」口径并新增「运行时告警线的在册行为证据」一节，`REQUIREMENTS` 新增第 10 条（运行时行为 → `m01/m03/m04/m05`）；④ 名字清单 6 → 9；⑤ 按 E60 重出表与 `--check`（见本轮改动面）。**如实登记**：唯一**没有变异杀手**的断言是「心跳恰好一次」（它需要 `runner.go` 的变异，而该集合 `TARGET` 是 `alert.go`）⇒ 它由该集合的两行静态检查 + 一次人工实测承载（新增第二次心跳 ⇒ 该用例在 `require.Len(beats, 1)` 处转红，已实测 `--- FAIL`；`internal/tracesealer/runner.go` 还原后 sha256 与改前逐字节一致）；该集合的两行静态检查**本身可失败**亦已实测：改动缩进（把心跳挪进 `if`）或重命名消息串 ⇒ 顶层锚定由命中变未命中；新增第二次心跳 ⇒「至多一次」由未命中变命中 —— 按本轮裁定**不另建元测试**。**行号纪律**：本节**追加在文件末尾**，任务 2 步骤 1/4/5 的三处订正**逐行原地改写、行数不变** ⇒ 既有行号引用**零位移**；改前 `grep -cE '本计划 ?:[0-9]' docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md` = **0**，改后复测仍为 **0**。**如实登记（文本一致性）**：任务 2 步骤 1 的用例代码块仍只抄录 6 条 `Summarize` 用例（上面已就地改成「另有 3 条行为用例，见 E62」），步骤 4 的「新增 6 个顶层用例」已就地改为 9 条 —— **代码块未逐字抄录那三条是有意的**：逐字抄进去会让其后所有行号 `+100` 以上，冲掉 E61 记的 `:1102`/`:1194`/`:1221-1222`；因此**在册源以 `tests/tracesealer/alert_test.go` @ `df0b9d06` 为准** |
+
+### 新增约定（E62 起，**今后所有轮次适用**）
+
+1. **行为要求必须由在册行为测试承载**：任何描述「运行时会打出什么 / 会调用什么 / 会返回什么」的要求，必须在某张权威表的**名字清单**里找得到承载它的顶层用例；只有静态检查、没有用例的要求，视为**未被验证**。
+2. **禁止以「临时测试已验」作为证据**：未进提交、因而不在任何权威表名字清单里的测试，等于没有证据；写进报告或集合 docstring 的「人工核验过」不改变这一判定（同族于 **E57**「声称的产物必须可复算」）。
+3. **静态检查只承载「存在 / 不存在」类要求**：结构不变量、字面量取值、产物文本可以用 `CHECKS` 钉住；但**行为**要求不得用静态检查替代 —— 静态检查通过只证明「这行文字在」，不证明「这条路径真的会被走到」。**例外（本轮已用）**：当被要求的行为与某个结构不变量**逐字等价**（例如「心跳恰好一次」≡「消息串出现一次且不在任何 `if` 内」）时，`CHECKS` 可以承载该要求，但必须同时给出该检查**可失败**的证明（改动缩进 / 重命名 / 新增第二次即红）。
+
+---
+
+## 过程失误登记与新增约定（E63；**Task 3 收口轮**）
+
+> 编号续 **E62**。与 E57–E62 同一纪律：逐条写清「位置 / 问题 / 处置」。
+
+> **本轮改动面（已核实）**：实现面 `internal/tracesealer/{rootguard.go(新建),options.go,runner.go}` 与 `cmd/trace-sealer/main.go`；测试面 `tests/tracesealer/{rootguard_test.go,loop_test.go}(均新建)`；集合面新增 `tools/trace-mutate/sets/p4-task-3-rootguard.py` 与 `p4-task-3-loop.py`。`internal/tracearchive/**`（冻结包）、`migrations/**`、`go.mod`、`go.sum`、`tools/trace-mutate/trace_mutate.py` 的改动**全部为零**。**跨任务连带（E59③ 的执行）**：共享测试目录 `tests/tracesealer/` 新增两个 `*_test.go` ⇒ 工具证据头里的「测试文件 sha256」段对**所有**把该目录列入 `PACKAGES` 的集合都变了 ⇒ `p4-task-1` 的四个集合与 `p4-task-2-alert` **一并重跑重出**（`p4-task-1-round`/`options` 另因 TARGET `runner.go`/`options.go` 变更、`p4-task-1-exit` 另因 `main.go` 变更而必须重出）。本轮共跑 **7 个集合**（两个新集合 + `p4-task-1` 四个 + `p4-task-2-alert`）的 `--check` 与权威表：**7 个 `check_exit=0` / 7 个 `table_exit=0`**，40 条变异 = **39 断言红 + 1 允许的绿 + 0 崩溃/超时/编译红 + 0 未登记的绿 + 0 证据无效**。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E63** | 本计划 Task 3 的文本（`:1608`、`:1617`、`:1640`、`:1652-1656`、`:1660-1663`、`:1672-1675`、`:2960`）与两个新集合 `tools/trace-mutate/sets/p4-task-3-{rootguard,loop}.py`；触发 = Task 3 实现与变异收口实测 | **八处「计划文本 ≠ 实测」的缺陷**：① `:1617` 的 `r.logf("[trace-sealer] ERROR 本轮失败，%s 后重试: %v", …)` 在实现里**不存在这个符号**（Task 2 把日志统一成 slog 后 `Runner` 没有 `logf` 方法）⇒ 照抄**编译不过**；② `:1608` 错字「心（每轮一条汇总）」缺「跳」；③ `:1640` 的「新增 6 + 5 = 11 个顶层用例」与实测 **7 + 7 = 14** 不符；④ `:1652`（m04）点名的两个杀手 `TestRootGuardCheckDetectsIdentityChange` 与 `TestRootGuardBaselineIsNonEmpty` **都注入 identity 闭包**、根本不经过 `covers`，且本机是 darwin（无 `/proc/self/mountinfo`）⇒ 真实 `Identity` 走 `fallbackIdentity` ⇒ m04 **没有任何杀手**；⑤ `:1653`（m05）点名的 `TestRootGuardBaselineIsNonEmpty` 注入的 identity **成功**返回 ⇒ 走不到 m05 动的那个错误分支，同时 `TestRootGuardCheckReportsVanishedRoot` 与 `TestRootGuardBaselineIsNonEmpty` 在原六条变异里**没有杀手**（m03 只动身份比对）；⑥ `:1672`（loop m04）点名的 `TestLoopStopsOnContextCancel` 实测在该变异下**仍绿**，而 Task 1 的 `TestRoundCancellationStopsBeforeNextSeal` **不在本集合的名字清单里**（该集合的 `-run` 只跑 `loop_test.go` 的用例）⇒ m04 在本集合里没有杀手；`TestLoopRepeatsRoundsOnPollInterval` 与 `TestLoopNeverOverlapsRounds` 在原五条变异里同样**没有杀手**；⑦ `:1673`（loop m05）登记 `EXPECTED_GREEN` 的理由是「`RoundResult.RootUnavailable` 无用例断言」—— 按 **E62** 的口径这正是「行为要求无在册证据」，应当补用例而不是登记弱覆盖；⑧ `:2960` 的弱覆盖清单 ② 与 ⑦ 同源，且 `:1660-1662` 的 `CHECKS` 只有两行 ⇒ m04 那条不可达分支连**存在性**旁证都没有 | ① 就地改写 `:1617` 为 `r.logger.Error("trace-sealer 本轮失败，下一个周期重试", "err", err, "poll_interval", r.opts.PollInterval.String())`（**行数不变**，与 Task 2 的单一 slog 路径一致；该行语义 —— 轮次级失败打 ERROR —— 未变）；②③ 就地改写（行数不变）；④ 就地订正 `:1652` 的杀手栏为「无，登记 `EXPECTED_GREEN`」并写明 darwin 不可达的理由，另在 `:1663` **新增一行 `CHECKS`** `covers必须特判根挂载点`（`(?m)^\tif mp == "/" \{$` present）承载该分支的**存在性**；并在**临时克隆**（`/tmp/p4t3-chk`，工具 `--repo` 指向它）里把三行静态检查各改坏一次（补 `os.MkdirAll` / 特判条件恒假 / 改 `Options.Identity` 字段名），实测三行**各自转红**且工具以「静态检查失败 ⇒ 整轮失败」退出 **1**；⑤⑥ 就地订正两处杀手栏，并在两张表里**各新增两行变异**（rootguard：m07 `Check()` 的 stat 失败静默放行、m08 `Baseline()` 返回 `g.root`；loop：m06 跑完一轮就退出、m07 轮次并行）⇒ 其后实时行号 `+5`，但本计划不含指向 `:1233` 之后行号的任何自引用（改前 `grep -cE '本计划 ?:[0-9]'` = **0**，改后复测仍为 **0**）⇒ **零级联**，且 `:1233` 之前的行本轮**一行未动**；⑦⑧ 在 `tests/tracesealer/rootguard_test.go` 新增 `TestRootGuardRejectsWhenBaselineCannotBeTaken`、在 `tests/tracesealer/loop_test.go` 新增 `TestLoopStopsSealingAfterCancel` 与 `TestLoopReportsRootUnavailable`（三条都是**在册行为用例**，进各自名字清单）⇒ `p4-task-3-rootguard` 的 m05 与 `p4-task-3-loop` 的 m04/m05 三个变异都拿到在册杀手，loop 集合的 `EXPECTED_GREEN` **清空**；`:2960` 就地改写。**如实登记（残余弱覆盖，唯一一处）**：`p4-task-3-rootguard` 的 **m04** 是唯一登记进 `EXPECTED_GREEN` 的变异（darwin 不可达；在 Linux 上它会杀掉依赖真实 `Identity` 的用例），其存在性由静态检查行承载（**E64① 已订正**：m04 由包内行为用例 `TestCoversRootMountCoversPathsUnderRoot` 承载、为**断言红**，`EXPECTED_GREEN` 已清空；原登记的两半理由均已证伪） ⇒ 本轮 40 条变异 = **40 断言红 + 0 允许的绿 + 0 崩溃/超时/编译红 + 0 未登记的绿 + 0 证据无效**（**E65(a) 订正**：原记「39 断言红 + 1 允许的绿」是 **E64① 订正之前**的 `-at-0240d4b5` 事实；订正后 `p4-task-3-rootguard` 的 8 条 = **8 断言红 + 0 允许的绿**、`EXPECTED_GREEN` 两项皆空，见 `-at-055c28c1` / `-at-12bdf706` 与 `-at-d1716d21`）。**如实登记（隔离探针）**：`TestLoopStopsOnContextCancel` 仍**没有变异杀手**（它断言「取消后干净返回」与「返回后没有遗留后台轮次」，而 m07 的泄漏 goroutine 不保证在 50ms 采样窗内留下痕迹）⇒ 按「隔离探针」口径登记，其两半的**可失败性**已人工实测：把 `Loop` 的 `case <-ctx.Done():` 分支改成 `return context.Canceled` ⇒ 该用例在 `require.NoError` 处转红（**E64② 复测订正**：只改 `select` 里的 `case <-ctx.Done():` **不**转红 —— 本用例实际生效的退出路径是同函数里 `if ctx.Err() != nil { … return nil }` 那一条，它遮蔽了前者；按该分支实测才转红，见集合 `COVERAGE_GAPS`）；在该分支注入 `go func() { for { r.Round(ctx) } }()` ⇒ 该用例在 `require.Equal(t, n, r.rounds())` 处转红（实测 `expected: 11 / actual: 25305`）；两次都按 `cp` 还原，`internal/tracesealer/runner.go` 还原后 sha256 = `d9f6630b475aab00e3020459f96aaf289795e342b5a0c59e39efbe87dbd4c5e5`（与提交版本逐字节一致），`git status --porcelain` 为空。**如实登记（文本一致性）**：步骤 3 的 `rootguard.go` 代码块与本轮实现**逐字节相同**（`diff` 为空）；步骤 1 的 `loop_test.go` 代码块**未逐字同步**（计划的示意块自己写着测试辅助要执行者自建，本轮按 E63④ 的理由把轮次计数改挂在 `loopHarness` 的身份探针上 —— 计划的 `f.rounds()` 计法在「根目录不可用」那一轮恒为 0）；**在册源以 `tests/tracesealer/{rootguard,loop}_test.go` 与两个集合文件 @ `0240d4b5` 为准**。 |
+
+---
+
+## 过程失误登记与新增约定（E64；**Task 3 评审修订轮**）
+
+> 编号续 **E63**。与 E57–E63 同一纪律：逐条写清「位置 / 问题 / 处置」。本轮**只做 Task 3 收口**，不做 Task 4+。
+
+> **本轮改动面（已核实）**：实现面 `internal/tracesealer/**` **零改动**（只复核 sha256：`rootguard.go` = `ff0c9e85b8406b72f4221b8ecd82079e5aafa90be77a6f9d68695b1b34923699`、`runner.go` = `d9f6630b475aab00e3020459f96aaf289795e342b5a0c59e39efbe87dbd4c5e5`，与 `0240d4b5` 逐字节一致）；冻结包 `internal/tracearchive/**`、`cmd/**`、`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum` **零改动**；`tools/trace-mutate/trace_mutate.py` **未动**（sha256 仍是 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）；测试面**新增** `internal/tracesealer/covers_test.go`（包内，1 条顶层用例）；集合面改 `tools/trace-mutate/sets/p4-task-3-rootguard.py` 与 `p4-task-3-loop.py`；清单面 `p4-task-3-rootguard-names.txt` 7 → 8 条；证据面新增四份文件（两表 + 两 `--check`，`-at-055c28c1` / `-at-12bdf706`），旧表 `-at-0240d4b5` **留档不删**。
+>
+> **跨任务连带自查（如实报告）**：遍历全部集合的 `PACKAGES`，**没有任何集合**含 `./internal/tracesealer/`（也没有 `./...` 一类父目录）⇒ 新增的包内 `*_test.go` **不落进**任何其它集合的「测试文件 sha256」段；另对 `p4-task-1-classify/round/exit/options` 与 `p4-task-2-alert` 五张 `-at-0240d4b5` 的表**逐行复算**其绑定的测试文件与被测文件 sha256（每张 8 条绑定行）⇒ **内容全未变、绑定仍有效**，故未重出这五张表。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E64** | ① 本计划 Task 3 步骤 6 的 A 集合表里 m04 那一行的「杀手」栏；② 本计划全局「已知的、被如实登记的弱覆盖」第 ② 条；③ 计划 **E63** 行末「如实登记（残余弱覆盖，唯一一处）」；④ `tools/trace-mutate/sets/p4-task-3-rootguard.py` 的 `EXPECTED_GREEN`（唯一一条 = m04）与其 `CHECKS` 的 why、`REQUIREMENTS` 的 note、docstring 第 4 条；⑤ 计划 **E63** 行末「如实登记（隔离探针）」把「无变异杀手」只写在**计划文本**里；⑥ `tools/trace-mutate/sets/p4-task-3-loop.py` 的 **m02**；触发 = 计划 4 任务 3 的独立评审（结论「修复后可合并」）的 **B1**，与发起者裁定的 **N1 / N2** | **B1（必做）**：那条「允许的绿」掩盖了一条**未被验证的行为要求**。「根挂载点必须覆盖其下路径」是**行为**要求，而它当时只由静态检查 `covers必须特判根挂载点`（存在性）承载 ⇒ 违反 **E62**。登记 m04 为 `EXPECTED_GREEN` 的理由**两半都错**：① `covers` 是**纯字符串函数**、不读 `/proc/self/mountinfo`，而计划 Q3 明文允许「确需触达未导出符号 ⇒ 放包内测试」⇒ 它**不是**平台不可达；② 在册清单 7 条里唯一传真实 `Identity` 的三条（`/`、相对路径、缺失目录）**都在调用 `Identity` 之前就返回错误** ⇒ 在 Linux 上 m04 **同样不会红**，「在 Linux 上会杀掉依赖真实 `Identity` 的用例」是**无据子句**。**N1（必做）**：`TestLoopStopsOnContextCancel` 的「隔离探针」登记**只写在计划文本**里，集合的 `EXPECTED_GREEN` / `CHECKS` / `REQUIREMENTS` 一行都没有 ⇒ 工件里查不到（同族于 **E57**）。**N2（必做）**：loop 的 m02 在 logger 调用**之前插入** `return err`，造出一条**不可达语句** —— Go 编译器放行、`go test` 的默认 vet 子集（不含 `unreachable`）也放行 ⇒ 侥幸通过，且不是「放宽 / 删除判定」的可解释形态 | **B1**：① 按 Q3 在**包内**新增 `internal/tracesealer/covers_test.go` 的 `TestCoversRootMountCoversPathsUnderRoot`（断言 `covers("/", "/tmp/x") == true`，另有 `covers("/","/")`、`covers("/a","/a/b")` 与不相干路径为 false 等边界），并把 `./internal/tracesealer/` 加进 `PACKAGES`、`MANIFEST_FILES` 与 `MANIFEST_DERIVATION` 扩到两个文件（名字清单 7 → 8）—— 该测试文件因此进证据绑定的「测试文件 sha256」段；② **删除** `EXPECTED_GREEN` 中 m04 那一条（`EXPECTED_GREEN` 清空），把 `CHECKS` 的 why、`REQUIREMENTS` 的 note、docstring 第 4 条与上面 ①②③ 三处计划文本一并改写为**事实陈述**（m04 由包内行为用例承载、为**断言红**）；③ 按 **E59** 重跑重绑：`p4-task-3-rootguard` 8 条**全断言红**、`p4-task-3-loop` 7 条**全断言红**（表 `-at-055c28c1` / `-at-12bdf706`，均 `table_exit=0`，两份 `--check` 均 `check_exit=0`）。**N1**：把该登记搬进**集合工件内**并复用**既有字段名** `COVERAGE_GAPS`（与 `task-5.py` 同形；不写进 `EXPECTED_GREEN`，因为它的键被工具当作**变异名**，也不放进 `REQUIREMENTS`，因为「mutations 与 checks 都为空」会被工具判 GAP ⇒ 整轮失败），另在该集合「ctx 取消后不得再开新块」的 `REQUIREMENTS` note 里复述实测结论（该 note 会进权威表）：两半的可失败性本轮**重新实测**（**E66①：以下 `loop_test.go:NNN` 均为「改动后行号」**）—— ① 退出分支 `return nil` 改成 `return ctx.Err()` ⇒ FAIL 于 `loop_test.go:171`；② 同一分支注入泄漏 goroutine ⇒ FAIL 于 `loop_test.go:174`（expected 11 / actual 25341，连跑 3 次 25341 / 25816 / 25735）。**N2**：把 m02 改成「把『记日志后继续』**整条语句**替换成 `return err`」——语义仍是「环境级失败 ⇒ 退出」，不留任何不可达代码，`go vet ./internal/tracesealer/ ./tests/tracesealer/` 全量通过，m02 仍为**断言红**（杀手 `TestLoopKeepsRunningWhenRootIsUnavailable`）。**如实登记（本轮新发现的一处竞态）**：loop 的 m07 会**偶发**把 `TestLoopStopsOnContextCancel` 一起打红（本轮两次工具运行都出现，上一轮 `-at-0240d4b5` 的表里没有，单项单跑 5 次里 1 次红）⇒ 它是**竞态**而非杀手，**不得**据此把该用例登记成 m07 的杀手；该事实已写进集合的 `COVERAGE_GAPS` 与 m07 条目，登记口径由「无变异杀手」订正为「无**可依赖的**变异杀手」 |
+
+### 新增约定（E64 起，**今后所有轮次适用**）
+
+1. **不允许用「本平台不可达」为在册清单从未触达的路径开脱**：若某条变异据称在某些平台上不可达，**必须给出在册证据**（哪个用例、哪一行、因哪条平台事实而不可达）；**给不出证据的一律按可杀处理并补测试**，且补在能**确定性**触达它的那一层 —— 纯函数（本例的 `covers`）就该由包内用例直调，而不是靠间接路径「碰巧走到」。
+2. **「无变异杀手」的登记必须落在集合工件内**，不能只写在计划文本里：登记到集合里一个**既有的、工具读不到的**人类可读字段（本轮用 `COVERAGE_GAPS`，**不新造字段名**），写清「位置 / 断言什么 / 为什么没有杀手 / 可失败性由谁承载 / 谁来补」；计划文本可以复述，但**不得**成为唯一落点。
+
+---
+
+## 过程失误登记与新增约定（E65；**Task 4 收口轮**）
+
+> 编号续 **E64**。与 E57–E64 同一纪律：逐条写清「位置 / 问题 / 处置」。
+
+> **本轮改动面（已核实）**：实现面 `internal/tracesealer/lock.go`（**新建**，sha256 `2835c163e3dda8d1…`）、`internal/tracesealer/runner.go`（`dd80de132255fafb…`）、`cmd/trace-sealer/main.go`（`d83e628462358fcc…`）；测试面 `tests/tracesealer/lock_test.go`（**新建**，`7bd98c1223b58280…`，8 条顶层用例）与 `tests/tracesealer/concurrent_test.go`（**新建**，`6ec687db153fbdeb…`，5 条）；集合面**新增** `tools/trace-mutate/sets/p4-task-4-lock.py`（`c3bbbeaefdea569e…`）与 `p4-task-4-runner.py`（`8a830be68383c7c0…`）。**七个既有集合因绑定失效而重跑重出**（集合文件**一字未改**）：`p4-task-1-{classify,round,exit,options}`、`p4-task-2-alert`、`p4-task-3-{rootguard,loop}`。`internal/tracearchive/**`（冻结包）、`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum` 的改动**全部为零**（`git diff --stat 00e5c1ba..HEAD -- internal/tracearchive/` 与同一范围的 `migrations atlas-migrations go.mod go.sum` 均**无输出**）；`tools/trace-mutate/trace_mutate.py` **未动**，sha256 仍是 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`。
+
+> **跨任务连带（E59③ 的执行，先自查后报告）**：`grep -n 'PACKAGES' tools/trace-mutate/sets/p4-task-*.py` 显示**七个**集合把 `./tests/tracesealer/` 列入 `PACKAGES`（`p4-task-3-rootguard` 另含 `./internal/tracesealer/`）；工具对包内**全部** `*_test.go` 取哈希 ⇒ 本轮新增两个测试文件使这七个集合的「测试文件 sha256」段**全部失效**。另 `p4-task-1-round` / `p4-task-3-loop` 的 TARGET `runner.go`、`p4-task-1-exit` 的 `main.go` 本轮被改 ⇒ 其「被测文件 sha256」段同时失效。⇒ 本轮共跑 **9 个集合**（两个新集合 + 七个重出）的 `--check` 与权威表：**9 个 `check_exit=0` / 9 个 `table_exit=0`**，**48 条变异 = 48 断言红 + 0 允许的绿 + 0 崩溃/超时/编译红 + 0 未登记的绿 + 0 证据无效**（`p4-task-1` 四集合 7/6/2/3、`p4-task-2-alert` 7、`p4-task-3-rootguard` 8、`p4-task-3-loop` 7、`p4-task-4-lock` 4、`p4-task-4-runner` 4；`--check` 唯一定位数同为 48）；绑定 **`-at-d1716d21`**，18 份产物（9 表 + 9 check）落盘于 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/`，旧表（`-at-0240d4b5` / `-at-055c28c1` / `-at-12bdf706` / `-at-ee4a60e4` 等）留档不删。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E65** | ① 计划 **E63** 行内的计数句「本轮 40 条变异 = **39 断言红 + 1 允许的绿**」；② Task 4 步骤 5 的「新增 6 + 5 = 11 个用例」；③ 全仓一切「零允许的绿」类表述的**范围**；④ `tools/trace-mutate/sets/p4-task-3-loop.py` 的 m07 与 `COVERAGE_GAPS`；⑤ Task 4 步骤 6 的集合拆分与 m07 形态；触发 = 上一轮（Task 3 评审修订轮）复审点出的三处精度问题 | **(a)** E63 行在其「**E64① 已订正**」标记**之后**仍留旧计数「40 条变异 = 39 断言红 + 1 允许的绿」，与各集合 `EXPECTED_GREEN` 已清空**自相矛盾**（同一行内前半说清空、后半仍算 1 条）。**(b)** 缺一条约定：**偶发杀手（竞态类）不得作为某变异为红的唯一依据** —— 实测实例：`p4-task-3-loop` 的 **m07**（轮次并行）在 `-at-d1716d21` 的表里把 `TestLoopStopsOnContextCancel` 一起打红（`-at-0240d4b5` 的表里没有；单项单跑 5 次里 1 次红），它的**确定性**杀手是 `TestLoopNeverOverlapsRounds`。**(c)** 「零允许的绿」被读成**全项目**事实 —— **不字面成立**：本计划与全部集合工件里**没有**这句字面陈述（`grep -rn '全项目'` 与 `grep -rn '零允许的绿'` 在 `--include='*.md' --include='*.py' --include='*.txt'`、排除 `vendor/` 后**在「改动前」**均 0 命中）—— **E66④ 订正**：该观测**只在改动前**成立；E65 本节自己的「新增约定（E65 起）」第 1 条引入了这两串 ⇒ **提交后（`9954edc9`）各 2 命中，且都落在 E65 本节自身（E65 行 ＋ 紧随其后的「新增约定（E65 起）」第 1 条 —— 自指）**，不构成对「全项目」读法的反驳（本 E66 节同样含这两串 ⇒ 自指命中数还会再增；判据以**改动前**（`00e5c1ba`，实测 0 命中）为准），但按「全项目」的读法它是**假的** —— `tools/trace-mutate/sets/p2-task-2.py:278`（`m03_删除minAge严格小于校验`、`m16_删除roll_interval正数校验`）、`task-5.py:387`（`m13_删除PendingSeals的空块守卫`）、`task-6.py:431`（`m15_删除打开spool失败守卫`、`m34_删除sort顺序`）**仍非空**（阶段 2 / legacy，不属本计划范围）。**(d)** Task 4 步骤 6 把**两个不同文件**的变异塞进一个 `TARGET` 单值的集合（与全局约束第 42 条冲突）。**(e)** 步骤 5 用例条数写错（实测 13 不是 11）。**(f)** 步骤 4 的 A7 示意图有三处不可照抄 | **(a)** 就地把该计数改写为事实：**40 条变异 = 40 断言红 + 0 允许的绿**，其中 `p4-task-3-rootguard` 8 条 = **8 断言红 + 0 允许的绿**（并写明旧数字属 `-at-0240d4b5`，订正后以 `-at-055c28c1` / `-at-12bdf706` / `-at-d1716d21` 为准；**行数不变**）。**(b)** 新增约定（见下「新增约定（E65 起）」第 2 条）；「m07 的确定性杀手是 `TestLoopNeverOverlapsRounds`、`TestLoopStopsOnContextCancel` 是竞态不是杀手」这一事实保留在集合的 `COVERAGE_GAPS` 与 m07 条目里（表仍**如实**列出两个红名 —— 表是事实记录，登记口径在集合工件内）。**(c)** 本轮一切「零允许的绿」类表述**一律限定为「计划 4 各集合」**；三处反例**只登记、本轮不改**（阶段 2 / legacy）。**(d)** 就地把 Task 4 的变异集合拆成两份：`p4-task-4-lock.py`（`lock.go` 的 m02–m05）与 `p4-task-4-runner.py`（`runner.go` 的 m06–m09），计划表格编号原样保留。**(e)** 就地把步骤 5 的条数改为 **8 + 5 = 13**（**行数不变**）。**(f)** 见下方「如实登记（Task 4 文本一致性）」第 3 条，**不改代码块**（计划自己在步骤 4 写着辅助由执行者补全；在册源以 `tests/tracesealer/{lock,concurrent}_test.go` 与两份集合 @ `d1716d21` 为准）。**未动任何自引用行号**：动计划文本前 `grep -cE '本计划 ?:[0-9]'` = **0**，改后复测仍为 **0** ⇒ **零级联**（本轮两处就地改写都是**单行内**替换，全文行数 3082 → 3082；本 E65 节追加在文末） |
+
+### 新增约定（E65 起，**今后所有轮次适用**）
+
+1. **「零允许的绿」必须写清范围**：任何「零允许的绿 / 没有允许的绿」类表述**必须限定到具体集合或批次**（本例一律写「**计划 4 各集合**」）。反例已经存在：阶段 2 / legacy 的三份集合（`p2-task-2.py:278`、`task-5.py:387`、`task-6.py:431`）的 `EXPECTED_GREEN` 非空 —— 它们是**历史事实**、不是缺陷；把范围写成「全项目」就是失真陈述。
+2. **偶发杀手（竞态类）不得作为某变异为红的唯一依据**：若某变异在某张表里把一条**竞态**用例（同一条变异反复跑时红/绿不定）打红，它**不得**被登记为该变异的杀手；该变异必须另有**确定性**杀手，否则按「无杀手」处理（登记进集合既有的 `COVERAGE_GAPS` 并补人工探针）。判据是「同一条变异重复跑 N 次是否稳定红」。本轮实例：`p4-task-3-loop` 的 m07 —— 竞态红名 `TestLoopStopsOnContextCancel`，确定性杀手 `TestLoopNeverOverlapsRounds`。表的红名清单**照实记录**，登记口径由集合工件承载（E64②）。
+
+**如实登记（Task 4 文本一致性：四处与实现不一致 —— 两处在**集合侧**就地订正、一处在**计划文本**就地订正、一处**只登记**）**：
+
+1. **集合拆分（已就地订正）**：计划步骤 6 的 `p4-task-4-lock.py` 同时含 `lock.go` 的 m02–m05 与 `runner.go` 的 m06/m07，而 `TARGET = "internal/tracesealer/lock.go"` ⇒ 后两条匹配串在 `--check` 阶段必然 `count=0`。工具一次只能变异一个文件（全局约束第 42 条），故按先例（`p2-task-8.py` / `p2-task-8-spooler.py`）拆成两份集合。
+2. **m07 的形态（如实订正）**：计划的「插入 `os.MkdirAll`」在 `runner.go`（**没有** `os` 导入）会红成**编译红**（无效证据，违反全局约束第 46 条）⇒ 集合用**两个操作**（先补 `"os"` 导入、再插 `os.MkdirAll(opts.Root, 0o755)`），语义与计划逐字相同。另新增 **m08**（`Close` 不释放锁）与 **m09**（装配失败不释放已取得的锁）：后者是计划步骤 3 自己写明的义务（「`NewRunner` 失败时必须把已取得的资源释放干净」），按 **E62** 必须由在册行为用例承载 ⇒ 本轮新增 `TestNewRunnerReleasesLockWhenSealerFails` 与 `TestNewRunnerCloseIsIdempotent`（后者幂等由两层保证、runner.go 侧单点变异杀不掉，按 E64② 登记进集合的 `COVERAGE_GAPS`）。
+3. **A7 示意图（未逐字同步，三处）**：① 计划的 `if i%40 == 39` 会在**最后一次** Append 之后也交接 ⇒ 只剩「产物在场」一条落点分支被走到；本轮改成 `if i%40 == 39 && i < 160`（4 次交接、最后一块留在 spool），使「产物在场」与「spool 行数 > row」**两条**分支都被走到。② 计划的 `hs.assertEveryRefLands()`（无参）**不可实现**：逐个 Ref 判定必须拿到 `refs` ⇒ 实现为 `hs.assertRefsLand(refs)`（返回 error）。③ 计划把 `require.False(sealed[ref.Part], …)` 与 `assertEveryRefLands()` 写在同一个示意块里；实现把**次序断言**落进 `TestA7WriterNeverAppendsToAHandedOffPart` 的**自身函数体**（`sealOnce` 才是共享辅助），以保证「一条承重性质 = 一个顶层用例」。
+4. **用例条数（已就地订正）**：步骤 5 的「新增 6 + 5 = 11」与实测 **8 + 5 = 13** 不符（多出的两条见上 2）。
+
+**如实登记（Task 4 的人工探针：四条「无变异杀手」用例与两条断言的可失败性）**：`p4-task-4-{lock,runner}` 的 `COVERAGE_GAPS` 登记了这些用例，其可失败性由人工探针承载（均按 `cp` 还原；还原后 sha256 与提交逐字节一致、`git status --porcelain` 为空；**E66①：本条内全部 `*.go:NNN` 均为「改动后行号」**）：① 把 `sealOnce` 里的 `w.MarkSealed(task.DT, task.Part)` 删掉 ⇒ `TestA7WriterNeverAppendsToAHandedOffPart` FAIL 于 `concurrent_test.go:161`（次序断言）；② 删掉 `handoff` 的 `os.WriteFile` ⇒ `TestA7NoRefPointsToNothing` FAIL 于 `:141`、`TestA7RestartAfterSealStartsAtNextPart` FAIL 于 `:188`；③ 交接完成后删掉产物目录再调 `assertRefsLand` ⇒ `TestA7NoRefPointsToNothing` FAIL 于 `:146`（「Ref 丢了：产物与 spool 都不在」）；④ 在 `Round` 里对同一 task 重复调用一次 `Seal` ⇒ `TestA7NoPartIsSealedTwiceConcurrently` FAIL 于 `:277`（perPart=2）；⑤ 用例侧并发跑两个 `Round` ⇒ 同一条 FAIL 于 `:281`（maxInFlight=2）。`internal/tracesealer/runner.go` = `dd80de132255fafb…`、`tests/tracesealer/concurrent_test.go` = `6ec687db153fbdeb…`（与提交一致）。
+
+---
+
+## 过程失误登记与新增约定（E66；**Task 5 开工前的上轮评审收口轮**）
+
+> 编号续 **E65**。与 E57–E65 同一纪律：逐条写清「位置 / 问题 / 处置」。本轮由上一轮（Task 4 收口轮）独立评审留下的 **5 条**触发，**只做这 5 条**；Task 5 本体是同一分支上紧随其后的独立提交。
+
+> **本轮改动面（已核实）**：实现面 `internal/tracesealer/**`、`cmd/**`、`tests/**` **零改动**；冻结包 `internal/tracearchive/**`、`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum` **零改动**；`tools/trace-mutate/trace_mutate.py` **未动**（sha256 仍是 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）；集合面改五个 —— `p4-task-1-exit.py` / `p4-task-1-options.py` / `p4-task-4-lock.py` **各补一行** `Mkdir` absent 静态检查（**E66③**），`p4-task-3-loop.py` **补 m07 形态登记**（**E66②**），`p4-task-3-loop.py` / `p4-task-4-lock.py` / `p4-task-4-runner.py` **补探针行号版本标记**（**E66①**）；计划面改三处 —— Task 4 步骤 6/7 的集合拆分文本同步（**E66⑤**）、E65(c) 的范围订正（**E66④**）、计划 E64 行与 Task 4 探针段的「改动后行号」标记（**E66①**）。
+
+> **跨任务连带（E59③ 自查，先自查后报告）**：`grep -n 'PACKAGES' tools/trace-mutate/sets/p4-task-*.py` ⇒ 本轮**没有任何 `*_test.go` 被改**，因此各集合的「测试文件 sha256」段**全部未变**；失效的只是被改那五个集合的「变异集合 sha256」与 `CHECKS` / 映射表段 ⇒ 按 **E59** **只重跑重出这五个集合**（`--check` ＋ 权威表），其余集合的集合文件内容与测试文件哈希都没变、**不牵连**。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E66** | ① 计划 E64 行与 Task 4 探针段、以及 `p4-task-3-loop.py` / `p4-task-4-lock.py` / `p4-task-4-runner.py` 的 `COVERAGE_GAPS` 里引用的探针行号；② `tools/trace-mutate/sets/p4-task-3-loop.py` 的 **m07**；③ `p4-task-1-round.py:93`（`runner.go`）与 `p4-task-3-rootguard.py:133`（`rootguard.go`）之外的全部 sealer 源文件；④ 计划 **E65** 行 (c) 的计数句；⑤ 计划 Task 4 步骤 6/7 的集合文本；触发 = 上一轮（Task 4 收口轮）独立评审留下的 **5 条** | **文档①**：探针行号**没有标注版本** —— 同一行号在「改动前 / 改动后」指向不同位置，读者无法复核。**文档②**：loop 的 **m07** 是**插入型（顺序颠倒）**变异（串行 → 并行），与 `tools/trace-mutate/README.md:5` 的「再逐条把守卫删掉/放宽」措辞**不同形**，而集合里**没有这一条形态登记**。**必做③**：D70「整包零建目录」的静态检查当时只覆盖 `runner.go`（`p4-task-1-round.py:93`）与 `rootguard.go`（`p4-task-3-rootguard.py:133`），`lock.go` / `options.go` / `cmd/trace-sealer/main.go` **缺该行** ⇒「整包」名不副实，而「启动时 root 不在就先建出来」正是这类事故（2026-09-24 `/` 被写满）最自然的入口。**必做④**：E65(c) 写「`grep -rn '全项目'` 与 `grep -rn '零允许的绿'` …… 均 0 命中」，但 E65 自己新增的「新增约定（E65 起）」第 1 条引入了这两串 ⇒ **提交后各 1 命中、且都落在该约定自身（自指）**；该观测**只在「改动前」成立**。**文档⑤**：计划 Task 4 步骤 6/7 仍只写一个集合、`TARGET` 仍写 `lock.go`，与 **E65(d)** 的裁定（拆成 `p4-task-4-lock` ＋ `p4-task-4-runner`）**不同步** | **①** 在计划 E64 行、Task 4 探针段与三个集合的 `COVERAGE_GAPS` 里统一标注「**改动后行号**」（本轮五处；判据 = 行号取自本轮提交后的文件，E66 本身不改任何 `.go` ⇒ 与提交内容一致）。**②** 在 m07 条目上方补【E66② 形态登记】，写明：它是插入型、与 `README.md:5` 的张力；依据两条 —— 计划 Task 4 步骤 6 的 m07 行**原文自己**就要求「顺序颠倒，插入 `os.MkdirAll`」，以及**同形先例** = Task 3 的 **m06**（「跑完一轮就退出」，在循环体里插入 `return nil`，已在权威表里为**断言红**）；并要求插入型**必须**另有**确定性**杀手（本条 = `TestLoopNeverOverlapsRounds`；`TestLoopStopsOnContextCancel` 的偶发红**不**计入，见本集合 `COVERAGE_GAPS`）。**③** 在 `p4-task-1-exit.py`（`cmd/trace-sealer/main.go`）、`p4-task-1-options.py`（`options.go`）、`p4-task-4-lock.py`（`lock.go`）各补一行 `\bMkdir[A-Za-z]*\s*\(` **absent**，使 D70 覆盖两个目录的**每一个**源文件；它**不可能**由变异承载（工具只在 pristine 树求值 `CHECKS`，`trace_mutate.py:574`）⇒ 可失败性由**临时仓库探针**实测（三个临时克隆各插入一处建目录调用并提交到该克隆 ⇒ 对应那一行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 **1**；三份输出落盘为证据目录里的 `e66-mkdir-check-probe-*.txt`，表末记 `probe_exit=`）。**④** 就地改写为「**在改动前**均 0 命中」，并写明「提交后各 1 命中、落在 E65 本节自身的约定行（自指）」，判据以**改动前**的 0 为准。**⑤** 就地把 Task 4 步骤 6 的集合文本同步成两份（新增 `p4-task-4-runner.py` 那一行、m07 行补形态依据）、步骤 7 改成「两个集合各跑一次」（**E66⑤**）。**⑥（任务 5 步骤 7 的强制核对自己发现的，不是上一轮评审的条目）**：计划里的 **p4 集合总数「26」是错的** —— 任务 4 已按 **E65(d)** 拆成 `p4-task-4-lock.py` ＋ `p4-task-4-runner.py`（计划 `:1946-1947` 自己也写着这是两个文件），而 `:97` 的「26 个变异集合」与任务 5 步骤 7 的算式「任务 4（1）… = **26**」都还是**拆分前**的数。**就地订正为 27**（算式其余项不变，任务 5 = 5），判据 = **按计划自己声明的集合名逐一点名复核**（task1 `classify/exit/options/round`、task2 `alert`、task3 `loop/rootguard`、task4 `lock/runner`、task5 `unit/isolate/restore/build/ci`、task6 `blue/green/root`、task7 `bluegreen`、task8 `compose/guard/runsh`、task9 `budget/vmhwm`、task10 `contract/footer/observability`、task11 `runbook`）⇒ **27**；而任务 5 收口时磁盘上实有 **14** 个 `p4-task-*.py`，恰等于算式前五项 4+1+2+2+5。**不改任何集合/测试/实现**（纯计划文本）⇒ 按 **E59**，五个 `p4-task-5-*` 集合的绑定不受影响（纯计划与证据提交不使绑定失效）。**自引用级联**：动计划文本前 `grep -cE '本计划 ?:[0-9]'` = **0**，本轮（含⑥的两处改写）动后复测仍为 **0** ⇒ 零级联（⑤/⑥的改写会改变后续行的**绝对行号**，但全文**不含**指向绝对行号的自引用；唯一一处行号对映（集合里的「原 `:1956` → `:1958`」）已在写入时按改后实际值给出）。 |
+| **E67** | ① 计划 **E66** 行「必做③」的收口句与「新增约定（E66 起）」第 1 条（「覆盖该包**每一个**源文件」）；② `tools/trace-mutate/sets/p4-task-1-classify.py`（`classify.go`）、`p4-task-1-exit.py`（`exit.go`）、`p4-task-2-alert.py`（`alert.go`）、`p4-task-3-rootguard.py`（`covers_test.go`）四个集合的 `CHECKS`；触发 = Task 5 收口轮独立评审留下的 **1 条必做** | **E66③ 名不副实**：它声称 Mkdir-absent 静态检查覆盖两个目录**每一个**源文件，实测只覆盖 `runner.go`（`p4-task-1-round.py`）/ `rootguard.go`（`p4-task-3-rootguard.py`）/ `lock.go`（`p4-task-4-lock.py`）/ `options.go`（`p4-task-1-options.py`）/ `main.go`（`p4-task-1-exit.py`），而 `classify.go` / `alert.go` / `exit.go` **没有该行**（复核时另发现包内测试文件 `covers_test.go` 也没有）⇒ 与 D70「**整包**零建目录」不符；而「启动时 root 不在就先建出来」正是 2026-09-24 `/` 被写满那类事故最自然的入口 | **扩到全部 9 个 `.go` 文件（不是改窄措辞）**：在四个集合各补一行 `\bMkdir[A-Za-z]*\s*\(` **absent** —— `p4-task-1-classify.py`→`classify.go`、`p4-task-1-exit.py`→`exit.go`、`p4-task-2-alert.py`→`alert.go`、`p4-task-3-rootguard.py`→`covers_test.go`；与既有五行合起来，`internal/tracesealer/` ＋ `cmd/trace-sealer/` 下**每个** `.go` 文件（**9 个** = `internal/tracesealer/` 的 `alert.go` / `classify.go` / `covers_test.go` / `exit.go` / `lock.go` / `options.go` / `rootguard.go` / `runner.go` ＋ `cmd/trace-sealer/main.go`）各有一行。**覆盖到的文件清单已落盘**（`e67-mkdir-coverage-at-*.txt`：两个目录全部 `.go` 的 `ls` 原样输出 ＋ 逐文件「file → 集合:检查名」对映表 ＋ 「全部覆盖: True」判定）；`covers_test.go` 是 **E64①** 新增的**包内测试文件**，同样被 `go test` 编译执行、同样能用建目录「修复」消失的挂载点 ⇒ 一并纳入，使「每一个 `.go` 文件一行」字面成立。它**不可能**由变异承载（工具只在 pristine 树求值 `CHECKS`，`trace_mutate.py:574`）⇒ 可失败性由**临时仓库探针**实测（`e67-mkdir-probe-at-*.txt`：把每个文件对应集合的「纯 pristine 侧」换成「插入 `os.MkdirAll(root, 0o755)` 并提交」的临时克隆 ⇒ 对应那一行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 **1**，表末记 `probe_exit=`）。**E59 连带**：本项改的是**四个集合文件** ⇒ 按「动了集合就重跑重绑」，这四个集合的权威表与 `--check` 在本轮重出（表头 `-at-<HEAD8>` 更新为新时点）。**自引用级联**：动计划文本前 `grep -cE '本计划 ?:[0-9]'` = **0**，改后复测仍为 **0**（本轮计划面只做「追加一行 + 就地改写一条约定」，不含指向绝对行号的自引用） |
+
+### 新增约定（E66 起，**今后所有轮次适用**）
+
+1. **D70「整包零建目录」的静态检查必须覆盖该包**每一个**源文件**：`internal/tracesealer/` 与 `cmd/trace-sealer/` 下每新增一个 `.go` 源文件（**含包内 `*_test.go`**），都必须在某个集合的 `CHECKS` 里有一行 `\bMkdir[A-Za-z]*\s*\(` **absent**；只覆盖「本轮动过的那几个文件」不算覆盖「整包」。**`E66③` 的「每一个源文件」曾被实测证伪（只覆盖 5 个，缺 `classify.go` / `alert.go` / `exit.go` / `covers_test.go`）⇒ 本条按 `E67` 要求把覆盖做成可复核的**逐文件清单****：清单落盘为 `e67-mkdir-coverage-at-*.txt`，判据是「`ls` 两个目录全部 `.go` 的集合」与「`CHECKS` 里 `Mkdir` absent 行的 `file` 集合」逐元素相等（`全部覆盖: True`）。可失败性由**临时仓库探针**承载（工具只在 pristine 树求值 `CHECKS`，变异**不可能**让它变红）。
+2. **插入型（顺序颠倒）变异必须逐条登记，且必须另有确定性杀手**：`README.md:5` 把变异表述为「把守卫删掉/放宽」；「插入一条提前返回 / 把串行改成并行」这类**语义反转**与之不同形 ⇒ 必须在集合里写明「依据（计划原文 / 同形先例）」＋「与铁律 5 的张力」＋「该变异的**确定性**杀手」。无**确定性**杀手者不得以插入型存在（与「新增约定（E65 起）」第 2 条配合）。
+3. **探针行号必须标注版本**：凡在计划文本或集合工件里以 `*.go:NNN` 作为「实测红在哪一行」的证据，必须写明它是**改动前**还是**改动后**行号；默认口径 = 「**改动后行号**」并逐处标注。
+
+---
+
+## 过程失误登记与新增约定（E68；**Task 7 轮**）
+
+> 编号续 **E67**。与 E57–E67 同一纪律：逐条写清「位置 / 问题 / 处置」。
+
+> **本轮改动面（已核实）**：交付面**新增** `deploy/blue-green/README.md`（蓝绿切换/回滚/降级/硬门剧本）、`tests/deploy/trace_bluegreen_runbook_test.go`（6 条顶层用例）、`tools/trace-mutate/sets/p4-task-7-bluegreen.py` 与名字清单 `p4-task-7-bluegreen-names.txt`；**订正面**改三处 —— `docker-compose.yml` 的注释措辞（**E68①**：只用 `TRACE_BODY_` 前缀、不写完整键名）、`tools/trace-mutate/sets/p4-task-6-root.py`（**E68①**：`CHECKS` 新增一行 `root不得有生效TRACE_BODY_赋值`）、`tests/deploy/trace_isolate_script_test.go` 与 `tests/deploy/trace_sealer_unit_test.go`（**E68③**：task-5 遗留的 `gofmt -w`，非本轮引入）；计划面改四处 —— Task 6 的「接口」段、步骤 3 的根编排段、步骤 6 的 `CHECKS` 段（**E68①**：门禁改写为「**非注释生效行 = 0**」）、「执行顺序与依赖」段末（**E68②**：登记 `main` 已前进到 `43af78b0`）。`internal/tracesealer/**`、`cmd/**`、`internal/tracearchive/**`（冻结包）、`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum` **零改动**；`tools/trace-mutate/trace_mutate.py` **未动**（sha256 仍是 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）。**零迁移**：本任务不涉及任何 PG schema 变更（剧本文本契约 + 只读 SQL 比对），因此**未触发** `atlas-db-migration` skill（全局约束「零迁移」）。
+
+> **跨任务连带（E59③ 自查，先自查后报告）**：`grep -n 'PACKAGES' tools/trace-mutate/sets/p4-task-*.py` 显示**八个**既有集合把 `./tests/deploy/` 列入 `PACKAGES`（`p4-task-5-{unit,isolate,restore,build,ci}` ＋ `p4-task-6-{blue,green,root}`）；工具对包内**全部** `*_test.go` 取哈希 ⇒ **E68③** 的 `gofmt -w` 使这八个集合的「测试文件 sha256」段**全部失效**。另 **E68①** 改了 `p4-task-6-root` 的 TARGET `docker-compose.yml` **与集合文件本身** ⇒ 它的「被测文件 sha256」段与「变异集合 sha256」段同时失效。⇒ 本轮共跑 **9 个集合**（新集合 `p4-task-7-bluegreen` ＋ 八个重出）的 `--check` 与权威表，全部 `check_exit=0` / `table_exit=0`，详情见交付报告。`p4-task-1..4`（`./tests/tracesealer/` 包）与 `p4-task-5/6` 之外的一切集合**不受牵连**（测试文件哈希与集合内容都没变）。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E68** | ① 计划 Task 6 的「接口」段与步骤 3 的根编排段（旧措辞「不加任何 `TRACE_BODY_*`」，易被读成「`grep -c TRACE_BODY docker-compose.yml` 必须为 0」）、步骤 6 的 `CHECKS` 段，以及 `docker-compose.yml:39-40`（订正前）的两行注释；② 计划的基线说明（全局约束与「执行顺序与依赖」段）只写到 `main=0bfb130f`；③ `tests/deploy/trace_isolate_script_test.go` 与 `tests/deploy/trace_sealer_unit_test.go` 的 `gofmt` 漂移（task-5 遗留、非本轮引入）。触发 = Task 6 收口轮的独立评审留下的 **3 条**（①判据口径 / ②登记事实 / ③格式化遗留） | **①判据口径（字面不成立）**：root compose 的 `grep -c TRACE_BODY docker-compose.yml` 实测 **= 2**（订正前，两处都在 `:39`/`:40` 的**注释**里：`TRACE_BODY_*` 与 `TRACE_BODY_ROOT`/`TRACE_BODY_INST`），而**非注释生效行 = 0** ⇒「不加任何 `TRACE_BODY_*`」若被读成「文本 grep 计数为 0」，这个门禁**字面不成立**（注释里提到键族是合法且必要的：不讲清楚「设了写侧开关而实例名缺失会启动失败」，运维反而会照抄错误做法）。真正的门禁是**语义**测试 `TestComposeRootComposeDoesNotEnableTraceBody`（`effectiveAssignments` 只收非注释行）。**②登记事实**：`main` 引用已前进到 `43af78b0`（领先基点 `0bfb130f` **2 个提交** = `d8875bda` ＋ 合并 `43af78b0`，只动 `internal/gateway/authz/groups.go` / `tests/gateway/authz/groups_test.go` / `tests/gateway/orchestrator/group_auth_test.go` **3 个文件**），与本分支**零交集** ⇒ **不影响绑定与合并**；此事实此前只存在于分支外，计划文本里查不到。**③格式化遗留**：两个 `tests/deploy/` 测试文件不合 `gofmt`（task-5 遗留），而 `tests/deploy/` 被**八个**既有集合列入 `PACKAGES` ⇒ 一改就会连带使它们的绑定失效，必须一并重跑重绑 | **①**：计划 Task 6 的「接口」段、步骤 3 的根编排段、步骤 6 的 `CHECKS` 段**就地改写**为「**非注释生效行 = 0**」，并显式写明**文本 `grep -c TRACE_BODY docker-compose.yml` 不是门禁、只是辅助读数**（真正的门禁是语义测试 `TestComposeRootComposeDoesNotEnableTraceBody`）；同时在 `p4-task-6-root.py` 的 `CHECKS` **新增一行** `root不得有生效TRACE_BODY_赋值`（正则 `(?m)^\s*TRACE_BODY_[A-Z0-9_]+\s*:` **absent**；注释行以 `#` 起头、不匹配 ⇒ 这一行量的正是「生效赋值」），它**不可能**由变异承载（工具只在 pristine 树求值 `CHECKS`，`trace_mutate.py:574`）⇒ 可失败性由**临时仓库探针**实测（临时克隆插入一行生效赋值并提交 ⇒ 该行 FAIL、工具以「静态检查失败 ⇒ 整轮失败」退出 **1**；输出落盘 `p4-task-6-rootcheck-probe-at-*.txt`，表末记 `probe_exit=`）。**统一注释措辞**：`docker-compose.yml` 的注释改成只用 `TRACE_BODY_` **前缀**、**不写完整键名** ⇒ `grep -c TRACE_BODY docker-compose.yml` 由 **2 → 1**（`grep -cE 'TRACE_BODY_[A-Z]'` = **0**），而**生效行仍是 0**（`grep -cE '^\s*TRACE_BODY_[A-Z0-9_]+\s*:'` = **0**）。**②**：在「执行顺序与依赖」段末新增一条**基线登记**（只登记事实、不改任何门禁）：写明 `main` 已前进到 `43af78b0`、领先 `0bfb130f` 两个提交、只动三个 `authz` 文件、与本分支零交集 ⇒ 不影响绑定（绑定的实质是**内容哈希**，见全局约束与 **E59**）与合并。**③**：执行 `gofmt -w tests/deploy/trace_isolate_script_test.go tests/deploy/trace_sealer_unit_test.go`（`gofmt -l tests/deploy/ tests/tracesealer/ internal/tracesealer/ cmd/trace-sealer/` 复测**为空**）；因这两个文件属于全部把 `./tests/deploy/` 列入 `PACKAGES` 的集合，按 **E59** 与 Task 7 的新集合**一并重跑重绑**（**9 个集合**：`p4-task-7-bluegreen` 新出 ＋ `p4-task-5-{unit,isolate,restore,build,ci}` 与 `p4-task-6-{blue,green,root}` 重出）。**自引用级联**：动计划文本前 `grep -cE '本计划 ?:[0-9]'` = **0**（已实测），改后复测仍为 **0**（本轮计划面的四处改动都是**段内就地改写**或**段末追加**，不含指向绝对行号的自引用） |
+
+### 新增约定（E68 起，**今后所有轮次适用**）
+
+1. **门禁判据必须写成语义判据，文本 grep 只能当辅助读数**：任何「产物里不得出现 X」类门禁，必须写明它的**语义**判据（例：`effectiveAssignments` 的「**非注释生效行 = 0**」，或行为用例名），**不得**把「某条 `grep -c <键名> <文件>` = 0」写成门禁 —— 注释里合法出现键名前缀会让文本计数**恒非零**，于是门禁要么字面不成立、要么逼着作者把必要的注释删掉。文本 grep 若要保留，必须**显式标注为辅助**，并给出它的可失败性证据（临时仓库探针）。
+
+---
+
+## 过程失误登记与新增约定（E69；**Task 8 开工前的上轮评审收口轮**）
+
+> 编号续 **E68**。与 E57–E68 同一纪律：逐条写清「位置 / 问题 / 处置」。
+
+> **本轮改动面（已核实）**：计划面**两处** —— Task 7 步骤 5 段末**就地追加一句**（E69③，**行数不变**）＋ 文件末尾**追加**本节；**实现/测试/产物/集合/证据面零改动** —— `internal/**`（含冻结包 `internal/tracearchive/**`）、`cmd/**`、`tests/**`、`deploy/**`、`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum`、`tools/trace-mutate/**`、`.superpowers/sdd/**` 全部**未动**；`tools/trace-mutate/trace_mutate.py` **未动**（sha256 仍是 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）。**零迁移**：本轮不涉及任何 PG schema 变更 ⇒ **未触发** `atlas-db-migration` skill（全局约束「零迁移」）。
+
+> **跨任务连带（E59③ 自查，先自查后报告）**：`grep -n '^PACKAGES' tools/trace-mutate/sets/p4-task-*.py` 显示**没有任何**集合把 `docs/**` 列入 `PACKAGES`，也没有任何集合的 `TARGET` 指向计划文档 ⇒ 本轮**唯一**的改动面是计划文本 ⇒ 按 **E59**「纯计划文档提交不使绑定失效」，**零个集合需要重出**（这与 E59③ 的连带面判定一致：只有实现 / 测试 / 集合 / 被测产物的**内容**变更才使绑定失效）。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E69** | ① 计划 / 证据文本里若有「git reflog 无 amend 记录」一类措辞（**实测：本计划与本任务的证据目录里都没有这种措辞** —— 可复算命令 `grep -rniE 'amend\|reflog' docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md .superpowers/sdd/2026-10-08-trace-sealer-deployment/ tools/trace-mutate/`：**追加本节之前为 0 行**；追加之后同一命令只命中**本节自身**（本节逐字引用了该措辞与 `amend` / `reflog` 两个词）⇒ **除本节外仍为 0 行**；`grep -rniE '无.*amend\|未.*amend' docs/ .superpowers/sdd/2026-10-08-trace-sealer-deployment/ tools/trace-mutate/` 只命中**另一份计划** `docs/superpowers/plans/2026-09-24-tracearchive-storage-primitives.md:4116`（D40，措辞是「`amend` 已禁 ⇒ 留痕」，**不是**「reflog 无 amend 记录」）＋本节自身 ⇒ 本计划与本任务证据目录仍为 **0 行**）；② `45e39d92` 的提交说明尾部；③ `tools/trace-mutate/sets/p4-task-7-bluegreen.py` 的 **6 行** `CHECKS` 与计划 Task 7 步骤 5 的**明列范围**（只列了 `deploy-blue-green.sh` 内 `TRACE_BODY` **absent** 一行）之间的差 | **①（订正事实）**：`git reflog` **有 1 条** `commit (amend)` = **`01de7150`**（`HEAD@{13}`，内容 = `docs(plan): E66⑥ —— p4 集合总数 26 → 27`）—— 它属 **Task 5 轮**，**与 Task 7 的提交及当前 tip（`45e39d92`）无关**（`git reflog -15` 实测：`45e39d92`/`1b6c7d6e`/`957c8ed2`/`38ebcf7e` 四条全部是 `commit:`，无 `amend`）⇒ 正确表述是「**Task 7 的提交未 amend；reflog 中唯一那条 amend 来自 Task 5 轮**」；「reflog 无 amend 记录」**不实**，此后不得出现。**②（登记伪影）**：`45e39d92` 的提交说明**尾部**有残缺 UTF-8 伪影（字节 `\xc2\xbc\xc2\x89`，实测命令 `git log -1 --format=%B 45e39d92 \| xxd \| tail -2`；正确字符应为 `）` + 换行）⇒ **禁止 amend**（会改写已发布的证据绑定时点），本项**只登记**：**不修**、保留原始提交说明与其字节，处置方式写明为「随分支收尾的合并 / squash 顺手修正，或在收尾报告里另立登记」。**③（对齐范围）**：该集合的 `CHECKS` 有 **6 行** —— 1 行是计划步骤 5 明列的（`deploy-blue-green.sh` 内 `TRACE_BODY` **absent**），另 **5 行**是本轮按 **E62** 追加的**存在性**静态检查（颜色↔inst 静态对应、硬门 D73、功能关闭的 SQL 比对、旧颜色 drain 无损、禁止事项）；集合 docstring 已写明理由与「静态检查只承载存在性、可失败性由探针实测」，但**计划文本里没有对应句子** ⇒ 计划与集合**无法逐条对照** | **①**：本节把事实写成**可复核的判据**（命令 + 结论），供后续轮次直接引用；`git reflog` 的当前事实同时登记为「1 条 amend / 属 Task 5 轮 / 与 Task 7 无关」。**②**：只登记、不动历史（**禁止 amend**，与全局约束「禁止 `--amend`」一致）。**③**：在 Task 7 **步骤 5 段末就地追加一句**（**行数不变**）写明那 5 行 `CHECKS` 的存在与理由（E62：静态检查只承载**存在 / 不存在**类要求；它们的**可失败性**由交付报告的「改坏→转红→还原」探针逐条实测，输出落盘 `p4-task-7-bluegreen-probe-at-*.txt`）⇒ 计划与集合此后可逐条对照。**自引用级联**：动计划文本前 `grep -cE '本计划 ?:[0-9]' docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md` = **0**（已实测），改后复测仍为 **0**（本轮两处改动都是**段末追加/就地追加**，不含指向绝对行号的自引用）。
+
+### 新增约定（E69 起，**今后所有轮次适用**）
+
+1. **提交历史的「事实陈述」必须带可复算命令，且禁止改写已发布提交**：凡在报告或计划里陈述 `amend` / `reset` / `rebase` 一类历史事实，必须同时给出可复算命令（如 `git reflog -15`）与结论；**禁止 `--amend`**（它会改写绑定证据的产出时点）。已发生的提交说明伪影（残字节）**只登记不修**，修正留给分支收尾的合并 / squash 或另立登记。
+2. **集合的 `CHECKS` 行数必须与计划文本逐条可对照**：集合可以按 E62 追加**存在性**静态检查，但每追加一行都必须在**计划文本**里能找到对应句子（写明存在与理由）；只写在集合 docstring 里不算 —— 否则计划与集合无法逐条对照，读者无法从计划推出集合的应然范围。
+
+---
+
+## 过程失误登记与新增约定（E70–E71；**Task 9 交付轮**）
+
+> 编号续 **E69**。与 E57–E69 同一纪律：逐条写清「位置 / 问题 / 处置」。
+
+> **本轮改动面（已核实）**：**实现面** = `internal/traceverify/budget.go`（新）＋ `internal/traceverify/vmhwm.go` ＋ `cmd/trace-verify/main.go` ＋ `tests/traceverify/budget_test.go`（新）＋ `tests/traceverify/vmhwm_test.go`；**集合面** = 新增 `p4-task-9-{budget,vmhwm}.py` 与两份名字清单，并**就地补齐** `p4-task-8-{guard,runsh}.py` 的删除面判据（E70①）；**计划面** = 范围段（`:17`）/ A 表尾行（`:110`）/ H9（`:2953`）三处**同行就地改写**（E71①）＋ 文件末尾**追加本节**；**证据面** = 新增 `p4-task-9-*` 六份与重出的 `p4-task-8-{guard,runsh}-*` 四份。**冻结包 `internal/tracearchive/**` 零改动**、`atlas-migrations/**` 与 `migrations/**` 零改动、`tools/trace-mutate/trace_mutate.py` 零改动（sha256 见交付报告）、`deploy/verify/trace-a3/run.sh` 零改动。
+
+> **跨任务连带（E59③ 自查，先自查后报告）**：`grep -n '^PACKAGES' tools/trace-mutate/sets/p4-task-*.py` ⇒ 本轮改了 `tests/traceverify/*_test.go`（被 `p4-task-8-guard` 与两个新集合列入 `PACKAGES`）与 `cmd/trace-verify/main.go`（**`p4-task-8-guard` 的 `CHECKS` 静态检查文件**，**不是**它的 `TARGET` —— 该集合的 `TARGET` 是 `internal/traceverify/guard.go`，见 `tools/trace-mutate/sets/p4-task-8-guard.py:33`）⇒ **必须重出** `p4-task-8-guard`；改了 `p4-task-8-runsh.py` **自身**（判据正则，E70①）⇒ **必须重出** `p4-task-8-runsh`。另 `grep -l '^PACKAGES.*tests/deploy' tools/trace-mutate/sets/p4-task-*.py | wc -l` = **11** 个集合与 `./tests/deploy/` 包**耦合**，但本轮 `tests/deploy/**` 与 `deploy/verify/trace-a3/run.sh` **零改动** ⇒ 只有 `p4-task-8-runsh`（集合文件变了）需要重出，其余 **10 个不受牵连**。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E70** | ① `tools/trace-mutate/sets/p4-task-8-guard.py` 的 `trace-verify破坏性删除面不得递归`、`tools/trace-mutate/sets/p4-task-8-runsh.py` 的 `run.sh不得递归删除`（上一轮 Task 8 收口轮的独立评审第 ① 条）；② 上一轮 `cmd/trace-verify/main.go` 的 `decode-bench` 实现面与 CLI 面（评审第 ② 条）；③ 上一轮报告 / 计划文本里的两处表述（评审第 ③ 条） | ① 判据只钉 `-rf`（`r` **紧跟** `f`）⇒ `rm -r X`、`runCmd("rm","-r",…)`、`rm --recursive`、`rm -fr`、`rm -v -r` **全部漏网** ⇒ 门禁退化成「对某一种拼写的巧合」，与 **E68** 的「判据必须是**语义**判据」相悖。② 上一轮的 `decode-bench` 做的是**整流解码**（`DecodeArtifact`：把整块解压一遍再丢弃），而计划任务 9 步骤 3 要求「对每个并发度 K，起 K 个 goroutine 各做 50 次**随机点读**（`tracearchive.NewReader` + `GetBody`）」—— 两者测的不是同一个动作：整流解码共享解码器、**少了 trailer/索引那条路径**（而那正是 `maxTrailerEntries` 上界要压的东西）⇒ 整流读数**不能**当 C5 的判据。同时 CLI 面（`--rounds/--samples/--interval/--window-bytes/--pid/--proc-root`）超出计划只给出的 `--artifact/--concurrency/--json`。③ 两处表述不实：「含 `./tests/deploy/` 的集合恰为 9」只数了**本轮连带重出的** 9 个；`git reflog \| grep -i amend` 会因**提交说明里含 `amend` 二字**而多出一行。 | ① **本轮选择「把正则补全」**（而不是「把 `-r` 边界登记进 why」）：E68 要求门禁是语义判据（「删除面有界」= **任何**递归删除形态都不许出现），只钉一种拼写下一轮换个写法就能绕过。新判据（两集合同一形态）= `(?m)^(?!\s*(?://\|#))(?=.*\brm\b)(?=.*(?:--recursive\b\|(?<!-)-[a-zA-Z]*[rR][a-zA-Z]*\b)).*`（同一行同时出现 `rm` 与递归开关；`(?<!-)` 把 `--force` 这类名字里含 `r` 的长开关排除在外），仍是 `absent`；**旧判据 vs 新判据对同一段插入文本的判定差**（旧 0 命中 / 新 2 命中）与「插入 ⇒ 该行 FAIL ⇒ 工具以『静态检查失败 ⇒ 整轮失败』退出 1」的实测见 `p4-task-9-probe-at-*.txt`；补全后在两个真实目标文件上实测 **0 命中**（不引入误报，见 `p4-task-8-{guard,runsh}-authoritative-at-*.txt` 的 `[PASS]`）。② **本轮按计划落实点读负载**（`PointReadLoad`：K 个 goroutine × 连续 ≥5 轮 × 每 goroutine 每轮 50 次随机点读、实测同时在飞峰值、首错即取消并原样上抛、峰值到 `AbortAtBytes` 即中止并留下已观测峰值），**偏差就地消解**（整流解码保留为独立的 `DecodeArtifact`，其用例 `TestDecodeArtifactRoundTripsRealArtifact` 仍在册）。CLI 面**仍是计划的超集**，**如实登记**为**已登记偏差**：新增 `--rows`（跳过行数探测——探测本身会推高 VmHWM）/ `--gc-modes`（承载步骤 4.2 的「同时报告有 GC 与 GOGC=off 两种形态」）/ `--abort-at-bytes`（承载步骤 4.2 停止点的**可观测性**：`GOGC=off` 下进程会被 OOM 杀掉、什么都报不出来），`--samples` 的语义改为「采样次数上限，0 ⇒ 采到负载结束」；计划给出的输出形状 `{"concurrency":K,"peak_vmhwm_bytes":N,"points":50}` 三个键**逐字保留**在 JSON 里（本实现是它的**超集**）。③ 本轮把两处事实写成**可复算判据**：`grep -l '^PACKAGES.*tests/deploy' tools/trace-mutate/sets/p4-task-*.py \| wc -l` = **11**（第 10、11 个是 `p4-task-8-compose` 与 `p4-task-8-runsh`，它们随后一轮才新增）；`git reflog \| grep -c 'commit (amend)'` = **1**，而 `git reflog \| grep -i amend \| wc -l` = **2**（第 2 条是 `c9e500a9` 的**提交说明**里含「amend」二字，不是一次 amend）⇒ **今后一律用前者**。 |
+| **E71** | 计划 3（`docs/superpowers/plans/2026-09-25-trace-point-read-service.md`）的 **E52③** 登记的「**计划 4 实现轮欠账**」：计划 4 的 A 表尾行与 **H9** 仍把 A1 划给「计划 3 读侧」（计划 3 的 E52 写的位置是 `:101` / `:2936`） | 发起者已裁定（计划 3 **E52**）：规格 §14.2 **A1** 的百万级（n = 1e6）读回的**物理测量归计划 4 任务 9**（环境 = 生产宿主 + 真实 PG + 真实 `zstd` **1.4.8**），**口径**（测什么 / 怎么测 / 通过标准）由计划 3 的交接 **H19** 给出；而计划 4 的两处文本仍写「A1 归计划 3」⇒ 两处分工表**互指对方、无人执行**。**行号漂移（已核实，不是推测）**：计划 3 的 E52 引用计划 4 的 `:101` / `:2936`，在计划 4 **当前**版本里实为 **`:110`** / **`:2953`**（计划 4 此后追加过文本；计划 3 按 H18「只引用不改」纪律当时未动计划 4）⇒ 本条一律以**当前实时行号**为准（E54/E55 的同一纪律）。 | ① **就地订正计划 4 的三处**（范围段 `:17`、A 表尾行 `:110`、H9 `:2953`）：写明「**A1 的读回半部（n = 1e6）物理测量归任务 9**（环境 = 生产宿主 + 真实 PG + 真实 zstd **1.4.8**）；**口径**由计划 3 的交接 **H19** 给出；**A2 / A5** 的对外映射归计划 3；**A4** 由计划 1 覆盖」。三处都是**同行就地改写**（行数不变 ⇒ 不产生行号级联）。② 本轮**不产出** A1 的物理测量数字（本机 = darwin/arm64、无真实 PG、本机 `zstd` v1.5.7 ≠ 1.4.8）⇒ 按任务 8 的既有形态登记「**待宿主执行**」（`p4-task-9-host-deferral-at-*.txt`），**不得**写成「已覆盖 / 已承接」。③ **自引用级联**：动计划文本前 `grep -cE '本计划 ?:[0-9]' docs/superpowers/plans/2026-10-08-trace-sealer-deployment.md` = **0**（已实测），改后复测仍为 **0**（三处都是**段内就地改写**，不含指向绝对行号的自引用）。 |
+
+### 新增约定（E70 起，**今后所有轮次适用**）
+
+1. **「不得出现 X」类判据必须覆盖 X 的**全部**常见形态，并给出「旧判据漏网 / 新判据命中」的同文本对照**：只钉一种拼写等于把门禁退化成对某一行文本的巧合（E70① 的实例：`-rf` 漏掉 `-r` / `--recursive` / `-fr` / `-v -r`）。补齐后必须把**两个目标文件上的 0 命中**与**插入形态后的 FAIL + 退出 1**都落盘（探针表）。
+2. **变异必须红成断言红**：编译红 / panic / 超时一律**就地改写变异字符串**，不得登记为「允许的绿」（E70② 的实例：把行号变异成字面量 `0` 会让 `rng` 成为未使用变量 ⇒ 编译红；改成 `rng.Int63n(1)`（恒 0、仍引用 `rng`）后才红成 `TestPointReadLoadRunsConcurrentlyAndRandomly` 的断言）。
+3. **跨计划行号引用必须以「当前实时行号」为准**：跨计划引用别处行号时必须**当场复算**（如 `grep -n`），并在登记里同时写出「对方当时写的行号」与「当前实时行号」（E71 的实例：`:101` → `:110`、`:2936` → `:2953`）。
+
+---
+
+## 过程失误登记与新增约定（E72–E73；任务 10 收尾轮 ＋ 任务 11 交付轮）
+
+> 编号续 **E71**。与 E57–E71 同一纪律：逐条写清「位置 / 问题 / 处置」。
+>
+> **两份登记的读法（先声明，免得再被读成自相矛盾）**：**E72** = **任务 10 收尾轮**（提交 `d058b1ba`）的三处订正
+> —— 那一轮只写了提交说明、**没有**把登记节写进计划（`grep -n 'E72' <本计划>` 在 E73 之前 = **0 命中**），
+> 本轮**补登记**（内容逐条取自 `d058b1ba` 的提交说明与其实际改动面，数字**本轮自己从表里重算过**）；
+> **E73** = **本（任务 11 交付）轮**的五条独立复审项 ＋ 本轮自查发现的一条事实订正。
+
+### E72（补登记：任务 10 收尾轮的三处订正）
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E72①** | `.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-9-host-deferral-at-7740bdbf.txt` 第 28–30 行 | 把「**15**」当成**四张表**的断言红总数：四表 = `p4-task-9-{budget,vmhwm}` ＋ 重出的 `p4-task-8-{guard,runsh}`。「15」只等于**本任务新增的两张表**（budget ＋ vmhwm），四表总数是 **22**。 | 已在 `d058b1ba` 就地改写为「**四表 22 = 4 + 11 + 4 + 3 断言红**」＋「本任务新增的两张表是 **15 = budget 4 + vmhwm 11**」，并写明此前是**算错**。**本轮自行重算核对**：`p4-task-9-budget-authoritative-at-3777d04c.txt` 的 `合计: 4 = …`、`p4-task-9-vmhwm-authoritative-at-7740bdbf.txt` 的 `合计: 11 = …`、`p4-task-8-guard-authoritative-at-3777d04c.txt` 的 `合计: 4 = …`、`p4-task-8-runsh-authoritative-at-3777d04c.txt` 的 `合计: 3 = …` ⇒ 4 + 11 = **15**，15 + 4 = **19**，19 + 3 = **22** ✓（加法全程写出，E60）。 |
+| **E72②** | 本计划的「跨任务连带（E59③ 自查）」段（**当前实时行号 `:3189`**） | 把 `p4-task-8-guard` 的 `TARGET` 说成 `cmd/trace-verify/main.go` —— 事实是：那份集合的 `TARGET` 是 `internal/traceverify/guard.go`（`tools/trace-mutate/sets/p4-task-8-guard.py:33`），`cmd/trace-verify/main.go` 只是它的 **`CHECKS` 静态检查文件**（`TARGET` 单值约束第 42 条 ⇒ 一份集合只能有一个被测文件）。 | 已在 `d058b1ba` **同行就地改写**（行数不变）：写明「**不是**它的 `TARGET` —— 该集合的 `TARGET` 是 `internal/traceverify/guard.go`」。**本轮复算行号**：`grep -n '跨任务连带（E59③ 自查'` ⇒ 该段现在是 `:3189`（E72② 写得对：这是**当前实时行号**，E71③ 的纪律）。 |
+| **E72③** | 同一份宿主挂起登记的**第 58 行**（「点读负载的形状」行） | 该行写「表里的 **m04–m11 共 8 条** … 全部断言红」，但「8」的**范围**没说清（读者可能把它当成整张表的条数 —— 那张表是 **11** 条），且表里**没有**任何一行写「8」。 | 已在 `d058b1ba` 就地补上范围：「**本子集**（表里的 m04–m11 共 8 条）」＋ 明确「该表的 m01–m03（`VmHWM` 解析三条）**不属于**本行这个子集」＋ 证据列写明「表里**没有**任何一行写『8』」。**本轮复算**：`grep -c '^| m' p4-task-9-vmhwm-authoritative-at-7740bdbf.txt` 的条数与该表 `变异总数 = 11` 一致 ⇒ 「8」确实只能是子集口径。 |
+
+### E73（任务 11 交付轮：五条复审项 ＋ 一条自查订正）
+
+> **本轮改动面（已核实，命令给出）**：**实现/测试面** = `tests/deploy/trace_runbook_test.go`（新，8 条顶层用例）＋ `docs/deployment.md`（追加运行手册一节）＋ `tests/tracesealer/footer_artifact_test.go`（新，E73① 的在册解析用例）＋ `tests/tracesealer/testdata/footer_roundtrip_real.jsonl.zst`（新，104 字节真实产物 fixture）＋ `tests/tracesealer/footer_roundtrip_test.go`（**只改文件头注释**：降级为产出方向人工复核项，E73①）；**集合面** = 新增 `tools/trace-mutate/sets/p4-task-11-runbook.py`，并就地改 `p4-task-10-footer.py`（`MANIFEST_FILES` / 推导命令 / `REQUIREMENTS` / `COVERAGE_GAPS`，E73①）与 `p4-task-4-runner.py`（m07 单操作化，E73②）；**计划面** = Task 10 文件清单补登记（E73③）＋ Task 11 步骤 5 段末补登记（E69②）＋ Task 11 的 D73 前置句在**同行就地补**一条事实订正（E73 自查⑥，**行数不变**）＋ 文末追加本节；**证据面** = `p4-task-11-runbook-*`（名单 / 先行红 / `--check` 定位表 / 权威表，各含 `4a9ffbf4` 与 `e854528c` 两个时点）＋ `p4-task-11-runbook-probe-at-e854528c.txt` ＋ **27 张**权威表 ＋ **27 份** `--check` 定位表（`e854528c` 上**全部** `p4-task-*` 集合各一份）＋ 探针 ＋ build/vet/test ＋ 宿主挂起登记（提交 `cc8c23b0` / `abad98ce`）。**冻结包 `internal/tracearchive/**` 零改动**（E73① 只调用它的导出 API）；`tools/trace-mutate/trace_mutate.py` 零改动（sha256 仍为 `10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8`）；`atlas-migrations/**` 零改动（零迁移）。**提交数（自己数的）**：`git log --oneline 0bfb130f..HEAD | wc -l` = **91**；本轮 `git log --oneline 96a85eb0..HEAD | wc -l` 在**本节写作时** = **5**（本节的提交是第 5 个）。**此处刻意不写「最终值」**：本计划每追加一条提交，这个数就 +1 —— 上一轮把「最终值」写进文本、结果又被自己的追加提交推翻，正是 E73⑤ 要堵的那类自指失效。**计数一律以当场命令输出为准**（交付报告里给的是收尾时的实测值），计划文本只登记「写作时」的时点值。；本轮改动文件 = **9** 个（不含 `.superpowers/sdd/**` 的证据），含证据 = **71** 个（**E74① 标注：写作时值(761c5a81)** —— 该计数随提交而变，**本行不宣称任何「当前值」**，一律以当场命令为准）（命令：`git diff --name-only 96a85eb0..HEAD [-- . ':(exclude).superpowers/sdd/*'] | wc -l`）。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E73①** | `tests/tracesealer/footer_roundtrip_test.go` 的 `TestFooterRoundTripOnRealArtifact` ＋ `tools/trace-mutate/sets/p4-task-10-footer.py` 的 `MANIFEST_FILES` / `COVERAGE_GAPS` | **E62 阻断（must-fix）**：那条用例承载的**行为**要求（「冻结包真的按这个布局写」）**不在任何 `MANIFEST_FILES` 里** ⇒ 自动门禁里没有它的名字。上一轮给的理由是「它要当场用 zstd 封一块，缺 zstd 的机器会 Skip ⇒ 塞进清单会让整张表判证据无效」—— **发起者已裁定：这不是正当理由**：**解析产物不需要 zstd**（冻结读侧用 Go 库 `klauspost/compress/zstd`），只有**产出**产物需要。 | **按 E62 修好，不给豁免**：① 用**冻结包的真 Sealer** 预产一份产物并**提交**（`tests/tracesealer/testdata/footer_roundtrip_real.jsonl.zst`，**104 字节**，sha256 `7f4291c592b71182a90bfa25953c648b3db5fd64383fc85af14752430e2af75e`，产出时点 `4a9ffbf4`、产出机 zstd v1.5.7，`3` 行正文，定位键 `dt=2026-10-08 / inst=blue / part=7`）；② 新增**不依赖 zstd** 的在册用例 `TestFooterParsesCommittedRealArtifact`（`tests/tracesealer/footer_artifact_test.go`）：钉 fixture 的 **sha256 与字节数**、用镜像 `tracesealer.RowCount` 读出封块时的行数、用**冻结读侧** `ta.NewReader.GetBody` **逐字节**取回三行原文、越界行号必须报 `ta.ErrNotArchived`；③ 把该文件登记进 **`p4-task-10-footer`** 的 `MANIFEST_FILES` 与推导命令（**更合适的集合**：它的 `TARGET` 就是承载这条镜像的 `internal/tracesealer/footer.go`；实测 m01/m02 改坏后该用例**出现在红名单里**，见 `p4-task-10-footer-authoritative-at-e854528c.txt`：`FAIL=2 | TestFooterParsesCommittedRealArtifact, TestFooterRowCountOnHandBuiltFooter`，names 7 → **8**）；④ 原 `TestFooterRoundTripOnRealArtifact` **保留**但降级为**产出方向**的人工复核项（文件头注释已改写，`COVERAGE_GAPS` gap-1 同步改写：**仍留在清单外的是产出方向**，它不承载镜像侧的任何判定 ⇒ **不再是 E62 缺口**）；⑤ 缺失/读不到产物必须 **FAIL 不许 SKIP**：探针 P4 把 fixture 移走后 `go test` 退出码 **1**、`--- FAIL`、**SKIP 行数 = 0**，写回后 sha256 与改前一致。 |
+| **E73②** | `tools/trace-mutate/sets/p4-task-4-runner.py`（m07 条目 ＋ 文件头第 4 条 ＋ `REQUIREMENTS`） | **自相矛盾（must-fix）**：m07 的注释把杀手写成 `TestNewRunnerNeverCreatesRoot`，而同文件的记录说该变异「红成**编译失败**、未编译、**没有用例执行**」—— 按 **E64**「死于编译失败者不得被安杀手名」，这两句话不能同时成立。根因可复核：该集合原来用**两个操作**（先往导入块插 `"os"`，再插 `os.MkdirAll(...)`），前提是「`runner.go` 没有 `os` 导入」；而任务 10 的 `observeSealedPart` 让 `runner.go` **已经**导入 `os` ⇒ 再插一行 `"os"` 是**重复导入** ⇒ 编译红。 | **就地订正为「断言红 ＋ 真杀手」**：m07 恢复成**单个**插入操作（`_ = os.MkdirAll(opts.Root, 0o755)` 插在 `NewRootGuard` 之前），语义与计划逐字相同（「先建 root 再取锁」）；文件头第 4 条与 `REQUIREMENTS` 的 `note` 都写明这次订正与原因。**实测**（`p4-task-4-runner-authoritative-at-e854528c.txt`）：`m07_先建根目录再取锁 \| 红 \| names=13 ran=13 diff=0 PASS=12 SKIP=0 FAIL=1 \| TestNewRunnerNeverCreatesRoot` ⇒ **断言红 + 点名杀手**，且该表 `崩溃/超时/编译红 = 0 条`。 |
+| **E73③** | 本计划 Task 10 的**文件清单**（**当前实时行号 `:2664-2669`**：`**文件：**` 在 `:2664`，清单最后一行「测试数据：…」在 `:2669`；补登记后本条不再随行号漂移） | 清单漏了 `internal/tracesealer/options.go` —— 任务 10 那一轮改了它（`MaxTrailerEntries` 的注释订正 **3 行**，行为零改动，见 `git show 2bba38ab -- internal/tracesealer/options.go`），而它在该轮的改动面里（其 `TARGET` 是 `p4-task-1-options`）。 | **就地补登记**：清单加一行「修改：`internal/tracesealer/options.go`（`MaxTrailerEntries` 注释订正，3 行，行为零改动）」；同时把 E73① 的两项产出（`footer_artifact_test.go` 与 `testdata/footer_roundtrip_real.jsonl.zst`）一并登记进该清单（**行数 +2**，见「自引用级联」）。 |
+| **E73④** | 本计划末尾的登记节 | 计划里**没有 E72 节**（`grep -n 'E72'` = 0 命中）：任务 10 收尾轮（`d058b1ba`）只把三处订正写进**提交说明**，没写进计划 ⇒ 后续轮次无法从计划里逐条对照「位置 / 问题 / 处置」。 | **本轮补登记**：上面 **E72①–③** 三行（内容逐条来自 `d058b1ba`，**数字本轮自己从四张表重算**）。 |
+| **E73⑤** | 本轮及此后一切含**计数**的陈述（提交数、表数、用例数、变异数、允许的绿数…） | 上一轮出现过「没自己数就写数」的失误（E72① 的「15 挂到四张表上」是同一族）。 | **订立约定（本轮起强制）**：凡报告/登记里出现的计数，**必须**先跑命令再写数字，并把命令与结果一并落盘（本轮的实例：`git log --oneline 0bfb130f..HEAD \| wc -l` = **91**、`git log --oneline 96a85eb0..HEAD \| wc -l` = **5**、27 张表的 `变异总数` 逐表相加 = **136 = 136 断言红 + 0 编译红 + 0 允许的绿 + 0 证据无效**（加法：7+2+3+6+3+8+5+7+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11 = 136，其中第 8 项 7 是 `p4-task-11-runbook`）、`check_exit=0` 与 `table_exit=0` 各 **27 / 27**，见 `p4-task-11-build-vet-test-at-e854528c.txt` 与 `*-at-e854528c.txt`）。**歧义公开 ＋ 一处自查勘误**：`e854528c` 上的表是 **27 张**（= E59③ 要求重出的 **23** 张：12 个 `./tests/tracesealer/` 耦合 ＋ 11 个 `./tests/deploy/` 耦合；＋ 输入本轮零改动但仍重跑的 **3** 张：`p4-task-8-guard`、`p4-task-9-budget`、`p4-task-9-vmhwm`；＋ `p4-task-11-runbook` 自己在最终 HEAD 上的重出 1 张）。如实登记为「多跑」，**不**说成「按需最小重跑」。**勘误**：提交 `abad98ce` 的提交说明写的是「26 张权威表 ＋ 26 份 `--check` ＝ 129 = 129 断言红」—— 那是我漏数了同一次提交里一并落盘的 `p4-task-11-runbook` 那一张：**实际 = 27 张 / 27 份 / 136 = 136 断言红 + 0 编译红 + 0 允许的绿**（129 + 7 = 136）。提交说明**不改**（禁止 `--amend`）⇒ 勘误写在这里，并以落盘的 27 份文件为准。**再补一条自查（E60）**：`-at-e854528c` 那 27 份是用 **/tmp** 下的名单文件跑出来的 ⇒ 表头自证串的「名字清单 sha256」指向 /tmp 路径（内容哈希与仓内名单逐字相同，但路径不可长期复核）；因此已在最终 HEAD **`761c5a81`** 上用**仓内**的 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/<集合>-names.txt` 把 27 份**全部重出**（`*-at-761c5a81.txt`，另 27 份 `--check`），数字不变（**136 = 136 断言红 + 0 编译红 + 0 允许的绿**，`check_exit=0` / `table_exit=0` 各 **27/27**），且重出前核对过「27 份仓内名单 == 各自 `MANIFEST_DERIVATION` 现推结果」。**结论以 `-at-761c5a81` 为准**，`-at-e854528c` 的 54 份保留为历史。 |
+| **E73⑥（本轮自查发现）** | Task 11 背景第 2 条（当前实时行号 `:2740`）：D73 前置句「读侧（计划 3）**尚未实现**（`tracearchive.Reader` 当前只被测试引用）」 | **事实不成立**：读侧**代码**在 base（`main`）上**已经存在**并在 `cmd` 里接线 —— `internal/observability/service/trace_body_service.go`（计划 3/4 任务 2 引入）＋ `cmd/trace-body/main.go`；`git merge-base --is-ancestor <该文件引入提交> 0bfb130f` ⇒ **base 已含**。 | **只改事实、不改规格**：在该行**同行就地**补一条 E73 订正（**行数不变**）：读侧**代码**已就绪 ≠ 读侧**部署**可用（D73 是**部署**硬门），且写侧在部署配置里仍是**关闭**的（`deploy/blue-green/docker-compose.{blue,green}.yml:42` 的 `TRACE_BODY_ROOT` 都注释着；tick = `:38` 的 `TRACE_BODY_FLUSH_INTERVAL: 1m`）⇒ **步骤 4 仍然挂起**，理由与读数登记见 `p4-task-11-host-deferral-at-e854528c.txt`。**附带**：该文件里「解锁探针不会把闸门解开」这一点是**读码**推演（`spooler.go:206` 的 `guardProbe` 先验身份再试写 ⇒ 身份基线不匹配时探针直接返回身份错误 ⇒ 不会因「容器可写层能写」而解锁），**明确标注为读码、不是实跑**，真正的判定仍留给宿主。 |
+
+> **跨任务连带（E59③ 自查，先自查后报告）**：`grep -n '^PACKAGES' tools/trace-mutate/sets/p4-task-*.py` ⇒ 本轮改了 `tests/tracesealer/**`（新 fixture ＋ 新用例 ＋ 一处文件头注释）与 `tests/deploy/**`（新用例文件）⇒ **与 `./tests/tracesealer/` 耦合的 12 个集合**（`p4-task-1-{classify,exit,options,round}`、`p4-task-10-{contract,footer,observability}`、`p4-task-2-alert`、`p4-task-3-{loop,rootguard}`、`p4-task-4-{lock,runner}`）＋ **与 `./tests/deploy/` 耦合的 11 个集合**（`p4-task-5-{build,ci,isolate,restore,unit}`、`p4-task-6-{blue,green,root}`、`p4-task-7-bluegreen`、`p4-task-8-{compose,runsh}`）**全部必须重出**（工具对包内**全部** `*_test.go` 取哈希）；改了两份集合文件自身（`p4-task-10-footer` / `p4-task-4-runner`）—— 它们已在这 23 个里。**共 23 个**（`grep -l '^PACKAGES.*tests/deploy' tools/trace-mutate/sets/p4-task-*.py | wc -l` = **11**，`grep -l '^PACKAGES.*tests/tracesealer' … | wc -l` = **12**，11 + 12 = **23**，与 E73⑤ 的「多跑 3 个」一起构成 26）。**新集合** `p4-task-11-runbook` 的输入（`docs/deployment.md` ＋ `tests/deploy/trace_runbook_test.go` ＋ 集合文件）在本轮**内容未变** ⇒ 它在 `4a9ffbf4` 的表仍然有效，但为口径统一**在最终 HEAD 上重出**了一份（`-at-e854528c`），两份都留在证据目录里。
+
+### 新增约定（E73 起，**今后所有轮次适用**）
+
+1. **一切计数先跑命令再落笔**：提交数用 `git log --oneline <base>..HEAD | wc -l`，表数用 `ls` / 逐表求和，用例数用 `go test -v | grep -c '^--- PASS'`，变异/断言红/允许的绿用**每张表的 `计数口径` 块**逐表相加并把加法写出（E73⑤）。
+2. **「缺依赖」不是把行为要求留在自动门禁外的理由**：若一条行为要求只能由「需要某外部工具」的用例承载，正确做法是**把该工具产出的工件预先产好并提交**，再写一条**不依赖该工具**的用例去解析它，并把这个新用例登记进某份集合的 `MANIFEST_FILES`（E73① 的形态：`testdata/*.zst` ＋ `TestFooterParsesCommittedRealArtifact` ＋ `p4-task-10-footer` 的推导命令）。**只依赖该工具的「产出方向」可以继续留在人工复核项**，但**不得**让「解析正确」这类要求失去在册承载者。
+3. **变异必须红成断言红；死于编译失败者不得安杀手名**：改任何变异字符串之前，先核对目标文件**当前**的导入与符号现状（E73② 的实例：任务 10 之后 `runner.go` 已导入 `os`，旧的两操作变异会重复导入 ⇒ 编译红）。交付报告里凡写「杀手 = X」，必须在同一轮的权威表里**能看到 X 出现在该变异的 FAIL 名单里**。
+
+---
+
+## 过程失误登记（E74；**任务 12 交付轮 —— 上一轮评审留下的两条**）
+
+> 编号续本计划 **E73**。与 E57–E73 同一纪律：逐条写清「位置 / 问题 / 处置」。
+>
+> **本轮（E74）改动面（已核实）**：改动面**只有计划文本**（E74① 一行原地标注 ＋ 文末追加 E74 节与下面的「未关闭验收项」节）；对 `internal/**`（含冻结包 `internal/tracearchive/**`）、`cmd/**`、`tests/**`、`tools/trace-mutate/**`、`atlas-migrations/**`、`migrations/**`、`go.mod`、`go.sum` 的改动**全部为零** ⇒ 按 **E59**（绑定 = **内容哈希**；**纯计划文档提交不使绑定失效**）**不**使任何既有绑定失效。但 **任务 12 步骤 2** 另有独立要求（**在最终 HEAD 上全量重跑**）⇒ 本轮仍把**全部 27 个** `p4-task-*.py` 的 `--check` 与权威表重出，落盘为 `p4-task-12-<集合>-authoritative-at-<sha>.txt` 与 `p4-task-12-<集合>-check-at-<sha>.txt`（并在同一次落盘里另存一份**规范名** `<集合>-authoritative-at-<sha>.txt` / `<集合>-check-at-<sha>.txt`，两份内容逐字节相同）。
+
+| 编号 | 位置 | 问题 | 处置 |
+|---|---|---|---|
+| **E74①** | 本计划 E73 节的前言块（**当前实时行号 `:3223`**；该行**同行就地**改写 ⇒ **行数不变**，无行号级联） | **「写作时时点值随提交而失效」的自指残留**（正是 **E73⑤** 要堵的那一类）：该行写「含证据 = **71** 个」，而 `71` 是**写作时（`761c5a81`）**的时点值 —— 分支上继续提交后它**必然失效**。评审在 `8716f067` 上实测为 **125**（当场命令：`git diff --name-only 96a85eb0..8716f067 \| wc -l`；通用式 `git diff --name-only <base>..HEAD \| wc -l`）⇒ `125 ≠ 71`，计划正文里因此留下一个**在工件中查不到的陈旧数字**。 | **同行就地标注为「写作时值(761c5a81)」**，并写明该计数随提交而变、**本行不宣称任何「当前值」**、一律以当场命令为准。`71`（= `761c5a81` 时点）与 `125`（= `8716f067` 时点）**都只是时点值**，**都不是**「最终值」⇒ 落实 E73⑤「一切计数先跑命令再落笔；计划文本只登记写作时时点值」。 |
+| **E74②** | `tests/tracesealer/testdata/footer_roundtrip_real.jsonl.zst`（E73① 提交的真实产物 fixture，**104 字节**，sha256 `7f4291c592b71182a90bfa25953c648b3db5fd64383fc85af14752430e2af75e`）＋ `tests/tracesealer/footer_roundtrip_test.go` 的文件头注释 | **可复现性被过度暗示**：该 fixture 的来源（**真 Sealer 预产**、产出机 zstd **v1.5.7**、产出时点 `4a9ffbf4`、3 行正文、定位键 `dt=2026-10-08 / inst=blue / part=7`）**只写在注释与 E73① 的正文里**；仓库里**没有任何自动用例或脚本能复现它的产出过程**（复现需要「真 Sealer ＋ 与本机版本一致的 zstd ＋ 当时的输入行」，两者都不在仓库里）。 | **如实登记为「不可自动复现」**：本节 ＋ 交付报告 `docs/superpowers/plans/2026-10-08-trace-sealer-deployment-report.md` 的「诚实的覆盖缺口」一节逐字写明「该 fixture 的**产出过程不可自动复现**；可自动验证的只有**解析**方向（在册用例 `TestFooterParsesCommittedRealArtifact` 钉 sha256／字节数，并用镜像 `RowCount` 与冻结读侧 `GetBody` 读回，见 E73①）」。冻结包不可变 ⇒ 该形态**可接受**，但**不得**暗示它可复现。**不改**任何实现/测试/集合文件（避免把本轮变成一次实现变更、触发额外重绑）。 |
+
+---
+
+## 交接：未关闭验收项（**只做代码不算完成**，必须在真实宿主补做）
+
+> **纪律（先声明）**：本节逐条列出**尚未关闭**的验收项。它们**不会**因为代码合并、门禁全绿或本计划收尾而关闭 —— 只有**在真实宿主上按在册路径抄录出真实读数**才算关闭。**任何报告/交接都不得把它们勾掉，也不得用「本机跑不了」代替「不需要跑」（E64）**；本机能交付的只有**契约面**（改坏 ⇒ 转红），**不是**读数。逐条登记原文见 `.superpowers/sdd/2026-10-08-trace-sealer-deployment/` 的 `p4-task-8-a3-deferral-at-d1bc8e8d.txt`、`p4-task-9-host-deferral-at-7740bdbf.txt`、`p4-task-10-host-deferral-at-d0581bba.txt`、`p4-task-11-host-deferral-at-e854528c.txt`。
+
+### U1　任务 8 —— A3 步骤 5 七项读数 ＋ **进程级 A7**
+
+- **在册路径**：`deploy/verify/trace-a3/run.sh`（＋ `deploy/verify/trace-a3/docker-compose.yml`）；契约面 = `tests/deploy/trace_a3_compose_test.go` ＋ `tests/traceverify/*` ＋ 三张表 `p4-task-8-{guard,compose,runsh}`。
+- **宿主要求**：**Linux ＋ root**（`fallocate` / `mkfs.ext4` / `mount -o loop` / `losetup` / `/proc`）＋ **可用的 docker 引擎** ＋ 测试环境 PG/Redis ＋ 必然拒连的上游（`base_url: http://127.0.0.1:9`）；按 `deploy/verify/trace-a3/run.sh` 执行。
+- **待执行项（7 ＋ 1）**：① 填盘前后 `df -h /srv/trace-a3`（两次）；② 单条闩锁 `ERROR` 原文（**只出现一次**，`grep -c '\[trace-body\] ERROR'`）；③ `body_missing` 计数 vs 总数（两条 `psql` SELECT）；④ `/health`、`/ready` 返回码；⑤ 延迟直方图前后对比（**由人判定**）；⑥ 恢复后的新 spool 列表；⑦ `scratch-cleanup` 后 `findmnt` 为空、镜像已删；⑧ **进程级 A7**：第二个 `--once` 退出码 **1** ＋ 撞锁消息。
+- **回填目标**：交付报告的 A3 一节（命令 ＋ 输出原样，含日期）；并把上述四份登记文件里对应的「待宿主执行」改为「已执行（附读数）」。
+
+### U2　任务 9 —— A6-① 生产压缩比、A6-② Linux `/proc` 峰值标定、A1 的 n = 1e6 回读
+
+- **在册路径**：`cmd/trace-verify`（`decode-bench` / `scratch-*`）＋ `internal/traceverify/{budget.go,vmhwm.go}`；契约面 = `tests/traceverify/*` ＋ `p4-task-9-{budget,vmhwm}`。
+- **宿主要求**：**生产宿主**（`/usr/bin/zstd --version` = **v1.4.8**；`--expected-zstd-version 1.4.8` 会强制它，版本不符即**响亮失败**）＋ **Linux 的 `/proc/<pid>/status`** ＋ 真实 PG ＋ 真实封块产物。
+- **待执行项**：① **A6-①**：`touch -d '5 hours ago' <spool>`（**不得**改 `--min-age`，那是 R8 的承重参数）后 `trace-sealer --root <copy> --zstd-binary /usr/bin/zstd --expected-zstd-version 1.4.8 --min-age 3h --once`，抄 per-part `rows`/`uncompressed_bytes`/`artifact_bytes`/`ratio` 与汇总行，并与规格 §16 第 7 条门槛（9×，或难压日实测下界 10.26×）**并列**；② **A6-②**：`decode-bench --artifact <真实产物> --concurrency 1,2,3 --gc-modes on,off`，取 **K = 1/2/3** 各自的 `peak_vmhwm_bytes`，并**先**取 **K = 0** 空读 RSS 作为基线；③ **A1（n = 1e6 读回，口径 = 计划 3 的 H19）**：固定 seed 抽 1,000 行**逐字节**比对（比对源 = **封块前 spool 行的原字节**，D57），覆盖 ≥2 part / ≥2 dt / 1 个越界样本（`ErrNotArchived`）/ 1 条 `body_missing=true`（`ErrBodyMissing`），**1000/1000 相等，不得 SKIP，不得降低抽样数或改写用例**。
+- **回填目标**：报告 A6/A1 一节 ＋ 交接 **H5 / H10**（回填给计划 3 的 `TRACE_BODY_READ_MAX_CONCURRENT`）。
+- **【E77-B 部分满足登记（不销账）】**：发起者已在**生产机**上完成一轮**历史归档 `.jsonl.gz` 的原地 zstd 转换**（`pigz -dc … | zstd -9 -T4`，逐文件过 `zstd -t` ＋ 双流 `cmp`，**更小才替换**）：共 **9** 个正文分片（本轮 batch3-detached **5** 个：入 **76,873,008,076** / 出 **30,611,546,894** ⇒ 释放 **46,261,461,182** 字节，本计划侧已自行复算逐位一致；早期一轮 4 个 `body-recent-*` 合计约 **52.5 GiB**，**缺逐文件原始尺寸 ⇒ 不可复算、不得与此相加**）；生产 `/usr/bin/zstd` = **v1.4.8**（sha256 `d304445d…836dc`）。⇒ **A6-① 的部分前置（生产宿主 ＋ 版本）已具备**，但该批**不是 sealer 封块产物**：参数是 `-9 -T4` 而非 `-19 --long=29 -T1`（sealer 固定后者，见 `internal/tracearchive/sealer.go:474`），输入是**已被 gzip 压过一遍**的历史语料，观测量只有**文件级** in/out 而无 per-part `rows` 与汇总行；其比值（1.391×–3.788×）**离口径**，**既不得判 A6-① 合格也不得判不合格**。⇒ **A6-① 保持「待宿主执行」**，缺的就是上条 ① 的 `trace-sealer --once` 读数。证据（逐条比对 ＋ 我的复算）：`.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-12-a6-1-partial-evidence-at-52850d26.txt`。
+
+### U3　任务 10 —— 4.1 真实流量行数分布、4.4 A3 人工构造 `too_many_rows` 样本（三条决策门）
+
+- **在册路径**：`internal/tracesealer/footer.go` ＋ `runner.go` 的 `observeSealedPart`；契约面 = `tests/tracesealer/{footer,constants_contract,observability}_test.go` ＋ `p4-task-10-{footer,contract,observability}`。
+- **宿主要求**：真实流量 ＋ 真实 `zstd` **1.4.8** 的宿主（4.4 的人造样本另需 A3 环境）。
+- **待执行项**：① **4.1**：`grep 'sealed part' <日志>` 抽出全部 `rows`，算 min/p50/p95/max 与 `bytes_per_row` 分布；② **4.4**：在 A3 环境把 `TRACE_BODY_BLOCK_MB` 调到极小 ＋ 平均行 < 192 B，**人工构造**一条 `too_many_rows` 样本（**禁止**在生产上复现）并抄录日志原文（`reason=too_many_rows`）；③ **三条决策门**：`max(rows) < 4,194,304`（> 2 倍余量）⇒ **不改**计划 2 代码；`4,194,304 ≤ max(rows) < 8,388,608`（50%–100%）⇒ 在运行手册登记「需要按行数滚动」的后续项并给建议参数；**`max(rows) ≥ 8,388,608`（≥ 上界）⇒ 必须改 `internal/gateway/observability/spooler.go` 增加按行数滚动，并在同一提交里重跑 `p2-task-5` 与 `p2-task-8-spooler` 两个集合并重记 sha256**。
+- **回填目标**：报告 A8 一节 ＋ 运行手册（触发第二/第三条门时）。
+
+### U4　任务 11 —— 4.3 「挂载消失 ≤1 tick」实测（**当前不可执行**）
+
+- **在册路径**：`docs/deployment.md` 的《调用链正文（`/datalog`）运行手册》一节 ＋ `tests/deploy/trace_runbook_test.go` ＋ `p4-task-11-runbook`。
+- **宿主要求**：生产（或 A3）宿主上**已启用写侧**（`TRACE_BODY_ROOT` 非空且 root 目录在场）的**非活跃、已摘流**颜色；**只允许**测试环境或**无真实流量**的生产窗口（该实验本身在持续丢正文）。
+- **待执行项**：撤挂载后连续观察 **≥3 个 tick**，确认：① `root_unavailable` / `root-identity-mismatch` ERROR **只跳变一次**（不是每 tick 反复刷）；② spool **始终没有**新文件；③ 此后每行 `body_missing=true` 且 `body_missing_rows` **单调**递增；④ **累计丢失行数**（期望 **0**；非 0 ⇒ 按事故复盘且不得作为验收证据）；⑤ 「窗口内流量为零」留证；⑥ 活跃颜色 `/health` 仍 200；⑦ 重启后恢复写盘；⑧ 停止点 A（禁止切换蓝绿流量）由人工值守。
+- **为什么当前不可执行（不是「跳过」）**：写侧在部署配置里**关闭**（`deploy/blue-green/docker-compose.{blue,green}.yml` 的 `TRACE_BODY_ROOT` 两处都注释着）⇒ `sink == nil` ⇒ `TraceSpooler` **根本不构造** ⇒ 期望的 ERROR **恒不出现**，观察断言**恒真（空过）**。⇒ 本项登记为「**读侧就绪（D73 硬门）后的启用门禁**」，**不得**宣称已通过。
+- **回填目标**：`p4-task-11-host-deferral-*.txt`（把 4.3 / 4b / 5 / 6 行改为「已执行（附读数）」）＋ 报告。
+
+### U5　跨计划依赖 —— A6-② 在 `GOGC=off` 下的 K = 2 停止点
+
+- **判据**：若 A6-② 在 **`GOGC=off`** 下 **K = 2** 的峰值 **≥ 2 GiB** ⇒ **不得**宣称 2 并发安全：`MaxConcurrent` 的结论取 **1**，且**必须**把**计划 3**（`docs/superpowers/plans/2026-09-25-trace-point-read-service.md`）的 `TRACE_BODY_READ_MAX_CONCURRENT` **由 2 改为 1**（或提高控制面限额）。
+- **在册路径**：`internal/traceverify/budget.go`（算术）＋ `cmd/trace-verify decode-bench`（读数）＋ 计划 3 的 H15 / 本计划的 H5 / H10。
+- **状态**：**未触发（也还没有读数）** —— 本轮只有算术面（`PerReadPeakBytes() = 512 + 64 + 64 = 640 MiB`、`MaxConcurrent(2 GiB, 300 MiB, 256 MiB) = 2`），**这两个数字不是结论**。⇒ 停止点保持**挂起**，判定与回填都在 U2 之后。
+
+### U6　风险 R1 —— 停止点 1.5 未执行 ⇒ R1 的量化仍挂起（**唯一可能失控的路径**）
+
+- **判据**：隔离旧定时器（`isolate-old-trace-archive.sh --confirm`）会让 `/datalog` 在隔离窗口内**没有任何 retention**（`mask trace-archive.timer`）⇒ **`--confirm` 之前必须先过停止点 1.5 的量化门**：在生产机对 `/datalog` 取**两次 `du -sb`（间隔 ≥ 24h）**，外推增长速率与「按当前容量还能撑几天」，并据此在 R1 的三个选项（**mask / 保留清理 / 另设 unit**）里**显式选定一个**写进上线记录。
+- **在册路径**：`deploy/systemd/isolate-old-trace-archive.sh`（默认 dry-run ＋ 删除谓词审查 ＋ 命中新树 exit 3）＋ `deploy/systemd/restore-old-trace-archive.sh`（回滚）；契约面 = `tests/deploy/*` ＋ `p4-task-5-{isolate,restore}` 共 **5** 条断言红；次序（任务 6 挂载核对 → 任务 5 隔离）写在 `deploy/blue-green/README.md`，由 `p4-task-7-bluegreen` 钉住。
+- **待执行项**：① 两次 `du -sb /datalog`（间隔 ≥ 24h）＋ 外推速率与可撑天数；② 选定 R1 选项并写理由（**必须在 `--confirm` 之前**）；③ 隔离脚本**真机执行**（dry-run → `--confirm`）＋ 回滚验证；④ 隔离窗口内 `/datalog` 的容量水位观察（无 retention 的直接后果）。
+- **为什么当前不可执行（不是「跳过」）**：本机没有生产宿主、没有 `/datalog` ⇒ 两次采样（间隔 ≥ 24h）只能在生产机做。**可执行面已交付、量化门未过** —— 这不是「本机跑不了就不需要跑」（E64）。
+- **为什么它单列（本节的目的）**：R1 是**唯一可能失控的路径** —— 其余未关闭项要么是「读数未取」（U1/U2/U3、R2 的执行后 `df -h`），要么是「纵深防御未验证」（`RequiresMountsFor=` 在手工 `umount` 时是否可靠）。只有 R1 的量化门**不过就可能真的把盘写满**。它已记载在交付报告 **§8（「R1 未关闭」，评审时点行号 `:198`）**、**§13 第 1 条（`§13.1`，评审时点行号 `:350`）** 与 **§4 的 D65**；本节把它**收进交接清单**，使「未关闭验收项」与报告逐条对应、自洽可读。
+  **（行号口径）**：上面两个行号是**评审时点**的值，**不随本计划的后续编辑维护** —— 引用一律以**节号**（`§8` / `§13` 第 1 条 / `§4 D65`）为准（避免自引用行号级联）。
+- **回填目标**：交付报告 §8 的 R1 表（两次 `du -sb` 读数 ＋ 选定选项与理由）＋ 上线记录；并把对应的宿主挂起登记改为「已执行（附读数）」。

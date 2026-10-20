@@ -1,0 +1,46 @@
+### E76① 加法串订正：逐表取值与算式自证（数据来源 = 27 张 *-authoritative-at-5650d28c.txt）
+# 被订正的「改前」原串 = 下面 27 项串**删去第 10 项（p4-task-3-loop = 7）** ⇒ 26 项、实和 129 = 136 - 7。
+# 其字面串见 git 历史（本节刻意**不**在树内重抄该字面串，以免第五条的残留复核 grep 自匹配）：
+#   git show 78fe1e39^:docs/superpowers/plans/2026-10-08-trace-sealer-deployment-report.md
+#     | sed -n '/变异总数逐表/p'      # 那一行即改前的 26 项串，逐字为 7+2+3+6+3+8+5+7+7+8+…+11
+# 命令（下表）：for f in $(ls p4-task-12-*-authoritative-at-5650d28c.txt | sed 's/^p4-task-12-//; s/-authoritative-at-5650d28c.txt$//' | sort); do ... done
+
+集合名（ls 字典序）      变异总数
+-----------------------------------------
+p4-task-1-classify               7
+p4-task-1-exit                   2
+p4-task-1-options                3
+p4-task-1-round                  6
+p4-task-10-contract              3
+p4-task-10-footer                8
+p4-task-10-observability         5
+p4-task-11-runbook               7
+p4-task-2-alert                  7
+p4-task-3-loop                   7
+p4-task-3-rootguard              8
+p4-task-4-lock                   4
+p4-task-4-runner                 4
+p4-task-5-build                  3
+p4-task-5-ci                     2
+p4-task-5-isolate                4
+p4-task-5-restore                1
+p4-task-5-unit                   14
+p4-task-6-blue                   6
+p4-task-6-green                  2
+p4-task-6-root                   2
+p4-task-7-bluegreen              5
+p4-task-8-compose                4
+p4-task-8-guard                  4
+p4-task-8-runsh                  3
+p4-task-9-budget                 4
+p4-task-9-vmhwm                  11
+
+逐表串（27 项）= 7+2+3+6+3+8+5+7+7+7+8+4+4+3+2+4+1+14+6+2+2+5+4+4+3+4+11
+项数 terms = 27   和 sum = 136
+
+漏项 = 第 10 项 p4-task-3-loop = 7（第 8 项 runbook=7、第 9 项 alert=7、第 11 项 rootguard=8 在场）
+136 - 7 = 129（= 改前 26 项串的实和，已当场逐项手算核对）
+129 + 7 = 136  ✓ 与 27 项 machine 加法一致
+结论：headline 136 正确，不改；订正的是算式的项数与和数。
+
+derivation_exit=0

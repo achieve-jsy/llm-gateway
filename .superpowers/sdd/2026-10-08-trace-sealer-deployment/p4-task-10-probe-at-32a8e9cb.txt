@@ -1,0 +1,99 @@
+# 任务 10 人工探针（break → red → restore）：证明「已登记为无杀手」的在册用例**不是恒真**
+# 纯净来源 = git archive 32a8e9cb9a604e8d4a6acb296a3720ea09dc1010 | tar -x -C /tmp/p4-t10-probe-tree（工作树零改动）
+# 每条探针：改坏 → go test ./tests/tracesealer/ -run ^<用例>$ -count=1 -v → 还原 → 校验 sha256
+# 行号口径 = 改**之后**的行号（post-change line numbers）
+
+==============================================================================
+P1  文件=internal/tracesealer/footer.go  用例=TestFooterRowCountOnHandBuiltFooter
+  目的：集合 A m01 的直取：镜像长度算错 ⇒ 常量断言先红（判据不是恒真）。
+  替换出现次数 = 1（必须 == 1）
+  改后行号 = 33（post-change）
+  判定 = FAIL
+      Error Trace:	/private/tmp/p4-t10-probe-tree/tests/tracesealer/footer_test.go:76
+      Error:      	Not equal:
+      Messages:   	FooterSize 必须严格等于冻结包 footer.go 的 footerSize（32）
+  还原校验：改前 sha256=fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15
+            还原 sha256=fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15  一致 ✓
+            仓库同名文件 sha256=fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15  一致 ✓
+
+==============================================================================
+P2  文件=internal/tracesealer/footer.go  用例=TestSealerFooterSizeMatchesFrozenPackage
+  目的：跨集合证据：集合 B 的 gap-1（FooterSize 镜像无杀手）在集合 A m01 下**真的**转红。
+  替换出现次数 = 1（必须 == 1）
+  改后行号 = 33（post-change）
+  判定 = FAIL
+      Error Trace:	/private/tmp/p4-t10-probe-tree/tests/tracesealer/constants_contract_test.go:368
+      Error:      	Not equal:
+      Messages:   	tracesealer.FooterSize 是冻结包 footer 布局的镜像长度；不一致 ⇒ RowCount 会去读错位置
+  还原校验：改前 sha256=fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15
+            还原 sha256=fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15  一致 ✓
+            仓库同名文件 sha256=fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15  一致 ✓
+
+==============================================================================
+P3  文件=internal/tracesealer/footer.go  用例=TestFooterRoundTripOnRealArtifact
+  目的：跨集合证据：真实产物往返测（gap-1，故意不进任何清单）在 m02 下**真的**转红。
+  替换出现次数 = 1（必须 == 1）
+  改后行号 = 84（post-change）
+  判定 = FAIL
+      Error Trace:	/private/tmp/p4-t10-probe-tree/tests/tracesealer/footer_roundtrip_test.go:71
+      Error:      	Received unexpected error:
+  还原校验：改前 sha256=fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15
+            还原 sha256=fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15  一致 ✓
+            仓库同名文件 sha256=fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15  一致 ✓
+
+==============================================================================
+P4  文件=internal/tracesealer/runner.go  用例=TestObserveTracksMaxRowsAndMinRatio
+  目的：集合 C gap-1：MaxRows 的更新方向被禁用 ⇒ 该用例转红（断言不是恒真）。
+  替换出现次数 = 1（必须 == 1）
+  改后行号 = 280（post-change）
+  判定 = FAIL
+      Error Trace:	/private/tmp/p4-t10-probe-tree/tests/tracesealer/observability_test.go:175
+      Error:      	Not equal:
+  还原校验：改前 sha256=dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab
+            还原 sha256=dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab  一致 ✓
+            仓库同名文件 sha256=dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab  一致 ✓
+
+==============================================================================
+P5  文件=internal/tracesealer/runner.go  用例=TestObserveTracksMaxRowsAndMinRatio
+  目的：集合 C gap-1：MinRatio 的更新方向被翻转 ⇒ 该用例转红。
+  替换出现次数 = 1（必须 == 1）
+  改后行号 = 288（post-change）
+  判定 = FAIL
+      Error Trace:	/private/tmp/p4-t10-probe-tree/tests/tracesealer/observability_test.go:177
+      Error:      	Max difference between 4 and 8 allowed is 1e-09, but difference was -4
+      Messages:   	最小压缩比取的是难压的那一块
+  还原校验：改前 sha256=dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab
+            还原 sha256=dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab  一致 ✓
+            仓库同名文件 sha256=dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab  一致 ✓
+
+==============================================================================
+P6  文件=internal/tracesealer/runner.go  用例=TestObserveLogsOneInfoLinePerSealedPart
+  目的：集合 C gap-2：删掉 per-part 的 INFO ⇒ 「每个成功块一行 INFO」的断言转红。
+  替换出现次数 = 1（必须 == 1）
+  删除位置行号 = 301（改前；删除后该行号处已是下一行）
+  判定 = FAIL
+      Error Trace:	/private/tmp/p4-t10-probe-tree/tests/tracesealer/observability_test.go:229
+      Error:      	"[]" should have 3 item(s), but has 0
+  还原校验：改前 sha256=dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab
+            还原 sha256=dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab  一致 ✓
+            仓库同名文件 sha256=dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab  一致 ✓
+
+==============================================================================
+P7  文件=internal/tracesealer/alert.go  用例=TestObserveLogsOneInfoLinePerSealedPart
+  目的：集合 C gap-2：轮次汇总的字段名改一个 ⇒ 汇总断言转红（字段集是契约，不是装饰）。
+  替换出现次数 = 1（必须 == 1）
+  改后行号 = 59（post-change）
+  判定 = FAIL
+      Error Trace:	/private/tmp/p4-t10-probe-tree/tests/tracesealer/observability_test.go:242
+      Error:      	Not equal:
+  还原校验：改前 sha256=4abf4a6ed0732d63c4a3457f60f8029b7ea8da3fbbd537de243b93ec743de115
+            还原 sha256=4abf4a6ed0732d63c4a3457f60f8029b7ea8da3fbbd537de243b93ec743de115  一致 ✓
+            仓库同名文件 sha256=4abf4a6ed0732d63c4a3457f60f8029b7ea8da3fbbd537de243b93ec743de115  一致 ✓
+
+==============================================================================
+收尾：每条探针都已把被改文件还原，并逐条比对 sha256（改前 == 还原 == 仓库同名文件）。
+下面复核「整棵副本与 HEAD 归档一致」：对每个被探针改过的文件重新算 sha256，
+并与仓库中的同名文件比对 —— 全部一致即说明探针没有在工作树或副本里留下残留。
+  一致 ✓  4abf4a6ed0732d63c4a3457f60f8029b7ea8da3fbbd537de243b93ec743de115  internal/tracesealer/alert.go
+  一致 ✓  fa10f80dfc995b640c546566d8b501ab42a44af02101b3de6d1cf95b8c22cd15  internal/tracesealer/footer.go
+  一致 ✓  dcf19c8e0491ff90fe223a38d1e5f539297bbdecec282ff090ae8e732945c9ab  internal/tracesealer/runner.go

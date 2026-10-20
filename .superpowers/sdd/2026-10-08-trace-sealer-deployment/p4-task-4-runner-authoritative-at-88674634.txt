@@ -1,0 +1,80 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = 88674634b106948b175db6416ea27241f51dd879
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 852d354a0c83e11836af425bf14602b12c4aa59aa634801a92b772322ebdf513  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-4-runner.py)
+名字清单 sha256          = f2e8b230f5e37434fed05b6d84a000aebdc213541b8d88fe8cd410e47bac44d6  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-4-runner-names.txt)
+名字清单条数             = 13
+清单推导命令             = grep -h '^func Test' tests/tracesealer/lock_test.go tests/tracesealer/concurrent_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 13 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-pk3dhs2i
+被测文件 sha256          = dd80de132255fafbb8cb16c0822eafc7e8cb30dae349f0eb0a4c13dad808ac32  internal/tracesealer/runner.go
+测试文件 sha256          = 22f21e27b31f645d06c288ec796b38da0c8a2c8f12fb3165b8cff81a8abf0406  tests/tracesealer/alert_test.go
+测试文件 sha256          = 0e36d92d813eb0af6d4caa658c1bd0fb235be03362bf690f4f54afed5be56515  tests/tracesealer/classify_test.go
+测试文件 sha256          = 6ec687db153fbdebe474d5c9280a68f0d21f28cb2069b52d607438b748a178b5  tests/tracesealer/concurrent_test.go
+测试文件 sha256          = f3bfdacf089c1cf0acf0706d54e8a58de454414f2e99880b852ad508152d077f  tests/tracesealer/exit_test.go
+测试文件 sha256          = 7bd98c1223b58280f9a6b88ad8561f7d5812e6dd7ae7b2f3d2aeab578f91137f  tests/tracesealer/lock_test.go
+测试文件 sha256          = 142965aca3858955488752e512f1f418ece44e129b7d2b384e81b0bba3a72099  tests/tracesealer/loop_test.go
+测试文件 sha256          = 64d07b52eb0b863dfa5d417471bf3ab3b83b79f8f16f8a3e2c76cc3714abe7c1  tests/tracesealer/options_test.go
+测试文件 sha256          = 451ce4de0d1e563c1548e9ff85ea7eb03b6d68f1d113938997fb9c6e9cb1c58c  tests/tracesealer/rootguard_test.go
+测试文件 sha256          = af3af343207b05f43948abe79a136be3795bea101259949e7e46dedd4e677c67  tests/tracesealer/round_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] runner不得有第二处锁实现
+      文件=internal/tracesealer/runner.go  正则=syscall\.Flock|os\.Mkdir  期望=absent  实际=未命中
+      理由=互斥只能有**一处**实现。在 `NewRunner` 里再补一层「文件/目录存在即认为有实例」的家酿锁，会在崩溃后把 sealer 永久挡在外面（D70 同族）。不存在性要求 ⇒ 静态检查（本行扫整个文件文本，含注释）。
+- [PASS] main必须释放锁
+      文件=cmd/trace-sealer/main.go  正则=defer r\.Close\(\)  期望=present  实际=命中 'defer r.Close()'
+      理由=`Runner.Close()` 的接口契约是「**进程退出前必须调用**」（释放单实例锁）。它是接线要求 ⇒ 静态检查；「Close 真的释放锁」由 m08 + TestNewRunnerReleasesLockOnClose 承载。
+- [PASS] A7轮内不重复封块用例在册
+      文件=tests/tracesealer/concurrent_test.go  正则=func TestA7NoPartIsSealedTwiceConcurrently\(  期望=present  实际=命中 'func TestA7NoPartIsSealedTwiceConcurrently('
+      理由=冻结包要求同一个 (dt,inst,part) 串行（两块共用同一个 <partPath>.tmp）。本用例的被测对象是冻结包的这一要求 + Round 的串行编排 ⇒ 本计划不得变异冻结包 ⇒ 只钉**存在性**（防止用例被删而没人发现）；行为由名字清单里的该用例承载，可失败性由人工探针承载（见 COVERAGE_GAPS）。
+- [PASS] Close幂等用例在册
+      文件=tests/tracesealer/lock_test.go  正则=func TestNewRunnerCloseIsIdempotent\(  期望=present  实际=命中 'func TestNewRunnerCloseIsIdempotent('
+      理由=`Runner.Close()` 的接口契约写明「幂等」（defer + 显式两条退出路径）。runner.go 侧的单点变异杀不掉它（幂等由 `r.lock = nil` 与 `Lock.Release` 自己的幂等两层保证）⇒ 静态检查只钉存在性，行为由名字清单里的用例承载。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 装配期就必须取锁：同一个 root 的第二个实例（含运维手工 --once）必须被拒 | `m06_装配不取锁` | — | 杀手 = TestNewRunnerRefusesWhenLockHeld；另 TestA7RoundIsSerializedWithLock（常驻循环持锁期间手工 --once 被装配期挡住）。跨集合：集合 A 的 m02/m03 也杀这两条。 |
+| 装配次序：normalize() → NewRootGuard()（stat 根目录、不建目录）→ AcquireLock()；失败不得创建根目录 | `m07_先建根目录再取锁` | — | 杀手 = TestNewRunnerNeverCreatesRoot（它断言缺失的根目录事后仍然不存在）。 |
+| 装配失败必须把**已取得的**资源释放干净（构造封块器失败 ⇒ 释放锁） | `m09_装配失败不释放锁` | — | 杀手 = TestNewRunnerReleasesLockWhenSealerFails（本轮按 E62 新增的在册行为用例）。 |
+| Runner.Close() 必须释放锁（进程退出前必须调用） | `m08_Close不释放锁` | `main必须释放锁` | 杀手 = TestNewRunnerReleasesLockOnClose（Close 后同一 root 必须能再起一个）；`cmd/trace-sealer/main.go` 的接线另有静态检查。 |
+| Runner.Close() 幂等（defer + 显式两条退出路径） | — | `Close幂等用例在册` | 在册行为用例 = TestNewRunnerCloseIsIdempotent；下层的 `Lock.Release` 幂等由 TestLockReleaseIsIdempotent 承载（被集合 A 的 m05 断言红杀死）。runner.go 侧无单点变异可杀 ⇒ 按 E64② 登记进 COVERAGE_GAPS。 |
+| 互斥只能有一处实现：`runner.go` 里不得再补一层家酿锁 | — | `runner不得有第二处锁实现` | 不存在性要求 ⇒ 静态检查（与集合 A 的同名检查互补：那边守 lock.go 的机制，这边守 runner.go 不重复实现）。 |
+| A7：一个轮次内对同一 part 只能有一次 Seal 调用，且同一时刻只能有一块在封（冻结包要求同一三元组串行） | — | `A7轮内不重复封块用例在册` | 在册行为用例 = TestA7NoPartIsSealedTwiceConcurrently（名字清单里有它）。**没有变异杀手**：TARGET（runner.go）的 m06–m09 都不改变 Round 的串行性，而改 Round 的变异属于 p4-task-1-round / p4-task-3-loop 的职责（那两份集合的清单里没有本用例）⇒ 按 E64①/E64② 如实登记进 COVERAGE_GAPS，可失败性由人工探针承载。 |
+
+计划要求总数 = 7；引用到的变异 = 4；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=13 ran=13 diff=0 PASS=13 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m06_装配不取锁 | 红 | names=13 ran=13 diff=0 PASS=11 SKIP=0 FAIL=2 | TestA7RoundIsSerializedWithLock, TestNewRunnerRefusesWhenLockHeld |
+| m07_先建根目录再取锁 | 红 | names=13 ran=13 diff=0 PASS=12 SKIP=0 FAIL=1 | TestNewRunnerNeverCreatesRoot |
+| m08_Close不释放锁 | 红 | names=13 ran=13 diff=0 PASS=12 SKIP=0 FAIL=1 | TestNewRunnerReleasesLockOnClose |
+| m09_装配失败不释放锁 | 红 | names=13 ran=13 diff=0 PASS=12 SKIP=0 FAIL=1 | TestNewRunnerReleasesLockWhenSealerFails |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 4
+集合里的变异总数          = 4（本次运行 == 全集 ✓）
+断言支撑的红             = 4 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 4 = 4 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

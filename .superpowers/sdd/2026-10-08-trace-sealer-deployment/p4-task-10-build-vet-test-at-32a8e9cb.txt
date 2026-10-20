@@ -1,0 +1,186 @@
+# 任务 10 的构建/vet/测试证据（HEAD ��工作树干净）
+# 工具链 = go version go1.26.1 darwin/arm64 darwin/arm64
+
+$ gofmt -l internal/tracesealer/ tests/tracesealer/
+gofmt_exit=0（无输出 = 无未格式化文件）
+
+$ go build ./internal/... ./cmd/...
+build_exit=0
+  （注：仓库存在**先于本任务**的基线失败，故只构建 ./internal/... 与 ./cmd/...；本命令 exit=0 即本任务未引入构建失败）
+
+$ go vet ./internal/tracesealer/ ./tests/tracesealer/
+vet_exit=0
+
+$ go test ./internal/tracesealer/ -count=1
+ok  	github.com/example/llm-gateway/internal/tracesealer	0.006s
+internal_test_exit=0
+
+$ go test ./tests/tracesealer/ -count=1 -v
+=== RUN   TestSummarizeCleanRoundIsSilent
+--- PASS: TestSummarizeCleanRoundIsSilent (0.00s)
+=== RUN   TestSummarizePartExistsAloneIsSilent
+--- PASS: TestSummarizePartExistsAloneIsSilent (0.00s)
+=== RUN   TestSummarizeRetryableFailureIsWarn
+--- PASS: TestSummarizeRetryableFailureIsWarn (0.00s)
+=== RUN   TestSummarizeTooManyRowsIsErrorAndNamed
+--- PASS: TestSummarizeTooManyRowsIsErrorAndNamed (0.00s)
+=== RUN   TestSummarizeUnknownFailureIsError
+--- PASS: TestSummarizeUnknownFailureIsError (0.00s)
+=== RUN   TestSummarizeFieldsAreStable
+--- PASS: TestSummarizeFieldsAreStable (0.00s)
+=== RUN   TestRoundTooManyRowsEmitsErrorAlertLine
+--- PASS: TestRoundTooManyRowsEmitsErrorAlertLine (0.00s)
+=== RUN   TestRoundRetryableFailureEmitsWarnAlertLine
+--- PASS: TestRoundRetryableFailureEmitsWarnAlertLine (0.00s)
+=== RUN   TestRoundCleanRoundEmitsOnlyHeartbeat
+--- PASS: TestRoundCleanRoundEmitsOnlyHeartbeat (0.00s)
+=== RUN   TestClassifyPartExistsIsIdempotent
+--- PASS: TestClassifyPartExistsIsIdempotent (0.00s)
+=== RUN   TestClassifyRowMismatchIsRetryable
+--- PASS: TestClassifyRowMismatchIsRetryable (0.00s)
+=== RUN   TestClassifySealFailedIsRetryable
+--- PASS: TestClassifySealFailedIsRetryable (0.00s)
+=== RUN   TestClassifyTooManyRowsIsPermanent
+--- PASS: TestClassifyTooManyRowsIsPermanent (0.00s)
+=== RUN   TestClassifyUnknownIsLoudAndRetryable
+--- PASS: TestClassifyUnknownIsLoudAndRetryable (0.00s)
+=== RUN   TestClassifyUsesErrorsIsNotEquality
+--- PASS: TestClassifyUsesErrorsIsNotEquality (0.00s)
+=== RUN   TestA7NoRefPointsToNothing
+--- PASS: TestA7NoRefPointsToNothing (0.00s)
+=== RUN   TestA7WriterNeverAppendsToAHandedOffPart
+--- PASS: TestA7WriterNeverAppendsToAHandedOffPart (0.00s)
+=== RUN   TestA7RestartAfterSealStartsAtNextPart
+--- PASS: TestA7RestartAfterSealStartsAtNextPart (0.00s)
+=== RUN   TestA7RoundIsSerializedWithLock
+--- PASS: TestA7RoundIsSerializedWithLock (0.00s)
+=== RUN   TestA7NoPartIsSealedTwiceConcurrently
+2026/10/09 12:24:32 time=2026-10-09T12:24:32.559+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000000 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently3412477037/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently3412477037/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently3412477037/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst: no such file or directory"
+2026/10/09 12:24:32 time=2026-10-09T12:24:32.561+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000001 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently3412477037/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently3412477037/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently3412477037/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst: no such file or directory"
+2026/10/09 12:24:32 time=2026-10-09T12:24:32.564+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000002 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently3412477037/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently3412477037/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestA7NoPartIsSealedTwiceConcurrently3412477037/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst: no such file or directory"
+2026/10/09 12:24:32 time=2026-10-09T12:24:32.564+08:00 level=INFO msg="trace-sealer round" reason="" eligible=3 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=0 seal_failed=0 sealed=3 too_many_rows=0 unknown_failed=0 duration=7.240459ms
+--- PASS: TestA7NoPartIsSealedTwiceConcurrently (0.01s)
+=== RUN   TestSealerMaxTrailerEntriesMatchesFrozenReader
+--- PASS: TestSealerMaxTrailerEntriesMatchesFrozenReader (0.00s)
+=== RUN   TestSealerGatewayRollBoundMatchesConfig
+--- PASS: TestSealerGatewayRollBoundMatchesConfig (0.00s)
+=== RUN   TestSealerDefaultMinAgeMatchesFrozenDefault
+--- PASS: TestSealerDefaultMinAgeMatchesFrozenDefault (0.00s)
+=== RUN   TestSealerFooterSizeMatchesFrozenPackage
+--- PASS: TestSealerFooterSizeMatchesFrozenPackage (0.00s)
+=== RUN   TestExitCodeZeroOnCleanRound
+--- PASS: TestExitCodeZeroOnCleanRound (0.00s)
+=== RUN   TestExitCodeOneOnFatalError
+--- PASS: TestExitCodeOneOnFatalError (0.00s)
+=== RUN   TestExitCodeTwoWhenOnceHasFailures
+--- PASS: TestExitCodeTwoWhenOnceHasFailures (0.00s)
+=== RUN   TestFooterRoundTripOnRealArtifact
+--- PASS: TestFooterRoundTripOnRealArtifact (0.07s)
+=== RUN   TestFooterRowCountOnHandBuiltFooter
+--- PASS: TestFooterRowCountOnHandBuiltFooter (0.00s)
+=== RUN   TestFooterRejectsShortFile
+--- PASS: TestFooterRejectsShortFile (0.00s)
+=== RUN   TestFooterRejectsBadMagic
+--- PASS: TestFooterRejectsBadMagic (0.00s)
+=== RUN   TestFooterRejectsUnknownFormatVersion
+--- PASS: TestFooterRejectsUnknownFormatVersion (0.00s)
+=== RUN   TestFooterRejectsTrailerNotAdjacentFooter
+--- PASS: TestFooterRejectsTrailerNotAdjacentFooter (0.00s)
+=== RUN   TestFooterRejectsNegativeRowCount
+--- PASS: TestFooterRejectsNegativeRowCount (0.00s)
+=== RUN   TestFooterRejectsMissingFile
+--- PASS: TestFooterRejectsMissingFile (0.00s)
+=== RUN   TestLockIsExclusive
+--- PASS: TestLockIsExclusive (0.00s)
+=== RUN   TestLockReleasedAllowsReacquire
+--- PASS: TestLockReleasedAllowsReacquire (0.00s)
+=== RUN   TestLockReleaseIsIdempotent
+--- PASS: TestLockReleaseIsIdempotent (0.00s)
+=== RUN   TestNewRunnerRefusesWhenLockHeld
+--- PASS: TestNewRunnerRefusesWhenLockHeld (0.00s)
+=== RUN   TestNewRunnerReleasesLockOnClose
+--- PASS: TestNewRunnerReleasesLockOnClose (0.00s)
+=== RUN   TestNewRunnerCloseIsIdempotent
+--- PASS: TestNewRunnerCloseIsIdempotent (0.00s)
+=== RUN   TestNewRunnerReleasesLockWhenSealerFails
+--- PASS: TestNewRunnerReleasesLockWhenSealerFails (0.00s)
+=== RUN   TestNewRunnerNeverCreatesRoot
+--- PASS: TestNewRunnerNeverCreatesRoot (0.00s)
+=== RUN   TestLoopRunsFirstRoundImmediately
+--- PASS: TestLoopRunsFirstRoundImmediately (0.05s)
+=== RUN   TestLoopRepeatsRoundsOnPollInterval
+--- PASS: TestLoopRepeatsRoundsOnPollInterval (0.12s)
+=== RUN   TestLoopStopsOnContextCancel
+--- PASS: TestLoopStopsOnContextCancel (0.10s)
+=== RUN   TestLoopKeepsRunningWhenRootIsUnavailable
+--- PASS: TestLoopKeepsRunningWhenRootIsUnavailable (0.06s)
+=== RUN   TestLoopStopsSealingAfterCancel
+--- PASS: TestLoopStopsSealingAfterCancel (0.00s)
+=== RUN   TestLoopReportsRootUnavailable
+--- PASS: TestLoopReportsRootUnavailable (0.00s)
+=== RUN   TestLoopNeverOverlapsRounds
+--- PASS: TestLoopNeverOverlapsRounds (0.15s)
+=== RUN   TestObserveTracksMinimumBytesPerRow
+--- PASS: TestObserveTracksMinimumBytesPerRow (0.01s)
+=== RUN   TestObserveTracksMaxRowsAndMinRatio
+--- PASS: TestObserveTracksMaxRowsAndMinRatio (0.00s)
+=== RUN   TestObserveWarnsAtHalfOfRowCap
+--- PASS: TestObserveWarnsAtHalfOfRowCap (0.00s)
+=== RUN   TestObserveLogsOneInfoLinePerSealedPart
+--- PASS: TestObserveLogsOneInfoLinePerSealedPart (0.00s)
+=== RUN   TestObserveSkipsUnreadableArtifact
+--- PASS: TestObserveSkipsUnreadableArtifact (0.00s)
+=== RUN   TestObserveSkipsDegenerateDenominator
+--- PASS: TestObserveSkipsDegenerateDenominator (0.00s)
+=== RUN   TestNewRunnerDefaultsMinAgeToThreeHours
+--- PASS: TestNewRunnerDefaultsMinAgeToThreeHours (0.00s)
+=== RUN   TestNewRunnerRejectsMinAgeAtOrBelowGatewayRollUpperBound
+--- PASS: TestNewRunnerRejectsMinAgeAtOrBelowGatewayRollUpperBound (0.00s)
+=== RUN   TestNewRunnerRejectsNonPowerOfTwoWindow
+--- PASS: TestNewRunnerRejectsNonPowerOfTwoWindow (0.00s)
+=== RUN   TestRootGuardRejectsFilesystemRoot
+--- PASS: TestRootGuardRejectsFilesystemRoot (0.00s)
+=== RUN   TestRootGuardRejectsRelativePath
+--- PASS: TestRootGuardRejectsRelativePath (0.00s)
+=== RUN   TestRootGuardNeverCreatesRoot
+--- PASS: TestRootGuardNeverCreatesRoot (0.00s)
+=== RUN   TestRootGuardCheckDetectsIdentityChange
+--- PASS: TestRootGuardCheckDetectsIdentityChange (0.00s)
+=== RUN   TestRootGuardCheckReportsVanishedRoot
+--- PASS: TestRootGuardCheckReportsVanishedRoot (0.00s)
+=== RUN   TestRootGuardBaselineIsNonEmpty
+--- PASS: TestRootGuardBaselineIsNonEmpty (0.00s)
+=== RUN   TestRootGuardRejectsWhenBaselineCannotBeTaken
+--- PASS: TestRootGuardRejectsWhenBaselineCannotBeTaken (0.00s)
+=== RUN   TestRoundSealsEveryEligiblePart
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.159+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000000 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart1933225202/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart1933225202/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart1933225202/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst: no such file or directory"
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.159+08:00 level=ERROR msg="trace-sealer 封块失败" kind=seal_failed note="可重试（保留 spool，等下一轮）" ref=2026-10-08/blue/part-000001 spool="/datalog/trace-archive-v4/spool/dt=2026-10-08/inst=blue/part-000001.jsonl" err="tracearchive: 封块失败: 子进程退出 37"
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.159+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000002 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart1933225202/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart1933225202/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart1933225202/001/dt=2026-10-08/inst=blue/part-000002.jsonl.zst: no such file or directory"
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.159+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000003 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart1933225202/001/dt=2026-10-08/inst=blue/part-000003.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart1933225202/001/dt=2026-10-08/inst=blue/part-000003.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundSealsEveryEligiblePart1933225202/001/dt=2026-10-08/inst=blue/part-000003.jsonl.zst: no such file or directory"
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.159+08:00 level=INFO msg="trace-sealer round" reason=round_failed eligible=4 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=0 seal_failed=1 sealed=3 too_many_rows=0 unknown_failed=0 duration=149.792µs
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.159+08:00 level=WARN msg="trace-sealer 轮次告警" reason=round_failed eligible=4 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=0 seal_failed=1 sealed=3 too_many_rows=0 unknown_failed=0 duration=149.792µs
+--- PASS: TestRoundSealsEveryEligiblePart (0.00s)
+=== RUN   TestRoundTreatsPartExistsAsIdempotentNoop
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.159+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000001 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundTreatsPartExistsAsIdempotentNoop2501463307/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundTreatsPartExistsAsIdempotentNoop2501463307/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundTreatsPartExistsAsIdempotentNoop2501463307/001/dt=2026-10-08/inst=blue/part-000001.jsonl.zst: no such file or directory"
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.159+08:00 level=INFO msg="trace-sealer round" reason="" eligible=2 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=1 row_mismatch=0 seal_failed=0 sealed=1 too_many_rows=0 unknown_failed=0 duration=45.792µs
+--- PASS: TestRoundTreatsPartExistsAsIdempotentNoop (0.00s)
+=== RUN   TestRoundSeparatesPermanentFromRetryable
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.160+08:00 level=ERROR msg="trace-sealer 封块失败" kind=too_many_rows note=永久（需人工介入，重试不会成功） ref=2026-10-08/blue/part-000000 spool="/datalog/trace-archive-v4/spool/dt=2026-10-08/inst=blue/part-000000.jsonl" err="tracearchive: spool 行数超过 trailer 条目数上界: 行数=8388609"
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.160+08:00 level=ERROR msg="trace-sealer 封块失败" kind=row_count_mismatch note="可重试（保留 spool，等下一轮）" ref=2026-10-08/blue/part-000001 spool="/datalog/trace-archive-v4/spool/dt=2026-10-08/inst=blue/part-000001.jsonl" err="tracearchive: 行数不符: 行数不符"
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.160+08:00 level=INFO msg="trace-sealer round" reason=too_many_rows eligible=2 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=1 seal_failed=0 sealed=0 too_many_rows=1 unknown_failed=0 duration=51.167µs
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.160+08:00 level=ERROR msg="trace-sealer 轮次告警" reason=too_many_rows eligible=2 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=1 seal_failed=0 sealed=0 too_many_rows=1 unknown_failed=0 duration=51.167µs
+--- PASS: TestRoundSeparatesPermanentFromRetryable (0.00s)
+=== RUN   TestRoundCountsUnknownFailuresAsFailures
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.161+08:00 level=ERROR msg="trace-sealer 封块失败" kind=unknown note=未分类（按最坏处理） ref=2026-10-08/blue/part-000000 spool="/datalog/trace-archive-v4/spool/dt=2026-10-08/inst=blue/part-000000.jsonl" err="EIO：底层 IO 抖动"
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.161+08:00 level=INFO msg="trace-sealer round" reason=unknown_failure eligible=1 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=0 seal_failed=0 sealed=0 too_many_rows=0 unknown_failed=1 duration=60.459µs
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.161+08:00 level=ERROR msg="trace-sealer 轮次告警" reason=unknown_failure eligible=1 max_rows=0 min_bytes_per_row=0 min_ratio=0 part_exists=0 row_mismatch=0 seal_failed=0 sealed=0 too_many_rows=0 unknown_failed=1 duration=60.459µs
+--- PASS: TestRoundCountsUnknownFailuresAsFailures (0.00s)
+=== RUN   TestRoundCancellationStopsBeforeNextSeal
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.162+08:00 level=ERROR msg="trace-sealer 读不出产物的行数（本块的观测量不计入本轮；产物本身已经封好）" reason=footer_unreadable ref=2026-10-08/blue/part-000000 part_path="/var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundCancellationStopsBeforeNextSeal1984443664/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst" err="tracesealer: 打开产物 /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundCancellationStopsBeforeNextSeal1984443664/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst 失败: open /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/TestRoundCancellationStopsBeforeNextSeal1984443664/001/dt=2026-10-08/inst=blue/part-000000.jsonl.zst: no such file or directory"
+--- PASS: TestRoundCancellationStopsBeforeNextSeal (0.00s)
+=== RUN   TestRoundDoesNotSwallowListError
+2026/10/09 12:24:33 time=2026-10-09T12:24:33.162+08:00 level=ERROR msg="trace-sealer 列举待封块失败" err="读 spool 根目录失败: permission denied"
+--- PASS: TestRoundDoesNotSwallowListError (0.00s)
+PASS
+ok  	github.com/example/llm-gateway/tests/tracesealer	0.623s
+tests_exit=0

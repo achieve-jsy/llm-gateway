@@ -1,0 +1,68 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = a5aed61ef0f793e8c402741d0acdcb1ae4ec94a5
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = 8c32ae2c3ae9a82651632cf163de7e1bb80b80af253014cabb1e8b2068aa1b7d  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-5-isolate.py)
+名字清单 sha256          = 685b625b04a968aee909cdf9ec40810ba030566136bd0703d10ed7827538b46b  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-5-isolate-names.txt)
+名字清单条数             = 5
+清单推导命令             = grep -h '^func Test' tests/deploy/trace_isolate_script_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 5 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-kg6fsclz
+被测文件 sha256          = 3be89f11ef11ce3d21909cef85d79d1d7aefc307f019381485da95c59e72aba0  deploy/systemd/isolate-old-trace-archive.sh
+测试文件 sha256          = 9ba416fe158cb34c2088239aea330bad631d8a388024cd49eb322b30881e0ccb  tests/deploy/trace_build_contract_test.go
+测试文件 sha256          = ad4acb1222923184f965e9d54c59875522dbc9d8a95ea0db4b86d030822060ad  tests/deploy/trace_isolate_script_test.go
+测试文件 sha256          = c8f1666d28bed7e17d3a48c565a2c99a02ab6c4ffa8f2cc3cd9270b041637047  tests/deploy/trace_sealer_unit_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] 隔离脚本必须fail-fast
+      文件=deploy/systemd/isolate-old-trace-archive.sh  正则=set -euo pipefail  期望=present  实际=命中 'set -euo pipefail'
+      理由=脚本一次跑完「留证 → 审查 → 停 → mask → 复核」，中间任何一步失败都必须立刻中止；`-u` 还要让 `$NEW_ROOT` 一类拼错立即暴露。取值要求 ⇒ 静态检查。
+- [PASS] 删除谓词审查覆盖find-delete
+      文件=deploy/systemd/isolate-old-trace-archive.sh  正则=find\[\[:space:\]\]\.\*-delete  期望=present  实际=命中 'find[[:space:]].*-delete'
+      理由=旧脚本的清理形态是 `find <根> -mtime +5 -delete`；只审 `rm -rf` 会漏掉最危险的那条分支（作用在 /datalog 上就会删掉新树）。行为面由 TestIsolateScriptRefusesWhenDeletionPredicateTouchesNewRoot 承载。
+- [PASS] 删除谓词审查覆盖rsync-delete
+      文件=deploy/systemd/isolate-old-trace-archive.sh  正则=rsync\[\[:space:\]\]\.\*--delete  期望=present  实际=命中 'rsync[[:space:]].*--delete'
+      理由=同族的第三种删除形态。正则覆盖率是形态要求 ⇒ 静态检查；行为面同上。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 脚本**默认 dry-run**：`--confirm` 之前不得有任何变更动作（误敲一次不能动生产） | `m01_默认不再dry-run` | — | 杀手 = TestIsolateScriptDefaultIsDryRun（它还断言 dry-run 分支 `exit 0`，并断言闸门出现在 disable/mask **之前**）。 |
+| 删除谓词审查：命中新树（或 /datalog 顶层）⇒ `exit 3` 直接 STOP，且审查在 mask 之前 | `m02_命中新树不STOP` | `删除谓词审查覆盖find-delete`, `删除谓词审查覆盖rsync-delete` | 杀手 = TestIsolateScriptRefusesWhenDeletionPredicateTouchesNewRoot；两条静态检查覆盖「审查了哪几种删除形态」（rm -rf / find -delete / rsync --delete），行为面覆盖「命中就 STOP」。 |
+| 变更面只有 `disable --now` + `mask`，且必须复核 is-active 与 list-timers，并打印回滚命令 | `m03_mask改unmask`, `m04_删掉回滚提示` | — | 杀手 = TestIsolateScriptStopsAndMasksTimer（同时反向断言脚本里没有 `systemctl unmask` —— 那是回滚脚本的事）。 |
+| 脚本必须 fail-fast（`set -euo pipefail`） | — | `隔离脚本必须fail-fast` | 取值要求 ⇒ 静态检查（没有任何变异形态能让它变成断言红）。 |
+
+计划要求总数 = 4；引用到的变异 = 4；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=5 ran=5 diff=0 PASS=5 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_默认不再dry-run | 红 | names=5 ran=5 diff=0 PASS=4 SKIP=0 FAIL=1 | TestIsolateScriptDefaultIsDryRun |
+| m02_命中新树不STOP | 红 | names=5 ran=5 diff=0 PASS=4 SKIP=0 FAIL=1 | TestIsolateScriptRefusesWhenDeletionPredicateTouchesNewRoot |
+| m03_mask改unmask | 红 | names=5 ran=5 diff=0 PASS=2 SKIP=0 FAIL=3 | TestIsolateScriptDefaultIsDryRun, TestIsolateScriptRefusesWhenDeletionPredicateTouchesNewRoot, TestIsolateScriptStopsAndMasksTimer |
+| m04_删掉回滚提示 | 红 | names=5 ran=5 diff=0 PASS=4 SKIP=0 FAIL=1 | TestIsolateScriptStopsAndMasksTimer |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 4
+集合里的变异总数          = 4（本次运行 == 全集 ✓）
+断言支撑的红             = 4 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 4 = 4 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

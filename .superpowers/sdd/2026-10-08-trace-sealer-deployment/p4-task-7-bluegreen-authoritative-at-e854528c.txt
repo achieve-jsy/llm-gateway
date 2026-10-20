@@ -1,0 +1,86 @@
+## 证据绑定（这些是事实，不是声明）
+git rev-parse HEAD       = e854528ca3bdf960ca2e141200bbd119c86004a4
+git status --porcelain   = (空)
+工具自身 sha256          = 10dea750fec073af9fd5b3af262ad6ec6f020aefa223da6b079e1c5a9cf708f8  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/trace_mutate.py)
+变异集合 sha256          = b62309b0de73d1c24d39d16b8b8094c72b83dcfd9c68a3e83a7dc4646188aa7f  (/Users/jsy/Public/self_code/llm-gateway/.worktrees/trace-sealer/tools/trace-mutate/sets/p4-task-7-bluegreen.py)
+名字清单 sha256          = df7b3b42df299d219c8a13c3564e8debb2bcedc1912b0d5ddf4a21a2b143db4b  (/tmp/p4t11-evi/p4-task-7-bluegreen-names.txt)
+名字清单条数             = 6
+清单推导命令             = grep -h '^func Test' tests/deploy/trace_bluegreen_runbook_test.go | sed -E 's/^func (Test[A-Za-z0-9_]*).*/\1/' | sort
+推导结果与清单比对       = 一致（推导出 6 条）
+pristine 来源            = git archive HEAD | tar -x  →  /var/folders/vm/m1785wd52_182p2q1z7yl77c0000gn/T/trace-mutate-ox5ev0qm
+被测文件 sha256          = f4d9704ae50a79a09638e01074efa6fdd725a3c415a4980474589344593334a0  deploy/blue-green/README.md
+测试文件 sha256          = 036dce9bc18421c897f7b368c74c610a909f051171367ca96e8d87cab5fba5aa  tests/deploy/trace_a3_compose_test.go
+测试文件 sha256          = 8121fdce81c2d3ba4257fbb7b4c3c570e56effc318e4e979c272a302097b8416  tests/deploy/trace_bluegreen_runbook_test.go
+测试文件 sha256          = 9ba416fe158cb34c2088239aea330bad631d8a388024cd49eb322b30881e0ccb  tests/deploy/trace_build_contract_test.go
+测试文件 sha256          = e9540b2e80c284d53cf6525b749117ed26a469d035951924b88215ba2ce8360b  tests/deploy/trace_compose_mount_test.go
+测试文件 sha256          = 12b7a0726ea1bbb8c058bdafc2e50aa98b887b6450270ebe715a3a290a584862  tests/deploy/trace_isolate_script_test.go
+测试文件 sha256          = 4822214387ab4458c9f88c660042904a197c9e704bd2f20d9a626eb6e39fa0bc  tests/deploy/trace_runbook_test.go
+测试文件 sha256          = 28418e7dcc2a4654061af42af882529b743d74894ab952ba96f6c4abaf17214a  tests/deploy/trace_sealer_unit_test.go
+子进程环境（白名单）     = HOME LANG LOGNAME PATH SHELL TMPDIR USER
+父进程中被剔除的敏感变量 = （无）
+
+## 静态检查（追加 G：变异测不到的要求必须有静态检查行）
+
+- [PASS] 蓝绿脚本不得出现TRACE_BODY键族
+      文件=deploy/blue-green/deploy-blue-green.sh  正则=TRACE_BODY  期望=absent  实际=未命中
+      理由=计划任务 7 步骤 3.1：`deploy/blue-green/deploy-blue-green.sh` **不需要任何改动**（它只管容器与 nginx，不认识任何 TRACE_BODY_ 键）⇒ 该脚本里不得出现这一族键名。**不存在性**要求 ⇒ 静态检查。
+- [PASS] 剧本必须钉住颜色↔inst静态对应
+      文件=deploy/blue-green/README.md  正则=TRACE_BODY_INST=blue  期望=present  实际=命中 'TRACE_BODY_INST=blue'
+      理由=计划任务 7 步骤 3.1：blue 文件 ⇒ `TRACE_BODY_INST=blue`；green 文件 ⇒ `green`。**存在性**要求 ⇒ 静态检查（同一批文字另由 TestBlueGreenRunbookCoversSwitch 断言）。
+- [PASS] 剧本必须含读侧硬门D73
+      文件=deploy/blue-green/README.md  正则=同一 root 的读侧可用之前，不得设置写侧开关  期望=present  实际=命中 '同一 root 的读侧可用之前，不得设置写侧开关'
+      理由=计划任务 7 步骤 3.5 + D73：读侧未就绪前不得取消注释写侧开关。**存在性**要求 ⇒ 静态检查（可失败性另由 m01 与探针承载）。
+- [PASS] 剧本必须含功能关闭的SQL比对
+      文件=deploy/blue-green/README.md  正则=SELECT count\(\*\) AS ref_rows  期望=present  实际=命中 'SELECT count(*) AS ref_rows'
+      理由=计划任务 7 步骤 3.4：功能关闭必须逐字节等价，并给出可粘贴的 SQL 比对。**存在性**要求 ⇒ 静态检查（可失败性另由 m03 与探针承载）。
+- [PASS] 剧本必须含旧颜色drain无损
+      文件=deploy/blue-green/README.md  正则=drain 期间旧颜色功能仍是关闭的  期望=present  实际=命中 'drain 期间旧颜色功能仍是关闭的'
+      理由=计划任务 7 步骤 3.6：drain 期间旧颜色功能仍关闭 ⇒ 正文继续进 jsonb ⇒ 无数据损失。**存在性**要求 ⇒ 静态检查（可失败性由探针实测）。
+- [PASS] 剧本必须含禁止事项
+      文件=deploy/blue-green/README.md  正则=不得在两个颜色里设同一个 `inst`  期望=present  实际=命中 '不得在两个颜色里设同一个 `inst`'
+      理由=计划任务 7 步骤 3.7：不得在两个颜色里设同一个 inst / 不得把 TRACE_BODY_* 放进config/prod.yaml / 不得在功能开启后停止 sealer。**存在性**要求 ⇒ 静态检查（可失败性由探针实测）。
+
+## 映射表：计划要求的变异 → 集合里的条目（追加 G）
+
+| 计划要求 | 变异集合条目 | 静态检查 | 说明 |
+|---|---|---|---|
+| 颜色↔inst 的静态对应（blue ⇒ inst=blue、green ⇒ inst=green），且 deploy-blue-green.sh 零改动 | — | `剧本必须钉住颜色↔inst静态对应`, `蓝绿脚本不得出现TRACE_BODY键族` | **存在性/不存在性**要求 ⇒ 两行静态检查；同一批文字另由 TestBlueGreenRunbookCoversSwitch 的在册断言承载（颜色写反 ⇒ 该用例转红）。 |
+| 切换：次序（起新 → /health+/ready → nginx 原子切流 → drain 旧 → 停旧）、抄录 .active-color、读侧按 body_ref_inst 定位（H2） | `m04_改用配置里的inst` | — | 杀手 = TestBlueGreenRunbookCoversSwitch（m04 把 `body_ref_inst` 换成「配置里的 inst」⇒该用例在 H2 那条 `require.Contains` 处转红；次序与 .active-color 由同一用例的其他断言承载）。 |
+| 回滚：`--rollback` 切回旧颜色 + 旧 inst 数据仍可读 + **sealer 不随功能回滚而停止** | `m02_回滚可停sealer` | — | 杀手 = TestBlueGreenRunbookCoversRollback（m02 把「sealer 必须继续运行」改成「可随功能一并停掉」⇒ 该用例在「功能回滚**不**停止」那条断言处转红）。 |
+| 功能降级：逐字节等价（body_ref_* 全 NULL + body_missing=false + 正文在 jsonb 列）+ 可粘贴的 SQL 比对 | `m03_删掉SQL比对` | `剧本必须含功能关闭的SQL比对` | 杀手 = TestBlueGreenRunbookCoversFeatureOffByteIdentical（m03 删掉 SQL 块 ⇒ `SELECT count(*) AS ref_rows` 断言转红）。 |
+| 硬门（⛔ 停止点）：同一 root 的读侧未就绪前不得取消注释写侧开关（D73），含 findmnt 与 ≥5 天保留量 | `m01_删掉硬门段落` | `剧本必须含读侧硬门D73` | 杀手 = TestBlueGreenRunbookHasReadSideHardGate（m01 删掉整节 ⇒ 五条断言全部失去文字）。 |
+| 旧颜色处置：drain 期间功能仍关闭 ⇒ 正文继续进 jsonb ⇒ 无数据损失；drain 后按新编排重建 | — | `剧本必须含旧颜色drain无损` | **存在性**要求 ⇒ 静态检查；另由 TestBlueGreenRunbookCoversOldColorDrain 的在册断言承载（可失败性由探针实测）。 |
+| 禁止事项：不得两个颜色同一个 inst、不得把 TRACE_BODY_* 放进 config/prod.yaml、不得在功能开启后停止 sealer | — | `剧本必须含禁止事项` | **存在性**要求 ⇒ 静态检查（可失败性由探针实测）。 |
+| D71：剧本里不得出现已被裁定的无效键（封块间隔键） | `m05_插入无效键` | — | 杀手 = TestBlueGreenRunbookNeverMentionsSealInterval（`require.NotContains`）。 |
+
+计划要求总数 = 8；引用到的变异 = 5；未被任何计划要求引用的变异 = 0
+未被引用的变异（来自评审轮次裁决，不是缺口；它们同样在 git-tracked 集合里，删掉会被 git diff 看见）:
+
+映射表核对：每条计划要求都有对应条目 ✓
+原始侧自证: OK names=6 ran=6 diff=0 PASS=6 SKIP=0 FAIL=0
+
+| 变异 | 判定 | 自证（名字/执行/diff/PASS/SKIP/FAIL） | 杀死的用例 |
+|---|---|---|---|
+| m01_删掉硬门段落 | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestBlueGreenRunbookHasReadSideHardGate |
+| m02_回滚可停sealer | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestBlueGreenRunbookCoversRollback |
+| m03_删掉SQL比对 | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestBlueGreenRunbookCoversFeatureOffByteIdentical |
+| m04_改用配置里的inst | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestBlueGreenRunbookCoversSwitch |
+| m05_插入无效键 | 红 | names=6 ran=6 diff=0 PASS=5 SKIP=0 FAIL=1 | TestBlueGreenRunbookNeverMentionsSealInterval |
+
+
+还原校验: 一致
+清单推导核对: 一致
+静态检查: 全部 PASS
+映射表: 无缺口
+
+## 计数口径
+变异总数                 = 5
+集合里的变异总数          = 5（本次运行 == 全集 ✓）
+断言支撑的红             = 5 条（清单全部执行 + 全部终判 + SKIP=0）
+崩溃/超时/编译红         = 0 条（**没有**「用例执行+终判」证据，但绝不可能是绿）
+允许的绿（集合里登记了理由） = 0 条
+未登记的绿（必须为 0）     = 0 条
+证据无效（必须为 0）       = 0 条
+
+合计: 5 = 5 断言支撑 + 0 崩溃/超时/编译 + 0 允许的绿
+table_exit=0

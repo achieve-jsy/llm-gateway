@@ -1,0 +1,7 @@
+定位校验（基于 HEAD:internal/tracesealer/lock.go，sha256=2835c163e3dda8d1）
+OK  m02_排他变共享
+OK  m03_冲突不返回哨兵
+OK  m04_释放不解锁
+OK  m05_释放不置空
+全部 4 条变异的模式都在 HEAD 上唯一定位 ✓
+check_exit=0

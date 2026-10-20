@@ -121,10 +121,11 @@ out 合计 =  4,369,707,248 +  5,102,753,238 +  6,650,911,874 +  8,285,390,289 +
 - **「stdin」这一点其实等价**：sealer 也是把 spool 文件放到子进程 **stdin**（`internal/tracearchive/sealer.go:476`
   `cmd.Stdin = src`），参数 `internal/tracearchive/sealer.go:474` = `["-19","--long=29","-T1","-c"]`，
   即**也是 `zstd … -c` 往 stdout 写流**。所以「读 stdin / 写 stdout」不是两者的差异点。
-- **不等价的是这四点**：① **级别 9 vs 19**；② **有无 `--long=29`**（sealer 默认窗口 512 MiB ⇒ `--long=29`）；
+- **不等价的是这五点**：① **级别 9 vs 19**；② **有无 `--long=29`**（sealer 默认窗口 512 MiB ⇒ `--long=29`）；
   ③ **`-T4` vs `-T1`**（sealer 代码注释：多并发会把流切成独立块，**显著削弱压缩比**）；
   ④ **多了一层 `pigz -dc`** ⇒ 输入语料是**二次压缩**的历史 gzip 数据，与 A3 的未压缩正文本质不同；
-  ⑤（产物层）sealer 的产物是**冻结包格式**（zstd 帧 ＋ Go 侧追加 trailer/footer），本批产物是没有 trailer 的裸 `.zst`
+  ⑤（产物层）sealer 的产物是**冻结包格式**（zstd 帧 ＋ **Go 侧**追加 trailer/footer），本批产物**只有 zstd CLI 写出的帧**
+  —— trailer/footer 是冻结包 `Sealer` 的 Go 侧行为，plain CLI **不可能**产出（**本文件不就其文件扩展名下定论**，转录里未给）
   ⇒ **读侧 `tracearchive.NewReader` 读不了这批文件**（不同产物家族）。
 - ⇒ 结论：**不可当作 sealer 封块产物的等价测量**。
 

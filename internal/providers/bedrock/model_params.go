@@ -39,6 +39,13 @@ type modelParamSupport struct {
 	TopP bool
 	// MinMaxTokens 是下发 max_tokens 时的下限，0 表示无特殊下限。
 	MinMaxTokens int32
+	// ToolSchemaLookaround 表示该模型的上游校验器是否接受工具 JSON Schema 中
+	// pattern 的环视（lookaround）与反向引用构造。
+	//
+	// 实测 Anthropic 系支持；XAI Grok 会以
+	// "The task request was rejected by the target" 拒绝整个请求（见 tool_guard.go）。
+	// 其余家族未逐一实测，按“宁可不报错”的保守策略一律剥离。
+	ToolSchemaLookaround bool
 }
 
 // paramSupportForModel 按上游模型 ID 的厂商前缀推断参数支持情况。
@@ -56,7 +63,13 @@ func paramSupportForModel(modelID string) modelParamSupport {
 	case strings.HasPrefix(id, "openai."), strings.HasPrefix(id, "xai."):
 		return modelParamSupport{Temperature: false, TopP: false, MinMaxTokens: bedrockOpenAIMinMaxTokens}
 	default:
-		return modelParamSupport{Temperature: true, TopP: true, MinMaxTokens: 1}
+		// Anthropic 系支持环视；其余（含未实测家族）保守剥离。
+		return modelParamSupport{
+			Temperature:          true,
+			TopP:                 true,
+			MinMaxTokens:         1,
+			ToolSchemaLookaround: strings.HasPrefix(id, "anthropic."),
+		}
 	}
 }
 

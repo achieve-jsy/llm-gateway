@@ -87,6 +87,8 @@ func TestPutPendingScheduleRequiresExplicitReplaceAndPreservesAuditRow(t *testin
 		dimension_key text NOT NULL, model_tier_id text, period_type text NOT NULL,
 		target_limit_usd numeric NOT NULL, effective_at datetime NOT NULL, reason text NOT NULL,
 		created_by text NOT NULL, status text NOT NULL, failure_reason text,
+		schedule_operation varchar(8) NOT NULL DEFAULT 'set'
+			CHECK (schedule_operation IN ('set','clear')),
 		created_at datetime, updated_at datetime
 	)`).Error)
 	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX uniq_budget_schedule_pending

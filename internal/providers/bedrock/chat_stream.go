@@ -3,6 +3,7 @@ package bedrock
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -72,6 +73,26 @@ type streamConverter struct {
 	pendingStopReason brtypes.StopReason
 	havePendingStop   bool
 	finishSent        bool
+
+	// started 记录是否收到过 messageStart。Converse 的正常事件流一定以
+	// messageStart 开头，因此“没有任何 messageStart 就关闭”只能解释为上游
+	// 没有真正产出回答（既没有内容，也没有抛出错误）。
+	started bool
+}
+
+// errEmptyConverseStream 表示 Converse 事件流在没有任何 messageStart 的情况下结束。
+var errEmptyConverseStream = errors.New("bedrock converse stream closed without any event")
+
+// streamEndError 判断一次“无 SDK 错误”的流关闭是否其实代表上游失败。
+//
+// 现场（2026-10-10）：xAI 拒绝请求时，流式调用可能既不产出内容、也不抛出错误
+// 就结束；网关会给客户端补上 [DONE]，让它以为回答正常结束（客户端表现为
+// "Streaming response ended before any complete data was received"）。
+func streamEndError(started bool) error {
+	if started {
+		return nil
+	}
+	return errEmptyConverseStream
 }
 
 type toolStreamState struct {
@@ -106,6 +127,11 @@ func (s *streamConverter) Read(p []byte) (int, error) {
 			if streamErr := s.stream.GetStream().Err(); streamErr != nil {
 				s.done = true
 				return 0, mapAWSError(streamErr)
+			}
+			// 上游没有产出任何事件就关闭：不能当成正常结束（见 streamEndError）。
+			if endErr := streamEndError(s.started); endErr != nil {
+				s.done = true
+				return 0, mapAWSError(endErr)
 			}
 			// Metadata never arrived — emit the deferred finish chunk now
 			// (without usage) so we never swallow it.
@@ -146,6 +172,7 @@ func (s *streamConverter) append(chunk string) {
 func (s *streamConverter) handleEvent(ev brtypes.ConverseStreamOutput) {
 	switch e := ev.(type) {
 	case *brtypes.ConverseStreamOutputMemberMessageStart:
+		s.started = true
 		role := string(e.Value.Role)
 		if role == "" {
 			role = "assistant"

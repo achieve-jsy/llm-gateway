@@ -399,6 +399,8 @@ func TestBudgetTierPostgresConcurrencyContracts(t *testing.T) {
 			dimension_key text NOT NULL, model_tier_id uuid, period_type text NOT NULL,
 			target_limit_usd numeric NOT NULL, effective_at timestamptz NOT NULL, reason text NOT NULL,
 			created_by uuid NOT NULL, status text NOT NULL, failure_reason text,
+			schedule_operation character varying(8) NOT NULL DEFAULT 'set'
+				CHECK (schedule_operation IN ('set','clear')),
 			created_at timestamptz, updated_at timestamptz
 		)
 	`).Error)
@@ -605,6 +607,8 @@ func TestLifecycleAllocationFirstAvoidsConfigDeadlockAndStaleFailure(t *testing.
 			dimension_key varchar(48) NOT NULL, model_tier_id uuid, period_type varchar(8) NOT NULL,
 			target_limit_usd numeric(18,6) NOT NULL, effective_at timestamptz NOT NULL,
 			reason text NOT NULL, created_by uuid NOT NULL, status varchar(16) NOT NULL,
+			schedule_operation character varying(8) NOT NULL DEFAULT 'set'
+				CHECK (schedule_operation IN ('set','clear')),
 			failure_reason text, created_at timestamptz, updated_at timestamptz
 		);
 		CREATE TABLE budget_temporary_overrides (

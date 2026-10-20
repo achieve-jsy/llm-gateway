@@ -70,6 +70,11 @@ func openModelTierTestDBWithAllTables(t *testing.T) *gorm.DB {
 			override_supports_vision boolean NOT NULL DEFAULT false,
 			override_supports_function_calling boolean NOT NULL DEFAULT false,
 			override_supports_tool_choice boolean NOT NULL DEFAULT false,
+			override_mode text DEFAULT NULL,
+			override_context_length integer DEFAULT NULL,
+			override_max_output_tokens integer DEFAULT NULL,
+			sticky_enabled boolean NOT NULL DEFAULT false,
+			sticky_ttl_seconds integer NOT NULL DEFAULT 3600,
 			quota_rpm integer,
 			quota_max_concurrency integer,
 			budget_tier_id text

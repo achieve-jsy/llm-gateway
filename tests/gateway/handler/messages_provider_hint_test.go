@@ -78,7 +78,7 @@ func (f *fakeMessagesScheduler) SetCooldown(_ string, _ time.Duration) {}
 func (f *fakeMessagesScheduler) PersistSticky(_ context.Context, _, _ string, _ *scheduler.RouteDecision) {
 }
 
-func (f *fakeMessagesScheduler) UpdateSticky(_ context.Context, _, _, _ string) {}
+func (f *fakeMessagesScheduler) UpdateSticky(_ context.Context, _, _, _, _ string) bool { return false }
 
 func TestMessagesHandler_SetsProviderHintFromGroupDispatch(t *testing.T) {
 	gin.SetMode(gin.TestMode)

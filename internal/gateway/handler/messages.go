@@ -335,7 +335,7 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 				originalModel,
 				estimatePromptTokens(req.Messages),
 			)
-			HandleStreamResponse(c, anthStream)
+			HandleStreamResponseAs(c, anthStream, DialectAnthropic)
 			return
 		}
 		lastErr = err

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 )
@@ -133,7 +134,25 @@ func (a *anthropicStreamAdapter) convert() {
 		}
 	}
 
-	// If scanner error or EOF without [DONE], still flush (guarded idempotent).
+	// 上游流中途出错（如 Bedrock ConverseStream 回了一个 validationException 事件，
+	// SDK 会把它作为 Read 错误抛出）：必须把错误沿着 pipe 传给
+	// HandleStreamResponseAs，由它写出 Anthropic 的 event: error。
+	//
+	// 修复前这里忽略 scanner.Err() 并照样 flushAndFinish()，等于给客户端发了一个
+	// “正常结束、内容为空”的 message_stop，Claude Code 因此报
+	// "Streaming response ended before any complete data was received" 并做一次
+	// 非流式重试（重试才拿到真正的 400）。
+	if err := scanner.Err(); err != nil {
+		slog.Error("anthropic stream: upstream stream error",
+			"request_id", a.state.requestID,
+			"model", a.state.model,
+			"error", err.Error(),
+		)
+		a.writer.CloseWithError(fmt.Errorf("upstream stream error: %w", err))
+		return
+	}
+
+	// 正常结束（[DONE] 之外的 EOF）：补齐收尾事件。
 	a.flushAndFinish()
 }
 

@@ -114,6 +114,11 @@ func setupQuotaTestDB(t *testing.T) *gorm.DB {
 		override_supports_vision INTEGER NOT NULL DEFAULT 0,
 		override_supports_function_calling INTEGER NOT NULL DEFAULT 0,
 		override_supports_tool_choice INTEGER NOT NULL DEFAULT 0,
+		override_mode TEXT DEFAULT NULL,
+		override_context_length INTEGER DEFAULT NULL,
+		override_max_output_tokens INTEGER DEFAULT NULL,
+		sticky_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+		sticky_ttl_seconds INTEGER NOT NULL DEFAULT 3600,
 		quota_rpm INTEGER,
 		quota_max_concurrency INTEGER,
 		budget_tier_id TEXT

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/handler"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
@@ -108,7 +109,7 @@ func TestModelTierBudgetContractFullyDefinesEveryP0Route(t *testing.T) {
 		"DELETE /model-tiers/:id", "PUT /groups/budget-tiers", "PUT /groups/:id/budget-tier",
 		"GET /budgets/:allocation_id/tier-limits", "PUT /budgets/:allocation_id/tier-limits",
 		"POST /budgets/tier-limits/batch/preview", "POST /budgets/tier-limits/batch/apply",
-		"GET /budgets/tier-usage", "GET /my/budget/tiers",
+		"GET /budgets/tier-usage", "GET /budgets/tier-limits", "GET /my/budget/tiers",
 	}
 	require.Len(t, document.ModelTierBudget.Routes, len(expectedRoutes))
 	for _, route := range expectedRoutes {
@@ -134,14 +135,15 @@ func TestModelTierBudgetContractFullyDefinesEveryP0Route(t *testing.T) {
 		}
 	}
 	require.Equal(t, []string{"include_archived"}, document.ModelTierBudget.Routes["GET /model-tiers"].QueryFields)
-	require.Equal(t, []string{"scope_type", "scope_id", "period_type", "model_tier_id", "group_id"}, document.ModelTierBudget.Routes["GET /budgets/tier-usage"].QueryFields)
+	require.Equal(t, []string{"scope_type", "scope_id", "scope_ids", "period_type", "model_tier_id", "group_id"}, document.ModelTierBudget.Routes["GET /budgets/tier-usage"].QueryFields)
+	require.Equal(t, []string{"allocation_ids"}, document.ModelTierBudget.Routes["GET /budgets/tier-limits"].QueryFields)
 	require.Equal(t, []any{}, document.ModelTierBudget.Routes["GET /model-tiers"].Empty["data"])
 	require.Equal(t, []any{}, document.ModelTierBudget.Routes["GET /budgets/:allocation_id/tier-limits"].Empty["tier_limits"])
 	require.Equal(t, []any{}, document.ModelTierBudget.Routes["GET /budgets/tier-usage"].Empty["items"])
 }
 
 func TestP0FoundationOwnsTierConstraintSnapshotSchemaAndContract(t *testing.T) {
-	foundation, err := os.ReadFile("../../atlas-migrations/20260711132830_add_model_tier_budget_foundation.sql")
+	foundation, err := os.ReadFile("../../atlas-migrations/20260716025000_add_model_tier_budget_foundation.sql")
 	require.NoError(t, err)
 	require.Contains(t, string(foundation), `"budget_tier_constraints_snapshot" jsonb NOT NULL DEFAULT '[]'`)
 	_, err = os.Stat("../../atlas-migrations/20260711140938_add_call_logs_budget_tier_constraints_snapshot.sql")
@@ -160,7 +162,8 @@ func expectedPermission(route string) string {
 		return "model_tier:manage"
 	case route == "GET /my/budget/tiers":
 		return "authenticated"
-	case route == "GET /budgets/:allocation_id/tier-limits" || route == "GET /budgets/tier-usage":
+	case route == "GET /budgets/:allocation_id/tier-limits" || route == "GET /budgets/tier-usage" ||
+		route == "GET /budgets/tier-limits":
 		return "budget:view:scoped"
 	default:
 		return "budget:set"
@@ -234,6 +237,9 @@ func (s *contractBudgetTierService) ApplyBatch(context.Context, rbac.Actor, serv
 	return &service.BatchTierLimitApplyResult{}, nil
 }
 func (s *contractBudgetTierService) QueryTierUsage(context.Context, rbac.Actor, service.TierUsageQueryInput) (*service.TierUsageResponse, error) {
+	return &service.TierUsageResponse{}, nil
+}
+func (s *contractBudgetTierService) QueryScopedTierUsage(context.Context, rbac.Actor, string, []string, budgetdomain.PeriodType) (*service.TierUsageResponse, error) {
 	return &service.TierUsageResponse{}, nil
 }
 func (s *contractBudgetTierService) GetMyBudgetTiers(context.Context, rbac.Actor) (*service.MyBudgetTiersResponse, error) {

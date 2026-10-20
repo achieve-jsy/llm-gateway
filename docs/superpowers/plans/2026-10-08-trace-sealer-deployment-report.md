@@ -17,6 +17,8 @@
 - **五项真实验收（A3 / A6 / A7 / A8 / 挂载消失 ≤1 tick）本轮一项都没有产生读数** —— 本机是 darwin/arm64，
   缺 Linux ＋ root ＋ 回环 ext4 ＋ docker 引擎 ＋ 真实 `/proc` ＋ 真实 PG ＋ zstd **1.4.8**。
   按 **E64** 口径全部**逐条登记为宿主执行清单**（§2、§6、§9），**不冒充、不用「形状」代替读数**。
+  （**E77-B 补注**：发起者转录的生产事实 —— `/usr/bin/zstd` v1.4.8 ＋ sha256、9 个**历史归档**文件的原地再压缩
+  量、转换后 `/datalog` 容量 —— 已如实登记在 §6 / §9-U2，但那**不是**上述五项验收的读数；**A6-① 仍待宿主执行**。）
 - 本计划因此交付到「**挂载在场 ＋ sealer 就位 ＋ 功能关闭**」为止；**开启写侧**是 D73 硬门之后的**显式人工动作**。
 - **「做完了代码」≠「验收通过」**：§9 的五条未关闭验收项**不得**因代码合并而勾掉。
 
@@ -86,7 +88,7 @@
 |---|---|---|---|---|
 | **A3** 真实盘满（步骤 5 七项读数） | **未执行** | 需要 Linux ＋ root（`fallocate`/`mkfs.ext4`/`mount -o loop`/`losetup`）＋ docker 引擎；本机 darwin/arm64 全缺 | `deploy/verify/trace-a3/run.sh`（步骤 4/5/6/7/9） | §9-U1；`p4-task-8-a3-deferral-at-d1bc8e8d.txt` |
 | **A7 进程级**（两个 `--once` 撞锁；边写边封） | **未执行**（**自动化半部已交付**：`p4-task-4-lock` / `p4-task-4-runner` 各 4 条断言红） | 进程级需要 A3 隔离实例 | `run.sh` 步骤 10（第二个 `--once` 必须退出码 1 ＋ 撞锁消息） | §9-U1 |
-| **A6-①** 生产压缩比（zstd **v1.4.8**） | **未执行** | 本机 `/opt/homebrew/bin/zstd` = **v1.5.7**；规格 §11.1 明写 10.26× 是 v1.4.8 专属 | `trace-sealer --once --zstd-binary /usr/bin/zstd --expected-zstd-version 1.4.8`（先 `touch -d '5 hours ago'`，**不得**改 `--min-age`） | §9-U2；`p4-task-9-host-deferral-at-7740bdbf.txt` |
+| **A6-①** 生产压缩比（zstd **v1.4.8**） | **未执行 —— 保持「待宿主执行」**（**部分前置已具备**：发起者转录的生产 `/usr/bin/zstd` = **v1.4.8** ＋ sha256；另有 **9** 个**历史归档**文件的原地再压缩经验值 —— **但那是离 A6-① 口径的另一件事**，见 §9-U2 的 **E77-B** 登记） | 本机 `/opt/homebrew/bin/zstd` = **v1.5.7**；规格 §11.1 明写 10.26× 是 v1.4.8 专属。**仍缺的**是 sealer `--once` 打出的 per-part `rows`/`uncompressed_bytes`/`artifact_bytes`/`ratio` ＋ 每轮汇总行（那批转换用的是 `zstd -9 -T4` ＋ **已 gzip 过**的历史语料，**不是**封块产物） | `trace-sealer --once --zstd-binary /usr/bin/zstd --expected-zstd-version 1.4.8`（先 `touch -d '5 hours ago'`，**不得**改 `--min-age`） | §9-U2；`p4-task-9-host-deferral-at-7740bdbf.txt`；`p4-task-12-a6-1-partial-evidence-at-52850d26.txt` |
 | **A6-②** Linux `/proc` 峰值标定（K=1/2/3 ＋ K=0 基线） | **未执行**（**形状**已由注入假 procfs 的 CLI 冒烟证过，**不是读数**） | 本机无 `/proc`；`decode-bench` 默认 procfs 路径在 darwin 上**响亮失败**（退出 1，刻意行为） | `go run ./cmd/trace-verify decode-bench --artifact <真实产物> --concurrency 1,2,3 --gc-modes on,off` | §9-U2/U5 |
 | **A8** 行数分布（min/p50/p95/max ＋ `bytes_per_row`） | **未执行**（**观测面**已交付：每个成功块一行 INFO、每轮汇总带三个量、越过一半即 WARN） | 需要真实流量 ＋ 真实 zstd 1.4.8 | `grep 'sealed part' <日志>`（4.1）；人造 `too_many_rows` 样本用 A3 环境（4.4） | §9-U3；`p4-task-10-host-deferral-at-d0581bba.txt` |
 | **挂载消失 ≤1 tick 闩锁** | **未执行 —— 前置条件不满足** | ① 写侧在部署配置里**关闭**（`deploy/blue-green/docker-compose.{blue,green}.yml:42` 的 `TRACE_BODY_ROOT` 两处都注释着）⇒ `sink == nil` ⇒ `TraceSpooler` **根本不构造** ⇒ 期望的 `root_unavailable`/`root-identity-mismatch` ERROR **恒不出现**，观察断言**恒真（空过）**；② 本机没有可 `umount` 的 `/datalog` | 撤挂载后连续观察 **≥3 个 tick**（`nsenter -m -t $(docker inspect -f '{{.State.Pid}}' llm-green-gateway) umount /datalog` ＋ `docker logs … | grep -E 'trace-spool.*(root_unavailable|root-identity-mismatch)'`） | §9-U4；`p4-task-11-host-deferral-at-e854528c.txt` |
@@ -178,14 +180,17 @@
 ## 6. 生产实测事实（当天重取）与旧定时器处置
 
 > 任务 12 步骤 4 第 6 条要求「当天重取的 `df -h` / `findmnt` / `zstd --version` / `.active-color` ＋ 旧定时器
-> `is-active`/`is-enabled` 输出」。**本节一条都没有产出** —— 本机没有生产宿主、没有 `/datalog`、没有 `/usr/bin/zstd`。
+> `is-active`/`is-enabled` 输出」。**本节**除**两处转录**（下表 `df -h` 与 `zstd --version` 两行的「部分」状态）**外一条都没有产出**
+> —— 本机没有生产宿主、没有 `/datalog`、没有 `/usr/bin/zstd`。**E77-B 订正**：那两处是**发起者转录**，
+> **不是**「当天重取」，**也**不是同一时点的配对读数 ⇒ **item 6 整体仍未完成**（缺 `findmnt` / `.active-color` /
+> 旧定时器 `is-active`/`is-enabled` ＋ 处置记录）。
 > **不得**把下面这些**计划登记的基线值**当作本轮实测：
 
 | 项目 | 状态 | 要求 |
 |---|---|---|
-| `df -h /datalog` | **待宿主执行**（当天实测） | 报告里必须给出**当天**实测值；计划登记的基线是 `407G 已用 / 153G 可用`（合计 560G，**72.7%**，2026-10-08），**引用时必须标注日期** |
+| `df -h /datalog` | **待宿主执行（当天实测）**；**E77-B 部分**：发起者转录「转换完成后 **321G 已用 / 239G 可用**」（并给「转换前**一度** 353G/207G」） | 报告里必须给出**当天**实测值；计划登记的基线是 `407G 已用 / 153G 可用`（合计 560G，**72.7%**，2026-10-08），**引用时必须标注日期**。⚠️ 转录的这组**不是**配对读数、**不是**当天重取 ⇒ **不进 A3/A6 验收**，只作容量现状登记（与释放量的对账见 §9-U2 的 E77-B 登记） |
 | `findmnt -T /datalog --output TARGET,SOURCE,FSTYPE` | **待宿主执行** | 必须显示 `TARGET=/datalog` 且 `FSTYPE` 是真实文件系统（D70） |
-| `/usr/bin/zstd --version` | **待宿主执行** | 期望 **v1.4.8**（本机是 v1.5.7） |
+| `/usr/bin/zstd --version` | **待宿主执行**；**E77-B 部分**：发起者转录生产 `/usr/bin/zstd` = **v1.4.8**，sha256 `d304445daa7e6429293dc02035063b7993fb6a489ee90d8851bff497952836dc` | 期望 **v1.4.8**（本机是 v1.5.7）。转录值**不是**「当场命令原文」，且**未**经 sealer 的 `--expected-zstd-version` 强制 ⇒ 只作**前置**登记 |
 | `.active-color` | **待宿主执行** | 蓝绿活跃颜色 |
 | 旧定时器：`systemctl is-active trace-archive.timer` / `is-enabled` | **待宿主执行** | 隔离前后各一次；隔离脚本 `deploy/systemd/isolate-old-trace-archive.sh`（默认 dry-run，`--confirm` 才动手） |
 | 旧定时器处置记录（选了哪个 R1 选项、为什么） | **待宿主执行** | 必须在 `--confirm` **之前**选定并写进上线记录（R1 的选项 1/2/3） |
@@ -247,6 +252,11 @@ $ zstd --version
 - **宿主**：**生产宿主**（`/usr/bin/zstd --version` = **v1.4.8**）＋ **Linux `/proc/<pid>/status`** ＋ 真实 PG ＋ 真实封块产物。
 - **待执行**：① A6-① 用 `touch -d '5 hours ago'`（**不得**改 `--min-age`）后 `trace-sealer --once`，抄 per-part `ratio` 与汇总，并与规格 §16 第 7 条门槛**并列**；② A6-② `decode-bench --concurrency 1,2,3 --gc-modes on,off`，**先**取 K=0 空读 RSS 作基线；③ A1 固定 seed 抽 **1,000** 行**逐字节**比对（比对源 = **封块前 spool 行的原字节**，D57），覆盖 ≥2 part / ≥2 dt / 1 越界（`ErrNotArchived`）/ 1 条 `body_missing=true`（`ErrBodyMissing`），**1000/1000 相等，不得 SKIP，不得降低抽样数**。
 - **回填目标**：§2 的 A6/A1 行 ＋ 交接 **H5 / H10**（回填计划 3 的 `TRACE_BODY_READ_MAX_CONCURRENT`）；`p4-task-9-host-deferral-at-7740bdbf.txt`。
+- **【E77-B——A6-① 口径核对 ＋ 生产实测数据的部分满足性（结论：只能部分销账，A6-① 保持「待宿主执行」）】**
+  - **发起者已确认的生产事实（权威转录，不改写）**：`/usr/bin/zstd` = **v1.4.8**，sha256 `d304445daa7e6429293dc02035063b7993fb6a489ee90d8851bff497952836dc`；生产机用 `pigz -dc <file>.jsonl.gz | zstd -9 -T4` **原地**转换了 **9** 个**历史归档**正文分片（每步过 `zstd -t` ＋ 双流 `cmp`，**更小才替换**）。本轮 batch3-detached **5** 个：`body-0` 16,554,265,475→4,369,707,248（26.40%）；`body-1` 16,724,608,637→5,102,753,238（30.51%）；`body-2` 16,398,577,063→6,650,911,874（40.56%）；`body-3` 18,565,755,168→8,285,390,289（44.63%）；`body-r3-new` 8,629,801,733→6,202,784,245（71.88%）。**合计（我逐项复算，与发起者所给逐位一致）**：入 **76,873,008,076** / 出 **30,611,546,894** ⇒ 释放 **46,261,461,182** 字节（整批 out/in = **39.82%**、**2.511×**）。早期一轮 4 个 `body-recent-*` 已转（当时合计约 **52.5 GiB**，**缺逐文件原始尺寸 ⇒ 不可复算、不得与前者相加**）。生产 `/datalog` 转换后 **321G 已用 / 239G 可用**（「转换前**一度**」353G/207G）。生产 `/datalog/zstd-conversion-log.tsv` 含各文件行 ＋ SUMMARY 行 ＋ **CORRECTION 行**（更正 SUMMARY 中一个手算错误）——**其数值未转录，本报告不引用**。
+  - **为什么 A6-① 销不掉（逐条对着判据）**：A6-① 要的是 **`trace-sealer --once` 在 A3 产出的真实 spool/产物树副本上的封块读数**——每个 part 的 `rows`/`uncompressed_bytes`/`artifact_bytes`/`ratio` ＋ 每轮汇总行，并与规格 §16 第 7 条的 **9×（或 10.26×）** 并列。而本批：**① 执行者不同**（shell 里的 `zstd -9 -T4`，不是 sealer 固定的 `-19 --long=29 -T1`；`internal/tracearchive/sealer.go:474`）；**② 输入语料不同**（**已被 gzip 压过一遍**的历史归档经 `pigz -dc` 解出的数据，不是 A3 的未压缩 spool 正文）；**③ 观测量不同**（只有文件级 in/out，**没有 part、没有 `rows`、没有汇总行**）；**④ 产物形态不同**（裸 `.zst` 无 trailer/footer，**不是**冻结包的 sealed artifact）。其比值 **1.391×–3.788× 离口径** ⇒ **既不得判 A6-① 合格，也不得判它不合格**（判不合格会误伤；判合格是替门槛放水）。**唯一满足的元素是宿主与版本**（且更强：给了二进制 sha256）；但判据还要求版本由 sealer 的 `--expected-zstd-version` **强制**，本批是人工 shell 调用同一路径同一 sha256 的二进制 ⇒ **该代码路径在生产上仍未被验证**。
+  - **仍缺什么（最小清单）**：① A3 产出（或已有）一棵真实 spool/产物树**副本** → `--root <copy>`；② `touch -d '5 hours ago' <copy>`（不得改 `--min-age`）；③ `trace-sealer --root <copy> --zstd-binary /usr/bin/zstd --expected-zstd-version 1.4.8 --min-age 3h --once`；④ 抄 per-part 四项 ＋ 汇总行；⑤ 与 9×/10.26× 并列。**结论：A6-① 状态保持「待宿主执行」**（**不是**「跳过」、也**不是**「已测未达标」）。
+  - **证据（含原始数字、逐条比对表、我的复算与存疑）**：`.superpowers/sdd/2026-10-08-trace-sealer-deployment/p4-task-12-a6-1-partial-evidence-at-52850d26.txt`。计划侧同步登记在 `2026-10-08-trace-sealer-deployment.md` 的 **U2**。
 
 ### U3　任务 10 —— 4.1 真实流量行数分布、4.4 A3 人工构造 `too_many_rows` 样本（三条决策门）
 - **待执行**：① 4.1 `grep 'sealed part' <日志>` 抽全部 `rows` 算 min/p50/p95/max 与 `bytes_per_row`；② 4.4 在 A3 环境把 `TRACE_BODY_BLOCK_MB` 调到极小 ＋ 平均行 < 192 B，**人工构造**一条 `too_many_rows` 样本（**禁止**在生产复现）并抄日志原文；③ 按 §7 的三条门处置（第三条门触发时**必须**改 `spooler.go` 并重跑 `p2-task-5` / `p2-task-8-spooler`）。
@@ -408,8 +418,13 @@ grep -l '^PACKAGES.*tests/traceverify' tools/trace-mutate/sets/p4-task-*.py | wc
 6. **fixture 的产出过程不可自动复现**；该 fixture 的 **trailer_len == row_count == 3** ⇒ **它在单测口径下**
    区分不了这两个字段（**E76③ 收窄**：这只影响该 fixture 的分辨力，**不影响**该判据的承重 —— 包级已由
    `TestFooterRowCountOnHandBuiltFooter` 承重，且 E76② 已把该判据正式在册；见 §5.5）。
-7. **本报告没有给出任何生产读数** —— 所有 `df -h` / `findmnt` / `zstd --version` / `is-active` / 压缩比 / 内存峰值
-   **一律待宿主执行**（§2 / §6 / §9）。
+7. **本报告没有给出任何"验收读数"** —— 五项验收（A3 / A6 / A7 / A8 / 挂载消失 ≤1 tick）的 `df -h` / `findmnt`
+   / `is-active` / **A6-① 封块压缩比** / 内存峰值**一律待宿主执行**（§2 / §6 / §9）。
+   **E77-B 订正**：报告与证据里现在**确实有若干生产事实**（**发起者转录**：`/usr/bin/zstd` = v1.4.8 ＋ sha256；
+   9 个**历史归档**文件原地再压缩的逐文件 in/out 与比值；转换后 `/datalog` 的 321G/239G；见 §6 两行的「部分」
+   状态与 §9-U2 的 E77-B 登记）—— 但它们**都不是**上述五项验收的读数：那批压缩是 `zstd -9 -T4` ＋ 已 gzip 过的
+   历史语料，**不是** sealer 封块产物，**没有** per-part `rows`，其比值**离口径**（既不能判合格也不能判不合格）。
+   ⇒ 本条的验收口径**不变**：**A6-① 仍待宿主执行**。
 
 ## 14. E76（计划 4 最终收尾轮 —— 五条：加法串订正 / 偏移判据在册 / 表述收窄 / 交接补 U6 / 残留复核）
 

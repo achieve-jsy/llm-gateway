@@ -96,6 +96,11 @@
             <el-icon><Document /></el-icon>
             <template #title>审计日志</template>
           </el-menu-item>
+          <!-- 反馈管理：仅 admin（会看到所有用户的反馈内容） -->
+          <el-menu-item v-if="authStore.isAdmin" data-test="menu-feedback" index="/admin/feedback">
+            <el-icon><ChatLineSquare /></el-icon>
+            <template #title>反馈管理</template>
+          </el-menu-item>
         </template>
 
         <!-- 平台（仅 admin）-->
@@ -182,6 +187,28 @@
         <div class="top-bar-spacer"></div>
         <AnnouncementBanner v-if="authStore.isLoggedIn" ref="bannerRef" />
         <NotificationBell v-if="authStore.isLoggedIn" ref="notificationBellRef" />
+        <!-- 使用手册：未登录也可访问的公开页，点击直接跳转 -->
+        <button
+          class="topbar-action"
+          type="button"
+          title="使用手册"
+          aria-label="使用手册"
+          data-test="manual-entry"
+          @click="router.push('/manual')"
+        >
+          <el-icon :size="18"><Reading /></el-icon>
+        </button>
+        <!-- 反馈：打开全局反馈弹窗（任意已登录用户可提交） -->
+        <button
+          class="topbar-action"
+          type="button"
+          title="反馈"
+          aria-label="反馈"
+          data-test="feedback-entry"
+          @click="showFeedback = true"
+        >
+          <el-icon :size="18"><ChatLineSquare /></el-icon>
+        </button>
         <span class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
           <Sunny v-if="isDark" class="theme-icon" />
           <Moon v-else class="theme-icon" />
@@ -236,6 +263,9 @@
       @close="showPopup = false"
       @all-read="onPopupAllRead"
     />
+
+    <!-- 全局反馈弹窗：顶部工具栏「反馈」按钮打开 -->
+    <FeedbackDialog v-model="showFeedback" />
   </div>
 </template>
 
@@ -245,10 +275,11 @@ import { onMounted, computed, ref, watch, onUnmounted } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts, Document, DataBoard, Sunny, Moon, CircleClose } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts, Document, DataBoard, Sunny, Moon, CircleClose, Reading, ChatLineSquare } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
+import FeedbackDialog from '@/components/common/FeedbackDialog.vue'
 import { getPendingExpansions, getUnreadAnnouncements } from '@/services/control-plane'
 
 const route = useRoute()
@@ -268,6 +299,8 @@ function resolveActiveMenu(r: { path: string; query: { tab?: string } }): string
 }
 const activeMenu = ref(resolveActiveMenu(route))
 const showPopup = ref(false)
+// 全局反馈弹窗开关（顶部工具栏「反馈」按钮）
+const showFeedback = ref(false)
 const budgetAlert = ref(false)
 const expansionPendingCount = ref(0)
 
@@ -635,6 +668,28 @@ function onPopupAllRead() {
   color: var(--el-text-color-regular);
   transition: all 0.25s ease;
   margin-right: 8px;
+}
+
+/* 顶部工具栏图标按钮（使用手册 / 反馈），样式对齐 .theme-toggle */
+.topbar-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--el-text-color-regular);
+  transition: all 0.25s ease;
+  margin-right: 8px;
+}
+
+.topbar-action:hover {
+  background-color: var(--el-fill-color);
+  color: var(--el-color-primary);
 }
 
 .theme-toggle:hover {

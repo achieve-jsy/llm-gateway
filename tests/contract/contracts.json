@@ -657,5 +657,138 @@
       "provider_ids": "必填数组，至少 1 个 UUID；服务端去重保序",
       "from_catalog": "catalog 不存在时整请求 404 catalog_not_found，不创建任何模型"
     }
+  },
+  "user_feedback": {
+    "base_prefix": "/api/v1",
+    "auth": {
+      "submit": "Bearer <jwt>（任意已登录用户）",
+      "admin": "Bearer <jwt> + RBAC PermFeedbackManage",
+      "attachment_upload": "Bearer <jwt>（任意已登录用户）",
+      "attachment_download": "Bearer <jwt> + 仅上传者本人、或持有 RBAC PermFeedbackManage；其余登录用户 403 feedback_attachment_forbidden"
+    },
+    "purpose": "任意已登录用户提交使用反馈/建议（可附带最多 3 张截图）；管理员在「反馈管理」页查看反馈列表并回写处理状态。附件采用「先上传后提交」：选图即上传（未绑定，孤儿 24h 后回收），提交反馈时用 attachment_ids 绑定。图片字节只存 Postgres，列表/详情只回元数据，字节走带鉴权的下载端点。当前未提供面向提交人的进度查询页；回复依赖账号邮箱（user_email）——提交人身份 user_id / user_name / user_email 一律由服务端从 JWT 取，请求体不接受身份字段，故无法冒名或替他人提交；web 端已不再收集联系方式，contact 恒为空。",
+    "routes": {
+      "POST /feedback": {
+        "handler": "FeedbackHandler.Create",
+        "submitter_identity": "user_id/user_name/user_email 由服务端从 JWT 取（getUserID + user_name/user_email context）；请求体无身份字段，客户端无法伪造提交人。前端只读回显这三项，不再提交 contact。",
+        "success_status": 201,
+        "error_statuses": {
+          "400": ["validation_error"],
+          "401": ["unauthorized"],
+          "500": ["internal_error"]
+        },
+        "request_body_fields": ["type", "content", "contact", "attachment_ids"],
+        "required_fields": ["content"],
+        "response_fields": ["id", "status", "created_at"]
+      },
+      "GET /feedback": {
+        "handler": "FeedbackHandler.List",
+        "success_status": 200,
+        "error_statuses": {
+          "400": ["validation_error"],
+          "401": ["unauthorized"],
+          "403": ["org.forbidden"],
+          "500": ["internal_error"]
+        },
+        "query_fields": ["status", "type", "page", "page_size"],
+        "response_fields": ["items", "total", "page", "page_size"],
+        "items_extra_fields": ["attachments"]
+      },
+      "PATCH /feedback/:id": {
+        "handler": "FeedbackHandler.UpdateStatus",
+        "success_status": 200,
+        "error_statuses": {
+          "400": ["validation_error"],
+          "401": ["unauthorized"],
+          "403": ["org.forbidden"],
+          "404": ["not_found"],
+          "500": ["internal_error"]
+        },
+        "request_body_fields": ["status", "handle_note"],
+        "required_fields": ["status"],
+        "response_fields_ref": "feedback_item_fields"
+      },
+      "POST /feedback/attachments": {
+        "handler": "FeedbackHandler.UploadAttachment",
+        "auth": "attachment_upload",
+        "content_type": "multipart/form-data",
+        "multipart_file_field": "file",
+        "multipart_optional_fields": ["width", "height"],
+        "success_status": 201,
+        "error_statuses": {
+          "400": ["validation_error"],
+          "401": ["unauthorized"],
+          "500": ["internal_error"]
+        },
+        "response_fields": ["id", "file_name", "mime", "size_bytes", "width", "height", "created_at"],
+        "response_excludes": ["data", "user_id", "feedback_id"],
+        "validation": "空文件 / 超过 2MiB / 类型不在白名单 / width、height 为负数或 >20000 均返回 400 validation_error（code=bad_request）"
+      },
+      "GET /feedback/attachments/:id": {
+        "handler": "FeedbackHandler.DownloadAttachment",
+        "auth": "attachment_download",
+        "success_status": 200,
+        "success_body": "原始图片字节（非 JSON）",
+        "response_headers": {
+          "Content-Type": "该行落库的 mime（服务端魔数嗅探结果，非客户端声明）",
+          "Content-Disposition": "inline; filename=\"<file_name>\"",
+          "Cache-Control": "private, max-age=3600",
+          "X-Content-Type-Options": "nosniff"
+        },
+        "error_statuses": {
+          "400": ["invalid_id"],
+          "401": ["unauthorized"],
+          "403": ["feedback_attachment_forbidden"],
+          "404": ["feedback_attachment_not_found"],
+          "500": ["internal_error"]
+        },
+        "forbidden_note": "本端点的 403 是「资源归属」拒绝（既不是上传者本人、也无 PermFeedbackManage），code 固定为 feedback_attachment_forbidden，与 RBAC Guard 的 org.forbidden 不同；禁止用遍历 id 的方式读他人截图"
+      }
+    },
+    "feedback_item_fields": [
+      "id", "type", "content", "contact", "status",
+      "user_id", "user_name", "user_email",
+      "created_at", "handled_at", "handled_by", "handle_note", "updated_at"
+    ],
+    "feedback_list_item_fields": "feedback_item_fields + attachments（仅 GET /feedback 的 items[] 带附件元数据；PATCH /feedback/:id 仍是纯 feedback_item_fields）",
+    "attachment_item_fields": [
+      "id", "file_name", "mime", "size_bytes", "width", "height", "created_at", "feedback_id"
+    ],
+    "attachment_limits": {
+      "max_count_per_feedback": 3,
+      "max_bytes_per_file": 2097152,
+      "max_bytes_per_file_human": "2 MiB",
+      "orphan_ttl_hours": 24,
+      "width_height_range": "0..20000 的整数，缺省 0",
+      "mime_whitelist": ["image/png", "image/jpeg", "image/webp", "image/gif"],
+      "mime_detection": "服务端用 http.DetectContentType 嗅探前 512 字节判定，绝不信任客户端声明的 Content-Type"
+    },
+    "attachment_binding": {
+      "when": "POST /feedback 携带 attachment_ids 时",
+      "rule": "每个 id 必须存在、属于提交者本人、且 feedback_id IS NULL（尚未绑定）",
+      "atomicity": "创建反馈与绑定附件在同一数据库事务内；绑定影响行数 != len(attachment_ids) 时整体回滚并返回 400 validation_error，绝不部分绑定",
+      "max_ids": 3
+    },
+    "type_enum": ["suggestion", "bug", "usage", "other"],
+    "type_default": "suggestion",
+    "status_enum": ["pending", "processing", "resolved", "closed"],
+    "validation": {
+      "content": "必填；trim 后 5..2000 字符，不满足返回 400 validation_error",
+      "contact": "可选；<=128 字符",
+      "type": "可选，缺省 suggestion；非法值返回 400",
+      "page": "可选，缺省 1",
+      "page_size": "可选，缺省 20",
+      "status": "PATCH 必填，取值见 status_enum；非法值返回 400",
+      "attachment_ids": "POST /feedback 可选；uuid 字符串数组，≤3 个；非法 uuid / 不存在 / 不属于本人 / 已绑定 / 超过 3 个均返回 400 validation_error（code=bad_request），且不产生任何部分绑定"
+    },
+    "semantics": {
+      "table": "feedbacks",
+      "status_default": "pending",
+      "handled_fields": "handled_at / handled_by / handle_note 在 status 变为 resolved 或 closed 时写入；其余状态下为 null",
+      "not_found": "PATCH 的记录不存在时返回 404",
+      "attachment_table": "feedback_attachments",
+      "attachment_lifecycle": "上传时 feedback_id 为 NULL（孤儿）；提交反馈绑定后 feedback_id 指向该反馈；上传路径顺带删除 feedback_id IS NULL 且 created_at 早于 now()-24h 的孤儿（清理失败只记日志，不影响上传）",
+      "attachment_bytes": "图片字节存 feedback_attachments.data（bytea），模型上 json:\"-\"；列表只 select 元数据列，任何 JSON 响应都不含 data 字段"
+    }
   }
 }

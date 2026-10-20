@@ -83,6 +83,7 @@ const (
 	PermChannelMonitorManage Permission = "channel_monitor:manage" // 渠道监控管理
 	PermHealthCheckManage    Permission = "health_check:manage"    // 健康检测配置/触发
 	PermAnnouncementManage   Permission = "announcement:manage"    // 公告管理（写操作）
+	PermFeedbackManage       Permission = "feedback:manage"        // 反馈管理（查看与处理用户反馈）
 	PermOrgUserSearch        Permission = "org:user:search"        // 用户搜索（任意管理角色）
 	PermRoleView             Permission = "org:role:view"          // 查看用户角色（任意管理角色）
 )

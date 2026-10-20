@@ -62,6 +62,12 @@ const (
 	// 403 forbidden
 	CodeKeyPermission        = "key_permission_denied"
 	CodeEntitlementForbidden = "entitlement_forbidden"
+	// CodeAttachmentForbidden 反馈附件的「资源归属」拒绝：请求者既不是上传者本人，
+	// 也不持有 PermFeedbackManage。刻意区别于 RBAC 的 org.forbidden。
+	CodeAttachmentForbidden = "feedback_attachment_forbidden"
+
+	// 404 not_found (feedback attachment)
+	CodeAttachmentNotFound = "feedback_attachment_not_found"
 
 	// 404 not_found (entitlement)
 	CodeEntitlementNotFound = "entitlement_not_found"

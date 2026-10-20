@@ -335,6 +335,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	testHandler := handler.NewTestHandler(providerRepo, modelRepo)
 	modelTagHandler := handler.NewModelTagHandler(modelTagRepo)
 	announcementHandler := handler.NewAnnouncementHandler(announcementRepo)
+	feedbackHandler := handler.NewFeedbackHandler(service.NewFeedbackService(repository.NewFeedbackRepo(db)))
 	notificationHandler := handler.NewNotificationHandler(notificationRepo)
 	healthCheckHandler := handler.NewHealthCheckHandler(healthCheckSvc)
 	modelCheckHandler := handler.NewModelCheckHandler(modelRepo, providerRepo, healthCheckRepo)
@@ -775,6 +776,21 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/announcements/unread", announcementHandler.GetUnread)
 		adminGroup.GET("/announcements/unread/count", announcementHandler.GetUnreadCount)
 		adminGroup.GET("/announcements/history", announcementHandler.GetReadHistory)
+
+		// 用户反馈（提交对所有登录用户开放，查看与处理仅 admin）
+		adminGroup.POST("/feedback", feedbackHandler.Create)
+		adminGroup.GET("/feedback", guard(rbac.PermFeedbackManage), feedbackHandler.List)
+		adminGroup.PATCH("/feedback/:id", guard(rbac.PermFeedbackManage), feedbackHandler.UpdateStatus)
+
+		// 用户反馈附件（先上传后提交；上传对已登录用户开放）
+		adminGroup.POST("/feedback/attachments", feedbackHandler.UploadAttachment)
+		// 下载端点的鉴权是「上传者本人 or feedback:manage」，403 必须是资源归属的
+		// feedback_attachment_forbidden 而非 org.forbidden，所以这里只构建 Actor 不挂 guard，
+		// 判定放在 handler 内（与 Guard 同源，均以服务端 user_roles 为准）。
+		adminGroup.GET("/feedback/attachments/:id",
+			func(c *gin.Context) { orgContainer.RBAC.BuildAndInjectActor(c) },
+			feedbackHandler.DownloadAttachment,
+		)
 
 		// 站内通知（系统自动触发，如预算告警）
 		adminGroup.GET("/notifications/unread", notificationHandler.GetUnread)

@@ -41,8 +41,20 @@ function restoreUser(): { user: User | null; role: string | null } {
   if (save) {
     try {
       const saved = JSON.parse(save) as { user: User | null; role: string | null }
-      // role 以 JWT 为准，避免缓存过期导致权限丢失
-      return { user: saved.user, role: jwtRole ?? saved.role }
+      // role 以 JWT 为准，避免缓存过期导致权限丢失。
+      // profile 同理用 JWT 兜底：save_user 是「登录那一刻」的快照，可能是旧版本前端
+      // 或历史登录路径写下的、缺 email/name 的对象；那种快照会一直显示「未提供邮箱」，
+      // 而 JWT 每次登录都由服务端重新签发、必定带 user_id/name/email。
+      // 只在快照字段为空时补，不覆盖快照里已有的值。
+      const user = saved.user
+        ? {
+            ...saved.user,
+            id: saved.user.id || claims?.user_id || '',
+            name: saved.user.name || claims?.name || '',
+            email: saved.user.email || claims?.email || '',
+          }
+        : null
+      return { user, role: jwtRole ?? saved.role }
     } catch {
       clearStoredAuth()
       return { user: null, role: null }

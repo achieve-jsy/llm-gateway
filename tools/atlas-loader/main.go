@@ -80,6 +80,10 @@ func main() {
 		&cpmmodel.AnomalyReview{},
 		&cpmmodel.OffhoursFiling{},
 
+		// 用户反馈
+		&cpmmodel.Feedback{},
+		&cpmmodel.FeedbackAttachment{},
+
 		// auth/model (3 个表)
 		&authmodel.Department{},
 		&authmodel.DevUser{},

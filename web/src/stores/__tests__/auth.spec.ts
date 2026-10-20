@@ -44,6 +44,40 @@ describe('auth store startup restore', () => {
     expect(localStorage.getItem('save_user')).toBeNull()
   })
 
+  it('backfills profile fields missing from a stale save_user snapshot using the JWT claims', async () => {
+    // 旧版本前端 / 历史登录路径可能写下一个缺 email 的快照；JWT 是服务端每次登录新签发的，
+    // 必定带 user_id/name/email。快照缺字段时必须用 JWT 补齐，否则界面会一直显示「未提供邮箱」。
+    localStorage.setItem('access_token', makeToken())
+    localStorage.setItem('refresh_token', 'refresh-token')
+    localStorage.setItem('save_user', JSON.stringify({
+      user: { id: 'admin-user', name: '平台管理员' },
+      role: 'admin',
+    }))
+
+    const { useAuthStore } = await import('../auth')
+    const auth = useAuthStore()
+
+    expect(auth.user?.email).toBe('admin@example.com')
+    expect(auth.user?.name).toBe('平台管理员')
+    expect(auth.user?.id).toBe('admin-user')
+  })
+
+  it('keeps values already present in save_user instead of overwriting them with JWT claims', async () => {
+    localStorage.setItem('access_token', makeToken())
+    localStorage.setItem('refresh_token', 'refresh-token')
+    localStorage.setItem('save_user', JSON.stringify({
+      user: { id: 'cached-id', name: '缓存里的名字', email: 'cached@corp.com' },
+      role: 'admin',
+    }))
+
+    const { useAuthStore } = await import('../auth')
+    const auth = useAuthStore()
+
+    expect(auth.user?.email).toBe('cached@corp.com')
+    expect(auth.user?.name).toBe('缓存里的名字')
+    expect(auth.user?.id).toBe('cached-id')
+  })
+
   it('summarizes every directly assigned approval role instead of only the effective role', async () => {
     const { useAuthStore } = await import('../auth')
     const auth = useAuthStore()

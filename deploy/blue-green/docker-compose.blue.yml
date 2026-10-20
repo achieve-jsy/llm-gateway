@@ -39,7 +39,7 @@ services:
       TRACE_BODY_ROLL_INTERVAL: 1h
       TRACE_BODY_DISK_WATERMARK_PERCENT: "90"
       # 功能开关：取消注释即开启（前置条件见任务 7 的硬门：读侧就绪 + 挂载在场）。
-      # TRACE_BODY_ROOT: /datalog/trace-archive-v4
+      TRACE_BODY_ROOT: /datalog/trace-archive-v4
     volumes:
       # 长语法（不是 `-v`）：source/target 显式，且**绝不**让 Docker 去创建宿主路径。
       # 部署前必须先 `findmnt -T /datalog` 证明挂载在场（见任务 6 步骤 5）。

@@ -1009,37 +1009,15 @@ func (s *RollupService) aggregateModelDailyStats(ctx context.Context, date time.
 	return nil
 }
 
-// aggregateUserDailyStats 聚合用户维度每日统计（写入 user_daily_stats 预聚合表）
-// PK: (stat_date, user_id) — 一个用户只属于一个部门，studio/dept 通过 JOIN 获取
-func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.Time) error {
-	db := s.db.WithContext(ctx)
-	statDate := date.Truncate(24 * time.Hour)
-
-	sql := `
-		INSERT INTO user_daily_stats (
-			stat_date, user_id, studio_id, dept_id,
-			req_count, success_count, error_count, model_count,
-			prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
-			est_cost_usd, hourly_distribution
-		)
-		SELECT
-			?::date AS stat_date,
-			sub.user_id,
-			sub.studio_id,
-			sub.dept_id,
-			SUM(sub.req_count) AS req_count,
-			SUM(sub.success_count) AS success_count,
-			SUM(sub.error_count) AS error_count,
-			-- Fix: COUNT DISTINCT models across all hours without overcounting.
-			-- Unnest per-hour model arrays, deduplicate across all hours, then count.
-			cardinality(array_agg(DISTINCT unnest(sub.model_list))) AS model_count,
-			SUM(sub.prompt_tokens) AS prompt_tokens,
-			SUM(sub.cached_tokens) AS cached_tokens,
-			SUM(sub.completion_tokens) AS completion_tokens,
-			SUM(sub.reasoning_tokens) AS reasoning_tokens,
-			SUM(sub.est_cost_usd) AS est_cost_usd,
-			jsonb_object_agg(sub.hour_key, sub.hour_count) AS hourly_distribution
-		FROM (
+// buildUserDailyStatsAggregateSQL 构造 user_daily_stats 的日聚合 UPSERT SQL。
+//
+// 重要：PostgreSQL 不允许聚合函数的入参里出现集合返回函数（SRF），否则报
+// SQLSTATE 0A000: aggregate function calls cannot contain set-returning function calls。
+// 因此「跨小时去重模型数」不能再写成 array_agg(DISTINCT unnest(sub.model_list))，
+// 必须先用 LATERAL unnest 把每小时的 model_list 展开成行，再在外层聚合去重。
+func buildUserDailyStatsAggregateSQL() string {
+	return `
+		WITH hourly AS (
 			SELECT
 				COALESCE(cl.user_id, 'unknown') AS user_id,
 				COALESCE(dsm.studio_id::text, '') AS studio_id,
@@ -1059,13 +1037,52 @@ func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.T
 			LEFT JOIN departments d ON (d.dept_id = cl.dept_id OR d.id::text = cl.dept_id)
 			LEFT JOIN dept_studio_map dsm ON dsm.dept_id = COALESCE(d.dept_id, cl.dept_id)
 			WHERE cl.ts >= ?::date AND cl.ts < (?::date + INTERVAL '1 day')
-				AND (` + obsmodel.WhereExcludeServiceKeyLogsCL + `)
+			  AND (` + obsmodel.WhereExcludeServiceKeyLogsCL + `)
 			GROUP BY COALESCE(cl.user_id, 'unknown'),
 					 COALESCE(dsm.studio_id::text, ''),
 					 COALESCE(d.dept_id, cl.dept_id, ''),
 					 EXTRACT(HOUR FROM cl.ts)
-		) sub
-		GROUP BY sub.user_id, sub.studio_id, sub.dept_id
+		),
+		user_model_counts AS (
+			-- 跨小时模型去重：先在 LATERAL 中展开每小时的 model_list 为行，
+			-- 再按 (user, studio, dept) 聚合去重；等价于原先「聚合函数入参里套 unnest」
+			-- 的写法（该写法在 PG 上会直接报 SQLSTATE 0A000）。
+			SELECT
+				h.user_id,
+				h.studio_id,
+				h.dept_id,
+				cardinality(array_agg(DISTINCT m.model)) AS model_count
+			FROM hourly h
+			CROSS JOIN LATERAL unnest(h.model_list) AS m(model)
+			GROUP BY h.user_id, h.studio_id, h.dept_id
+		)
+		INSERT INTO user_daily_stats (
+			stat_date, user_id, studio_id, dept_id,
+			req_count, success_count, error_count, model_count,
+			prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
+			est_cost_usd, hourly_distribution
+		)
+		SELECT
+			?::date AS stat_date,
+			sub.user_id,
+			sub.studio_id,
+			sub.dept_id,
+			SUM(sub.req_count) AS req_count,
+			SUM(sub.success_count) AS success_count,
+			SUM(sub.error_count) AS error_count,
+			mc.model_count,
+			SUM(sub.prompt_tokens) AS prompt_tokens,
+			SUM(sub.cached_tokens) AS cached_tokens,
+			SUM(sub.completion_tokens) AS completion_tokens,
+			SUM(sub.reasoning_tokens) AS reasoning_tokens,
+			SUM(sub.est_cost_usd) AS est_cost_usd,
+			jsonb_object_agg(sub.hour_key, sub.hour_count) AS hourly_distribution
+		FROM hourly sub
+		JOIN user_model_counts mc
+		  ON mc.user_id = sub.user_id
+		 AND mc.studio_id = sub.studio_id
+		 AND mc.dept_id = sub.dept_id
+		GROUP BY sub.user_id, sub.studio_id, sub.dept_id, mc.model_count
 		ON CONFLICT (stat_date, user_id) DO UPDATE SET
 			studio_id = EXCLUDED.studio_id,
 			dept_id = EXCLUDED.dept_id,
@@ -1080,8 +1097,16 @@ func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.T
 			est_cost_usd = EXCLUDED.est_cost_usd,
 			hourly_distribution = EXCLUDED.hourly_distribution
 	`
+}
 
-	if err := db.Exec(sql, statDate, statDate, statDate).Error; err != nil {
+// aggregateUserDailyStats 聚合用户维度每日统计（写入 user_daily_stats 预聚合表）
+// PK: (stat_date, user_id) — 一个用户只属于一个部门，studio/dept 通过 JOIN 获取
+func (s *RollupService) aggregateUserDailyStats(ctx context.Context, date time.Time) error {
+	db := s.db.WithContext(ctx)
+	statDate := date.Truncate(24 * time.Hour)
+
+	// SQL 中的三个 `?` 依次为 hourly 里 WHERE 的起止日期与 SELECT 列表里的 stat_date，取值相同。
+	if err := db.Exec(buildUserDailyStatsAggregateSQL(), statDate, statDate, statDate).Error; err != nil {
 		slog.Error("user_daily_stats_aggregate_failed", "date", statDate, "error", err)
 		return err
 	}

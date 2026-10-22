@@ -154,7 +154,6 @@
         <div class="r">
           <a role="button" tabindex="0" @click="scrollToId('login')" @keydown.enter.prevent="scrollToId('login')">回到开头</a>
           <a role="button" tabindex="0" @click="scrollToId('faq')" @keydown.enter.prevent="scrollToId('faq')">常见问题</a>
-          <a :href="loginHref" target="_blank" rel="noopener">打开网关</a>
         </div>
       </footer>
     </div>
@@ -416,9 +415,6 @@ function scrollToId(id: string) {
 function scrollToTop() {
   scrollContainerTo(scrollerEl.value, 0)
 }
-
-/** 登录页地址：手册正文里的 https://<loginUrl>/login */
-const loginHref = computed(() => `https://${MANUAL_META.loginUrl}/login`)
 
 onMounted(async () => {
   await nextTick()

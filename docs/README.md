@@ -15,6 +15,7 @@
 | [guardrails.md](guardrails.md) | 项目防护栏铁律（架构/数据库/配置/质量/流程） | 否 |
 | [frontend-design-guidelines.md](frontend-design-guidelines.md) | 前端 UI/UX 设计规范（Vue3 + Element Plus），含设计 token、三态、危险操作确认、动作密度等 | 否 |
 | [opencode-models-discovery.md](opencode-models-discovery.md) | OpenCode 模型发现插件架构 | 是 |
+| [anthropic-openai-stream-tool-args.md](anthropic-openai-stream-tool-args.md) | Anthropic ↔ OpenAI 流式工具调用参数转换规范（协议约束、行业实现对照、转换层状态机、回归用例与已知限制） | 否 |
 
 ## 约定
 

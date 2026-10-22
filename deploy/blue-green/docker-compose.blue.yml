@@ -93,6 +93,7 @@ services:
       # root 必须与写侧(gateway 的 TRACE_BODY_ROOT)同一个值；为空 ⇒ 读侧禁用、接口返回 503。
       # 判据见 internal/controlplane/config/trace_body_read.go 的 Disabled()。
       TRACE_BODY_ROOT: /datalog/trace-archive-v4
+      GOMEMLIMIT: ${GOMEMLIMIT:-3584MiB}
     volumes:
       # 控制面只点读（冻结包 reader 全程不写文件）⇒ 只读挂载即可。
       - type: bind
@@ -109,4 +110,4 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2g
+          memory: 4g

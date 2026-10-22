@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -597,4 +598,665 @@ func TestAnthropicStream_CacheReadFromPromptTokensDetails(t *testing.T) {
 	if v := usage["cache_read_input_tokens"]; v == nil {
 		t.Errorf("cache_read_input_tokens 未出现")
 	}
+}
+
+// ──────────────────────────────────────────────
+// tool_use 参数拼接（processChunk）回归测试
+//
+// 背景：OpenAI 流式协议要求把同一次工具调用（同一 index）每个分块里的
+// function.arguments 按顺序无脑拼接，首块也不例外。修复前 processChunk 在
+// tc.ID != ""（新工具调用首块）分支只发 content_block_start(input:{})，
+// 把该块的 arguments 整块丢弃；遇到「首块即带完整参数」的后端（SGLang 0.5.22
+// 的 deepseekv41 工具解析器）时，Claude Code 收到的 tool_use.input 恒为 {}，
+// 报 InputValidationError: The required parameter `command` is missing。
+//
+// 以下用例分两类断言：(1) 完整 SSE 事件序列；(2) 每个 tool_use 块的 input
+// 反序列化结果（逐字节拼接 + 字段级对象相等）。修复前应为红。
+// ──────────────────────────────────────────────
+
+// openAISSE 把若干 OpenAI chunk（map 形式）序列化为 SSE 文本，末尾补 [DONE]。
+// 用 map 构造而不是手写字符串，避免多层 JSON 转义把用例写错（尤其 arguments
+// 本身就是 JSON 的场景）。
+func openAISSE(t *testing.T, chunks ...map[string]any) string {
+	t.Helper()
+	var sb strings.Builder
+	for _, c := range chunks {
+		raw, err := json.Marshal(c)
+		if err != nil {
+			t.Fatalf("marshal openai chunk: %v", err)
+		}
+		sb.WriteString("data: ")
+		sb.Write(raw)
+		sb.WriteString("\n\n")
+	}
+	sb.WriteString("data: [DONE]\n\n")
+	return sb.String()
+}
+
+// chunkWithToolCalls 构造 choices[0].delta.tool_calls 的 chunk。
+func chunkWithToolCalls(toolCalls ...map[string]any) map[string]any {
+	return map[string]any{
+		"id":     "chatcmpl-tools",
+		"object": "chat.completion.chunk",
+		"model":  "deepseek-v41",
+		"choices": []any{map[string]any{
+			"index": 0,
+			"delta": map[string]any{"tool_calls": toolCalls},
+		}},
+	}
+}
+
+// finishChunk 构造 finish_reason 收尾 chunk（delta 为空）。
+func finishChunk(reason string) map[string]any {
+	return map[string]any{
+		"id":     "chatcmpl-tools",
+		"object": "chat.completion.chunk",
+		"model":  "deepseek-v41",
+		"choices": []any{map[string]any{
+			"index":         0,
+			"delta":         map[string]any{},
+			"finish_reason": reason,
+		}},
+	}
+}
+
+// emptyDeltaChunk 构造 delta 为空的边界 chunk（不发任何内容）。
+func emptyDeltaChunk() map[string]any {
+	return map[string]any{
+		"id":     "chatcmpl-tools",
+		"object": "chat.completion.chunk",
+		"model":  "deepseek-v41",
+		"choices": []any{map[string]any{
+			"index": 0,
+			"delta": map[string]any{},
+		}},
+	}
+}
+
+// toolCallDeltaWithArgs 构造显式带 id/type/name/arguments 的 tool_calls delta
+// （首块即带完整参数的后端形态）。id 为空时不下发 id（用于续传块）。
+func toolCallDeltaWithArgs(idx int, id, name, args string) map[string]any {
+	fn := map[string]any{"arguments": args}
+	if name != "" {
+		fn["name"] = name
+	}
+	d := map[string]any{"index": idx, "function": fn}
+	if id != "" {
+		d["id"] = id
+		d["type"] = "function"
+	}
+	return d
+}
+
+// toolCallDeltaNameOnly 构造只有 name、没有 arguments 字段的首块 delta。
+func toolCallDeltaNameOnly(idx int, id, name string) map[string]any {
+	return map[string]any{
+		"index":    idx,
+		"id":       id,
+		"type":     "function",
+		"function": map[string]any{"name": name},
+	}
+}
+
+// toolCallDeltaArgsOnly 构造续传块：只有 index + arguments，没有 id / name
+// （OpenAI 官方风格，续传块不复述 id）。
+func toolCallDeltaArgsOnly(idx int, args string) map[string]any {
+	return map[string]any{
+		"index":    idx,
+		"function": map[string]any{"arguments": args},
+	}
+}
+
+// toolUseBlockView 是一个 tool_use 内容块在 Anthropic SSE 事件流中的完整视图：
+// 它的 content_block_start、挂在同一 index 上的所有 input_json_delta、以及
+// content_block_stop，连同它们的事件序号，便于断言块内顺序与参数归属。
+type toolUseBlockView struct {
+	Index       int
+	ID          string
+	Name        string
+	StartInput  map[string]any // content_block_start.content_block.input（协议要求空对象 {}）
+	PartialJSON string         // 该 index 下所有 input_json_delta.partial_json 的顺序拼接
+	StartPos    int            // content_block_start 在事件列表中的位置
+	StopPos     int            // content_block_stop 位置，-1 表示缺失
+	DeltaPos    []int          // 每个 input_json_delta 的位置
+}
+
+// eventIndex 读取事件的 index 字段（JSON 数字解析为 float64）。
+func eventIndex(e map[string]any) int {
+	v, _ := e["index"].(float64)
+	return int(v)
+}
+
+// eventDelta 读取事件的 delta 对象。
+func eventDelta(e map[string]any) map[string]any {
+	d, _ := e["delta"].(map[string]any)
+	return d
+}
+
+// collectToolUseBlocks 从事件流还原所有 tool_use 块（按 content_block_start 出现顺序）。
+// 出现「没有对应 content_block_start 的 input_json_delta」或「同一 index 出现两个
+// tool_use content_block_start」时直接 Fatal——两者都是协议级错误。
+func collectToolUseBlocks(t *testing.T, events []map[string]any) []toolUseBlockView {
+	t.Helper()
+	blocks := []toolUseBlockView{}
+	byIndex := map[int]int{} // content_block index -> blocks 下标
+
+	for pos, e := range events {
+		switch e["type"] {
+		case "content_block_start":
+			cb, _ := e["content_block"].(map[string]any)
+			if cb == nil || cb["type"] != "tool_use" {
+				continue
+			}
+			idx := eventIndex(e)
+			if _, dup := byIndex[idx]; dup {
+				t.Fatalf("content_block_start(tool_use, index=%d) 重复出现：同一 index 只能有一个 tool_use 块；事件序列 %v",
+					idx, eventTypes(events))
+			}
+			id, _ := cb["id"].(string)
+			name, _ := cb["name"].(string)
+			input, _ := cb["input"].(map[string]any)
+			blocks = append(blocks, toolUseBlockView{
+				Index:      idx,
+				ID:         id,
+				Name:       name,
+				StartInput: input,
+				StartPos:   pos,
+				StopPos:    -1,
+			})
+			byIndex[idx] = len(blocks) - 1
+		case "content_block_delta":
+			d := eventDelta(e)
+			if d == nil || d["type"] != "input_json_delta" {
+				continue
+			}
+			idx := eventIndex(e)
+			bi, ok := byIndex[idx]
+			if !ok {
+				t.Fatalf("input_json_delta(index=%d) 之前没有对应的 content_block_start(tool_use)，参数无处落地；事件序列 %v",
+					idx, eventTypes(events))
+			}
+			partial, _ := d["partial_json"].(string)
+			blocks[bi].PartialJSON += partial
+			blocks[bi].DeltaPos = append(blocks[bi].DeltaPos, pos)
+		case "content_block_stop":
+			if bi, ok := byIndex[eventIndex(e)]; ok && blocks[bi].StopPos < 0 {
+				blocks[bi].StopPos = pos
+			}
+		}
+	}
+	return blocks
+}
+
+// toolBlockByID 按 tool_use id 取块视图（并行场景避免依赖块的出现顺序）。
+func toolBlockByID(t *testing.T, blocks []toolUseBlockView, id string) toolUseBlockView {
+	t.Helper()
+	for _, b := range blocks {
+		if b.ID == id {
+			return b
+		}
+	}
+	t.Fatalf("没有 id=%q 的 tool_use 块；实际得到 %d 个块: %+v", id, len(blocks), blocks)
+	return toolUseBlockView{}
+}
+
+// assertToolBlockSequenced 断言一个 tool_use 块内部严格是
+// content_block_start → input_json_delta… → content_block_stop：
+// 每个 delta 必须落在本块自己的 start→stop 之间（delta 若在 stop 之后，客户端
+// 按 index 累加时会找不到块而丢弃）。
+// 没有 input_json_delta 时给出与生产事故对应的失败信息。
+func assertToolBlockSequenced(t *testing.T, events []map[string]any, b toolUseBlockView) {
+	t.Helper()
+	if b.StopPos < 0 {
+		t.Fatalf("tool_use 块(index=%d, id=%q) 缺少 content_block_stop；事件序列 %v",
+			b.Index, b.ID, eventTypes(events))
+	}
+	if len(b.DeltaPos) == 0 {
+		t.Fatalf("tool_use 块(index=%d, id=%q, name=%q) 没有任何 input_json_delta，"+
+			"客户端拿到的 tool_use.input 只能是 {}（生产事故：InputValidationError: required parameter missing）；"+
+			"事件序列 %v", b.Index, b.ID, b.Name, eventTypes(events))
+	}
+	for _, dp := range b.DeltaPos {
+		if dp < b.StartPos || dp > b.StopPos {
+			t.Fatalf("input_json_delta(pos=%d) 不在块(index=%d) 的 start(pos=%d)→stop(pos=%d) 之间；事件序列 %v",
+				dp, b.Index, b.StartPos, b.StopPos, eventTypes(events))
+		}
+	}
+}
+
+// decodeJSONObject 把 JSON 字符串解析成对象，用于字段级断言（不做字符串包含判断）。
+func decodeJSONObject(t *testing.T, what, raw string) map[string]any {
+	t.Helper()
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		t.Fatalf("%s 不是合法 JSON 对象: %q: %v", what, raw, err)
+	}
+	return obj
+}
+
+// assertToolBlockArgs 断言块的 partial_json 顺序拼接结果逐字节等于 wantRaw，
+// 且解析出的对象与 wantObj 完全相等。
+func assertToolBlockArgs(t *testing.T, b toolUseBlockView, wantRaw string, wantObj map[string]any) {
+	t.Helper()
+	if b.PartialJSON != wantRaw {
+		t.Errorf("tool_use 块(index=%d, id=%q) 的 partial_json 拼接 = %q, want %q",
+			b.Index, b.ID, b.PartialJSON, wantRaw)
+		return
+	}
+	if got := decodeJSONObject(t, "流式拼接结果", b.PartialJSON); !reflect.DeepEqual(got, wantObj) {
+		t.Errorf("tool_use 块(index=%d, id=%q) input 解析 = %#v, want %#v", b.Index, b.ID, got, wantObj)
+	}
+}
+
+// nonStreamingToolUseInput 走非流式 ChatResponseToAnthropic，返回指定 tool_use 块的
+// input 解析结果，用于断言「流式拼出来的 input == 非流式 input」。
+func nonStreamingToolUseInput(t *testing.T, toolID, toolName, args string) map[string]any {
+	t.Helper()
+	resp := &core.ChatResponse{
+		ID:    "chatcmpl-nonstream",
+		Model: "claude-3-5-sonnet",
+		Choices: []core.Choice{{
+			Message: core.ResponseMessage{
+				Role: "assistant",
+				ToolCalls: []core.ToolCall{{
+					ID:       toolID,
+					Type:     "function",
+					Function: core.FunctionCall{Name: toolName, Arguments: args},
+				}},
+			},
+			FinishReason: "tool_calls",
+		}},
+	}
+	anth := core.ChatResponseToAnthropic(resp, "claude-3-5-sonnet")
+	if anth == nil {
+		t.Fatal("ChatResponseToAnthropic 返回 nil")
+	}
+	for _, blk := range anth.Content {
+		if blk.Type == "tool_use" && blk.ID == toolID {
+			return decodeJSONObject(t, "非流式 tool_use.input", string(blk.Input))
+		}
+	}
+	t.Fatalf("非流式转换结果里没有 id=%q 的 tool_use 块: %+v", toolID, anth.Content)
+	return nil
+}
+
+// TestAnthropicStream_ToolArgs_FirstChunkWithFullArguments 复现生产事故：
+// SGLang 0.5.22 的 deepseekv41 工具解析器把 {id, name, arguments 全量} 放在同一个
+// 首块里发出。修复前 tc.ID != "" 分支只发 content_block_start(input:{})，首块
+// arguments 被整块丢弃，于是 tool_use.input 永远是 {}。
+//
+// 断言：(1) content_block_start(tool_use, input:{}) 之后紧接一条 input_json_delta，
+// partial_json 严格等于原始 arguments；(2) 拼接结果与非流式转换结果字段级相等。
+func TestAnthropicStream_ToolArgs_FirstChunkWithFullArguments(t *testing.T) {
+	const args = `{"command": "git status", "description": "show working tree"}`
+	wantObj := decodeJSONObject(t, "期望参数", args)
+
+	sse := openAISSE(t,
+		chunkWithToolCalls(toolCallDeltaWithArgs(0, "call_9071", "Bash", args)),
+		finishChunk("tool_calls"),
+	)
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 120))
+
+	blocks := collectToolUseBlocks(t, events)
+	if len(blocks) != 1 {
+		t.Fatalf("tool_use 块数量 = %d, want 1；事件序列 %v", len(blocks), eventTypes(events))
+	}
+	b := blocks[0]
+	if b.ID != "call_9071" {
+		t.Errorf("tool_use.id = %q, want call_9071", b.ID)
+	}
+	if b.Name != "Bash" {
+		t.Errorf("tool_use.name = %q, want Bash", b.Name)
+	}
+	if b.Index != 0 {
+		t.Errorf("tool_use 块 index = %d, want 0", b.Index)
+	}
+	if b.StartInput == nil || len(b.StartInput) != 0 {
+		t.Errorf("content_block_start.content_block.input = %#v, want 空对象 {}", b.StartInput)
+	}
+
+	// 关键断言一：start 之后紧接的必须是承载首块 arguments 的 input_json_delta。
+	if b.StartPos+1 >= len(events) {
+		t.Fatalf("content_block_start 之后没有任何事件")
+	}
+	next := events[b.StartPos+1]
+	nextDelta := eventDelta(next)
+	if next["type"] != "content_block_delta" || nextDelta == nil || nextDelta["type"] != "input_json_delta" {
+		t.Fatalf("content_block_start 之后的事件 = %#v, want content_block_delta(input_json_delta)；事件序列 %v",
+			next, eventTypes(events))
+	}
+	if got, _ := nextDelta["partial_json"].(string); got != args {
+		t.Errorf("首块 input_json_delta.partial_json = %q, want %q（首块 arguments 被丢弃 = 生产事故根因）", got, args)
+	}
+	if got := eventIndex(next); got != b.Index {
+		t.Errorf("首块 input_json_delta.index = %d, want %d", got, b.Index)
+	}
+
+	assertToolBlockSequenced(t, events, b)
+	assertToolBlockArgs(t, b, args, wantObj)
+
+	// 关键断言二：流式拼接结果必须与非流式 /v1/messages 转换一致。
+	nonStream := nonStreamingToolUseInput(t, "call_9071", "Bash", args)
+	if got := decodeJSONObject(t, "流式拼接结果", b.PartialJSON); !reflect.DeepEqual(got, nonStream) {
+		t.Errorf("流式 input = %#v 与非流式 input = %#v 不一致", got, nonStream)
+	}
+}
+
+// TestAnthropicStream_ToolArgs_FirstChunkFullArgs_ExactEventSequence 断言首块即带
+// 完整参数时的完整 SSE 序列必须逐条为：
+// message_start → content_block_start(tool_use) → content_block_delta(input_json_delta,
+// 完整 JSON) → content_block_stop → message_delta(stop_reason=tool_use) → message_stop。
+// 修复前缺失中间的 input_json_delta（序列退化为 5 条），Claude Code 因此拿到空 input。
+func TestAnthropicStream_ToolArgs_FirstChunkFullArgs_ExactEventSequence(t *testing.T) {
+	const args = `{"command": "ls", "description": "list files"}`
+	wantObj := decodeJSONObject(t, "期望参数", args)
+
+	sse := openAISSE(t,
+		chunkWithToolCalls(toolCallDeltaWithArgs(0, "call_seq", "Bash", args)),
+		finishChunk("tool_calls"),
+	)
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 64))
+
+	want := []string{
+		"message_start",
+		"content_block_start",
+		"content_block_delta",
+		"content_block_stop",
+		"message_delta",
+		"message_stop",
+	}
+	got := eventTypes(events)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("事件序列 = %v, want %v（修复前缺 input_json_delta）", got, want)
+	}
+
+	// index 必须连续正确：同一 tool_use 块的 start/delta/stop 都是 index 0。
+	start, delta, stop := events[1], events[2], events[3]
+	for name, e := range map[string]map[string]any{"content_block_start": start, "content_block_delta": delta, "content_block_stop": stop} {
+		if idx := eventIndex(e); idx != 0 {
+			t.Errorf("%s.index = %d, want 0", name, idx)
+		}
+	}
+	cb, _ := start["content_block"].(map[string]any)
+	if cb["type"] != "tool_use" || cb["id"] != "call_seq" || cb["name"] != "Bash" {
+		t.Errorf("content_block = %#v, want tool_use/call_seq/Bash", cb)
+	}
+	if input, ok := cb["input"].(map[string]any); !ok || len(input) != 0 {
+		t.Errorf("content_block.input = %#v, want 空对象 {}", cb["input"])
+	}
+	d := eventDelta(delta)
+	if d["type"] != "input_json_delta" {
+		t.Errorf("delta.type = %v, want input_json_delta", d["type"])
+	}
+	if partial, _ := d["partial_json"].(string); partial != args {
+		t.Errorf("delta.partial_json = %q, want 完整 %q", partial, args)
+	}
+	if out, stopReason := messageDeltaInfo(t, events); stopReason != "tool_use" {
+		t.Errorf("message_delta.stop_reason = %q, want tool_use (output_tokens=%v)", stopReason, out)
+	}
+
+	// 同一份事件流再做一次对象级断言，避免只对字符串下判断。
+	blocks := collectToolUseBlocks(t, events)
+	if len(blocks) != 1 {
+		t.Fatalf("tool_use 块数量 = %d, want 1", len(blocks))
+	}
+	assertToolBlockArgs(t, blocks[0], args, wantObj)
+}
+
+// TestAnthropicStream_ToolArgs_ParallelCallsInSingleChunk 覆盖同一个分块里出现多个
+// 工具调用（各自 index 不同、各自自带 id/name/完整 arguments）的并行场景。
+// 断言：每个工具各自一个 content_block_start + 自己的 input_json_delta + 自己的
+// content_block_stop，块内参数不串块，content_block index 连续为 0/1/2。
+func TestAnthropicStream_ToolArgs_ParallelCallsInSingleChunk(t *testing.T) {
+	const bashArgs = `{"command": "ls", "description": "list files"}`
+	const readArgs = `{"file_path": "/tmp/a.go"}`
+	const writeArgs = `{"file_path": "/tmp/b.go", "content": "package main\n"}`
+
+	sse := openAISSE(t,
+		chunkWithToolCalls(
+			toolCallDeltaWithArgs(0, "call_bash", "Bash", bashArgs),
+			toolCallDeltaWithArgs(1, "call_read", "Read", readArgs),
+			toolCallDeltaWithArgs(2, "call_write", "Write", writeArgs),
+		),
+		finishChunk("tool_calls"),
+	)
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 200))
+
+	blocks := collectToolUseBlocks(t, events)
+	if len(blocks) != 3 {
+		t.Fatalf("tool_use 块数量 = %d, want 3（每个并行工具一块）；事件序列 %v", len(blocks), eventTypes(events))
+	}
+
+	// content_block index 必须从 0 连续递增，且与出现顺序一致。
+	for i, b := range blocks {
+		if b.Index != i {
+			t.Errorf("第 %d 个 tool_use 块 index = %d, want %d（index 必须连续）", i, b.Index, i)
+		}
+		assertToolBlockSequenced(t, events, b)
+	}
+
+	bash := toolBlockByID(t, blocks, "call_bash")
+	read := toolBlockByID(t, blocks, "call_read")
+	write := toolBlockByID(t, blocks, "call_write")
+	if bash.Name != "Bash" || read.Name != "Read" || write.Name != "Write" {
+		t.Errorf("name 与 id 配对错误: bash=%q read=%q write=%q", bash.Name, read.Name, write.Name)
+	}
+
+	assertToolBlockArgs(t, bash, bashArgs, decodeJSONObject(t, "Bash 期望参数", bashArgs))
+	assertToolBlockArgs(t, read, readArgs, decodeJSONObject(t, "Read 期望参数", readArgs))
+	assertToolBlockArgs(t, write, writeArgs, decodeJSONObject(t, "Write 期望参数", writeArgs))
+
+	// 显式的串块检查（对象级相等之外再点明意图）：每个块只能有自己那份参数。
+	if strings.Contains(bash.PartialJSON, "file_path") {
+		t.Errorf("Bash 块里混入了别的工具的 file_path 参数: %q", bash.PartialJSON)
+	}
+	if strings.Contains(read.PartialJSON, "command") {
+		t.Errorf("Read 块里混入了 Bash 的 command 参数: %q", read.PartialJSON)
+	}
+	if strings.Contains(write.PartialJSON, "command") || strings.Contains(write.PartialJSON, `"/tmp/a.go"`) {
+		t.Errorf("Write 块里混入了别的工具的参数: %q", write.PartialJSON)
+	}
+
+	// 每个工具恰好一条 input_json_delta（本场景每个工具只有一块参数）。
+	if n := countContentBlockDeltaType(events, "input_json_delta"); n != 3 {
+		t.Errorf("input_json_delta 数量 = %d, want 3（每个工具一条）；事件序列 %v", n, eventTypes(events))
+	}
+	if n := countEvent(events, "content_block_start"); n != 3 {
+		t.Errorf("content_block_start 数量 = %d, want 3", n)
+	}
+	if n := countEvent(events, "content_block_stop"); n != 3 {
+		t.Errorf("content_block_stop 数量 = %d, want 3", n)
+	}
+	if _, stopReason := messageDeltaInfo(t, events); stopReason != "tool_use" {
+		t.Errorf("message_delta.stop_reason = %q, want tool_use", stopReason)
+	}
+}
+
+// TestAnthropicStream_ToolArgs_TraditionalChunked_Regression 回归保护：OpenAI 官方
+// 风格（首块 arguments 为空串，后续分块续传且不带 id）的既有行为必须保持不变，
+// 这里把完整事件序列与拼接结果都钉死，防止修首块时改坏分块式上游。
+func TestAnthropicStream_ToolArgs_TraditionalChunked_Regression(t *testing.T) {
+	const (
+		part1 = `{"command":`
+		part2 = ` "ls -la",`
+		part3 = ` "timeout": 5000}`
+		full  = part1 + part2 + part3
+	)
+	wantObj := decodeJSONObject(t, "期望参数", full)
+
+	sse := openAISSE(t,
+		chunkWithToolCalls(toolCallDeltaWithArgs(0, "call_trad", "Bash", "")),
+		chunkWithToolCalls(toolCallDeltaArgsOnly(0, part1)),
+		chunkWithToolCalls(toolCallDeltaArgsOnly(0, part2)),
+		chunkWithToolCalls(toolCallDeltaArgsOnly(0, part3)),
+		finishChunk("tool_calls"),
+	)
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 80))
+
+	want := []string{
+		"message_start",
+		"content_block_start",
+		"content_block_delta",
+		"content_block_delta",
+		"content_block_delta",
+		"content_block_stop",
+		"message_delta",
+		"message_stop",
+	}
+	if got := eventTypes(events); !reflect.DeepEqual(got, want) {
+		t.Fatalf("事件序列 = %v, want %v（分块式上游的既有行为）", got, want)
+	}
+
+	blocks := collectToolUseBlocks(t, events)
+	if len(blocks) != 1 {
+		t.Fatalf("tool_use 块数量 = %d, want 1（续传块没有 id，不能开新块）", len(blocks))
+	}
+	b := blocks[0]
+	if b.ID != "call_trad" || b.Name != "Bash" {
+		t.Errorf("tool_use id/name = %q/%q, want call_trad/Bash", b.ID, b.Name)
+	}
+	if len(b.DeltaPos) != 3 {
+		t.Errorf("input_json_delta 数量 = %d, want 3（每块参数各一条）", len(b.DeltaPos))
+	}
+	assertToolBlockSequenced(t, events, b)
+	assertToolBlockArgs(t, b, full, wantObj)
+	if _, stopReason := messageDeltaInfo(t, events); stopReason != "tool_use" {
+		t.Errorf("message_delta.stop_reason = %q, want tool_use", stopReason)
+	}
+}
+
+// TestAnthropicStream_ToolArgs_EmptyFirstChunkThenContinuationWithoutID 覆盖
+// OpenAI 官方风格：首块 arguments 显式为空串，后续分块只有 arguments（没有 id、
+// 没有 name），中间还夹一个 delta:{} 空块。断言参数仍落在同一个 tool_use 块里，
+// 不会因为「没有 id」而开新块或丢参数。
+func TestAnthropicStream_ToolArgs_EmptyFirstChunkThenContinuationWithoutID(t *testing.T) {
+	const (
+		part1 = `{"file_path": "/tmp/x.go",`
+		part2 = ` "old_string": "a"}`
+		full  = part1 + part2
+	)
+	wantObj := decodeJSONObject(t, "期望参数", full)
+
+	sse := openAISSE(t,
+		chunkWithToolCalls(toolCallDeltaWithArgs(0, "call_empty", "Edit", "")),
+		chunkWithToolCalls(toolCallDeltaArgsOnly(0, part1)),
+		emptyDeltaChunk(),
+		chunkWithToolCalls(toolCallDeltaArgsOnly(0, part2)),
+		finishChunk("tool_calls"),
+	)
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 90))
+
+	if n := countEvent(events, "content_block_start"); n != 1 {
+		t.Fatalf("content_block_start 数量 = %d, want 1（续传块没有 id，不得开新块）；事件序列 %v",
+			n, eventTypes(events))
+	}
+	blocks := collectToolUseBlocks(t, events)
+	if len(blocks) != 1 {
+		t.Fatalf("tool_use 块数量 = %d, want 1", len(blocks))
+	}
+	b := blocks[0]
+	if b.ID != "call_empty" || b.Name != "Edit" || b.Index != 0 {
+		t.Errorf("tool_use id/name/index = %q/%q/%d, want call_empty/Edit/0", b.ID, b.Name, b.Index)
+	}
+	if len(b.DeltaPos) != 2 {
+		t.Errorf("input_json_delta 数量 = %d, want 2（两个续传块）", len(b.DeltaPos))
+	}
+	assertToolBlockSequenced(t, events, b)
+	assertToolBlockArgs(t, b, full, wantObj)
+	if n := countEvent(events, "content_block_stop"); n != 1 {
+		t.Errorf("content_block_stop 数量 = %d, want 1", n)
+	}
+}
+
+// TestAnthropicStream_ToolArgs_InterleavedContinuationAcrossParallelBlocks 覆盖并行
+// 场景下参数分块交错到达（OpenAI index 0,1,0,1）：每个块的参数必须落到它自己的
+// content_block index 上。修复前续传分支一律写到「当前打开的块」，参数会串块。
+func TestAnthropicStream_ToolArgs_InterleavedContinuationAcrossParallelBlocks(t *testing.T) {
+	const (
+		editPart1 = `{"file_path":`
+		editPart2 = ` "/tmp/a.go", "old_string": "x"}`
+		bashPart1 = `{"command":`
+		bashPart2 = ` "go test ./...", "description": "run tests"}`
+		editFull  = editPart1 + editPart2
+		bashFull  = bashPart1 + bashPart2
+	)
+	editObj := decodeJSONObject(t, "Edit 期望参数", editFull)
+	bashObj := decodeJSONObject(t, "Bash 期望参数", bashFull)
+
+	sse := openAISSE(t,
+		chunkWithToolCalls(toolCallDeltaWithArgs(0, "call_edit", "Edit", editPart1)),
+		chunkWithToolCalls(toolCallDeltaWithArgs(1, "call_bash", "Bash", bashPart1)),
+		chunkWithToolCalls(toolCallDeltaArgsOnly(0, editPart2)),
+		chunkWithToolCalls(toolCallDeltaArgsOnly(1, bashPart2)),
+		finishChunk("tool_calls"),
+	)
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 300))
+
+	blocks := collectToolUseBlocks(t, events)
+	if len(blocks) != 2 {
+		t.Fatalf("tool_use 块数量 = %d, want 2；事件序列 %v", len(blocks), eventTypes(events))
+	}
+	edit := toolBlockByID(t, blocks, "call_edit")
+	bash := toolBlockByID(t, blocks, "call_bash")
+	if edit.Name != "Edit" || bash.Name != "Bash" {
+		t.Errorf("name 与 id 配对错误: edit=%q bash=%q", edit.Name, bash.Name)
+	}
+	if edit.Index == bash.Index {
+		t.Errorf("两个 tool_use 块的 content_block index 相同 (=%d)，必须各自独立", edit.Index)
+	}
+
+	// 这是本用例的核心：交错到达的续传参数必须按 OpenAI index 归位。
+	assertToolBlockArgs(t, edit, editFull, editObj)
+	assertToolBlockArgs(t, bash, bashFull, bashObj)
+	if strings.Contains(edit.PartialJSON, "command") {
+		t.Errorf("Edit 块里混入了 Bash 的 command 参数: %q", edit.PartialJSON)
+	}
+	if strings.Contains(bash.PartialJSON, "file_path") {
+		t.Errorf("Bash 块里混入了 Edit 的 file_path 参数: %q", bash.PartialJSON)
+	}
+	for _, b := range []toolUseBlockView{edit, bash} {
+		if len(b.DeltaPos) == 0 {
+			t.Fatalf("tool_use 块(index=%d, id=%q) 没有任何 input_json_delta；事件序列 %v",
+				b.Index, b.ID, eventTypes(events))
+		}
+		if b.StopPos < 0 {
+			t.Fatalf("tool_use 块(index=%d, id=%q) 缺少 content_block_stop；事件序列 %v",
+				b.Index, b.ID, eventTypes(events))
+		}
+	}
+	if n := countEvent(events, "content_block_stop"); n != 2 {
+		t.Errorf("content_block_stop 数量 = %d, want 2", n)
+	}
+	if _, stopReason := messageDeltaInfo(t, events); stopReason != "tool_use" {
+		t.Errorf("message_delta.stop_reason = %q, want tool_use", stopReason)
+	}
+}
+
+// TestAnthropicStream_ToolArgs_NameInFirstChunkArgsInSecond 覆盖首块只有 name、
+// 没有 arguments 字段（不是空串，而是字段缺失），第二块才下发参数（没有 id）。
+// 既有实现应当通过：本用例确认「修复不会只认首块带参的一种形态」。
+func TestAnthropicStream_ToolArgs_NameInFirstChunkArgsInSecond(t *testing.T) {
+	const args = `{"command": "pwd"}`
+	wantObj := decodeJSONObject(t, "期望参数", args)
+
+	sse := openAISSE(t,
+		chunkWithToolCalls(toolCallDeltaNameOnly(0, "call_name_only", "Bash")),
+		chunkWithToolCalls(toolCallDeltaArgsOnly(0, args)),
+		finishChunk("tool_calls"),
+	)
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 40))
+
+	if n := countEvent(events, "content_block_start"); n != 1 {
+		t.Fatalf("content_block_start 数量 = %d, want 1；事件序列 %v", n, eventTypes(events))
+	}
+	blocks := collectToolUseBlocks(t, events)
+	if len(blocks) != 1 {
+		t.Fatalf("tool_use 块数量 = %d, want 1", len(blocks))
+	}
+	b := blocks[0]
+	if b.ID != "call_name_only" || b.Name != "Bash" {
+		t.Errorf("tool_use id/name = %q/%q, want call_name_only/Bash（name 必须沿用首块）", b.ID, b.Name)
+	}
+	assertToolBlockSequenced(t, events, b)
+	assertToolBlockArgs(t, b, args, wantObj)
 }

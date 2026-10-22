@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -39,22 +40,39 @@ type anthropicStreamAdapter struct {
 type anthropicStreamState struct {
 	requestID            string
 	model                string
-	estimatedInputTokens int    // 本地估算的 input_tokens（无真实 usage 时的备用值）
-	finishReason         string // 记录映射后的 Anthropic stop_reason
-	inputTokens          int    // 末尾 usage 提供的真实 prompt_tokens（未缓存部分，累计，供 message_delta 覆盖估算）
-	outputTokens         int    // 末尾 usage 提供的 completion_tokens（累计）
-	cacheReadTokens      int    // 末尾 usage 提供的 cache_read_input_tokens（累计，取最大）
-	cacheCreationTokens  int    // 末尾 usage 提供的 cache_creation_input_tokens（累计，取最大）
-	openBlockIndex       int    // current content block index
-	hasTextBlock         bool   // whether a text block has been started
-	hasToolBlock         bool   // whether at least one tool block exists
-	textBlockOpen        bool   // whether a text content block is currently open
-	toolBlockOpen        bool   // whether a tool content block is currently open
-	currentToolID        string
-	currentToolName      string
-	started              bool // whether message_start has been emitted
-	finished             bool // whether message_stop has been emitted
+	estimatedInputTokens int                     // 本地估算的 input_tokens（无真实 usage 时的备用值）
+	finishReason         string                  // 记录映射后的 Anthropic stop_reason
+	inputTokens          int                     // 末尾 usage 提供的真实 prompt_tokens（未缓存部分，累计，供 message_delta 覆盖估算）
+	outputTokens         int                     // 末尾 usage 提供的 completion_tokens（累计）
+	cacheReadTokens      int                     // 末尾 usage 提供的 cache_read_input_tokens（累计，取最大）
+	cacheCreationTokens  int                     // 末尾 usage 提供的 cache_creation_input_tokens（累计，取最大）
+	nextBlockIndex       int                     // 下一个可用的 content block index（块按需分配）
+	textBlockOpen        bool                    // 文本块是否处于打开状态
+	textBlockIndex       int                     // 当前文本块的 content block index
+	toolBlocks           map[int]*toolBlockState // OpenAI tool_calls[].index → tool_use 块状态
+	toolBlockOrder       []*toolBlockState       // 按首次出现顺序记录所有工具调用（收尾时遍历）
+	started              bool                    // whether message_start has been emitted
+	finished             bool                    // whether message_stop has been emitted
 	mu                   sync.Mutex
+}
+
+// toolBlockState 跟踪单个 OpenAI tool_call（按 tool_calls[].index 归属）与它对应的
+// Anthropic tool_use content block。
+//
+// 修复前的实现只有一份 currentToolID/currentToolName 状态，且"是不是新工具调用"
+// 只按 id 是否为空判定，由此产生两个缺陷：
+//  1. 与 id/name 同块到达的 function.arguments 被整块丢弃（生产事故：SGLang 把一次
+//     调用的 id/name/全量参数放在同一个分块里，客户端拿到的 tool_use.input 永远是 {}）；
+//  2. 并行工具调用的参数按"当前打开的块"落地而不看 index，会静默串到别的工具块里。
+//
+// 这里按 index 维护独立状态，让每个 arguments 片段都能回到自己的块。
+type toolBlockState struct {
+	index       int             // OpenAI 流里的 tool_calls[].index
+	id          string          // 上游给的 tool_call id（缺失时开块兜底生成）
+	name        string          // 上游给的 function name（可能晚于 id 到达）
+	blockIndex  int             // 对应的 Anthropic content block index；-1 表示尚未开块
+	pendingArgs strings.Builder // name 未到达时暂存的 arguments，等 name 到齐再开块补发
+	closed      bool            // 是否已发出 content_block_stop
 }
 
 // newAnthropicStreamAdapter creates a new streaming adapter.
@@ -71,6 +89,7 @@ func newAnthropicStreamAdapter(upstream io.ReadCloser, requestID, model string, 
 			requestID:            requestID,
 			model:                model,
 			estimatedInputTokens: estimatedInputTokens,
+			toolBlocks:           map[int]*toolBlockState{},
 		},
 	}
 	adapter.wg.Add(1)
@@ -167,31 +186,23 @@ func (a *anthropicStreamAdapter) flushAndFinish() {
 		return
 	}
 	a.state.finished = true
-	stopReason := a.state.finishReason
 	outputTokens := a.state.outputTokens
 	inputTokens := a.state.inputTokens
 	cacheRead := a.state.cacheReadTokens
 	cacheCreation := a.state.cacheCreationTokens
 	a.state.mu.Unlock()
 
-	if stopReason == "" {
-		stopReason = "end_turn"
-	}
 	a.closeAllBlocks()
+	stopReason := a.inferStopReason()
 	a.emitMessageDelta(stopReason, outputTokens, inputTokens, cacheRead, cacheCreation)
 	a.emitRaw("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 }
 
-// closeAllBlocks emits content_block_stop for any open text/tool blocks.
+// closeAllBlocks 按协议收尾：先关文本块，再按 content block index 升序关闭所有
+// 打开的工具块（并行工具调用的块会一直开到收尾，避免把续传参数关在块外）。
 func (a *anthropicStreamAdapter) closeAllBlocks() {
-	if a.state.textBlockOpen {
-		a.emitContentBlockStop()
-		a.state.textBlockOpen = false
-	}
-	if a.state.toolBlockOpen {
-		a.emitContentBlockStop()
-		a.state.toolBlockOpen = false
-	}
+	a.closeTextBlock()
+	a.closeOpenToolBlocks()
 }
 
 // openAIChatChunk is the structure of a single OpenAI SSE chunk.
@@ -284,10 +295,7 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 		//（例如 [DONE]/EOF 先到达或 finish_reason 已发射）则跳过，避免协议乱序重复。
 		if chunk.Usage != nil && !a.state.finished {
 			a.closeAllBlocks()
-			stopReason := a.state.finishReason
-			if stopReason == "" {
-				stopReason = "end_turn"
-			}
+			stopReason := a.inferStopReason()
 			// 透传本 chunk（多为末尾 usage-only chunk）的真实非零 cache 字段到
 			// message_delta.usage。权衡：这与 Anthropic 官方 message_delta 仅含
 			// output_tokens 的口径略有偏离，但可避免流式晚到的非零 cache 被丢。
@@ -304,40 +312,19 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 		content := delta.Content
 		toolCalls := delta.ToolCalls
 
-		// Handle content (text) deltas
+		// Handle content (text) deltas。文本块与 tool_use 块按协议互斥：仍有打开的
+		// 工具块时先给它们收尾再开文本块（修复前这里会把这批文本 delta 直接丢掉）。
 		if content != nil && *content != "" {
-			if !a.state.textBlockOpen && !a.state.toolBlockOpen {
-				// No text block open — start one (or close tool block first)
+			a.closeOpenToolBlocks()
+			if !a.state.textBlockOpen {
 				a.startTextBlock()
 			}
-			// Emit text delta
-			if a.state.textBlockOpen {
-				a.emitTextDelta(*content)
-			}
+			a.emitTextDelta(*content)
 		}
 
-		// Handle tool call deltas
+		// Handle tool call deltas。每个 tool_call 严格按 index 归属到自己的 tool_use 块。
 		for _, tc := range toolCalls {
-			if tc.ID != "" {
-				// New tool call: close any open block, start a new tool block
-				a.closeAllBlocks()
-				a.state.currentToolID = tc.ID
-				a.state.currentToolName = ""
-				if tc.Function != nil {
-					a.state.currentToolName = tc.Function.Name
-				}
-				a.startToolBlock()
-			} else if tc.Function != nil {
-				// Accumulating tool call arguments
-				if tc.Function.Name != "" && a.state.currentToolName == "" {
-					a.state.currentToolName = tc.Function.Name
-				}
-				if tc.Function.Arguments != "" {
-					if a.state.toolBlockOpen {
-						a.emitInputJSONDelta(tc.Function.Arguments)
-					}
-				}
-			}
+			a.handleToolCallDelta(tc)
 		}
 
 		// Handle finish reason：只记录 stop_reason 并关闭内容块，不在此发射
@@ -347,6 +334,152 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 			a.state.finishReason = mapFinishReason(choice.FinishReason)
 			a.closeAllBlocks()
 		}
+	}
+}
+
+// handleToolCallDelta 处理一个 tool_calls 分块。
+//
+// OpenAI 流式协议中，同一个 index 的工具调用在每个分块里给出的 function.arguments
+// 都是待拼接的片段，**第一块也不例外**（OpenAI 官方 SDK 的累加器就是无条件 append；
+// 官方服务习惯把首块参数置空，但协议并不要求）。因此首块携带的非空 arguments 必须
+// 紧跟 content_block_start 作为第一个 input_json_delta 发出，否则客户端拿到的
+// tool_use.input 只有 {}。
+func (a *anthropicStreamAdapter) handleToolCallDelta(tc openAIToolCallDelta) {
+	slot := a.state.toolBlocks[tc.Index]
+	// 同一 index 换了新的 tool_call id（上游复用 index，或干脆省略 index 恒为 0）：
+	// 视为一次新的工具调用，先把旧块收尾，避免两次调用的参数拼进同一个块。
+	if slot != nil && !slot.closed && slot.id != "" && tc.ID != "" && slot.id != tc.ID {
+		a.closeToolBlock(slot)
+		slot = nil
+	}
+	if slot == nil {
+		slot = &toolBlockState{index: tc.Index, blockIndex: -1}
+		a.state.toolBlocks[tc.Index] = slot
+		a.state.toolBlockOrder = append(a.state.toolBlockOrder, slot)
+	}
+
+	if tc.ID != "" {
+		slot.id = tc.ID
+	}
+	if tc.Function == nil {
+		return
+	}
+	if tc.Function.Name != "" {
+		slot.name = tc.Function.Name
+	}
+
+	args := tc.Function.Arguments
+
+	// 块已经发过 content_block_stop：Anthropic 的块关闭后无法再追加 delta，只能丢弃
+	// 并留下告警，绝不能把参数写进当时恰好打开着的别的块（那是静默串台）。
+	if slot.closed {
+		if args != "" {
+			slog.Warn("anthropic stream: dropping tool_call arguments for a closed block",
+				"request_id", a.state.requestID, "model", a.state.model,
+				"tool_call_index", slot.index, "tool_id", slot.id, "tool_name", slot.name)
+		}
+		return
+	}
+
+	if slot.blockIndex < 0 {
+		// 没有 name 就先攒参数：content_block_start 里缺 name 会让客户端无法把
+		// tool_use 匹配到工具定义上。name 到齐后再开块并补发已攒下的片段。
+		if slot.name == "" {
+			slot.pendingArgs.WriteString(args)
+			return
+		}
+		a.openToolBlock(slot)
+	}
+
+	if args == "" && slot.pendingArgs.Len() == 0 {
+		return
+	}
+	payload := slot.pendingArgs.String() + args
+	slot.pendingArgs.Reset()
+	a.emitInputJSONDelta(slot.blockIndex, payload)
+}
+
+// openToolBlock 分配 content block index 并发出 tool_use 的 content_block_start。
+func (a *anthropicStreamAdapter) openToolBlock(slot *toolBlockState) {
+	// 文本块与 tool_use 块按协议互斥：开工具块前先给文本块收尾。
+	a.closeTextBlock()
+
+	slot.blockIndex = a.state.nextBlockIndex
+	a.state.nextBlockIndex++
+
+	toolID := slot.id
+	if toolID == "" {
+		toolID = fmt.Sprintf("toolu_%d", slot.blockIndex)
+	}
+	block := map[string]any{
+		"type":  "content_block_start",
+		"index": slot.blockIndex,
+		"content_block": map[string]any{
+			"type":  "tool_use",
+			"id":    toolID,
+			"name":  slot.name,
+			"input": map[string]any{},
+		},
+	}
+	b, _ := json.Marshal(block)
+	a.emitRaw(fmt.Sprintf("event: content_block_start\ndata: %s\n\n", string(b)))
+}
+
+// closeTextBlock emits content_block_stop for the open text block, if any.
+func (a *anthropicStreamAdapter) closeTextBlock() {
+	if !a.state.textBlockOpen {
+		return
+	}
+	a.emitContentBlockStop(a.state.textBlockIndex)
+	a.state.textBlockOpen = false
+}
+
+// closeToolBlock emits content_block_stop for a tool block that was actually opened.
+func (a *anthropicStreamAdapter) closeToolBlock(slot *toolBlockState) {
+	if slot == nil || slot.closed {
+		return
+	}
+	slot.closed = true
+	if slot.blockIndex < 0 {
+		return
+	}
+	a.emitContentBlockStop(slot.blockIndex)
+}
+
+// closeOpenToolBlocks 按 content block index 升序关闭所有打开的工具块。
+//
+// 收尾前先把「name 一直没到、但参数已攒下」的调用补开出来：否则整次工具调用会
+// 凭空消失，客户端只看到 stop_reason=tool_use 却没有任何 tool_use 块。
+func (a *anthropicStreamAdapter) closeOpenToolBlocks() {
+	var pending []*toolBlockState
+	var open []*toolBlockState
+	for _, slot := range a.state.toolBlockOrder {
+		if slot.closed {
+			continue
+		}
+		switch {
+		case slot.blockIndex < 0 && slot.pendingArgs.Len() > 0:
+			pending = append(pending, slot)
+		case slot.blockIndex >= 0:
+			open = append(open, slot)
+		}
+	}
+
+	sort.Slice(pending, func(i, j int) bool { return pending[i].index < pending[j].index })
+	for _, slot := range pending {
+		slog.Warn("anthropic stream: tool_call never got a function name; emitting tool_use block with empty name",
+			"request_id", a.state.requestID, "model", a.state.model,
+			"tool_call_index", slot.index, "tool_id", slot.id)
+		a.openToolBlock(slot)
+		payload := slot.pendingArgs.String()
+		slot.pendingArgs.Reset()
+		a.emitInputJSONDelta(slot.blockIndex, payload)
+		open = append(open, slot)
+	}
+
+	sort.Slice(open, func(i, j int) bool { return open[i].blockIndex < open[j].blockIndex })
+	for _, slot := range open {
+		a.closeToolBlock(slot)
 	}
 }
 
@@ -409,18 +542,18 @@ func (a *anthropicStreamAdapter) emitMessageStart(chunk openAIChatChunk) {
 	a.emitRaw(line)
 }
 
-// startTextBlock emits a content_block_start for a text block.
+// startTextBlock 开一个文本块（分配新的 content block index）。
 func (a *anthropicStreamAdapter) startTextBlock() {
-	// If a text block is already open, close it first (shouldn't happen normally)
 	if a.state.textBlockOpen {
 		return
 	}
 
 	a.state.textBlockOpen = true
-	a.state.hasTextBlock = true
+	a.state.textBlockIndex = a.state.nextBlockIndex
+	a.state.nextBlockIndex++
 	block := map[string]any{
 		"type":  "content_block_start",
-		"index": a.state.openBlockIndex,
+		"index": a.state.textBlockIndex,
 		"content_block": map[string]any{
 			"type": "text",
 			"text": "",
@@ -435,7 +568,7 @@ func (a *anthropicStreamAdapter) startTextBlock() {
 func (a *anthropicStreamAdapter) emitTextDelta(text string) {
 	delta := map[string]any{
 		"type":  "content_block_delta",
-		"index": a.state.openBlockIndex,
+		"index": a.state.textBlockIndex,
 		"delta": map[string]any{
 			"type": "text_delta",
 			"text": text,
@@ -446,41 +579,11 @@ func (a *anthropicStreamAdapter) emitTextDelta(text string) {
 	a.emitRaw(line)
 }
 
-// startToolBlock emits a content_block_start for a tool_use block.
-func (a *anthropicStreamAdapter) startToolBlock() {
-	if a.state.toolBlockOpen {
-		return
-	}
-
-	a.state.toolBlockOpen = true
-	a.state.hasToolBlock = true
-
-	toolID := a.state.currentToolID
-	if toolID == "" {
-		toolID = fmt.Sprintf("toolu_%d", a.state.openBlockIndex)
-	}
-	toolName := a.state.currentToolName
-
-	block := map[string]any{
-		"type":  "content_block_start",
-		"index": a.state.openBlockIndex,
-		"content_block": map[string]any{
-			"type":  "tool_use",
-			"id":    toolID,
-			"name":  toolName,
-			"input": map[string]any{},
-		},
-	}
-	b, _ := json.Marshal(block)
-	line := fmt.Sprintf("event: content_block_start\ndata: %s\n\n", string(b))
-	a.emitRaw(line)
-}
-
-// emitInputJSONDelta emits a content_block_delta for input_json.
-func (a *anthropicStreamAdapter) emitInputJSONDelta(partialJSON string) {
+// emitInputJSONDelta emits a content_block_delta for input_json on the given block.
+func (a *anthropicStreamAdapter) emitInputJSONDelta(index int, partialJSON string) {
 	delta := map[string]any{
 		"type":  "content_block_delta",
-		"index": a.state.openBlockIndex,
+		"index": index,
 		"delta": map[string]any{
 			"type":         "input_json_delta",
 			"partial_json": partialJSON,
@@ -491,16 +594,32 @@ func (a *anthropicStreamAdapter) emitInputJSONDelta(partialJSON string) {
 	a.emitRaw(line)
 }
 
-// emitContentBlockStop emits a content_block_stop event for the current block.
-func (a *anthropicStreamAdapter) emitContentBlockStop() {
+// emitContentBlockStop emits a content_block_stop event for the given block.
+func (a *anthropicStreamAdapter) emitContentBlockStop(index int) {
 	stop := map[string]any{
 		"type":  "content_block_stop",
-		"index": a.state.openBlockIndex,
+		"index": index,
 	}
 	b, _ := json.Marshal(stop)
 	line := fmt.Sprintf("event: content_block_stop\ndata: %s\n\n", string(b))
 	a.emitRaw(line)
-	a.state.openBlockIndex++
+}
+
+// inferStopReason 在流结束（末尾 usage-only chunk / [DONE] / EOF）但上游从未给出
+// finish_reason 时兜底推导 stop_reason：已经发出过 tool_use 块就只能是 tool_use，
+// 否则 end_turn。避免出现"有 tool_use 块却报 end_turn"的协议自相矛盾（Anthropic 的
+// 口径是只要有工具调用 stop_reason 就是 tool_use）。必须在 closeAllBlocks 之后调用，
+// 让收尾阶段补发的工具块也被算进去。
+func (a *anthropicStreamAdapter) inferStopReason() string {
+	if a.state.finishReason != "" {
+		return a.state.finishReason
+	}
+	for _, slot := range a.state.toolBlockOrder {
+		if slot.blockIndex >= 0 {
+			return "tool_use"
+		}
+	}
+	return "end_turn"
 }
 
 // emitMessageDelta emits a message_delta event.

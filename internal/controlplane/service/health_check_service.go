@@ -60,16 +60,16 @@ type HealthCheckService struct {
 
 	groupCheckSvc *GroupCheckService // 可选：模型组检测（nil 表示未启用）
 
-	modelStatusLogSvc *ModelStatusLogService    // 模型状态变更日志服务
-	snapshotter       *ProviderSnapshotRefresher // 自动禁用/恢复后刷新 Redis snapshot
+	modelStatusLogSvc *ModelStatusLogService // 模型状态变更日志服务
+	snapshotter       snapshotRefresher      // 自动禁用/恢复后刷新 Redis snapshot（可为 nil）
 
-	mu                   sync.Mutex
-	cancel               context.CancelFunc
-	modelCheckCancel     context.CancelFunc
-	groupCheckCancel     context.CancelFunc
-	running              bool
-	modelCheckRunning    bool
-	groupCheckRunning    bool
+	mu                sync.Mutex
+	cancel            context.CancelFunc
+	modelCheckCancel  context.CancelFunc
+	groupCheckCancel  context.CancelFunc
+	running           bool
+	modelCheckRunning bool
+	groupCheckRunning bool
 }
 
 // NewHealthCheckService 创建 HealthCheckService 实例
@@ -97,9 +97,28 @@ func (s *HealthCheckService) SetModelStatusLogService(svc *ModelStatusLogService
 	s.modelStatusLogSvc = svc
 }
 
+// snapshotRefresher 抽象「自动禁用/恢复后重建 gateway provider 快照」的能力。
+// 生产实现是 *ProviderSnapshotRefresher（合并去抖 + 单飞）；抽成接口便于单测注入计数型假实现。
+type snapshotRefresher interface {
+	// ScheduleRefresh 请求一次异步、合并去抖的全量快照重建
+	ScheduleRefresh(ctx context.Context)
+}
+
 // SetSnapshotRefresher 注入 provider snapshot 刷新器，自动禁用/恢复后同步通知 gateway
 func (s *HealthCheckService) SetSnapshotRefresher(snapshotter *ProviderSnapshotRefresher) {
+	if snapshotter == nil {
+		s.snapshotter = nil
+		return
+	}
 	s.snapshotter = snapshotter
+}
+
+// scheduleSnapshotRefresh 请求一次合并去抖的全量快照重建（未注入 snapshotter 时为空操作）
+func (s *HealthCheckService) scheduleSnapshotRefresh(ctx context.Context) {
+	if s.snapshotter == nil {
+		return
+	}
+	s.snapshotter.ScheduleRefresh(ctx)
 }
 
 // GetConfig 获取配置
@@ -293,7 +312,7 @@ func (s *HealthCheckService) startModelCheckBackground(ctx context.Context, conf
 		case <-modelCtx.Done():
 			return
 		case <-time.After(45 * time.Second):
-			s.runBackgroundModelCheck()
+			s.runBackgroundModelCheck(modelCtx)
 		}
 
 		for {
@@ -313,14 +332,156 @@ func (s *HealthCheckService) startModelCheckBackground(ctx context.Context, conf
 					s.mu.Unlock()
 					return
 				}
-				s.runBackgroundModelCheck()
+				s.runBackgroundModelCheck(modelCtx)
 			}
 		}
 	}()
 }
 
-// runBackgroundModelCheck 后台执行一轮模型检测
-func (s *HealthCheckService) runBackgroundModelCheck() {
+// ─── 失败分类：确定性失败 / 临时性失败 ──────────────────────────────────────
+//
+// 区分两类失败的目的（2026-10-16 生产事故复盘）：
+//   - 临时性上游故障（配额耗尽 429、5xx、超时）不该把模型/渠道永久踢出可用池——
+//     事故中 27 个模型因 429/5xx 被自动禁用后 consecutive_recovery_successes 永远为 0、
+//     永不恢复；
+//   - 确定性故障（模型名不存在 404、鉴权失败 401/403、凭证解不开）重复探测不会自愈，
+//     仍需按「连续 N 次失败」的阈值自动禁用，避免把错误持续暴露给线上流量。
+
+// probeFailureKind 健康检测失败类别
+type probeFailureKind int
+
+const (
+	// probeFailureTransient 临时性失败：上游暂时不可用，不累加连续失败、不触发自动禁用
+	probeFailureTransient probeFailureKind = iota
+	// probeFailureDeterministic 确定性失败：配置/数据/权限问题，累加连续失败，达阈值自动禁用
+	probeFailureDeterministic
+)
+
+// transientFailureMarkers 无 HTTP 状态码时的临时性失败兜底判据（全部按小写匹配）。
+// 覆盖网络/超时类错误，以及上游限流、服务不可用的常见错误类型名。
+var transientFailureMarkers = []string{
+	"throttl",                 // ThrottlingException / ThrottlingException
+	"too many requests",       // 通用限流文案
+	"requestlimitexceeded",    // AWS RequestLimitExceeded
+	"toomanyrequests",         // AWS TooManyRequestsException
+	"rate limit",              // 通用限流文案
+	"serviceunavailable",      // AWS ServiceUnavailableException
+	"service unavailable",     // 上游 503 文案
+	"temporarily unavailable", // 上游 503 文案
+	"internal server error",   // 上游 500 文案
+	"internalerror",           // AWS InternalServerError / internal error
+	"requesttimeout",          // AWS RequestTimeout
+	"timeout",                 // 通用超时
+	"timed out",               // 通用超时
+	"deadline exceeded",       // context deadline exceeded
+	"connection refused",      // 连接被拒
+	"connection reset",        // 连接被重置
+	"connection closed",       // 连接被关闭
+	"reset by peer",           // 对端重置
+	"broken pipe",             // 写管道断开
+	"no such host",            // DNS 解析失败
+	"unexpected eof",          // 上游提前断开
+	"i/o timeout",             // 网络超时
+	"tls handshake",           // TLS 握手失败（上游临时抖动）
+}
+
+// deterministicFailureMarkers 无 HTTP 状态码时的确定性失败兜底判据（全部按小写匹配）。
+var deterministicFailureMarkers = []string{
+	"model not exist",             // 上游 404 文案（生产 43 个模型属于此类）
+	"model not found",             // 上游 404 文案
+	"model_not_found",             // 上游错误码
+	"does not exist",              // 通用「不存在」文案
+	"invalid model",               // 模型名非法
+	"invalid api key",             // 鉴权失败文案
+	"invalid_api_key",             // 鉴权失败错误码
+	"incorrect api key",           // 鉴权失败文案
+	"unauthorized",                // 上游 401 文案
+	"authentication",              // 鉴权类文案
+	"access denied",               // 上游 403 文案
+	"accessdenied",                // AWS AccessDeniedException
+	"permission denied",           // 权限类文案
+	"forbidden",                   // 上游 403 文案
+	"not authorized",              // 权限类文案
+	"validationexception",         // AWS 参数/模型校验失败
+	"unrecognizedclientexception", // AWS 凭证无效
+	"invalidsignatureexception",   // AWS 签名无效
+	"expired",                     // 凭证过期
+	"解密凭证失败",                      // 本地：EncryptedCredentials 无法解密
+	"decrypt credentials failed",  // 本地：EncryptedCredentials 无法解密
+	"渠道不存在",                       // 本地：provider 记录缺失
+	"provider not found",          // 本地：provider 记录缺失
+	"aws 配置加载失败",                  // 本地：AWS 配置加载失败
+}
+
+// classifyProbeFailure 把检测失败归类为确定性/临时性。
+//
+// 判据优先级：
+//  1. 探针自己写入的 HTTP 状态码（doProbeRequest / checkConnectivity 统一生成 "HTTP %d: ..."），
+//     这是最可靠的机器可读信号，不依赖上游文案：
+//     408/425/429/5xx → 临时性；其余 4xx → 确定性；
+//  2. 无状态码时按已知错误类型/关键词兜底（见上面两个 marker 列表）；
+//  3. 仍无法归类 → 临时性（保守：宁可下一轮再探测一次，也不把可能可用的对象永久剔除）。
+func classifyProbeFailure(errMsg string) probeFailureKind {
+	if code, ok := probeHTTPStatusCode(errMsg); ok {
+		switch {
+		case code == http.StatusRequestTimeout || code == http.StatusTooEarly || code == http.StatusTooManyRequests:
+			return probeFailureTransient
+		case code >= 500:
+			return probeFailureTransient
+		case code >= 400:
+			return probeFailureDeterministic
+		default:
+			return probeFailureTransient
+		}
+	}
+
+	lower := strings.ToLower(errMsg)
+	for _, marker := range transientFailureMarkers {
+		if strings.Contains(lower, marker) {
+			return probeFailureTransient
+		}
+	}
+	for _, marker := range deterministicFailureMarkers {
+		if strings.Contains(lower, marker) {
+			return probeFailureDeterministic
+		}
+	}
+	return probeFailureTransient
+}
+
+// probeHTTPStatusCode 提取探针错误文本里自己写入的 HTTP 状态码。
+// 形如 "HTTP 502: <body>"，可能带前缀（checkModelForward 会加 "model forward "）。
+// 取第一个 "HTTP " 之后的 3 位数字，且必须落在 100..599 之间。
+func probeHTTPStatusCode(errMsg string) (int, bool) {
+	const marker = "http "
+	lower := strings.ToLower(errMsg)
+	idx := strings.Index(lower, marker)
+	if idx < 0 {
+		return 0, false
+	}
+	rest := lower[idx+len(marker):]
+	if len(rest) < 3 {
+		return 0, false
+	}
+	code := 0
+	for i := 0; i < 3; i++ {
+		c := rest[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		code = code*10 + int(c-'0')
+	}
+	if code < 100 || code > 599 {
+		return 0, false
+	}
+	return code, true
+}
+
+// runBackgroundModelCheck 后台执行一轮模型检测。
+//
+// ctx 为轮次上下文（定时器上下文）：仅用于判断「自动禁用/恢复触发的快照重建」是否还有必要，
+// 单次重建本身由 ProviderSnapshotRefresher 用独立的超时上下文执行。
+func (s *HealthCheckService) runBackgroundModelCheck(ctx context.Context) {
 	config, _ := s.healthRepo.GetConfig()
 	maxFailures := 3
 	if config != nil && config.ModelCheckFailureThreshold > 0 {
@@ -343,7 +504,7 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 		return
 	}
 
-	var total, success, failed, autoDisabled int
+	var total, success, failed, autoDisabled, reenabled, transientFailed int
 	var mu sync.Mutex
 	sem := make(chan struct{}, 10)
 	var wg sync.WaitGroup
@@ -370,107 +531,197 @@ func (s *HealthCheckService) runBackgroundModelCheck() {
 
 			ok, elapsed, errMsg := s.doModelForwardCheck(mod)
 			if ok {
+				recovered := s.handleModelCheckSuccess(mod, elapsed, errMsg, recoveryEnabled, recoveryThreshold, ctx)
 				mu.Lock()
 				success++
+				if recovered {
+					reenabled++
+				}
 				mu.Unlock()
-				s.modelRepo.ResetModelFailures(mod.ID)
-				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, errMsg)
-				s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, true, elapsed, errMsg)
-
-				// 恢复逻辑：自动禁用的模型检测成功时处理恢复条件
-				if mod.Status == model.ModelStatusAutoDisabled && recoveryEnabled {
-					newRecoveryCount := mod.ConsecutiveRecoverySuccesses + 1
-					slog.Info("model auto-recovery: success count increased",
-						"model_id", mod.ID, "model_name", mod.Name,
-						"recovery_successes", newRecoveryCount, "threshold", recoveryThreshold)
-
-					if newRecoveryCount >= recoveryThreshold {
-						slog.Warn("model auto-recovery: threshold reached, re-enabling",
-							"model_id", mod.ID, "model_name", mod.Name,
-							"recovery_successes", newRecoveryCount)
-				if err := s.modelRepo.AutoEnableModel(mod.ID); err == nil {
-						reason := fmt.Sprintf("连续 %d 次健康检测成功", newRecoveryCount)
-						if s.modelStatusLogSvc != nil {
-							s.modelStatusLogSvc.LogStatusChange(
-								mod.ID, mod.Provider.ID,
-								mod.Name, mod.Provider.Name,
-								model.ChangeTypeAutoRecovered,
-								reason, "",
-								nil, "",
-							)
-						}
-						// 刷新 Redis snapshot，让 gateway 立即感知模型恢复
-						if s.snapshotter != nil {
-							go s.snapshotter.RefreshAvailableSnapshot(context.Background())
-						}
-					}
-					} else {
-						// 未达阈值：递增 recovery_successes
-						s.modelRepo.IncrementRecoverySuccesses(mod.ID)
-					}
-				}
-			} else {
-				s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, errMsg)
-				s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, false, elapsed, errMsg)
-
-				// 失败时重置恢复成功计数
-				if mod.Status == model.ModelStatusAutoDisabled {
-					s.modelRepo.ResetRecoverySuccesses(mod.ID)
-					slog.Info("model auto-recovery: reset recovery successes due to failure",
-						"model_id", mod.ID, "model_name", mod.Name)
-				}
-
-				newCount, err := s.modelRepo.IncrementModelFailures(mod.ID)
-				if err == nil && newCount >= maxFailures {
-					slog.Warn("model check: auto-disabling model",
-						"model_id", mod.ID, "model_name", mod.Name,
-						"failures", newCount, "threshold", maxFailures)
-				if err := s.modelRepo.AutoDisableModel(mod.ID); err == nil {
-					if s.modelStatusLogSvc != nil {
-						s.modelStatusLogSvc.LogStatusChange(
-							mod.ID, mod.Provider.ID,
-							mod.Name, mod.Provider.Name,
-							model.ChangeTypeAutoDisabled,
-							fmt.Sprintf("连续 %d 次健康检测失败", newCount),
-							errMsg, nil, "",
-						)
-					}
-					// 刷新 Redis snapshot，让 gateway 立即感知模型禁用
-					if s.snapshotter != nil {
-						go s.snapshotter.RefreshAvailableSnapshot(context.Background())
-					}
-					mu.Lock()
-					autoDisabled++
-					mu.Unlock()
-				}
-				}
-				mu.Lock()
-				failed++
-				mu.Unlock()
+				return
 			}
+
+			disabled, kind := s.handleModelCheckFailure(mod, elapsed, errMsg, maxFailures, ctx)
+			mu.Lock()
+			failed++
+			if disabled {
+				autoDisabled++
+			}
+			if kind == probeFailureTransient {
+				transientFailed++
+			}
+			mu.Unlock()
 		}(m)
 	}
 
 	wg.Wait()
 	slog.Info("background model check completed",
-		"total", total, "success", success, "failed", failed, "auto_disabled", autoDisabled)
+		"total", total, "success", success, "failed", failed,
+		"auto_disabled", autoDisabled, "transient_failed", transientFailed, "recovered", reenabled)
 	s.invalidateTimelineCache()
 }
 
-// invalidateTimelineCache 清除所有健康监控时间线缓存
-func (s *HealthCheckService) invalidateTimelineCache() {
+// handleModelCheckSuccess 处理模型检测成功：清零连续失败计数、写检测结果，
+// 自动禁用态（status=3）的模型再按恢复策略决定是否自动恢复。
+// 返回本轮是否发生了自动恢复。
+func (s *HealthCheckService) handleModelCheckSuccess(mod *model.Model, elapsed int, errMsg string, recoveryEnabled bool, recoveryThreshold int, ctx context.Context) bool {
+	// 成功即归零「连续失败」，保证阈值语义始终是「连续 N 次失败」
+	s.modelRepo.ResetModelFailures(mod.ID)
+	s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, errMsg)
+	s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, true, elapsed, errMsg)
+
+	// 恢复逻辑：自动禁用的模型检测成功时处理恢复条件
+	if mod.Status != model.ModelStatusAutoDisabled || !recoveryEnabled {
+		return false
+	}
+
+	newRecoveryCount := mod.ConsecutiveRecoverySuccesses + 1
+	slog.Info("model auto-recovery: success count increased",
+		"model_id", mod.ID, "model_name", mod.Name,
+		"recovery_successes", newRecoveryCount, "threshold", recoveryThreshold)
+
+	if newRecoveryCount < recoveryThreshold {
+		// 未达阈值：递增 recovery_successes
+		s.modelRepo.IncrementRecoverySuccesses(mod.ID)
+		return false
+	}
+
+	slog.Warn("model auto-recovery: threshold reached, re-enabling",
+		"model_id", mod.ID, "model_name", mod.Name,
+		"recovery_successes", newRecoveryCount)
+	if err := s.modelRepo.AutoEnableModel(mod.ID); err != nil {
+		return false
+	}
+	reason := fmt.Sprintf("连续 %d 次健康检测成功", newRecoveryCount)
+	if s.modelStatusLogSvc != nil {
+		s.modelStatusLogSvc.LogStatusChange(
+			mod.ID, mod.Provider.ID,
+			mod.Name, mod.Provider.Name,
+			model.ChangeTypeAutoRecovered,
+			reason, "",
+			nil, "",
+		)
+	}
+	// 请求刷新 Redis snapshot（合并去抖），让 gateway 立即感知模型恢复
+	s.scheduleSnapshotRefresh(ctx)
+	return true
+}
+
+// handleModelCheckFailure 处理模型检测失败。
+//
+// 语义（修复重复禁用 churn + 临时故障被永久淘汰）：
+//   - 已处于自动禁用态（status=3）的模型：本轮只探测「能否恢复」，失败时不再累加
+//     consecutive_failures、不再重复执行自动禁用与快照重建（幂等短路）；
+//   - 临时性失败（429/5xx/超时/网络等）：不计入连续失败、不自动禁用，只写检测结果与日志，
+//     上游恢复后下一轮成功即把计数归零；
+//   - 确定性失败（404/401/403/凭证错误等）：累加连续失败计数，达到阈值才自动禁用。
+//
+// 返回：(本轮是否真的触发了自动禁用, 失败类别)。
+func (s *HealthCheckService) handleModelCheckFailure(mod *model.Model, elapsed int, errMsg string, maxFailures int, ctx context.Context) (bool, probeFailureKind) {
+	kind := classifyProbeFailure(errMsg)
+	alreadyAutoDisabled := mod.Status == model.ModelStatusAutoDisabled
+
+	s.modelRepo.UpdateModelCheckResult(mod.ID, elapsed, errMsg)
+	s.recordLog("model", mod.ID, mod.Name, mod.Provider.ID, mod.Provider.Name, false, elapsed, errMsg)
+
+	// 失败时重置恢复成功计数（已有计数才写库，避免每轮无谓 UPDATE）
+	if alreadyAutoDisabled && mod.ConsecutiveRecoverySuccesses != 0 {
+		s.modelRepo.ResetRecoverySuccesses(mod.ID)
+		slog.Info("model auto-recovery: reset recovery successes due to failure",
+			"model_id", mod.ID, "model_name", mod.Name)
+	}
+
+	// 幂等短路：已自动禁用的模型不可能「再次被禁用」，重复累加计数与重复触发快照只会放大 churn
+	if alreadyAutoDisabled {
+		return false, kind
+	}
+
+	if kind == probeFailureTransient {
+		slog.Warn("model check: transient failure, skip auto-disable",
+			"model_id", mod.ID, "model_name", mod.Name, "error", errMsg)
+		return false, kind
+	}
+
+	newCount, err := s.modelRepo.IncrementModelFailures(mod.ID)
+	if err != nil || newCount < maxFailures {
+		return false, kind
+	}
+
+	slog.Warn("model check: auto-disabling model",
+		"model_id", mod.ID, "model_name", mod.Name,
+		"failures", newCount, "threshold", maxFailures)
+	if err := s.modelRepo.AutoDisableModel(mod.ID); err != nil {
+		return false, kind
+	}
+	if s.modelStatusLogSvc != nil {
+		s.modelStatusLogSvc.LogStatusChange(
+			mod.ID, mod.Provider.ID,
+			mod.Name, mod.Provider.Name,
+			model.ChangeTypeAutoDisabled,
+			fmt.Sprintf("连续 %d 次健康检测失败", newCount),
+			errMsg, nil, "",
+		)
+	}
+	// 请求刷新 Redis snapshot（合并去抖：一轮 72 次禁用 → 1~2 次全量重建）
+	s.scheduleSnapshotRefresh(ctx)
+	return true, kind
+}
+
+// 时间线缓存 key 与版本号 key。
+//
+// 缓存失效改为「版本号」：
+//   - 旧实现用 SCAN MATCH health:timeline:* (COUNT 取默认 10) + 逐 key DEL，
+//     Redis keyspace 较大时会产生成百上千次往返，2s 上限必然 context deadline exceeded，
+//     且 key 删不干净（生产日志每轮都报 health timeline cache invalidate scan failed）；
+//   - 新实现只 INCR 一个版本号，缓存 key 内嵌版本号：旧 key 不再被读取，
+//     由自身 30s TTL 自然回收。失效成本 O(1)，与 keyspace 规模无关。
+const (
+	timelineCacheVersionKey      = "health:timeline:version"
+	groupTimelineCacheVersionKey = "health:group-timeline:version"
+)
+
+// timelineCacheKey 生成带版本号的时间线缓存 key
+func timelineCacheKey(version int64, lookback, search string) string {
+	return fmt.Sprintf("health:timeline:v%d:%s:%s", version, lookback, search)
+}
+
+// groupTimelineCacheKey 生成带版本号的模型组时间线缓存 key
+func groupTimelineCacheKey(version int64, lookback, search string) string {
+	return fmt.Sprintf("health:group-timeline:v%d:%s:%s", version, lookback, search)
+}
+
+// timelineCacheVersion 读取时间线缓存版本号（key 不存在或读取失败都按 0 处理）
+func (s *HealthCheckService) timelineCacheVersion(key string) int64 {
+	if s.rdb == nil {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	version, err := s.rdb.Get(ctx, key).Int64()
+	if err != nil {
+		if err != redis.Nil {
+			slog.Debug("health timeline cache version get failed", "key", key, "error", err)
+		}
+		return 0
+	}
+	return version
+}
+
+// bumpTimelineCacheVersion 递增缓存版本号，一次性让该命名空间下的所有缓存失效
+func (s *HealthCheckService) bumpTimelineCacheVersion(key string) {
 	if s.rdb == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	iter := s.rdb.Scan(ctx, 0, "health:timeline:*", 0).Iterator()
-	for iter.Next(ctx) {
-		s.rdb.Del(ctx, iter.Val())
+	if err := s.rdb.Incr(ctx, key).Err(); err != nil {
+		slog.Warn("health timeline cache invalidate failed", "key", key, "error", err)
 	}
-	if err := iter.Err(); err != nil {
-		slog.Warn("health timeline cache invalidate scan failed", "error", err)
-	}
+}
+
+// invalidateTimelineCache 失效健康监控时间线缓存（O(1)，不再 SCAN 整个 keyspace）
+func (s *HealthCheckService) invalidateTimelineCache() {
+	s.bumpTimelineCacheVersion(timelineCacheVersionKey)
 }
 
 // BedrockProbeMaxTokens 是 Bedrock 探针下发的 max_tokens。
@@ -718,7 +969,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 	if err != nil {
 		cr.Error = "decrypt credentials failed"
 		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
-		s.handleProviderFailure(provider.ID, maxFailures, cr)
+		s.handleProviderFailure(provider, maxFailures, cr)
 		return cr
 	}
 
@@ -736,7 +987,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 		if !success {
 			cr.Error = errMsg
 			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, elapsed, errMsg)
-			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			s.handleProviderFailure(provider, maxFailures, cr)
 			return cr
 		}
 		// 仅连通性模式直接返回成功
@@ -766,7 +1017,7 @@ func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provi
 			}
 			cr.Error = errMsg
 			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, cr.ResponseTime, errMsg)
-			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			s.handleProviderFailure(provider, maxFailures, cr)
 			return cr
 		}
 	}
@@ -820,7 +1071,7 @@ func (s *HealthCheckService) checkAzureProvider(ctx context.Context, provider *m
 		if !res.Success {
 			cr.Error = res.Message
 			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			s.handleProviderFailure(provider, maxFailures, cr)
 			return cr
 		}
 		if checkMode == "connectivity" {
@@ -853,7 +1104,7 @@ func (s *HealthCheckService) checkAzureProvider(ctx context.Context, provider *m
 		if !res.Success {
 			cr.Error = res.Message
 			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			s.handleProviderFailure(provider, maxFailures, cr)
 			return cr
 		}
 		cr.Success = true
@@ -892,7 +1143,7 @@ func (s *HealthCheckService) checkVertexProvider(ctx context.Context, provider *
 	if !res.Success {
 		cr.Error = res.Message
 		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-		s.handleProviderFailure(provider.ID, maxFailures, cr)
+		s.handleProviderFailure(provider, maxFailures, cr)
 		return cr
 	}
 	cr.Success = true
@@ -915,7 +1166,7 @@ func (s *HealthCheckService) checkSeedanceRelayProvider(ctx context.Context, pro
 		if !res.Success {
 			cr.Error = res.Message
 			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			s.handleProviderFailure(provider, maxFailures, cr)
 			return cr
 		}
 		if checkMode == "connectivity" {
@@ -939,7 +1190,7 @@ func (s *HealthCheckService) checkSeedanceRelayProvider(ctx context.Context, pro
 			if !res.Success {
 				cr.Error = res.Message
 				s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-				s.handleProviderFailure(provider.ID, maxFailures, cr)
+				s.handleProviderFailure(provider, maxFailures, cr)
 				return cr
 			}
 			cr.Success = true
@@ -975,7 +1226,7 @@ func (s *HealthCheckService) checkSeedanceVolcengineProvider(ctx context.Context
 	if !cred.HasAuth() {
 		cr.Error = "seedance-volcengine: missing credentials for selected auth_type"
 		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
-		s.handleProviderFailure(provider.ID, maxFailures, cr)
+		s.handleProviderFailure(provider, maxFailures, cr)
 		return cr
 	}
 
@@ -990,7 +1241,7 @@ func (s *HealthCheckService) checkSeedanceVolcengineProvider(ctx context.Context
 		if !res.Success {
 			cr.Error = res.Message
 			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			s.handleProviderFailure(provider, maxFailures, cr)
 			return cr
 		}
 		cr.Message = res.Message
@@ -1010,7 +1261,7 @@ func (s *HealthCheckService) checkSeedanceVolcengineProvider(ctx context.Context
 			if !res.Success {
 				cr.Error = res.Message
 				s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-				s.handleProviderFailure(provider.ID, maxFailures, cr)
+				s.handleProviderFailure(provider, maxFailures, cr)
 				return cr
 			}
 			cr.Success = true
@@ -1095,7 +1346,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 	if err != nil {
 		cr.Error = "AWS 配置加载失败: " + err.Error()
 		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
-		s.handleProviderFailure(provider.ID, maxFailures, cr)
+		s.handleProviderFailure(provider, maxFailures, cr)
 		return cr
 	}
 
@@ -1112,7 +1363,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 		if err != nil {
 			cr.Error = err.Error()
 			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, elapsed, cr.Error)
-			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			s.handleProviderFailure(provider, maxFailures, cr)
 			return cr
 		}
 
@@ -1170,7 +1421,7 @@ func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider 
 		if err != nil {
 			cr.Error = "model forward: " + err.Error()
 			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, cr.ResponseTime, cr.Error)
-			s.handleProviderFailure(provider.ID, maxFailures, cr)
+			s.handleProviderFailure(provider, maxFailures, cr)
 			return cr
 		}
 	}
@@ -1312,30 +1563,47 @@ func (s *HealthCheckService) finalizeProviderSuccess(provider *model.Provider, c
 	provider.Status = model.ProviderStatusEnabled
 	slog.Warn("provider auto-recovery: re-enabled after successful health check",
 		"provider_id", provider.ID, "provider_name", provider.Name)
-	if s.snapshotter != nil {
-		go s.snapshotter.RefreshAvailableSnapshot(context.Background())
-	}
+	// 请求刷新 Redis snapshot（合并去抖），让 gateway 立即感知渠道恢复
+	s.scheduleSnapshotRefresh(context.Background())
 }
 
-// handleProviderFailure 处理渠道失败（递增计数，可能自动禁用）
-func (s *HealthCheckService) handleProviderFailure(id uuid.UUID, maxFailures int, cr *CheckResult) {
-	newCount, err := s.providerRepo.IncrementFailures(id)
+// handleProviderFailure 处理渠道检测失败。
+//
+// 语义与 handleModelCheckFailure 对齐：
+//   - 已处于自动禁用态（status=3）的渠道：幂等短路，失败不再累加计数、不再重复禁用；
+//   - 临时性失败（429/5xx/超时/网络/上游限流）：不计入连续失败、不自动禁用；
+//   - 确定性失败（4xx/凭证解密失败等）：累加连续失败，达到阈值才自动禁用。
+func (s *HealthCheckService) handleProviderFailure(provider *model.Provider, maxFailures int, cr *CheckResult) {
+	if provider == nil {
+		return
+	}
+	if provider.Status == model.ProviderStatusAutoDisabled {
+		// 已自动禁用：继续检测只为自动恢复，失败无需再记账（避免 consecutive_failures 无限增长）
+		return
+	}
+	if classifyProbeFailure(cr.Error) == probeFailureTransient {
+		slog.Warn("provider check: transient failure, skip auto-disable",
+			"provider_id", provider.ID, "provider_name", provider.Name, "error", cr.Error)
+		return
+	}
+
+	newCount, err := s.providerRepo.IncrementFailures(provider.ID)
 	if err != nil {
-		slog.Error("failed to increment failures", "provider_id", id, "error", err)
+		slog.Error("failed to increment failures", "provider_id", provider.ID, "error", err)
 		return
 	}
 
 	if newCount >= maxFailures {
 		slog.Warn("auto-disabling provider due to consecutive failures",
-			"provider_id", id,
+			"provider_id", provider.ID,
 			"failures", newCount,
 			"threshold", maxFailures,
 		)
-		if err := s.providerRepo.AutoDisable(id); err != nil {
-			slog.Error("failed to auto-disable provider", "provider_id", id, "error", err)
-		} else {
-			cr.AutoDisabled = true
+		if err := s.providerRepo.AutoDisable(provider.ID); err != nil {
+			slog.Error("failed to auto-disable provider", "provider_id", provider.ID, "error", err)
+			return
 		}
+		cr.AutoDisabled = true
 	}
 }
 
@@ -1346,7 +1614,11 @@ func (s *HealthCheckService) RunNow() {
 		defer cancel()
 		s.CheckAll(ctx)
 	}()
-	go s.runBackgroundModelCheck()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		s.runBackgroundModelCheck(ctx)
+	}()
 	if s.groupCheckSvc != nil {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -1507,7 +1779,8 @@ const timelineBuckets = 100
 
 // GetTimeline 获取健康监控时间线数据
 func (s *HealthCheckService) GetTimeline(lookback string, search string, offset int, limit int) (*TimelineResult, error) {
-	cacheKey := fmt.Sprintf("health:timeline:%s:%s", lookback, search)
+	version := s.timelineCacheVersion(timelineCacheVersionKey)
+	cacheKey := timelineCacheKey(version, lookback, search)
 	if s.rdb != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -1612,7 +1885,7 @@ func paginateTimelineResult(full *TimelineResult, offset int, limit int) *Timeli
 	return &TimelineResult{Lookback: full.Lookback, Total: total, Groups: full.Groups[offset:end]}
 }
 
-	func parseLookback(lookback string) time.Duration {
+func parseLookback(lookback string) time.Duration {
 	switch lookback {
 	case "12h":
 		return 12 * time.Hour
@@ -1655,7 +1928,8 @@ type GroupTimelineResult struct {
 
 // GetGroupTimeline 获取按模型组聚合的健康监控时间线数据
 func (s *HealthCheckService) GetGroupTimeline(lookback string, search string, offset int, limit int) (*GroupTimelineResult, error) {
-	cacheKey := fmt.Sprintf("health:group-timeline:%s:%s", lookback, search)
+	version := s.timelineCacheVersion(groupTimelineCacheVersionKey)
+	cacheKey := groupTimelineCacheKey(version, lookback, search)
 	if s.rdb != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -1846,22 +2120,10 @@ func (s *HealthCheckService) runBackgroundGroupCheck(ctx context.Context) {
 	s.invalidateGroupTimelineCache()
 }
 
-// invalidateGroupTimelineCache 清除模型组时间线 Redis 缓存
+// invalidateGroupTimelineCache 失效模型组时间线缓存（与 invalidateTimelineCache 同机制）
 func (s *HealthCheckService) invalidateGroupTimelineCache() {
-	if s.rdb == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	iter := s.rdb.Scan(ctx, 0, "health:group-timeline:*", 0).Iterator()
-	for iter.Next(ctx) {
-		s.rdb.Del(ctx, iter.Val())
-	}
-	if err := iter.Err(); err != nil {
-		slog.Warn("group timeline cache invalidate scan failed", "error", err)
-	}
+	s.bumpTimelineCacheVersion(groupTimelineCacheVersionKey)
 }
-
 
 func sortGroupTimelineByHealth(groups []GroupTimelineGroup) {
 	for i := 0; i < len(groups); i++ {
@@ -1872,7 +2134,6 @@ func sortGroupTimelineByHealth(groups []GroupTimelineGroup) {
 		}
 	}
 }
-
 
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {

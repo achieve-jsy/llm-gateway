@@ -198,11 +198,46 @@ func (a *anthropicStreamAdapter) flushAndFinish() {
 	a.emitRaw("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 }
 
-// closeAllBlocks 按协议收尾：先关文本块，再按 content block index 升序关闭所有
-// 打开的工具块（并行工具调用的块会一直开到收尾，避免把续传参数关在块外）。
+// closeAllBlocks 按 content block index 升序关闭所有打开的内容块（文本块与工具块混排），
+// 最后再把「name 始终未到、但参数已攒下」的调用补发出来。
+//
+// 工具块（可能并行多个）与文本块都保持打开到收尾，避免把续传参数关在块外；块的 index 在
+// 打开时分配，收尾按升序发 stop 以满足官方 SDK 的顺序假设。补发留到最后，是因为只有真正
+// 收尾时才能确定"没有 name 可等了"，提前发会得到 name 为空的半成品块。
 func (a *anthropicStreamAdapter) closeAllBlocks() {
-	a.closeTextBlock()
-	a.closeOpenToolBlocks()
+	var indexes []int
+	if a.state.textBlockOpen {
+		a.state.textBlockOpen = false
+		indexes = append(indexes, a.state.textBlockIndex)
+	}
+	for _, slot := range a.state.toolBlockOrder {
+		if !slot.closed && slot.blockIndex >= 0 {
+			slot.closed = true
+			indexes = append(indexes, slot.blockIndex)
+		}
+	}
+	sort.Ints(indexes)
+	for _, index := range indexes {
+		a.emitContentBlockStop(index)
+	}
+
+	var pending []*toolBlockState
+	for _, slot := range a.state.toolBlockOrder {
+		if !slot.closed && slot.blockIndex < 0 && slot.pendingArgs.Len() > 0 {
+			pending = append(pending, slot)
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].index < pending[j].index })
+	for _, slot := range pending {
+		slog.Warn("anthropic stream: tool_call never got a function name; emitting tool_use block with empty name",
+			"request_id", a.state.requestID, "model", a.state.model,
+			"tool_call_index", slot.index, "tool_id", slot.id)
+		a.openToolBlock(slot)
+		payload := slot.pendingArgs.String()
+		slot.pendingArgs.Reset()
+		a.emitInputJSONDelta(slot.blockIndex, payload)
+		a.closeToolBlock(slot)
+	}
 }
 
 // openAIChatChunk is the structure of a single OpenAI SSE chunk.
@@ -312,10 +347,10 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 		content := delta.Content
 		toolCalls := delta.ToolCalls
 
-		// Handle content (text) deltas。文本块与 tool_use 块按协议互斥：仍有打开的
-		// 工具块时先给它们收尾再开文本块（修复前这里会把这批文本 delta 直接丢掉）。
+		// Handle content (text) deltas。文本块与工具块各自持有自己的 block index，文本 delta
+		// 不能顺手把工具块关掉：否则"参数被文本打断"的流会在块关闭后丢掉尾部参数
+		// （拼出非法 JSON）。多块并存，收尾时按 index 升序统一 close。
 		if content != nil && *content != "" {
-			a.closeOpenToolBlocks()
 			if !a.state.textBlockOpen {
 				a.startTextBlock()
 			}
@@ -346,9 +381,14 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 // tool_use.input 只有 {}。
 func (a *anthropicStreamAdapter) handleToolCallDelta(tc openAIToolCallDelta) {
 	slot := a.state.toolBlocks[tc.Index]
-	// 同一 index 换了新的 tool_call id（上游复用 index，或干脆省略 index 恒为 0）：
-	// 视为一次新的工具调用，先把旧块收尾，避免两次调用的参数拼进同一个块。
-	if slot != nil && !slot.closed && slot.id != "" && tc.ID != "" && slot.id != tc.ID {
+	// 已关闭的块无法再追加 delta：同一 index 之后又来的数据只能属于一次新的调用
+	// （上游复用 index，或干脆省略 index 恒为 0）。不重建状态就会把整次调用丢掉。
+	if slot != nil && slot.closed {
+		slot = nil
+	}
+	// 同一 index 换了新的 tool_call id：同样视为新的调用，先收尾旧块，避免两次调用的
+	// 参数拼进同一个块。
+	if slot != nil && slot.id != "" && tc.ID != "" && slot.id != tc.ID {
 		a.closeToolBlock(slot)
 		slot = nil
 	}
@@ -444,43 +484,6 @@ func (a *anthropicStreamAdapter) closeToolBlock(slot *toolBlockState) {
 		return
 	}
 	a.emitContentBlockStop(slot.blockIndex)
-}
-
-// closeOpenToolBlocks 按 content block index 升序关闭所有打开的工具块。
-//
-// 收尾前先把「name 一直没到、但参数已攒下」的调用补开出来：否则整次工具调用会
-// 凭空消失，客户端只看到 stop_reason=tool_use 却没有任何 tool_use 块。
-func (a *anthropicStreamAdapter) closeOpenToolBlocks() {
-	var pending []*toolBlockState
-	var open []*toolBlockState
-	for _, slot := range a.state.toolBlockOrder {
-		if slot.closed {
-			continue
-		}
-		switch {
-		case slot.blockIndex < 0 && slot.pendingArgs.Len() > 0:
-			pending = append(pending, slot)
-		case slot.blockIndex >= 0:
-			open = append(open, slot)
-		}
-	}
-
-	sort.Slice(pending, func(i, j int) bool { return pending[i].index < pending[j].index })
-	for _, slot := range pending {
-		slog.Warn("anthropic stream: tool_call never got a function name; emitting tool_use block with empty name",
-			"request_id", a.state.requestID, "model", a.state.model,
-			"tool_call_index", slot.index, "tool_id", slot.id)
-		a.openToolBlock(slot)
-		payload := slot.pendingArgs.String()
-		slot.pendingArgs.Reset()
-		a.emitInputJSONDelta(slot.blockIndex, payload)
-		open = append(open, slot)
-	}
-
-	sort.Slice(open, func(i, j int) bool { return open[i].blockIndex < open[j].blockIndex })
-	for _, slot := range open {
-		a.closeToolBlock(slot)
-	}
 }
 
 // emitMessageStart writes the message_start event, carrying the real
@@ -611,13 +614,25 @@ func (a *anthropicStreamAdapter) emitContentBlockStop(index int) {
 // 口径是只要有工具调用 stop_reason 就是 tool_use）。必须在 closeAllBlocks 之后调用，
 // 让收尾阶段补发的工具块也被算进去。
 func (a *anthropicStreamAdapter) inferStopReason() string {
-	if a.state.finishReason != "" {
-		return a.state.finishReason
-	}
+	hasToolBlock := false
 	for _, slot := range a.state.toolBlockOrder {
 		if slot.blockIndex >= 0 {
+			hasToolBlock = true
+			break
+		}
+	}
+	// 上游给了 finish_reason 就优先用它；但 "stop"/"content_filter" 会被映射成 end_turn，
+	// 而流里已经发出 tool_use 块时，end_turn 会让 agent 循环认为"这一轮说完了"从而不执行
+	// 工具（部分后端确实把 tool_calls 报成 stop）。这种情况改成 tool_use。
+	// 保留 max_tokens：参数可能被截断，客户端应继续生成而不是执行半个工具调用。
+	if a.state.finishReason != "" {
+		if a.state.finishReason == "end_turn" && hasToolBlock {
 			return "tool_use"
 		}
+		return a.state.finishReason
+	}
+	if hasToolBlock {
+		return "tool_use"
 	}
 	return "end_turn"
 }

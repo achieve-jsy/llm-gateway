@@ -229,8 +229,10 @@ id 兜底）都已用"临时退回对应改动"的方式确认过会失败，避
    **新的一次调用**处理（另开块）。这覆盖了上游复用 index / 省略 index（恒为 0）的形态；
    真正的"同一次调用参数在块关闭后继续到达"无法表达，只能丢弃并 `slog.Warn`（实际不会发生：
    OpenAI/vLLM/SGLang 的工具调用参数按 index 顺序单调流出）。
-2. **多 choice（`n > 1`）共享一份块状态**：流式转换目前只按 `choices[0]` 的语义假设工作（与既有实现一致），
-   未做 per-choice 隔离。
+2. **多 choice（`n > 1`）只转换第一个**：Anthropic 的一条 `message` 只能装一份内容，所以
+   `choices[1..]` 被丢弃并 `slog.Warn`（带 choices 数量）。这比"把多个 choice 的 delta 灌进同一份状态"
+   安全：后者会让文本串台、并行工具调用的参数互相污染。若确有 per-choice 需求，只能拆成多条 message
+   （协议层不支持），或由调用方显式发起多次请求。
 3. **非法 JSON 的收口**：流式通道无法在收尾把非法 JSON 改写成 `{}`（客户端已按分片累加）；
    非流式通道（`core.responseMessageToAnthropicBlocks`）对非法 JSON 有"包成 JSON 字符串"的兜底。
 4. **LiteLLM 的 hold-and-release 严格顺序**未采用，见 §4.4 取舍说明。

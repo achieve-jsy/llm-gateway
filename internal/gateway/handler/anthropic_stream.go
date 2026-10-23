@@ -342,7 +342,15 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 		return
 	}
 
-	for _, choice := range chunk.Choices {
+	// 多 choice（n > 1）：Anthropic 的一条 message 只能装一份内容，把多个 choice 的
+	// delta 灌进同一份状态会让文本串台、并行工具调用的参数互相污染。因此只转换第一个
+	// choice，其余丢弃并告警（带 choices 数量，便于发现上游没按预期置 n=1）。
+	if len(chunk.Choices) > 1 {
+		slog.Warn("anthropic stream: upstream returned multiple choices; converting only the first",
+			"request_id", a.state.requestID, "model", a.state.model, "choices", len(chunk.Choices))
+	}
+	choice := chunk.Choices[0]
+	{
 		// message_stop 已发出（usage-only chunk 提前收尾）后不再开内容块：否则会出现
 		// message_stop 之后的 content_block_start，客户端直接判协议错误。
 		if a.state.finished {

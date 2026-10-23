@@ -36,8 +36,6 @@ type fcItem struct {
 	ArgsRaw any // 非 nil 时直接作为 arguments 的值下发（模拟对象/数组形态）
 }
 
-func strPtr(s string) *string { return &s }
-
 func (it fcItem) toMap() map[string]any {
 	m := map[string]any{
 		"type":    "function_call",
@@ -112,15 +110,6 @@ func addedEventWithIndex(t *testing.T, it fcItem, outputIndex int) string {
 	t.Helper()
 	return mustJSON(t, map[string]any{
 		"type":         "response.output_item.added",
-		"output_index": outputIndex,
-		"item":         it.toMap(),
-	})
-}
-
-func doneEventWithIndex(t *testing.T, it fcItem, outputIndex int) string {
-	t.Helper()
-	return mustJSON(t, map[string]any{
-		"type":         "response.output_item.done",
 		"output_index": outputIndex,
 		"item":         it.toMap(),
 	})

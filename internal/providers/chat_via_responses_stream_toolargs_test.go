@@ -575,3 +575,37 @@ func TestResponsesStreamToolArgsNoItemID(t *testing.T) {
 	assert.Equal(t, normalArgs, calls[1].Arguments, "参数不能串到别的 tool_call 上")
 	assert.Equal(t, "tool_calls", finishReason)
 }
+
+// TestResponsesStreamToolArgsNameArrivesLater 覆盖"added 里没有 name、name 只在
+// output_item.done / completed 才出现"的兼容实现：下游 tool_call 必须最终拿到 name，
+// 不能被 added 那一帧用空 name 把身份钉死。
+func TestResponsesStreamToolArgsNameArrivesLater(t *testing.T) {
+	args := `{"q":"x"}`
+	chunks := runResponsesStream(t,
+		addedEvent(t, fcItem{ID: "fc_n", CallID: "call_n"}),
+		doneEvent(t, fcItem{ID: "fc_n", CallID: "call_n", Name: "late_tool", Args: &args}),
+		completedEvent(t, "resp_n", fcItem{ID: "fc_n", CallID: "call_n", Name: "late_tool", Args: &args}),
+	)
+	calls, finishReason := assembleToolCalls(t, chunks)
+	require.Len(t, calls, 1)
+	assert.Equal(t, "late_tool", calls[0].Name, "name 晚到时必须补上")
+	assert.Equal(t, "call_n", calls[0].ID)
+	requireArgsJSONEqual(t, calls[0].Arguments, args)
+	assert.Equal(t, "tool_calls", finishReason)
+}
+
+// TestResponsesStreamToolArgsSynthesizesIDWhenNoIdent 覆盖 id/call_id 全缺、只有
+// output_index 可定位的兼容实现：下游 tool_call 不能拿到空 id（空 id 会破坏
+// tool_use/tool_result 的配对），必须合成一个稳定 id。
+func TestResponsesStreamToolArgsSynthesizesIDWhenNoIdent(t *testing.T) {
+	args := `{"x":1}`
+	chunks := runResponsesStream(t,
+		addedEventWithIndex(t, fcItem{Name: "no_ident_tool", Args: &args}, 0),
+		completedEvent(t, "resp_s", fcItem{Name: "no_ident_tool", Args: &args}),
+	)
+	calls, _ := assembleToolCalls(t, chunks)
+	require.Len(t, calls, 1)
+	assert.NotEmpty(t, calls[0].ID, "id 全缺时必须合成兜底 id")
+	assert.Equal(t, "no_ident_tool", calls[0].Name)
+	requireArgsJSONEqual(t, calls[0].Arguments, args)
+}

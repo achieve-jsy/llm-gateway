@@ -105,9 +105,10 @@ type toolBlockState struct {
 
 ### 4.2 处理单个 `tool_calls` 分块（`handleToolCallDelta`）
 
-1. 同一 index 出现新 `id`（与已知 id 不同且未 closed）→ 视为新调用，先关闭旧块、另起新状态。
-2. 记录 `id` / `name`。
-3. 块已 closed → 参数无法回填，`slog.Warn` 后丢弃（**不写进别人的块**）。
+1. 该 index 的块已 closed（例如同一 index 已经跑完一次调用）→ 一律重建状态、另开新块：
+   closed 的块无法再追加 delta，复用状态会把整次调用静默丢掉。
+2. 同一 index 出现新 `id`（与已知 id 不同）→ 同样视为新调用，先关闭旧块、另起新状态。
+3. 记录 `id` / `name`。
 4. 尚未开块：没有 `name` 就把 `arguments` 暂存进 `pendingArgs`（避免发出 name 为空的 tool_use 块）；
    有 `name` 立即 `openToolBlock`（顺带给打开的文本块收尾）。
 5. **无论首块还是续块**，把 `pendingArgs + arguments` 作为一条 `input_json_delta` 发到自己的块。
@@ -115,13 +116,20 @@ type toolBlockState struct {
 
 ### 4.3 收尾（`closeAllBlocks`）
 
-先关文本块，再按 block index 升序关闭所有打开的工具块；关闭前把"name 始终未到但有参数"的调用
-补开出来（`slog.Warn`），避免客户端只看到 `stop_reason=tool_use` 却没有任何 `tool_use` 块。
-finish_reason / 末尾 usage-only chunk / `[DONE]` / EOF / scanner error 五条路径都走这里，
-由 `state.finished` 守卫保证 `message_delta`+`message_stop` 只发一次。
+1. 收集所有仍打开的块（文本块 + 工具块），按 block index **升序**发 `content_block_stop`。
+2. 再把"name 始终未到但有参数"的调用补开出来（`openToolBlock` + `input_json_delta` + stop）并
+   `slog.Warn`：这类块只能等到真正收尾才确定"没有 name 可等"，提前发会得到 name 为空的半成品块。
 
-上游全程不给 `finish_reason` 时，`inferStopReason()` 按已发出的块推导：有 `tool_use` 块即
-`tool_use`，否则 `end_turn`。
+finish_reason / 末尾 usage-only chunk / `[DONE]` / EOF / scanner error 五条路径都走这里，
+由 `state.finished` 守卫保证 `message_delta`+`message_stop` 只发一次；`finished` 之后不再开新块。
+
+`inferStopReason()` 决定 `stop_reason`：
+
+- 上游给了 `finish_reason` 就优先用映射结果；但若映射成 `end_turn` 而流里已有 `tool_use` 块，
+  改判 `tool_use`（部分后端把 tool_calls 报成 `finish_reason:"stop"`，`end_turn` 会让 agent
+  循环直接结束、工具永不执行）；
+- 保留 `max_tokens`：参数可能被截断，客户端应继续生成而不是执行半个工具调用；
+- 上游完全没给 `finish_reason` 时，有 `tool_use` 块即 `tool_use`，否则 `end_turn`。
 
 ### 4.4 事件形态（单 chunk 内两个并行调用，实测输出）
 
@@ -201,13 +209,19 @@ JSON）；同理并行调用的块被关掉会把后续参数丢进别人的块�
 | `..._SameIndexThreeSequentialCalls` | 同 index 连续三次调用 → 三块、参数不串 |
 | `..._IDArrivesAfterBlockStart` | id 晚于 name/参数到达：块已用兜底 id 打开，不能另开块 |
 | `..._EmptyArgumentsToolInputEmptyObject` | 空参数工具：无 `input_json_delta`、`input={}`、stop_reason 仍是 tool_use |
+| `..._TextToolText` | text → tool → text：两个文本块（index 0/2）+ 工具块（index 1），文本拼接完整、三个块都收尾 |
 
 `tests/gateway/handler/messages_stream_toolargs_test.go`：HTTP 层端到端（`/v1/messages` + stream=true）
 回放事故 SSE，断言客户端收到的 tool_use 块 id/name/完整 input 与事件顺序。
 
 `internal/providers/chat_via_responses_stream_toolargs_test.go`：A 首帧即全量 / B delta 回归 /
 C 仅 completed / D `output_item.done`（含缺 added 的兼容形态）/ E 并行不串台 / F 空参数收口 /
-G `"{}"` 占位不重复拼接 / H delta-only 流补 id/name。
+G `"{}"` 占位不重复拼接 / H delta-only 流补 id/name / I name 晚到由 done/completed 补 /
+J id 与 call_id 全缺时合成 `call_<idx>`。
+
+**新增测试的自我验证约定**：每个修复都要能"退回修复就变红"。文档里列出的关键用例（首块全量参数、
+文本打断参数、同 index 换新 id、`finish_reason:"stop"` + tool 块、`"{}"` 占位、name 晚到、
+id 兜底）都已用"临时退回对应改动"的方式确认过会失败，避免写出恒绿的实现无关断言。
 
 ## 7. 已知限制
 

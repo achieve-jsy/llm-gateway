@@ -208,7 +208,9 @@ func (c *ResponsesToChatStreamConverter) toolAddedChunks(evt map[string]any) []j
 	idx := c.nextToolIdx
 	c.nextToolIdx++
 	c.toolIndex[key] = idx
-	c.toolAnnounced[key] = true
+	// 只有真的带上了 name 才算"身份已 announce"：否则后续 output_item.done /
+	// completed 拿到的 name 会被这个标记挡住，下游 tool_call 永远没有 name。
+	c.toolAnnounced[key] = name != ""
 
 	// 首帧参数不能假定为空：OpenAI 官方形态下 added 的 arguments 恒为空串，
 	// 正文随后由 response.function_call_arguments.delta 分片下发；但部分兼容
@@ -227,10 +229,16 @@ func (c *ResponsesToChatStreamConverter) toolAddedChunks(evt map[string]any) []j
 			"role": "assistant",
 		}, nil))
 	}
+	// id / call_id 全缺（只有 output_index 可定位）时合成一个稳定 id：下游 tool_call
+	// 的 id 为空串会破坏 tool_use/tool_result 的配对。
+	frameID := callID
+	if frameID == "" {
+		frameID = "call_" + strconv.Itoa(idx)
+	}
 	out = append(out, c.chunk(map[string]any{
 		"tool_calls": []map[string]any{{
 			"index": idx,
-			"id":    callID,
+			"id":    frameID,
 			"type":  "function",
 			"function": map[string]any{
 				"name":      name,
@@ -437,7 +445,11 @@ func (c *ResponsesToChatStreamConverter) emitToolArguments(item map[string]any, 
 	toolCall := map[string]any{"index": idx, "function": fn}
 	if !announced && name != "" {
 		fn["name"] = name
-		toolCall["id"] = callID
+		frameID := callID
+		if frameID == "" {
+			frameID = "call_" + strconv.Itoa(idx)
+		}
+		toolCall["id"] = frameID
 		toolCall["type"] = "function"
 		c.toolAnnounced[key] = true
 	}

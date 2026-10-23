@@ -92,38 +92,31 @@ func TestAnthropicStream_ToolArgs_FinishReasonStopWithToolBlock(t *testing.T) {
 }
 
 // TestAnthropicStream_ToolArgs_TextAndToolCallsInSameChunk 覆盖单个 chunk 同时带文本与
-// tool_calls 的形态（两种字段顺序各一次）：文本块与工具块 index 必须密集且各自完整。
+// tool_calls 的形态：文本块占 index 0、工具块占 index 1，两者都完整。
+// （JSON 对象的字段顺序不影响结果：processChunk 固定先处理 content 再处理 tool_calls。）
 func TestAnthropicStream_ToolArgs_TextAndToolCallsInSameChunk(t *testing.T) {
 	const args = `{"command": "ls"}`
-	for name, delta := range map[string]map[string]any{
-		"text_then_tools": {
-			"content":    "running",
-			"tool_calls": []any{toolCallDeltaWithArgs(0, "call_ls", "Bash", args)},
+	sse := openAISSE(t,
+		map[string]any{
+			"id": "chatcmpl-x", "object": "chat.completion.chunk", "model": "m",
+			"choices": []any{map[string]any{"index": 0, "delta": map[string]any{
+				"content":    "running",
+				"tool_calls": []any{toolCallDeltaWithArgs(0, "call_ls", "Bash", args)},
+			}}},
 		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			sse := openAISSE(t,
-				map[string]any{
-					"id": "chatcmpl-x", "object": "chat.completion.chunk", "model": "m",
-					"choices": []any{map[string]any{"index": 0, "delta": delta}},
-				},
-				finishChunk("tool_calls"),
-			)
-			events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 50))
+		finishChunk("tool_calls"),
+	)
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 50))
 
-			blocks := collectToolUseBlocks(t, events)
-			if len(blocks) != 1 {
-				t.Fatalf("tool_use 块数量 = %d, want 1; 事件序列 %v", len(blocks), eventTypes(events))
-			}
-			assertToolBlockSequenced(t, events, blocks[0])
-			assertToolBlockArgs(t, blocks[0], args, decodeJSONObject(t, "期望参数", args))
-
-			// 文本块 index 必须与工具块不同且更小（文本先出现）。
-			if blocks[0].Index != 1 {
-				t.Errorf("tool_use 块 index = %d, want 1（文本块占用 0）", blocks[0].Index)
-			}
-		})
+	blocks := collectToolUseBlocks(t, events)
+	if len(blocks) != 1 {
+		t.Fatalf("tool_use 块数量 = %d, want 1; 事件序列 %v", len(blocks), eventTypes(events))
 	}
+	if blocks[0].Index != 1 {
+		t.Errorf("tool_use 块 index = %d, want 1（文本块占用 0）", blocks[0].Index)
+	}
+	assertToolBlockSequenced(t, events, blocks[0])
+	assertToolBlockArgs(t, blocks[0], args, decodeJSONObject(t, "期望参数", args))
 }
 
 // TestAnthropicStream_ToolArgs_SameIndexThreeSequentialCalls 覆盖同 index 连续三次调用
@@ -201,5 +194,61 @@ func TestAnthropicStream_ToolArgs_EmptyArgumentsToolInputEmptyObject(t *testing.
 	}
 	if _, stop := messageDeltaInfo(t, events); stop != "tool_use" {
 		t.Errorf("stop_reason = %q, want tool_use", stop)
+	}
+}
+
+// TestAnthropicStream_ToolArgs_TextToolText 覆盖 text → tool → text 的形态：
+// 期望两个文本块(index 0/2) + 一个工具块(index 1)，文本拼接为 "ab"，index 密集升序。
+func TestAnthropicStream_ToolArgs_TextToolText(t *testing.T) {
+	const args = `{"command": "ls"}`
+	sse := openAISSE(t,
+		map[string]any{
+			"id": "chatcmpl-x", "object": "chat.completion.chunk", "model": "m",
+			"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": "a"}}},
+		},
+		chunkWithToolCalls(toolCallDeltaWithArgs(0, "call_ls", "Bash", args)),
+		map[string]any{
+			"id": "chatcmpl-x", "object": "chat.completion.chunk", "model": "m",
+			"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": "b"}}},
+		},
+		finishChunk("tool_calls"),
+	)
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 50))
+
+	blocks := collectToolUseBlocks(t, events)
+	if len(blocks) != 1 {
+		t.Fatalf("tool_use 块数量 = %d, want 1; 事件序列 %v", len(blocks), eventTypes(events))
+	}
+	if blocks[0].Index != 1 {
+		t.Errorf("tool_use 块 index = %d, want 1（文本块 0 之后）", blocks[0].Index)
+	}
+	assertToolBlockSequenced(t, events, blocks[0])
+	assertToolBlockArgs(t, blocks[0], args, decodeJSONObject(t, "期望参数", args))
+
+	// 两个文本块（index 0 与 2）的文本拼起来必须是 "ab"，且都各自有 start/stop。
+	texts := map[int]string{}
+	open := map[int]bool{}
+	for _, e := range events {
+		switch e["type"] {
+		case "content_block_start":
+			cb, _ := e["content_block"].(map[string]any)
+			if cb != nil && cb["type"] == "text" {
+				open[eventIndex(e)] = true
+			}
+		case "content_block_delta":
+			d := eventDelta(e)
+			if d["type"] == "text_delta" {
+				texts[eventIndex(e)] += d["text"].(string)
+			}
+		}
+	}
+	if texts[0] != "a" || texts[2] != "b" {
+		t.Errorf("文本块拼接 = %v, want map[0:a 2:b]", texts)
+	}
+	if !open[0] || !open[2] {
+		t.Errorf("两个文本块都应发出 content_block_start，实际 %v", open)
+	}
+	if n := countEvent(events, "content_block_stop"); n != 3 {
+		t.Errorf("content_block_stop 数量 = %d, want 3", n)
 	}
 }

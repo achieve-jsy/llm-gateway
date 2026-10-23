@@ -343,6 +343,11 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 	}
 
 	for _, choice := range chunk.Choices {
+		// message_stop 已发出（usage-only chunk 提前收尾）后不再开内容块：否则会出现
+		// message_stop 之后的 content_block_start，客户端直接判协议错误。
+		if a.state.finished {
+			return
+		}
 		delta := choice.Delta
 		content := delta.Content
 		toolCalls := delta.ToolCalls

@@ -137,12 +137,19 @@ event: message_delta         stop_reason=tool_use
 event: message_stop
 ```
 
-**取舍说明**：并行调用的多个工具块会同时处于 open 状态，`content_block_stop` 推迟到收尾按 index
-升序统一发。这偏离了 Anthropic 官方"一次只开一个块"的示例，但与 new-api / vLLM / llama.cpp 的
-做法一致；官方 SDK 按 `index` 累加（`push` 只要求索引密集升序），实测 Claude Code 正常消费。
-代价是并行工具块的 stop 事件不再即时。严格顺序方案（LiteLLM 的 hold-and-release）需要在网关里
-缓冲后到的调用、等前一块 close 后再 start+flush，实现复杂度更高；这里选择与多数 Go 中转实现一致
-的简单方案。
+**取舍说明**：内容块（文本块、多个并行工具块）会同时处于 open 状态，`content_block_stop` 推迟到
+收尾按 block index 升序统一发。这偏离了 Anthropic 官方"一次只开一个块"的示例，但与
+new-api / vLLM / llama.cpp 的做法一致；官方 SDK 按 `index` 累加（`push` 只要求索引密集升序），
+实测 Claude Code 正常消费。
+
+为什么不让"后到的内容类型"把前一个块关掉：那是"用块的 open 状态当参数发不发的守卫"的变体。
+一旦文本 delta 把工具块关掉，"参数被文本打断"的流就会把尾部参数丢在已关闭的块上（拼出非法
+JSON）；同理并行调用的块被关掉会把后续参数丢进别人的块（串台）。所以规则统一为：**块只在
+收尾时关，或在该 index 明确开始新调用时关**。
+
+代价有两个：并行工具块的 stop 事件不再即时；严格顺序方案（LiteLLM 的 hold-and-release）需要
+在网关里缓冲后到的调用、等前一块 close 后再 start+flush，实现复杂度更高。这里选择与多数 Go
+中转实现一致的简单方案。
 
 ## 5. 另一个方向：Responses API → OpenAI Chat（`chat_via_responses_stream.go`）
 
@@ -183,14 +190,31 @@ event: message_stop
 | `..._IndexReusedByNewCallID` | 同 index 换新 id → 切成两个块，参数各归其主 |
 | `..._ParallelThenNoFinishChunk` | 没有 finish_reason（只有 `[DONE]`）：并行块按升序收尾、只发一次 `message_stop` |
 
+`internal/gateway/handler/anthropic_stream_toolargs_regression_test.go`（评审回合补的回归）：
+
+| 用例 | 钉住的行为 |
+|---|---|
+| `..._TextInterruptsArguments` | 参数被文本 delta 打断（args→text→args，续传无 id）时尾部参数不能丢；修复过程中曾回归成 `{"comm` 这种非法 JSON |
+| `..._SameIndexNewIDAfterText` | 文本打断后同 index 换新 id → 两块；曾因复用已关闭的 slot 导致第二次调用整体消失 |
+| `..._FinishReasonStopWithToolBlock` | 上游把 tool_calls 报成 `finish_reason:"stop"` 时 stop_reason 仍必须是 `tool_use` |
+| `..._TextAndToolCallsInSameChunk` | 单 chunk 同时带文本与 tool_calls：文本块 0、工具块 1，两者都完整 |
+| `..._SameIndexThreeSequentialCalls` | 同 index 连续三次调用 → 三块、参数不串 |
+| `..._IDArrivesAfterBlockStart` | id 晚于 name/参数到达：块已用兜底 id 打开，不能另开块 |
+| `..._EmptyArgumentsToolInputEmptyObject` | 空参数工具：无 `input_json_delta`、`input={}`、stop_reason 仍是 tool_use |
+
+`tests/gateway/handler/messages_stream_toolargs_test.go`：HTTP 层端到端（`/v1/messages` + stream=true）
+回放事故 SSE，断言客户端收到的 tool_use 块 id/name/完整 input 与事件顺序。
+
 `internal/providers/chat_via_responses_stream_toolargs_test.go`：A 首帧即全量 / B delta 回归 /
-C 仅 completed / D `output_item.done`（含缺 added 的兼容形态）/ E 并行不串台 / F 空参数收口。
+C 仅 completed / D `output_item.done`（含缺 added 的兼容形态）/ E 并行不串台 / F 空参数收口 /
+G `"{}"` 占位不重复拼接 / H delta-only 流补 id/name。
 
 ## 7. 已知限制
 
-1. **同一个 index 在块关闭后又来参数**：Anthropic 的块关闭后无法追加，只能 `slog.Warn` 丢弃。
-   实际不会发生（OpenAI/vLLM/SGLang 的工具调用参数按 index 顺序单调流出，不会在切到下一个调用后
-   再回来）。
+1. **同一个上游 index 被多次使用**：块关闭后不能再追加，因此"已关闭 slot 又来数据"一律按
+   **新的一次调用**处理（另开块）。这覆盖了上游复用 index / 省略 index（恒为 0）的形态；
+   真正的"同一次调用参数在块关闭后继续到达"无法表达，只能丢弃并 `slog.Warn`（实际不会发生：
+   OpenAI/vLLM/SGLang 的工具调用参数按 index 顺序单调流出）。
 2. **多 choice（`n > 1`）共享一份块状态**：流式转换目前只按 `choices[0]` 的语义假设工作（与既有实现一致），
    未做 per-choice 隔离。
 3. **非法 JSON 的收口**：流式通道无法在收尾把非法 JSON 改写成 `{}`（客户端已按分片累加）；

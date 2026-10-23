@@ -29,10 +29,11 @@ import (
 
 // fcItem 描述一个 function_call item；Args 为 nil 表示字段缺失（而非空串）。
 type fcItem struct {
-	ID     string
-	CallID string
-	Name   string
-	Args   *string
+	ID      string
+	CallID  string
+	Name    string
+	Args    *string
+	ArgsRaw any // 非 nil 时直接作为 arguments 的值下发（模拟对象/数组形态）
 }
 
 func strPtr(s string) *string { return &s }
@@ -44,7 +45,9 @@ func (it fcItem) toMap() map[string]any {
 		"call_id": it.CallID,
 		"name":    it.Name,
 	}
-	if it.Args != nil {
+	if it.ArgsRaw != nil {
+		m["arguments"] = it.ArgsRaw
+	} else if it.Args != nil {
 		m["arguments"] = *it.Args
 	}
 	return m
@@ -101,6 +104,61 @@ func completedEvent(t *testing.T, respID string, items ...fcItem) string {
 			"output": output,
 		},
 	})
+}
+
+// addedEventWithIndex / doneEventWithIndex 构造带顶层 output_index 的事件，
+// 用于刻画「item 既无 id 也无 call_id、只能靠 output_index 定位」的兼容实现。
+func addedEventWithIndex(t *testing.T, it fcItem, outputIndex int) string {
+	t.Helper()
+	return mustJSON(t, map[string]any{
+		"type":         "response.output_item.added",
+		"output_index": outputIndex,
+		"item":         it.toMap(),
+	})
+}
+
+func doneEventWithIndex(t *testing.T, it fcItem, outputIndex int) string {
+	t.Helper()
+	return mustJSON(t, map[string]any{
+		"type":         "response.output_item.done",
+		"output_index": outputIndex,
+		"item":         it.toMap(),
+	})
+}
+
+// argsDeltaEventAt 构造带 output_index 的 response.function_call_arguments.delta。
+func argsDeltaEventAt(t *testing.T, itemID, delta string, outputIndex int) string {
+	t.Helper()
+	return mustJSON(t, map[string]any{
+		"type":         "response.function_call_arguments.delta",
+		"item_id":      itemID,
+		"output_index": outputIndex,
+		"delta":        delta,
+	})
+}
+
+// argsDoneEvent 构造 response.function_call_arguments.done。
+// 真实 OpenAI 只给 item_id + arguments，但部分兼容实现会额外带上 name / call_id，
+// 传空字符串表示「该字段不出现」。
+func argsDoneEvent(t *testing.T, itemID, callID, name string, args *string, outputIndex *int) string {
+	t.Helper()
+	evt := map[string]any{
+		"type":    "response.function_call_arguments.done",
+		"item_id": itemID,
+	}
+	if callID != "" {
+		evt["call_id"] = callID
+	}
+	if name != "" {
+		evt["name"] = name
+	}
+	if args != nil {
+		evt["arguments"] = *args
+	}
+	if outputIndex != nil {
+		evt["output_index"] = *outputIndex
+	}
+	return mustJSON(t, evt)
 }
 
 // ---------------------------------------------------------------------------
@@ -372,4 +430,148 @@ func TestResponsesStreamToolArgsEmpty(t *testing.T) {
 			"空参数工具的 arguments 必须是合法 JSON，实际: %q", calls[0].Arguments)
 		assert.Equal(t, map[string]any{}, args)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// 评审补充用例 G~K：占位 "{}"、done 事件身份、缺失 added、非字符串参数、
+// 无 id/call_id 的 item（只能靠 output_index 定位）。
+// ---------------------------------------------------------------------------
+
+// 用例 G：added 里给的是仓库既有的 "{}" 占位（PlaceholderObject 约定）——
+// 后续仍有 delta 时，下游不能拼成 "{}{...}"（非法 JSON）。
+func TestResponsesStreamToolArgsPlaceholderObject(t *testing.T) {
+	placeholder := "{}"
+	full := `{"command":"ls"}`
+	chunks := runResponsesStream(t,
+		addedEvent(t, fcItem{ID: "fc_g", CallID: "call_g", Name: "run", Args: &placeholder}),
+		argsDeltaEvent(t, "fc_g", `{"command":`),
+		argsDeltaEvent(t, "fc_g", `"ls"}`),
+		completedEvent(t, "resp_g", fcItem{ID: "fc_g", CallID: "call_g", Name: "run", Args: &full}),
+	)
+	calls, finishReason := assembleToolCalls(t, chunks)
+	require.Contains(t, calls, 0)
+	assert.Equal(t, "call_g", calls[0].ID)
+	assert.Equal(t, full, calls[0].Arguments, "added 的 \" {}\" 占位不能拼在真参数前面")
+	requireArgsJSONEqual(t, calls[0].Arguments, full)
+	assert.Equal(t, "tool_calls", finishReason)
+}
+
+// 用例 G2：added/done/completed 三处都只有 "{}" 占位、没有真参数 ——
+// 最终必须是合法 JSON 的空对象（且不能重复）。
+func TestResponsesStreamToolArgsPlaceholderObjectOnly(t *testing.T) {
+	placeholder := "{}"
+	chunks := runResponsesStream(t,
+		addedEvent(t, fcItem{ID: "fc_g2", CallID: "call_g2", Name: "noop", Args: &placeholder}),
+		doneEvent(t, fcItem{ID: "fc_g2", CallID: "call_g2", Name: "noop", Args: &placeholder}),
+		completedEvent(t, "resp_g2", fcItem{ID: "fc_g2", CallID: "call_g2", Name: "noop", Args: &placeholder}),
+	)
+	calls, finishReason := assembleToolCalls(t, chunks)
+	require.Contains(t, calls, 0)
+	assert.Equal(t, "{}", calls[0].Arguments)
+	requireArgsJSONEqual(t, calls[0].Arguments, "{}")
+	assert.Equal(t, "tool_calls", finishReason)
+}
+
+// 用例 H：只有 response.function_call_arguments.done（事件自带 name/call_id），
+// 没有 added、没有 delta、也没有 completed —— id/name/args 必须齐全。
+func TestResponsesStreamToolArgsDoneEventOnly(t *testing.T) {
+	args := `{"a":1}`
+	chunks := runResponsesStream(t,
+		argsDoneEvent(t, "fc_h", "call_h", "run_cmd", &args, nil),
+	)
+	calls, _ := assembleToolCalls(t, chunks)
+	require.Contains(t, calls, 0)
+	assert.Equal(t, "call_h", calls[0].ID)
+	assert.Equal(t, "run_cmd", calls[0].Name)
+	assert.Equal(t, args, calls[0].Arguments)
+	requireArgsJSONEqual(t, calls[0].Arguments, args)
+}
+
+// 用例 H2：arguments.done 不带 name/call_id（真实 OpenAI 形态），
+// 身份信息由后续 response.completed 的 output 补齐，参数不能重复。
+func TestResponsesStreamToolArgsDoneEventIdentityFromCompleted(t *testing.T) {
+	args := `{"a":2}`
+	chunks := runResponsesStream(t,
+		argsDoneEvent(t, "fc_h2", "", "", &args, nil),
+		completedEvent(t, "resp_h2", fcItem{ID: "fc_h2", CallID: "call_h2", Name: "run_cmd", Args: &args}),
+	)
+	calls, finishReason := assembleToolCalls(t, chunks)
+	require.Contains(t, calls, 0)
+	assert.Equal(t, "call_h2", calls[0].ID, "completed 必须补上缺失的 id")
+	assert.Equal(t, "run_cmd", calls[0].Name, "completed 必须补上缺失的 name")
+	assert.Equal(t, args, calls[0].Arguments, "已发过参数时不能再补一帧")
+	requireArgsJSONEqual(t, calls[0].Arguments, args)
+	assert.Equal(t, "tool_calls", finishReason)
+}
+
+// 用例 I：完全没有 added 事件，只有 arguments.delta —— 参数先落地，
+// 下游 tool_call 的 id/name 必须由 completed 补齐（不能恒为空）。
+func TestResponsesStreamToolArgsNoAddedEvent(t *testing.T) {
+	full := `{"path":"/etc/hosts"}`
+	chunks := runResponsesStream(t,
+		argsDeltaEvent(t, "fc_i", `{"path":`),
+		argsDeltaEvent(t, "fc_i", `"/etc/hosts"}`),
+		completedEvent(t, "resp_i", fcItem{ID: "fc_i", CallID: "call_i", Name: "read_file", Args: &full}),
+	)
+	calls, finishReason := assembleToolCalls(t, chunks)
+	require.Contains(t, calls, 0)
+	assert.Equal(t, "call_i", calls[0].ID, "缺失 added 时 id 必须由 completed 补齐")
+	assert.Equal(t, "read_file", calls[0].Name, "缺失 added 时 name 必须由 completed 补齐")
+	assert.Equal(t, full, calls[0].Arguments)
+	requireArgsJSONEqual(t, calls[0].Arguments, full)
+	assert.Equal(t, "tool_calls", finishReason)
+}
+
+// 用例 J：item.arguments 是对象/数组（非字符串）—— 序列化分支必须生效。
+func TestResponsesStreamToolArgsNonStringArguments(t *testing.T) {
+	t.Run("对象", func(t *testing.T) {
+		full := `{"path":"/tmp/x"}`
+		chunks := runResponsesStream(t,
+			addedEvent(t, fcItem{ID: "fc_j1", CallID: "call_j1", Name: "read_file", ArgsRaw: map[string]any{"path": "/tmp/x"}}),
+			completedEvent(t, "resp_j1", fcItem{ID: "fc_j1", CallID: "call_j1", Name: "read_file", ArgsRaw: map[string]any{"path": "/tmp/x"}}),
+		)
+		calls, finishReason := assembleToolCalls(t, chunks)
+		require.Contains(t, calls, 0)
+		assert.Equal(t, full, calls[0].Arguments)
+		requireArgsJSONEqual(t, calls[0].Arguments, full)
+		assert.Equal(t, "tool_calls", finishReason)
+	})
+
+	t.Run("数组", func(t *testing.T) {
+		full := `["a","b"]`
+		chunks := runResponsesStream(t,
+			addedEvent(t, fcItem{ID: "fc_j2", CallID: "call_j2", Name: "batch", ArgsRaw: []any{"a", "b"}}),
+			completedEvent(t, "resp_j2", fcItem{ID: "fc_j2", CallID: "call_j2", Name: "batch", ArgsRaw: []any{"a", "b"}}),
+		)
+		calls, finishReason := assembleToolCalls(t, chunks)
+		require.Contains(t, calls, 0)
+		assert.Equal(t, full, calls[0].Arguments)
+		requireArgsJSONEqual(t, calls[0].Arguments, full)
+		assert.Equal(t, "tool_calls", finishReason)
+	})
+}
+
+// 用例 K：item 既无 id 也无 call_id（只有 output_index + name）——
+// added 的 name 不能整块丢掉，且参数不能串到并行的另一个 tool_call 上。
+func TestResponsesStreamToolArgsNoItemID(t *testing.T) {
+	noIDArgs := `{"x":1}`
+	normalArgs := `{"y":2}`
+	chunks := runResponsesStream(t,
+		addedEventWithIndex(t, fcItem{Name: "no_id_tool"}, 0),
+		addedEventWithIndex(t, fcItem{ID: "fc_k1", CallID: "call_k1", Name: "normal_tool"}, 1),
+		argsDeltaEventAt(t, "", `{"x":1}`, 0),
+		argsDeltaEvent(t, "fc_k1", `{"y":2}`),
+		completedEvent(t, "resp_k",
+			fcItem{Name: "no_id_tool", Args: &noIDArgs},
+			fcItem{ID: "fc_k1", CallID: "call_k1", Name: "normal_tool", Args: &normalArgs},
+		),
+	)
+	calls, finishReason := assembleToolCalls(t, chunks)
+	require.Len(t, calls, 2)
+	assert.Equal(t, "no_id_tool", calls[0].Name, "无 id/call_id 时 name 不能丢")
+	assert.Equal(t, noIDArgs, calls[0].Arguments)
+	assert.Equal(t, "call_k1", calls[1].ID)
+	assert.Equal(t, "normal_tool", calls[1].Name)
+	assert.Equal(t, normalArgs, calls[1].Arguments, "参数不能串到别的 tool_call 上")
+	assert.Equal(t, "tool_calls", finishReason)
 }

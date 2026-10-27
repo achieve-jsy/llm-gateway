@@ -211,8 +211,28 @@ JSON）；同理并行调用的块被关掉会把后续参数丢进别人的块�
 | `..._EmptyArgumentsToolInputEmptyObject` | 空参数工具：无 `input_json_delta`、`input={}`、stop_reason 仍是 tool_use |
 | `..._TextToolText` | text → tool → text：两个文本块（index 0/2）+ 工具块（index 1），文本拼接完整、三个块都收尾 |
 
+`internal/gateway/handler/anthropic_stream_choice_test.go`（多 choice 与错误路径）：
+
+| 用例 | 钉住的行为 |
+|---|---|
+| `..._MultiChoice_OnlyFirstChoiceConverted` | n=2 时文本只来自 `choices[0]`（修前拼成 `"ab"`） |
+| `..._MultiChoice_ToolCallsOnlyFromFirstChoice` | n=2 时工具调用只来自 `choices[0]`（修前出现 2 个 tool_use 块） |
+| `..._MultiChoice_EmptyChoices` | `choices: []` 不 panic、不发内容块 |
+| `..._MultiChoice_FinishReasonFromIgnoredChoice` | finish_reason 只挂在非 0 choice 上时仍要取到（否则 `max_tokens` 被误报成 `end_turn`） |
+
+`internal/gateway/handler/anthropic_stream_error_path_test.go`：
+
+| 用例 | 钉住的行为 |
+|---|---|
+| `..._UpstreamReadError_NoNormalTermination` | 上游读失败：错误沿 pipe 传给调用方，不补发 `message_delta`/`message_stop`，也不给仍打开的工具块补 `content_block_stop` |
+| `..._ReadErrorBeforeAnyChunk` | 一帧都没读出来就失败时同样不发空壳收尾 |
+| `..._ClientCloseMidStream` | 客户端提前 `Close`：`Read` 报错、转换 goroutine 退出，不 panic |
+
 `tests/gateway/handler/messages_stream_toolargs_test.go`：HTTP 层端到端（`/v1/messages` + stream=true）
 回放事故 SSE，断言客户端收到的 tool_use 块 id/name/完整 input 与事件顺序。
+
+`tests/providers/responses_stream_toolargs_test.go`（组件层）：参数只在 added 里给 / 传统 delta 分片 /
+added 为裸 `"{}"` 占位三种上游形态，断言下游 `arguments` 拼接后是合法 JSON。
 
 `internal/providers/chat_via_responses_stream_toolargs_test.go`：A 首帧即全量 / B delta 回归 /
 C 仅 completed / D `output_item.done`（含缺 added 的兼容形态）/ E 并行不串台 / F 空参数收口 /

@@ -381,6 +381,16 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 		if choice.FinishReason != "" && !a.state.finished {
 			a.state.finishReason = mapFinishReason(choice.FinishReason)
 			a.closeAllBlocks()
+		} else if !a.state.finished {
+			// 被忽略的 choice 仍可能携带 finish_reason（部分上游只在某个 choice 上报）。内容
+			// 只转换第一份，但收尾原因要尽量取到：否则 max_tokens / content_filter 会被误报成
+			// end_turn。这里只记录，不提前关块——被忽略的 choice 收尾不代表第一份内容已结束。
+			for _, other := range chunk.Choices[1:] {
+				if other.FinishReason != "" {
+					a.state.finishReason = mapFinishReason(other.FinishReason)
+					break
+				}
+			}
 		}
 	}
 }

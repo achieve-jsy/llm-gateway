@@ -91,3 +91,25 @@ func TestAnthropicStream_MultiChoice_EmptyChoices(t *testing.T) {
 		t.Errorf("content_block_start 数量 = %d, want 0；事件序列 %v", n, eventTypes(events))
 	}
 }
+
+// TestAnthropicStream_MultiChoice_FinishReasonFromIgnoredChoice 覆盖"finish_reason 只挂在
+// 被忽略的 choice 上"的形态（部分上游这么发）。内容仍然只取 choices[0]，但收尾原因必须
+// 取到，否则 max_tokens / content_filter 会被误报成 end_turn（旧实现会遍历所有 choice，
+// 所以这是"只转换第一个"引入的回归风险）。
+func TestAnthropicStream_MultiChoice_FinishReasonFromIgnoredChoice(t *testing.T) {
+	chunk := map[string]any{
+		"id": "chatcmpl-fin", "object": "chat.completion.chunk", "model": "m",
+		"choices": []any{
+			map[string]any{"index": 0, "delta": map[string]any{"content": "a"}},
+			map[string]any{"index": 1, "delta": map[string]any{}, "finish_reason": "length"},
+		},
+	}
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, openAISSE(t, chunk), 50))
+
+	if _, stop := messageDeltaInfo(t, events); stop != "max_tokens" {
+		t.Errorf("stop_reason = %q, want max_tokens（finish_reason 在被忽略的 choice 上也不能丢）", stop)
+	}
+	if got := collectTextDeltas(events); got != "a" {
+		t.Errorf("文本拼接 = %q, want a（内容仍只取第一个 choice）", got)
+	}
+}

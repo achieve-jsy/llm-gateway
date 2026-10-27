@@ -113,3 +113,79 @@ func TestAnthropicStream_MultiChoice_FinishReasonFromIgnoredChoice(t *testing.T)
 		t.Errorf("文本拼接 = %q, want a（内容仍只取第一个 choice）", got)
 	}
 }
+
+// TestAnthropicStream_MultiChoice_SingleChoicePerChunk 覆盖 n>1 的**真实**流式形态：
+// 上游每个 chunk 只带一个 choice，靠 choice.index 区分（官方 SDK 就按 index 累加）。
+// 按数组下标取"第一个元素"会把 index=1 的内容当成第一份，串台照旧发生。
+func TestAnthropicStream_MultiChoice_SingleChoicePerChunk(t *testing.T) {
+	first := map[string]any{
+		"id": "chatcmpl-split", "object": "chat.completion.chunk", "model": "m",
+		"choices": []any{
+			map[string]any{"index": 0, "delta": map[string]any{"content": "a1"}},
+			map[string]any{"index": 1, "delta": map[string]any{"content": "b1"}},
+		},
+	}
+	second := map[string]any{
+		"id": "chatcmpl-split", "object": "chat.completion.chunk", "model": "m",
+		"choices": []any{map[string]any{"index": 1, "delta": map[string]any{"content": "b2"}}},
+	}
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, openAISSE(t, first, second, finishChunk("stop")), 50))
+
+	if got := collectTextDeltas(events); got != "a1" {
+		t.Errorf("文本拼接 = %q, want %q（只有 choice.index==0 的内容能进这条 message）", got, "a1")
+	}
+}
+
+// TestAnthropicStream_MultiChoice_ToolCallFromIgnoredIndex 覆盖"某个 chunk 只带 index=1 的
+// 工具调用"：它属于被丢弃的那一份内容，绝不能变成 tool_use 块（否则客户端会去执行它）。
+func TestAnthropicStream_MultiChoice_ToolCallFromIgnoredIndex(t *testing.T) {
+	const argsB = `{"command": "pwd"}`
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, openAISSE(t,
+		multiChoiceChunk(
+			map[string]any{"content": "a"},
+			map[string]any{"tool_calls": []any{toolCallDeltaWithArgs(0, "call_b", "Bash", argsB)}},
+		),
+		map[string]any{
+			"id": "chatcmpl-only-b", "object": "chat.completion.chunk", "model": "m",
+			"choices": []any{map[string]any{"index": 1, "delta": map[string]any{"content": "b-more"}}},
+		},
+		finishChunk("tool_calls"),
+	), 50))
+
+	blocks := collectToolUseBlocks(t, events)
+	if len(blocks) != 0 {
+		t.Errorf("tool_use 块数量 = %d, want 0（被丢弃的 choice 里的工具调用不能下发）；ids=%v",
+			len(blocks), func() []string {
+				ids := make([]string, 0, len(blocks))
+				for _, b := range blocks {
+					ids = append(ids, b.ID)
+				}
+				return ids
+			}())
+	}
+	if got := collectTextDeltas(events); got != "a" {
+		t.Errorf("文本拼接 = %q, want a（index=1 的文本同样不能混进来）", got)
+	}
+}
+
+// TestAnthropicStream_UsageOnlyChunk_EmitsMessageStart 覆盖"整条流只有一个 usage-only
+// chunk（choices 为空）"的形态：Anthropic 协议要求 message_start 是第一条事件，
+// 缺了它只发 message_delta/message_stop 是协议违例（SDK 会报意外事件顺序）。
+func TestAnthropicStream_UsageOnlyChunk_EmitsMessageStart(t *testing.T) {
+	sse := openAISSE(t, map[string]any{
+		"id": "chatcmpl-usage", "object": "chat.completion.chunk", "model": "m",
+		"choices": []any{},
+		"usage":   map[string]any{"prompt_tokens": 7, "completion_tokens": 0, "total_tokens": 7},
+	})
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 50))
+
+	if len(events) == 0 {
+		t.Fatal("没有任何事件")
+	}
+	if got := events[0]["type"]; got != "message_start" {
+		t.Errorf("首个事件 = %v, want message_start（否则客户端收到的是非法事件序列）", got)
+	}
+	if n := countEvent(events, "message_start"); n != 1 {
+		t.Errorf("message_start 数量 = %d, want 1", n)
+	}
+}

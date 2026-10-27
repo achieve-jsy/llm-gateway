@@ -54,6 +54,9 @@ type anthropicStreamState struct {
 	started              bool                    // whether message_start has been emitted
 	finished             bool                    // whether message_stop has been emitted
 	mu                   sync.Mutex
+	// warnedMultipleChoices 保证「多 choice」告警每个请求只打一次：n > 1 的长流里
+	// 逐 chunk 打 Warn 会淹没排障关键字（见文档 §8）。
+	warnedMultipleChoices bool
 }
 
 // toolBlockState 跟踪单个 OpenAI tool_call（按 tool_calls[].index 归属）与它对应的
@@ -329,6 +332,9 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 		// chunk 的 completion_tokens 作为 output_tokens；若 message_stop 已发出
 		//（例如 [DONE]/EOF 先到达或 finish_reason 已发射）则跳过，避免协议乱序重复。
 		if chunk.Usage != nil && !a.state.finished {
+			// message_start 必须是第一条事件：若整条流只有 usage-only chunk（上游没给任何
+			// 内容），这里必须补发它，否则客户端先收到 message_delta 会判事件顺序非法。
+			a.emitMessageStart(chunk)
 			a.closeAllBlocks()
 			stopReason := a.inferStopReason()
 			// 透传本 chunk（多为末尾 usage-only chunk）的真实非零 cache 字段到
@@ -343,55 +349,109 @@ func (a *anthropicStreamAdapter) processChunk(data []byte) {
 	}
 
 	// 多 choice（n > 1）：Anthropic 的一条 message 只能装一份内容，把多个 choice 的
-	// delta 灌进同一份状态会让文本串台、并行工具调用的参数互相污染。因此只转换第一个
-	// choice，其余丢弃并告警（带 choices 数量，便于发现上游没按预期置 n=1）。
-	if len(chunk.Choices) > 1 {
-		slog.Warn("anthropic stream: upstream returned multiple choices; converting only the first",
-			"request_id", a.state.requestID, "model", a.state.model, "choices", len(chunk.Choices))
-	}
-	choice := chunk.Choices[0]
-	{
+	// delta 灌进同一份状态会让文本串台、工具参数互相污染。因此只转换 choice.index == 0
+	// 的那一份。
+	//
+	// 判据必须用 choice.index，不能按数组下标：n > 1 时上游通常**每个 chunk 只带一个**
+	// choice（靠 index 区分，官方 SDK 也按 index 累加），按位置取"第一个元素"会把别的
+	// choice 的内容当成第一份，串台照旧发生。
+	a.state.mu.Lock()
+	finished := a.state.finished
+	a.state.mu.Unlock()
+	if finished {
 		// message_stop 已发出（usage-only chunk 提前收尾）后不再开内容块：否则会出现
 		// message_stop 之后的 content_block_start，客户端直接判协议错误。
-		if a.state.finished {
-			return
-		}
-		delta := choice.Delta
-		content := delta.Content
-		toolCalls := delta.ToolCalls
+		return
+	}
 
-		// Handle content (text) deltas。文本块与工具块各自持有自己的 block index，文本 delta
-		// 不能顺手把工具块关掉：否则"参数被文本打断"的流会在块关闭后丢掉尾部参数
-		// （拼出非法 JSON）。多块并存，收尾时按 index 升序统一 close。
-		if content != nil && *content != "" {
-			if !a.state.textBlockOpen {
-				a.startTextBlock()
-			}
-			a.emitTextDelta(*content)
+	choiceIdx := -1
+	for i := range chunk.Choices {
+		if chunk.Choices[i].Index == 0 {
+			choiceIdx = i
+			break
 		}
+	}
+	if choiceIdx < 0 {
+		// 本 chunk 只带被忽略的 choice：丢弃内容，但仍要把 finish_reason 记下来
+		// （否则 max_tokens / content_filter 会被推断成 end_turn）。
+		a.warnMultipleChoicesOnce(len(chunk.Choices))
+		a.recordIgnoredChoiceFinishReason(chunk)
+		return
+	}
 
-		// Handle tool call deltas。每个 tool_call 严格按 index 归属到自己的 tool_use 块。
-		for _, tc := range toolCalls {
-			a.handleToolCallDelta(tc)
+	if len(chunk.Choices) > 1 {
+		a.warnMultipleChoicesOnce(len(chunk.Choices))
+	}
+	choice := chunk.Choices[choiceIdx]
+	delta := choice.Delta
+	content := delta.Content
+	toolCalls := delta.ToolCalls
+
+	// Handle content (text) deltas。文本块与工具块各自持有自己的 block index，文本 delta
+	// 不能顺手把工具块关掉：否则"参数被文本打断"的流会在块关闭后丢掉尾部参数
+	// （拼出非法 JSON）。多块并存，收尾时按 index 升序统一 close。
+	if content != nil && *content != "" {
+		if !a.state.textBlockOpen {
+			a.startTextBlock()
 		}
+		a.emitTextDelta(*content)
+	}
 
-		// Handle finish reason：只记录 stop_reason 并关闭内容块，不在此发射
-		// message_delta / message_stop —— 统一由末尾 usage chunk（或 [DONE]/EOF）
-		// 发射，确保 message_delta 使用末尾 usage 的 completion_tokens，且不会重复。
-		if choice.FinishReason != "" && !a.state.finished {
+	// Handle tool call deltas。每个 tool_call 严格按 index 归属到自己的 tool_use 块。
+	for _, tc := range toolCalls {
+		a.handleToolCallDelta(tc)
+	}
+
+	// Handle finish reason：只记录 stop_reason 并关闭内容块，不在此发射
+	// message_delta / message_stop —— 统一由末尾 usage chunk（或 [DONE]/EOF）
+	// 发射，确保 message_delta 使用末尾 usage 的 completion_tokens，且不会重复。
+	if choice.FinishReason != "" {
+		// 首个 finish_reason 为准：畸形流可能先给 max_tokens 再给 stop，覆盖会把截断
+		// 说成自然结束（客户端于是执行被截断的工具参数）。
+		if a.state.finishReason == "" {
 			a.state.finishReason = mapFinishReason(choice.FinishReason)
-			a.closeAllBlocks()
-		} else if !a.state.finished {
-			// 被忽略的 choice 仍可能携带 finish_reason（部分上游只在某个 choice 上报）。内容
-			// 只转换第一份，但收尾原因要尽量取到：否则 max_tokens / content_filter 会被误报成
-			// end_turn。这里只记录，不提前关块——被忽略的 choice 收尾不代表第一份内容已结束。
-			for _, other := range chunk.Choices[1:] {
-				if other.FinishReason != "" {
-					a.state.finishReason = mapFinishReason(other.FinishReason)
-					break
-				}
-			}
 		}
+		a.closeAllBlocks()
+		return
+	}
+	// 被忽略的 choice 仍可能携带 finish_reason（部分上游只在某个 choice 上报）。内容只
+	// 转换第一份，但收尾原因要尽量取到：否则 max_tokens / content_filter 会被误报成
+	// end_turn。这里只记录，不提前关块——被忽略的 choice 收尾不代表第一份内容已结束。
+	a.recordIgnoredChoiceFinishReason(chunk)
+}
+
+// warnMultipleChoicesOnce 每个请求只告警一次：n > 1 的长流里逐 chunk 打 Warn 会淹没
+// 排障关键字（见文档 §8）。
+func (a *anthropicStreamAdapter) warnMultipleChoicesOnce(choicesInChunk int) {
+	a.state.mu.Lock()
+	already := a.state.warnedMultipleChoices
+	a.state.warnedMultipleChoices = true
+	a.state.mu.Unlock()
+	if already {
+		return
+	}
+	slog.Warn("anthropic stream: upstream returned multiple choices; converting only choice index 0",
+		"request_id", a.state.requestID, "model", a.state.model, "choices_in_chunk", choicesInChunk)
+}
+
+// recordIgnoredChoiceFinishReason 从"被忽略的 choice"里取第一个非空 finish_reason。
+// 只记录、不关块：被忽略的 choice 收尾不代表要转换的那一份内容已结束。
+func (a *anthropicStreamAdapter) recordIgnoredChoiceFinishReason(chunk openAIChatChunk) {
+	if a.state.finishReason != "" {
+		return
+	}
+	a.state.mu.Lock()
+	finished := a.state.finished
+	a.state.mu.Unlock()
+	if finished {
+		return
+	}
+	for i := range chunk.Choices {
+		if chunk.Choices[i].Index == 0 || chunk.Choices[i].FinishReason == "" {
+			continue
+		}
+		a.state.finishReason = mapFinishReason(chunk.Choices[i].FinishReason)
+		return
 	}
 }
 

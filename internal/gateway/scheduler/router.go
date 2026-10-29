@@ -53,6 +53,19 @@ func (r *Router) Route(groupName string, req *core.ChatRequest) (*RouteDecision,
 		return nil, ErrNoAvailableModel
 	}
 
+	// 视频请求只能落在"已声明支持视频"的成员上。组级能力是保守 AND，
+	// 混合组对外不声明视频，但只要有成员真支持就应当能服务视频请求，
+	// 因此过滤放在路由期、按请求内容逐次判定。
+	needsVideo := req != nil && core.HasVideoContent(req.Messages)
+	healthyModels = filterVideoCapable(healthyModels, needsVideo)
+	if len(healthyModels) == 0 {
+		if needsVideo {
+			slog.Warn("router: no video-capable models", "group", groupName, "total", len(group.Models))
+			return nil, ErrNoVideoCapableModel
+		}
+		return nil, ErrNoAvailableModel
+	}
+
 	slog.Debug("router: healthy models", "group", groupName, "healthy", len(healthyModels))
 
 	// Sticky routing（strategy 选择之前）。req 可能为 nil（embeddings/rerank 组路由）。
@@ -85,6 +98,21 @@ func (r *Router) Route(groupName string, req *core.ChatRequest) (*RouteDecision,
 	}
 
 	return buildDecision(group, entry, start), nil
+}
+
+// filterVideoCapable 在候选集里只保留声明支持视频输入的成员。
+// needsVideo=false 时原样返回，保持既有路由行为完全不变。
+func filterVideoCapable(models []*ModelRoutingEntry, needsVideo bool) []*ModelRoutingEntry {
+	if !needsVideo {
+		return models
+	}
+	out := make([]*ModelRoutingEntry, 0, len(models))
+	for _, m := range models {
+		if m != nil && m.SupportsVideoInput {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func buildDecision(group *GroupRoutingConfig, entry *ModelRoutingEntry, start time.Time) *RouteDecision {

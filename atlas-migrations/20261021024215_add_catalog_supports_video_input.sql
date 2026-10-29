@@ -1,0 +1,35 @@
+-- atlas-migrations/20261021024215_add_catalog_supports_video_input.sql
+-- Feature: model_catalog 采集 supports_video_input 能力位（视频输入 MVP 第 1 步）
+--
+-- 背景：LiteLLM catalog 已有 supports_video_input 字段（实测 2725 条中 41 条为 true，
+-- 覆盖 Gemini/Vertex、Bedrock Nova 2、TwelveLabs Pegasus、Kimi 等），但控制面采集器
+-- 用 6 项固定白名单解析能力位（internal/controlplane/service/catalog_parser.go），
+-- 该字段被静默丢弃，导致"上游声明支持视频"这一事实在网关内完全不存在，
+-- 视频请求也就无法按能力路由。
+--
+-- 语义：boolean NOT NULL DEFAULT false。缺省 false 与既有能力位一致（保守：
+-- 未声明即不支持），catalog 同步会按上游值为 true 的行翻成 true。
+-- 本列只是**数据源**；对外的"组能力"仍是保守聚合（组内全部成员都支持才算支持），
+-- 见 internal/controlplane/service/model_info_service.go。
+-- 人工纠偏走 models.override_supports_video_input（三态，NULL=跟随 catalog），
+-- 在后续迁移中加入，不与本列混在一个 PR。
+--
+-- 为什么是手写 SQL 而不是 make atlas-diff（同 20261014063200 / 20260910125402 的结论，本次已复核）：
+--   atlas migrate diff 在本仓库稳定产出与本次改动无关的存量漂移（实测 228 行：
+--   alert_events/api_keys/audit_logs/models/users 等 20+ 张表的类型与默认值差异，
+--   以及若干只存在于 legacy migrations/ 的表），不能混进本 PR。
+--   diff 中唯一与本改动相关的一行是：
+--     ALTER TABLE "public"."model_catalog" ADD COLUMN "supports_video_input" boolean NULL DEFAULT false;
+--   本文件改为 NOT NULL + IF NOT EXISTS（理由见下），其余一律不取。
+--
+-- 为什么用 ADD COLUMN IF NOT EXISTS（沿用 20260910125402 / 20261014063200 的结论）：
+--   纯新增列、无回填，没有"列已存在就必须报错"的正当理由；无法核对目标库是否已有该列时，
+--   选可重放的一侧，避免无谓阻断 CI 的 migrate stage。
+--   ⚠️ 代价：同名但类型不同的历史列会被静默跳过、不报错也不纠正。因此列类型正确性由
+--   GORM model（internal/controlplane/model/model_catalog.go 的 gorm tag）与本文件逐字对齐保证；
+--   后续若改该列类型，必须重跑 schema 比对，不能依赖本语句生效。
+--
+-- 回滚（本项目不使用 Atlas 的 down 迁移机制；注意目录内放 *.down.sql 会被当独立前向迁移执行）：
+--   ALTER TABLE model_catalog DROP COLUMN IF EXISTS supports_video_input;
+
+ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS supports_video_input BOOLEAN NOT NULL DEFAULT false;

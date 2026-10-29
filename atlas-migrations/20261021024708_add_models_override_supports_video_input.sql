@@ -1,0 +1,25 @@
+-- atlas-migrations/20261021024708_add_models_override_supports_video_input.sql
+-- Feature: models 增加视频输入能力的人工纠偏开关（三态）
+--
+-- 背景：Task 6 让 model_catalog 采集 supports_video_input，但 LiteLLM 对
+-- Ark（doubao）/ DashScope（qwen）/ 智谱（glm）这三家**官方支持 video_url** 的厂商
+-- 一条声明都没有（实测：dashscope/* 254 条、ark/* 10 条、zhipu/* 51 条，全为 0 声明）。
+-- 纯靠 catalog，这三家的模型永远无法对外声明"支持视频输入"，
+-- 因此需要一个人工开关作为"已声明"的通路。
+--
+-- 语义（三态，可为 NULL）：
+--   NULL  = 跟随 catalog（默认；catalog 未声明即不支持）
+--   true  = 强制支持（用于 catalog 缺声明但上游确实支持，如 Ark/DashScope/智谱）
+--   false = 强制不支持（用于 catalog 声明过时、上游实际已下线视频能力）
+-- 判定入口唯一：internal/controlplane/service.EffectiveSupportsVideoInput，
+-- 组级聚合与逐成员路由配置都走它，避免两处语义漂移。
+--
+-- 为什么是手写 SQL 而不是 make atlas-diff：同 20261021024215 的结论（本仓库 diff
+-- 稳定产出与本次改动无关的存量漂移）。diff 中与本改动相关的只有一行：
+--   ALTER TABLE "public"."models" ADD COLUMN "override_supports_video_input" boolean NULL;
+-- 本文件用 IF NOT EXISTS 保证可重放（理由同前两个迁移）。
+--
+-- 回滚（本项目不使用 Atlas 的 down 迁移机制；目录内不要落盘 *.down.sql）：
+--   ALTER TABLE models DROP COLUMN IF EXISTS override_supports_video_input;
+
+ALTER TABLE models ADD COLUMN IF NOT EXISTS override_supports_video_input BOOLEAN NULL;

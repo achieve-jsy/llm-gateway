@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -83,7 +84,12 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 	c.Set("model", anthReq.Model)
 
 	// Convert Anthropic request to internal ChatRequest
-	req := core.AnthropicToChatRequest(&anthReq)
+	req, convErr := core.AnthropicToChatRequest(&anthReq)
+	if convErr != nil {
+		// 协议不支持的内容（如视频片段）在这里就拒绝，不要带着被丢弃的内容继续转发。
+		h.respondAnthropicConversionError(c, convErr)
+		return
+	}
 
 	originalModel := anthReq.Model
 
@@ -422,7 +428,13 @@ func (h *MessagesHandler) HandleCountTokens(c *gin.Context) {
 	// Convert to ChatRequest and count tokens approximately.
 	// 改用与流式 message_start 一致的校准估算（CJK≈0.66/字 + 每条消息结构开销），
 	// 替代旧的 totalChars/4——后者会严重低估中文（中文按 1 字近 1 token，而非 4 字 1 token）。
-	req := core.AnthropicToChatRequest(&anthReq)
+	// 视频/图片等不支持转换的片段由 AnthropicToChatRequest 返回错误，这里显式回 400，
+	// 不再静默丢弃（静默丢弃会让用户以为模型看到了视频）。
+	req, convErr := core.AnthropicToChatRequest(&anthReq)
+	if convErr != nil {
+		h.respondAnthropicConversionError(c, convErr)
+		return
+	}
 
 	estimatedTokens := estimatePromptTokens(req.Messages)
 	if estimatedTokens < 1 {
@@ -466,6 +478,23 @@ func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, 
 	}
 	middleware.SetTraceResponseObject(c, body)
 	c.JSON(httpStatus, body)
+}
+
+// respondAnthropicConversionError 把 core 转换层错误（协议不支持的内容片段，如视频）
+// 渲染为 Anthropic 形状的错误体：/v1/messages 的客户端只认 Anthropic 错误格式。
+func (h *MessagesHandler) respondAnthropicConversionError(c *gin.Context, err error) {
+	status := http.StatusBadRequest
+	message := err.Error()
+	var gwErr *core.GatewayError
+	if errors.As(err, &gwErr) {
+		if gwErr.StatusCode > 0 {
+			status = gwErr.StatusCode
+		}
+		if gwErr.Message != "" {
+			message = gwErr.Message
+		}
+	}
+	h.respondAnthropicError(c, status, "invalid_request_error", "unsupported_content_part", message, nil)
 }
 
 // respondAnthropicGroupError handles group dispatch errors.

@@ -109,6 +109,24 @@ func Logger() gin.HandlerFunc {
 	}
 }
 
+// requestBodyLogLimit 是 debug 日志里保留的请求体字节上限（仅影响日志，不影响下游）。
+const requestBodyLogLimit int64 = 64 * 1024
+
+// peekBody 读取 rc 的前 limit 字节用于日志，并返回一个"已读字节 + 剩余字节"的
+// 组合 body，调用方必须用 restored 替换原 body，否则下游会丢数据。
+// truncated 为 true 表示上游 body 可能还有更多内容未进入 head。
+func peekBody(rc io.ReadCloser, limit int64) (head []byte, restored io.ReadCloser, truncated bool) {
+	if rc == nil {
+		return nil, nil, false
+	}
+	if limit <= 0 {
+		return nil, rc, false
+	}
+	head, _ = io.ReadAll(io.LimitReader(rc, limit))
+	restored = io.NopCloser(io.MultiReader(bytes.NewReader(head), rc))
+	return head, restored, int64(len(head)) >= limit
+}
+
 // RequestBodyLogger 在 DEBUG 级别记录请求体原始内容。
 // 仅在 LOG_LEVEL=debug 时有实际输出，生产环境 INFO 级别下该中间件为无操作。
 // 注意：此中间件会将请求体读入内存后重置，对大 payload 有一定内存压力。
@@ -132,17 +150,18 @@ func RequestBodyLogger() gin.HandlerFunc {
 			return
 		}
 
-		// 读取并重置请求体（让下游 handler 仍能读取）
-		body, err := io.ReadAll(io.LimitReader(c.Request.Body, 64*1024)) // 最多 64KB
-		if err == nil {
-			c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
-			requestID, _ := c.Get("request_id")
-			slog.Debug("request_body",
-				"request_id", requestID,
-				"path", path,
-				"body", string(body),
-			)
-		}
+		// 只在内存里保留前 64KB 用于日志，其余字节必须原样还给下游 handler。
+		// 早期实现用 io.LimitReader 读完直接把 c.Request.Body 换成截断副本，
+		// 导致 >64KB 的请求体在 debug 级别下被静默截断（大图片/视频请求必 400）。
+		head, restored, truncated := peekBody(c.Request.Body, requestBodyLogLimit)
+		c.Request.Body = restored
+		requestID, _ := c.Get("request_id")
+		slog.Debug("request_body",
+			"request_id", requestID,
+			"path", path,
+			"body", string(head),
+			"truncated", truncated,
+		)
 
 		c.Next()
 	}

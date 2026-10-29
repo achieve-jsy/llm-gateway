@@ -48,16 +48,30 @@ type ChatHandler struct {
 	budgetGate    *budget.Gate
 	requestQuota  *quota.QuotaMiddleware
 	quotaGate     *quota.ModelQuotaGate // v0.15: 模型层配额检查（nil 表示跳过）
+	// maxInlineMediaBytes 含内联媒体（data: URL 视频）的请求体上限。
+	// 内联 base64 视频会把请求体撑到几十 MB，既拖慢网关又要经过整条
+	// 鉴权/配额链路，所以在 bind 之后立刻拦截，引导客户端改用 http(s) URL。
+	maxInlineMediaBytes int64
 }
+
+// defaultMaxInlineMediaBytes 内联媒体请求体默认上限（10MiB）。
+// 视频帧 base64 后膨胀约 1.37 倍，10MiB 大约够几秒钟的低分辨率片段；
+// 更长的视频应当走模型厂商的文件/URL 接口。
+const defaultMaxInlineMediaBytes int64 = 10 << 20
 
 // NewChatHandler 创建 ChatHandler 实例
 func NewChatHandler(orch ChatOrchestratorInterface) *ChatHandler {
-	return &ChatHandler{orchestrator: orch}
+	return &ChatHandler{orchestrator: orch, maxInlineMediaBytes: defaultMaxInlineMediaBytes}
 }
 
 // NewChatHandlerWithGroup 创建带模型组调度的 ChatHandler 实例
 func NewChatHandlerWithGroup(orch ChatOrchestratorInterface, gd *orchestrator.GroupAwareDispatcher) *ChatHandler {
-	return &ChatHandler{orchestrator: orch, groupDispatch: gd}
+	return &ChatHandler{orchestrator: orch, groupDispatch: gd, maxInlineMediaBytes: defaultMaxInlineMediaBytes}
+}
+
+// SetMaxInlineMediaBytes 覆盖内联媒体请求体上限（<=0 表示不限制）。
+func (h *ChatHandler) SetMaxInlineMediaBytes(n int64) {
+	h.maxInlineMediaBytes = n
 }
 
 // SetBudgetDeps 注入预算依赖（router setup 时调用一次）
@@ -97,7 +111,40 @@ func (h *ChatHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
 func (h *ChatHandler) Handle(c *gin.Context) {
 	var req core.ChatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		// 内容片段错误单独成码：客户端能定位到 content[N] 的哪一段、哪个字段，
+		// 而不是只得到笼统的 request_body_invalid。
+		var partErr *core.ContentPartError
+		if errors.As(err, &partErr) {
+			// Index 未知（-1）时不拼 content[-1]，退化成不带下标的定位。
+			param := "content.type"
+			if partErr.Index >= 0 {
+				param = fmt.Sprintf("content[%d].type", partErr.Index)
+			}
+			if partErr.Field != "" {
+				if partErr.Index >= 0 {
+					param = fmt.Sprintf("content[%d].%s", partErr.Index, partErr.Field)
+				} else {
+					param = fmt.Sprintf("content.%s", partErr.Field)
+				}
+			}
+			gatewayerrors.WriteError(c, "unsupported_content_part",
+				gatewayerrors.WithMessage(err.Error()),
+				gatewayerrors.WithParam(param))
+			return
+		}
 		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage(err.Error()))
+		return
+	}
+
+	// 内联媒体体积闸门：放在鉴权/配额/路由之前，超大 base64 视频不必走完整链路。
+	// 只对含视频片段的请求生效——纯文本超长属于另一层限制（上游 context 校验）。
+	if h.maxInlineMediaBytes > 0 &&
+		c.Request.ContentLength > h.maxInlineMediaBytes &&
+		core.HasVideoContent(req.Messages) {
+		gatewayerrors.WriteError(c, "inline_media_too_large",
+			gatewayerrors.WithMessage(fmt.Sprintf(
+				"内联媒体体积 %d bytes 超过上限 %d bytes，请改用 http(s) 视频 URL（如 video_url.url 指向可公网访问的 mp4）",
+				c.Request.ContentLength, h.maxInlineMediaBytes)))
 		return
 	}
 

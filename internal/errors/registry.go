@@ -44,6 +44,18 @@ var registry = map[string]ErrorCode{
 		HTTPStatus: http.StatusBadRequest,
 		Message:    "请求体无效",
 	},
+	"unsupported_content_part": {
+		Code:       "unsupported_content_part",
+		Type:       ErrorTypeInvalidRequest,
+		HTTPStatus: http.StatusBadRequest,
+		Message:    "内容片段类型或字段不受支持",
+	},
+	"inline_media_too_large": {
+		Code:       "inline_media_too_large",
+		Type:       ErrorTypeInvalidRequest,
+		HTTPStatus: http.StatusBadRequest,
+		Message:    "内联媒体体积超过上限，请改用 http(s) 视频 URL",
+	},
 
 	// ── Authentication errors ───────────────────────────────────────────────
 	"auth_key_invalid": {

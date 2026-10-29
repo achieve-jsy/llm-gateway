@@ -13,6 +13,7 @@ type ContentPart struct {
 	Text        string             `json:"text,omitempty"`
 	ImageURL    *ImageURLContent   `json:"image_url,omitempty"`
 	InputAudio  *InputAudioContent `json:"input_audio,omitempty"`
+	VideoURL    *VideoURLContent   `json:"video_url,omitempty"`
 	ExtraFields UnknownJSONFields  `json:"-" swaggerignore:"true"`
 }
 
@@ -22,6 +23,54 @@ type ImageURLContent struct {
 	Detail      string            `json:"detail,omitempty"`
 	MediaType   string            `json:"media_type,omitempty"`
 	ExtraFields UnknownJSONFields `json:"-" swaggerignore:"true"`
+}
+
+// VideoURLContent 表示视频输入片段：url 与 file_id 二选一，fps 等采样参数可选。
+// 与 ImageURLContent 一致，同时兼容 "url 字符串" 与 {"url": ...} 两种 JSON 形态。
+type VideoURLContent struct {
+	URL         string   `json:"url,omitempty"`
+	FileID      string   `json:"file_id,omitempty"`
+	FPS         *float64 `json:"fps,omitempty"`
+	MaxFrames   *int     `json:"max_frames,omitempty"`
+	StartOffset *float64 `json:"start_offset,omitempty"`
+	EndOffset   *float64 `json:"end_offset,omitempty"`
+	MediaType   string   `json:"media_type,omitempty"`
+	// Source 记录目标方言（ark-chat / ark-responses / dashscope / zhipu / kimi / gemini），
+	// 只用于出站翻译时决定 fps 等参数的落位，不参与序列化。
+	Source      string            `json:"-"`
+	ExtraFields UnknownJSONFields `json:"-"`
+}
+
+func (v *VideoURLContent) UnmarshalJSON(data []byte) error {
+	parsed, err := unmarshalVideoURLContent(data)
+	if err != nil {
+		return err
+	}
+	*v = *parsed
+	return nil
+}
+
+func (v VideoURLContent) MarshalJSON() ([]byte, error) {
+	if v.URL == "" && v.FileID == "" {
+		return nil, NewContentPartError("video_url", "video_url.url")
+	}
+	return marshalWithUnknownJSONFields(struct {
+		URL         string   `json:"url,omitempty"`
+		FileID      string   `json:"file_id,omitempty"`
+		FPS         *float64 `json:"fps,omitempty"`
+		MaxFrames   *int     `json:"max_frames,omitempty"`
+		StartOffset *float64 `json:"start_offset,omitempty"`
+		EndOffset   *float64 `json:"end_offset,omitempty"`
+		MediaType   string   `json:"media_type,omitempty"`
+	}{
+		URL:         v.URL,
+		FileID:      v.FileID,
+		FPS:         v.FPS,
+		MaxFrames:   v.MaxFrames,
+		StartOffset: v.StartOffset,
+		EndOffset:   v.EndOffset,
+		MediaType:   v.MediaType,
+	}, v.ExtraFields)
 }
 
 // InputAudioContent contains inline audio payload metadata.
@@ -75,8 +124,19 @@ func (p ContentPart) MarshalJSON() ([]byte, error) {
 			Type:       "input_audio",
 			InputAudio: p.InputAudio,
 		}, p.ExtraFields)
+	case "video_url", "input_video", "video":
+		if p.VideoURL == nil || (p.VideoURL.URL == "" && p.VideoURL.FileID == "") {
+			return nil, NewContentPartError("video_url", "video_url.url")
+		}
+		return marshalWithUnknownJSONFields(struct {
+			Type     string           `json:"type"`
+			VideoURL *VideoURLContent `json:"video_url"`
+		}{
+			Type:     "video_url",
+			VideoURL: p.VideoURL,
+		}, p.ExtraFields)
 	default:
-		return nil, fmt.Errorf("unsupported content part type %q", p.Type)
+		return nil, NewContentPartError(p.Type, "")
 	}
 }
 
@@ -214,7 +274,7 @@ func UnmarshalMessageContent(data []byte) (any, error) {
 		for i, rawPart := range rawParts {
 			part, err := unmarshalContentPart(rawPart)
 			if err != nil {
-				return nil, fmt.Errorf("part %d: %w", i, err)
+				return nil, wrapContentPartError(i, err)
 			}
 			parts[i] = part
 		}
@@ -236,7 +296,7 @@ func NormalizeMessageContent(content any) (any, error) {
 		for i, part := range c {
 			normalized, err := normalizeTypedContentPart(part)
 			if err != nil {
-				return nil, fmt.Errorf("part %d: %w", i, err)
+				return nil, wrapContentPartError(i, err)
 			}
 			parts[i] = normalized
 		}
@@ -246,7 +306,7 @@ func NormalizeMessageContent(content any) (any, error) {
 		for i, part := range c {
 			normalized, err := normalizeContentPartValue(part)
 			if err != nil {
-				return nil, fmt.Errorf("part %d: %w", i, err)
+				return nil, wrapContentPartError(i, err)
 			}
 			parts[i] = normalized
 		}
@@ -354,6 +414,11 @@ func unmarshalContentPart(data []byte) (ContentPart, error) {
 		Text       *string         `json:"text,omitempty"`
 		ImageURL   json.RawMessage `json:"image_url,omitempty"`
 		InputAudio json.RawMessage `json:"input_audio,omitempty"`
+		VideoURL   json.RawMessage `json:"video_url,omitempty"`
+		// Responses 方言把 file_id / url / fps 放在 part 顶层
+		FPS    json.RawMessage `json:"fps,omitempty"`
+		FileID string          `json:"file_id,omitempty"`
+		URL    string          `json:"url,omitempty"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return ContentPart{}, err
@@ -363,6 +428,10 @@ func unmarshalContentPart(data []byte) (ContentPart, error) {
 		"text",
 		"image_url",
 		"input_audio",
+		"video_url",
+		"fps",
+		"file_id",
+		"url",
 	)
 	if err != nil {
 		return ContentPart{}, err
@@ -398,6 +467,26 @@ func unmarshalContentPart(data []byte) (ContentPart, error) {
 			InputAudio:  audio,
 			ExtraFields: extraFields,
 		}, nil
+	case "video_url", "input_video", "video":
+		video, err := unmarshalVideoURLContent(raw.VideoURL)
+		if err != nil {
+			// Responses 方言：file_id / url 位于 part 顶层
+			if raw.FileID == "" && raw.URL == "" {
+				return ContentPart{}, err
+			}
+			video = &VideoURLContent{URL: raw.URL, FileID: raw.FileID}
+		}
+		if len(raw.FPS) > 0 && video.FPS == nil {
+			var fps float64
+			if err := json.Unmarshal(raw.FPS, &fps); err == nil {
+				video.FPS = &fps
+			}
+		}
+		return ContentPart{
+			Type:        "video_url",
+			VideoURL:    video,
+			ExtraFields: extraFields,
+		}, nil
 	case "thinking", "redacted_thinking":
 		// Anthropic extended thinking blocks are passed back verbatim in multi-turn
 		// conversations. They carry an encrypted signature that Anthropic validates
@@ -414,7 +503,7 @@ func unmarshalContentPart(data []byte) (ContentPart, error) {
 			ExtraFields: extraFields,
 		}, nil
 	default:
-		return ContentPart{}, fmt.Errorf("unsupported content part type %q", raw.Type)
+		return ContentPart{}, NewContentPartError(raw.Type, "")
 	}
 }
 
@@ -456,6 +545,17 @@ func normalizeTypedContentPart(part ContentPart) (ContentPart, error) {
 			},
 			ExtraFields: CloneUnknownJSONFields(part.ExtraFields),
 		}, nil
+	case "video_url", "input_video", "video":
+		if part.VideoURL == nil || (part.VideoURL.URL == "" && part.VideoURL.FileID == "") {
+			return ContentPart{}, fmt.Errorf("video_url part is missing url or file_id")
+		}
+		cloned := *part.VideoURL
+		cloned.ExtraFields = CloneUnknownJSONFields(part.VideoURL.ExtraFields)
+		return ContentPart{
+			Type:        "video_url",
+			VideoURL:    &cloned,
+			ExtraFields: CloneUnknownJSONFields(part.ExtraFields),
+		}, nil
 	case "thinking", "redacted_thinking":
 		// Pass through verbatim — all payload fields live in ExtraFields.
 		return ContentPart{
@@ -464,7 +564,7 @@ func normalizeTypedContentPart(part ContentPart) (ContentPart, error) {
 			ExtraFields: CloneUnknownJSONFields(part.ExtraFields),
 		}, nil
 	default:
-		return ContentPart{}, fmt.Errorf("unsupported content part type %q", part.Type)
+		return ContentPart{}, NewContentPartError(part.Type, "")
 	}
 }
 
@@ -515,6 +615,94 @@ func unmarshalImageURLContent(data []byte) (*ImageURLContent, error) {
 	default:
 		return nil, fmt.Errorf("image_url must be a string or object")
 	}
+}
+
+// unmarshalVideoURLContent 解析 video_url：支持 "url 字符串" 与对象两种形态。
+func unmarshalVideoURLContent(data []byte) (*VideoURLContent, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, NewContentPartError("video_url", "video_url.url")
+	}
+
+	switch trimmed[0] {
+	case '"':
+		var url string
+		if err := json.Unmarshal(trimmed, &url); err != nil {
+			return nil, err
+		}
+		if url == "" {
+			return nil, NewContentPartError("video_url", "video_url.url")
+		}
+		return &VideoURLContent{URL: url}, nil
+	case '{':
+		var raw struct {
+			URL         string   `json:"url"`
+			FileID      string   `json:"file_id"`
+			FPS         *float64 `json:"fps"`
+			MaxFrames   *int     `json:"max_frames"`
+			StartOffset *float64 `json:"start_offset"`
+			EndOffset   *float64 `json:"end_offset"`
+			MediaType   string   `json:"media_type"`
+		}
+		if err := json.Unmarshal(trimmed, &raw); err != nil {
+			return nil, err
+		}
+		if raw.URL == "" && raw.FileID == "" {
+			return nil, NewContentPartError("video_url", "video_url.url")
+		}
+		extra, err := extractUnknownJSONFields(trimmed,
+			"url", "file_id", "fps", "max_frames", "start_offset", "end_offset", "media_type")
+		if err != nil {
+			return nil, err
+		}
+		return &VideoURLContent{
+			URL:         raw.URL,
+			FileID:      raw.FileID,
+			FPS:         raw.FPS,
+			MaxFrames:   raw.MaxFrames,
+			StartOffset: raw.StartOffset,
+			EndOffset:   raw.EndOffset,
+			MediaType:   raw.MediaType,
+			ExtraFields: extra,
+		}, nil
+	default:
+		return nil, NewContentPartError("video_url", "video_url")
+	}
+}
+
+// ParseVideoURLContent 供 provider 层复用双形态解析（map/字符串均可）。
+func ParseVideoURLContent(raw any) (*VideoURLContent, bool) {
+	if raw == nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, false
+	}
+	video, err := unmarshalVideoURLContent(encoded)
+	if err != nil {
+		return nil, false
+	}
+	return video, true
+}
+
+// HasVideoContent 判断消息列表里是否含视频片段（调度期能力过滤使用）。
+func HasVideoContent(msgs []Message) bool {
+	for _, msg := range msgs {
+		parts, ok := NormalizeContentParts(msg.Content)
+		if !ok {
+			continue
+		}
+		for _, part := range parts {
+			// 归一化后类型统一是 video_url；这里同时接受方言别名，
+			// 防止有调用方直接构造 input_video/video 片段时逃过能力判定。
+			switch part.Type {
+			case "video_url", "input_video", "video":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func unmarshalInputAudioContent(data []byte) (*InputAudioContent, error) {

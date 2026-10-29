@@ -32,6 +32,27 @@ func (o *OptionalFloat64) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// OptionalBool 三态 bool：Set 表示请求里显式出现了该字段，Value=nil 表示显式 null
+// （用于 override_* 这类"NULL=跟随 catalog/默认"的列）。
+type OptionalBool struct {
+	Set   bool
+	Value *bool
+}
+
+func (o *OptionalBool) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+	var value bool
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	o.Value = &value
+	return nil
+}
+
 var (
 	ErrModelNameExists      = errors.New("model name already exists")
 	ErrModelNotFound        = errors.New("model not found")
@@ -131,6 +152,8 @@ type CreateModelInput struct {
 	VideoMinDurationSeconds    *int     `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
 	VideoMaxDurationSeconds    *int     `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
 	VideoSupportedActions      []string `json:"video_supported_actions"`
+	// OverrideSupportsVideoInput 视频输入能力人工纠偏（nil=跟随 catalog）。
+	OverrideSupportsVideoInput *bool `json:"override_supports_video_input"`
 }
 
 // validateModelPricing 校验模型定价：
@@ -210,6 +233,7 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 	}
 	applyVideoParams(m, input.VideoSupportedResolutions, input.VideoSupportedAspectRatios,
 		input.VideoMinDurationSeconds, input.VideoMaxDurationSeconds, input.VideoSupportedActions)
+	m.OverrideSupportsVideoInput = input.OverrideSupportsVideoInput
 
 	if err := s.modelRepo.Create(m); err != nil {
 		return nil, fmt.Errorf("create model: %w", err)
@@ -279,6 +303,8 @@ type UpdateModelInput struct {
 	VideoMinDurationSeconds    *int            `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
 	VideoMaxDurationSeconds    *int            `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
 	VideoSupportedActions      []string        `json:"video_supported_actions"`
+	// OverrideSupportsVideoInput 三态：缺省不动，null 清除（跟随 catalog），true/false 强制。
+	OverrideSupportsVideoInput OptionalBool `json:"override_supports_video_input"`
 }
 
 // UpdateModel 更新模型（T032）
@@ -369,6 +395,9 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 	}
 	if input.Weight != nil {
 		m.Weight = *input.Weight
+	}
+	if input.OverrideSupportsVideoInput.Set {
+		m.OverrideSupportsVideoInput = input.OverrideSupportsVideoInput.Value
 	}
 	applyVideoParams(m, input.VideoSupportedResolutions, input.VideoSupportedAspectRatios,
 		input.VideoMinDurationSeconds, input.VideoMaxDurationSeconds, input.VideoSupportedActions)
@@ -478,24 +507,24 @@ func (s *ModelService) CreateModelFromCatalog(catalogID, providerID uuid.UUID, n
 // BatchCreateModelsInput 批量注册模型（多渠道）输入。
 // 字段语义与 CreateModelInput 一致，仅用 ProviderIDs 替代单个 ProviderID。
 type BatchCreateModelsInput struct {
-	Name            string          `json:"name" binding:"required,max=200"`
-	ProviderIDs     []string        `json:"provider_ids" binding:"required,min=1,dive,uuid"`
-	ModelType       string          `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank rerank_vl video"`
-	UpstreamModelID string          `json:"upstream_model_id" binding:"omitempty,max=200"`
-	Description     string          `json:"description" binding:"omitempty,max=500"`
-	ContextLength   *int            `json:"context_length" binding:"omitempty,min=0,max=10000000"`
-	MaxOutputTokens *int            `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
-	InputPrice      *float64        `json:"input_price" binding:"omitempty,min=0"`
-	OutputPrice     *float64        `json:"output_price" binding:"omitempty,min=0"`
-	CacheReadPrice  OptionalFloat64 `json:"cache_read_price"`
-	CacheWritePrice OptionalFloat64 `json:"cache_write_price"`
-	PriceMode       string          `json:"price_mode" binding:"omitempty,oneof=catalog manual video"`
-	Weight          *int            `json:"weight" binding:"omitempty,min=0,max=9999"`
-	VideoSupportedResolutions  []string `json:"video_supported_resolutions"`
-	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios"`
-	VideoMinDurationSeconds    *int     `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
-	VideoMaxDurationSeconds    *int     `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
-	VideoSupportedActions      []string `json:"video_supported_actions"`
+	Name                       string          `json:"name" binding:"required,max=200"`
+	ProviderIDs                []string        `json:"provider_ids" binding:"required,min=1,dive,uuid"`
+	ModelType                  string          `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	UpstreamModelID            string          `json:"upstream_model_id" binding:"omitempty,max=200"`
+	Description                string          `json:"description" binding:"omitempty,max=500"`
+	ContextLength              *int            `json:"context_length" binding:"omitempty,min=0,max=10000000"`
+	MaxOutputTokens            *int            `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
+	InputPrice                 *float64        `json:"input_price" binding:"omitempty,min=0"`
+	OutputPrice                *float64        `json:"output_price" binding:"omitempty,min=0"`
+	CacheReadPrice             OptionalFloat64 `json:"cache_read_price"`
+	CacheWritePrice            OptionalFloat64 `json:"cache_write_price"`
+	PriceMode                  string          `json:"price_mode" binding:"omitempty,oneof=catalog manual video"`
+	Weight                     *int            `json:"weight" binding:"omitempty,min=0,max=9999"`
+	VideoSupportedResolutions  []string        `json:"video_supported_resolutions"`
+	VideoSupportedAspectRatios []string        `json:"video_supported_aspect_ratios"`
+	VideoMinDurationSeconds    *int            `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoMaxDurationSeconds    *int            `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoSupportedActions      []string        `json:"video_supported_actions"`
 }
 
 // BatchCreateFromCatalogInput 从 catalog 批量注册到多个渠道。

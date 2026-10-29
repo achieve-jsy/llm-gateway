@@ -630,6 +630,10 @@ func convertUserContentBlocks(content any) ([]brtypes.ContentBlock, error) {
 	blocks := make([]brtypes.ContentBlock, 0, len(parts)*2)
 	for _, part := range parts {
 		switch part.Type {
+		case "video_url", "input_video", "video":
+			// Bedrock Converse 没有视频内容块。显式拒绝，避免静默丢弃后让模型
+			// 在没有视频的情况下回答（用户会以为视频已经被看过）。
+			return nil, core.NewInvalidRequestError("bedrock 不支持视频输入", nil)
 		case "text", "input_text":
 			if part.Text != "" {
 				blocks = append(blocks, &brtypes.ContentBlockMemberText{Value: part.Text})

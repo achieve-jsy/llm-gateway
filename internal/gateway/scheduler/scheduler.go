@@ -83,6 +83,12 @@ func (s *Scheduler) FailoverExcluding(groupName string, excludeIDs []string, req
 	return s.failoverHandler.FailoverExcluding(groupName, excludeIDs, req)
 }
 
+// FailoverExcludingVideo 由调用方显式给出"是否必须保持视频能力"，
+// 供没有 core.ChatRequest 的协议（/v1/responses）使用。
+func (s *Scheduler) FailoverExcludingVideo(groupName string, excludeIDs []string, needsVideo bool, req *core.ChatRequest) (*RouteDecision, error) {
+	return s.failoverHandler.FailoverExcludingVideo(groupName, excludeIDs, needsVideo, req)
+}
+
 // SetCooldown 为指定模型设置 429 冷却期，冷却期内不会被路由选中。
 func (s *Scheduler) SetCooldown(modelID string, duration time.Duration) {
 	s.healthStore.SetCooldown(modelID, duration)

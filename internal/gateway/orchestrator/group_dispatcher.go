@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -96,6 +97,11 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *c
 			"group_name", modelName,
 			"error", err,
 		)
+		// 视频能力缺失是"请求与模型能力不匹配"（400），不能被吞成通用的
+		// "无可用模型"（503）——那会误导客户端去重试。
+		if errors.Is(err, scheduler.ErrNoVideoCapableModel) {
+			return nil, model.ErrVideoInputNotSupported
+		}
 		return nil, model.ErrNoAvailableModel
 	}
 
@@ -131,6 +137,17 @@ func containsGroup(groups []string, target string) bool {
 }
 
 func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedModelID string, req *core.ChatRequest) (*scheduler.RouteDecision, error) {
+	needsVideo := req != nil && core.HasVideoContent(req.Messages)
+	return d.handleFailover(c, groupName, failedModelID, req, needsVideo)
+}
+
+// HandleFailoverVideo 供没有 core.ChatRequest 的协议（/v1/responses）使用：
+// 显式告知本轮是否必须保持视频能力，避免 failover 换到不支持视频的成员。
+func (d *GroupAwareDispatcher) HandleFailoverVideo(c *gin.Context, groupName, failedModelID string, needsVideo bool) (*scheduler.RouteDecision, error) {
+	return d.handleFailover(c, groupName, failedModelID, nil, needsVideo)
+}
+
+func (d *GroupAwareDispatcher) handleFailover(c *gin.Context, groupName, failedModelID string, req *core.ChatRequest, needsVideo bool) (*scheduler.RouteDecision, error) {
 	dc := model.GetDispatchContext(c)
 
 	rounds := 0
@@ -145,7 +162,7 @@ func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedM
 		triedIDs = append(triedIDs, failedModelID)
 	}
 
-	decision, err := d.scheduler.FailoverExcluding(groupName, triedIDs, req)
+	decision, err := d.scheduler.FailoverExcludingVideo(groupName, triedIDs, needsVideo, req)
 	if err != nil {
 		slog.Error("group failover failed",
 			"group_name", groupName,

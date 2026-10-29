@@ -170,6 +170,7 @@ func setupQuotaTestDB(t *testing.T) *gorm.DB {
 		catalog_id TEXT,
 		ctx_overridden INTEGER NOT NULL DEFAULT 0,
 		max_output_overridden INTEGER NOT NULL DEFAULT 0,
+		override_supports_video_input INTEGER,
 		video_supported_resolutions TEXT NOT NULL DEFAULT '[]',
 		video_supported_aspect_ratios TEXT NOT NULL DEFAULT '[]',
 		video_min_duration_seconds INTEGER NOT NULL DEFAULT 0,

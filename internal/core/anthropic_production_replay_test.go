@@ -9,17 +9,20 @@ import (
 // request d5f69282-c314-425f-b746-f9d9869a8d3b (2026-07-16).
 //
 // Before the fix, the user message [tool_result, text] was converted to:
-//   assistant (tool_calls: call_sB80VJ5yd4ytNXYHXUD8U5vf)
-//   user (text with cache_control)          ← WRONG ORDER
-//   tool (tool_call_id=call_sB80VJ5yd4ytNXYHXUD8U5vf)
+//
+//	assistant (tool_calls: call_sB80VJ5yd4ytNXYHXUD8U5vf)
+//	user (text with cache_control)          ← WRONG ORDER
+//	tool (tool_call_id=call_sB80VJ5yd4ytNXYHXUD8U5vf)
 //
 // Azure rejected this with:
-//   "An assistant message with 'tool_calls' must be followed by tool messages..."
+//
+//	"An assistant message with 'tool_calls' must be followed by tool messages..."
 //
 // After the fix the order must be:
-//   assistant (tool_calls)
-//   tool                                    ← immediately after assistant
-//   user (text with cache_control)          ← trailing user turn
+//
+//	assistant (tool_calls)
+//	tool                                    ← immediately after assistant
+//	user (text with cache_control)          ← trailing user turn
 const productionFixture = `[
   {
     "role": "assistant",
@@ -64,7 +67,10 @@ func TestProductionReplay_ToolResultOrderingFixed(t *testing.T) {
 		t.Fatalf("unmarshal fixture: %v", err)
 	}
 
-	msgs := convertAnthropicMessages(anthMsgs)
+	msgs, err := convertAnthropicMessages(anthMsgs)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
 
 	// Expected:
 	//   [0] assistant  {ToolCalls: [{ID: call_sB80VJ5yd4ytNXYHXUD8U5vf}]}
@@ -124,7 +130,10 @@ func TestProductionReplay_SanitizeStillPasses(t *testing.T) {
 		t.Fatalf("unmarshal fixture: %v", err)
 	}
 
-	converted := convertAnthropicMessages(anthMsgs)
+	converted, err := convertAnthropicMessages(anthMsgs)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
 	sanitized := SanitizeToolMessages(converted)
 
 	if len(sanitized) != len(converted) {

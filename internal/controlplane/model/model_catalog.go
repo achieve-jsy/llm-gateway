@@ -22,23 +22,26 @@ import (
 //   - SQLite 测试库不识别 gen_random_uuid()，因此在 repo Upsert/Create 时仍由 Go 侧
 //     主动生成 ID，避免依赖 PG 端 default。
 type ModelCatalog struct {
-	ID                              uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	Source                          string     `gorm:"type:varchar(50);not null;uniqueIndex:idx_catalog_source_id" json:"source"`
-	SourceModelID                   string     `gorm:"type:varchar(200);not null;uniqueIndex:idx_catalog_source_id" json:"source_model_id"`
-	DisplayName                     string     `gorm:"type:varchar(200)" json:"display_name"`
-	Provider                        string     `gorm:"type:varchar(50);index:idx_catalog_provider" json:"provider"`
-	Mode                            string     `gorm:"type:varchar(30)" json:"mode"`
-	ContextLength                   int64      `gorm:"default:0" json:"context_length"`
-	MaxOutputTokens                 int64      `gorm:"default:0" json:"max_output_tokens"`
-	InputPricePerMillion            float64    `gorm:"type:decimal(14,6);default:0" json:"input_price_per_million"`
-	OutputPricePerMillion           float64    `gorm:"type:decimal(14,6);default:0" json:"output_price_per_million"`
-	CacheReadPrice                  *float64   `gorm:"type:decimal(14,6)" json:"cache_read_price,omitempty"`
-	CacheWritePrice                 *float64   `gorm:"type:decimal(14,6)" json:"cache_write_price,omitempty"`
-	TierThreshold                   *int64     `json:"tier_threshold,omitempty"`
-	InputPriceAboveTier             *float64   `gorm:"type:decimal(14,6)" json:"input_price_above_tier,omitempty"`
-	OutputPriceAboveTier            *float64   `gorm:"type:decimal(14,6)" json:"output_price_above_tier,omitempty"`
-	SupportsFunctionCalling         bool       `gorm:"default:false" json:"supports_function_calling"`
-	SupportsVision                  bool       `gorm:"default:false" json:"supports_vision"`
+	ID                      uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	Source                  string    `gorm:"type:varchar(50);not null;uniqueIndex:idx_catalog_source_id" json:"source"`
+	SourceModelID           string    `gorm:"type:varchar(200);not null;uniqueIndex:idx_catalog_source_id" json:"source_model_id"`
+	DisplayName             string    `gorm:"type:varchar(200)" json:"display_name"`
+	Provider                string    `gorm:"type:varchar(50);index:idx_catalog_provider" json:"provider"`
+	Mode                    string    `gorm:"type:varchar(30)" json:"mode"`
+	ContextLength           int64     `gorm:"default:0" json:"context_length"`
+	MaxOutputTokens         int64     `gorm:"default:0" json:"max_output_tokens"`
+	InputPricePerMillion    float64   `gorm:"type:decimal(14,6);default:0" json:"input_price_per_million"`
+	OutputPricePerMillion   float64   `gorm:"type:decimal(14,6);default:0" json:"output_price_per_million"`
+	CacheReadPrice          *float64  `gorm:"type:decimal(14,6)" json:"cache_read_price,omitempty"`
+	CacheWritePrice         *float64  `gorm:"type:decimal(14,6)" json:"cache_write_price,omitempty"`
+	TierThreshold           *int64    `json:"tier_threshold,omitempty"`
+	InputPriceAboveTier     *float64  `gorm:"type:decimal(14,6)" json:"input_price_above_tier,omitempty"`
+	OutputPriceAboveTier    *float64  `gorm:"type:decimal(14,6)" json:"output_price_above_tier,omitempty"`
+	SupportsFunctionCalling bool      `gorm:"default:false" json:"supports_function_calling"`
+	SupportsVision          bool      `gorm:"default:false" json:"supports_vision"`
+	// SupportsVideoInput 来自 LiteLLM catalog 的 supports_video_input；
+	// 网关据此决定该模型能否接受视频输入片段（保守聚合，见 model_info_service）。
+	SupportsVideoInput              bool       `gorm:"not null;default:false" json:"supports_video_input"`
 	SupportsPromptCaching           bool       `gorm:"default:false" json:"supports_prompt_caching"`
 	SupportsResponseSchema          bool       `gorm:"default:false" json:"supports_response_schema"`
 	SupportsToolChoice              bool       `gorm:"default:false" json:"supports_tool_choice"`

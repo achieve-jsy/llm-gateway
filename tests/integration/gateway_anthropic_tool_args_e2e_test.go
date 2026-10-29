@@ -132,6 +132,11 @@ func (s *e2eScheduler) FailoverExcluding(_ string, _ []string, _ *core.ChatReque
 	return nil, model.ErrNoOtherModelAvailable
 }
 
+// FailoverExcludingVideo 与 FailoverExcluding 行为一致：该用例不涉及视频输入能力过滤。
+func (s *e2eScheduler) FailoverExcludingVideo(_ string, _ []string, _ bool, _ *core.ChatRequest) (*scheduler.RouteDecision, error) {
+	return nil, model.ErrNoOtherModelAvailable
+}
+
 func (s *e2eScheduler) GetGroupConfig(_ string) *scheduler.GroupRoutingConfig { return nil }
 
 func (s *e2eScheduler) NotifyFailure(_ string) {}

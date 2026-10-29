@@ -56,6 +56,10 @@ func (f *fakeEmbeddingScheduler) FailoverExcluding(_ string, _ []string, _ *core
 	return nil, model.ErrNoOtherModelAvailable
 }
 
+func (f *fakeEmbeddingScheduler) FailoverExcludingVideo(_ string, _ []string, _ bool, _ *core.ChatRequest) (*scheduler.RouteDecision, error) {
+	return f.FailoverExcluding("", nil, nil)
+}
+
 func (f *fakeEmbeddingScheduler) GetGroupConfig(_ string) *scheduler.GroupRoutingConfig {
 	return nil
 }
@@ -67,7 +71,9 @@ func (f *fakeEmbeddingScheduler) SetCooldown(_ string, _ time.Duration) {}
 func (f *fakeEmbeddingScheduler) PersistSticky(_ context.Context, _, _ string, _ *scheduler.RouteDecision) {
 }
 
-func (f *fakeEmbeddingScheduler) UpdateSticky(_ context.Context, _, _, _, _ string) bool { return false }
+func (f *fakeEmbeddingScheduler) UpdateSticky(_ context.Context, _, _, _, _ string) bool {
+	return false
+}
 
 func newEmbeddingGroupDispatcher(groupName, modelName, modelType string) *orchestrator.GroupAwareDispatcher {
 	nc := cache.NewGroupNameCache("")

@@ -68,6 +68,10 @@ func (f *fakeScheduler) FailoverExcluding(_ string, _ []string, _ *core.ChatRequ
 	return nil, model.ErrNoOtherModelAvailable
 }
 
+func (f *fakeScheduler) FailoverExcludingVideo(_ string, _ []string, _ bool, _ *core.ChatRequest) (*scheduler.RouteDecision, error) {
+	return nil, model.ErrNoOtherModelAvailable
+}
+
 func (f *fakeScheduler) GetGroupConfig(_ string) *scheduler.GroupRoutingConfig {
 	return nil
 }

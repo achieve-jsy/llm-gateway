@@ -139,7 +139,9 @@ func TestAllCodesMatchregistryKey(t *testing.T) {
 
 // TestRegistrySize verifies the expected number of error codes.
 func TestRegistrySize(t *testing.T) {
-	expected := 27
+	// 27 → 29：新增 unsupported_content_part（内容片段类型/字段不支持）
+	// 与 inline_media_too_large（内联视频体积超限）。
+	expected := 29
 	if len(registry) != expected {
 		t.Errorf("registry has %d codes, expected %d", len(registry), expected)
 	}

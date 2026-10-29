@@ -115,11 +115,17 @@ type AnthropicUsage struct {
 
 // AnthropicToChatRequest converts an Anthropic Messages API request
 // to the internal ChatRequest (OpenAI-compatible) format.
-func AnthropicToChatRequest(anthReq *AnthropicMessagesRequest) *ChatRequest {
+// 返回 error 是必需的：Messages 协议没有视频内容块，遇到 video 片段必须拒绝
+// 而不是静默丢弃（否则上游会在没看到视频的情况下回答，用户却以为成功）。
+func AnthropicToChatRequest(anthReq *AnthropicMessagesRequest) (*ChatRequest, error) {
+	messages, err := convertAnthropicMessages(anthReq.Messages)
+	if err != nil {
+		return nil, err
+	}
 	req := &ChatRequest{
 		Model:      anthReq.Model,
 		Stream:     anthReq.Stream,
-		Messages:   convertAnthropicMessages(anthReq.Messages),
+		Messages:   messages,
 	}
 	if anthReq.MaxTokens > 0 {
 		maxTok := anthReq.MaxTokens
@@ -142,7 +148,7 @@ func AnthropicToChatRequest(anthReq *AnthropicMessagesRequest) *ChatRequest {
 	// Add system message if present
 	req.Messages = prependSystemMessage(anthReq.System, req.Messages)
 
-	return req
+	return req, nil
 }
 
 // convertAnthropicMessages converts Anthropic messages (with content blocks)
@@ -253,27 +259,30 @@ func cacheControlExtraFields(cc json.RawMessage) UnknownJSONFields {
 	})
 }
 
-func convertAnthropicMessages(anthMsgs []AnthropicMessage) []Message {
+func convertAnthropicMessages(anthMsgs []AnthropicMessage) ([]Message, error) {
 	if len(anthMsgs) == 0 {
-		return nil
+		return nil, nil
 	}
 	msgs := make([]Message, 0, len(anthMsgs))
 	for _, anthMsg := range anthMsgs {
-		converted := convertOneAnthropicMessage(anthMsg)
+		converted, err := convertOneAnthropicMessage(anthMsg)
+		if err != nil {
+			return nil, err
+		}
 		msgs = append(msgs, converted...)
 	}
-	return msgs
+	return msgs, nil
 }
 
 // convertOneAnthropicMessage converts a single Anthropic message to one or more
 // OpenAI messages. A user message with tool_result blocks may produce
 // multiple OpenAI "tool" role messages.
-func convertOneAnthropicMessage(anthMsg AnthropicMessage) []Message {
+func convertOneAnthropicMessage(anthMsg AnthropicMessage) ([]Message, error) {
 	switch content := anthMsg.Content.(type) {
 	case string:
-		return []Message{{Role: anthMsg.Role, Content: content}}
+		return []Message{{Role: anthMsg.Role, Content: content}}, nil
 	case nil:
-		return []Message{{Role: anthMsg.Role, Content: ""}}
+		return []Message{{Role: anthMsg.Role, Content: ""}}, nil
 	case []AnthropicContentBlock:
 		return flattenAnthropicBlocksToMessages(anthMsg.Role, content)
 	case []any:
@@ -283,9 +292,9 @@ func convertOneAnthropicMessage(anthMsg AnthropicMessage) []Message {
 		if len(blocks) > 0 {
 			return flattenAnthropicBlocksToMessages(anthMsg.Role, blocks)
 		}
-		return []Message{{Role: anthMsg.Role, Content: fmt.Sprintf("%v", content)}}
+		return []Message{{Role: anthMsg.Role, Content: fmt.Sprintf("%v", content)}}, nil
 	default:
-		return []Message{{Role: anthMsg.Role, Content: fmt.Sprintf("%v", content)}}
+		return []Message{{Role: anthMsg.Role, Content: fmt.Sprintf("%v", content)}}, nil
 	}
 }
 
@@ -295,7 +304,7 @@ func convertOneAnthropicMessage(anthMsg AnthropicMessage) []Message {
 //   - image → ContentPart with image_url
 //   - tool_use (assistant) → ToolCall entries
 //   - tool_result (user) → separate messages with role "tool"
-func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBlock) []Message {
+func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBlock) ([]Message, error) {
 	var (
 		result       []Message
 		textParts    []ContentPart
@@ -305,6 +314,11 @@ func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBloc
 
 	for _, block := range blocks {
 		switch block.Type {
+		// Messages 协议没有视频内容块。显式拒绝而不是静默丢弃：丢弃会让上游在
+		// 没看到视频的情况下回答，用户却以为成功。只加显式命中分支，
+		// 不引入 default，保持对其它未知 block 的既有宽松行为。
+		case "video_url", "input_video", "video":
+			return nil, NewInvalidRequestError("anthropic messages 协议不支持视频输入", nil)
 		case "text":
 			if block.Text != "" {
 				textParts = append(textParts, ContentPart{
@@ -383,7 +397,7 @@ func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBloc
 		result = append(result, msg)
 	}
 
-	return result
+	return result, nil
 }
 
 // convertAnthropicToolResultContent converts nested tool_result blocks while

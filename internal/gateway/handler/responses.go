@@ -169,7 +169,9 @@ func (h *ResponsesHandler) handleNonStream(c *gin.Context, baseCtx context.Conte
 		if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
 			failedID = dc.RoutedModelID
 		}
-		if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID, nil); fErr == nil {
+		// /v1/responses 没有 core.ChatRequest，视频约束必须显式传入：
+		// 否则 failover 会换到不支持视频的成员，视频被静默丢弃。
+		if decision, fErr := h.groupDispatch.HandleFailoverVideo(c, originalModel, failedID, core.HasVideoInput(req.Input)); fErr == nil {
 			req.Model = decision.ModelName
 			req.Provider = decision.ChannelType
 			c.Set("failover_used", true)
@@ -216,7 +218,7 @@ func (h *ResponsesHandler) handleStream(c *gin.Context, baseCtx context.Context,
 			if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
 				failedID = dc.RoutedModelID
 			}
-			if decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID, nil); fErr == nil {
+			if decision, fErr := h.groupDispatch.HandleFailoverVideo(c, originalModel, failedID, core.HasVideoInput(req.Input)); fErr == nil {
 				req.Model = decision.ModelName
 				req.Provider = decision.ChannelType
 				c.Set("failover_used", true)

@@ -342,6 +342,10 @@ func (protocolScheduler) Failover(string, string, *core.ChatRequest) (*gwschedul
 func (protocolScheduler) FailoverExcluding(string, []string, *core.ChatRequest) (*gwscheduler.RouteDecision, error) {
 	return nil, errors.New("unused")
 }
+
+func (protocolScheduler) FailoverExcludingVideo(string, []string, bool, *core.ChatRequest) (*gwscheduler.RouteDecision, error) {
+	return nil, errors.New("unused")
+}
 func (protocolScheduler) GetGroupConfig(string) *gwscheduler.GroupRoutingConfig { return nil }
 func (protocolScheduler) NotifyFailure(string)                                  {}
 func (protocolScheduler) SetCooldown(string, time.Duration)                     {}

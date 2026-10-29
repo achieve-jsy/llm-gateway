@@ -74,6 +74,29 @@ func convertResponsesContentParts(parts []any) (any, bool) {
 				ImageURL:    imageURL,
 				ExtraFields: core.UnknownJSONFieldsFromMap(rawJSONMapFromUnknownKeys(partMap, "type", "image_url")),
 			})
+		case "input_video", "video_url", "video":
+			// Responses 方言用 input_video，Chat 侧统一收敛为 video_url（与 new-api 一致）。
+			video, ok := core.ParseVideoURLContent(partMap["video_url"])
+			if !ok {
+				// 也允许 file_id / url / fps 直接放在 part 顶层
+				video, ok = core.ParseVideoURLContent(map[string]any{
+					"url":     partMap["url"],
+					"file_id": partMap["file_id"],
+					"fps":     partMap["fps"],
+				})
+				if !ok {
+					return nil, false
+				}
+			} else if fps, exists := partMap["fps"]; exists && video.FPS == nil {
+				if v, isNum := fps.(float64); isNum {
+					video.FPS = &v
+				}
+			}
+			typedParts = append(typedParts, core.ContentPart{
+				Type:        "video_url",
+				VideoURL:    video,
+				ExtraFields: core.UnknownJSONFieldsFromMap(rawJSONMapFromUnknownKeys(partMap, "type", "video_url", "file_id", "fps", "url")),
+			})
 		case "input_audio":
 			inputAudio, ok := normalizeResponsesInputAudioForChat(partMap["input_audio"])
 			if !ok {
@@ -130,6 +153,17 @@ func normalizeTypedResponsesContentPart(part core.ContentPart) (core.ContentPart
 				MediaType:   strings.TrimSpace(part.ImageURL.MediaType),
 				ExtraFields: core.CloneUnknownJSONFields(part.ImageURL.ExtraFields),
 			},
+			ExtraFields: core.CloneUnknownJSONFields(part.ExtraFields),
+		}, true
+	case "video_url", "input_video", "video":
+		if part.VideoURL == nil || (part.VideoURL.URL == "" && part.VideoURL.FileID == "") {
+			return core.ContentPart{}, false
+		}
+		video := *part.VideoURL
+		video.ExtraFields = core.CloneUnknownJSONFields(part.VideoURL.ExtraFields)
+		return core.ContentPart{
+			Type:        "video_url",
+			VideoURL:    &video,
 			ExtraFields: core.CloneUnknownJSONFields(part.ExtraFields),
 		}, true
 	case "input_audio":

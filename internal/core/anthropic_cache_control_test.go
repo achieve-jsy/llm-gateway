@@ -54,7 +54,10 @@ func TestAnthropicToChatRequest_PreservesCacheControl(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	req := AnthropicToChatRequest(&anthReq)
+	req, err := AnthropicToChatRequest(&anthReq)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
 	if req == nil {
 		t.Fatal("nil ChatRequest")
 	}
@@ -111,7 +114,10 @@ func TestAnthropicToChatRequest_SingleTextWithCacheControl_NotCollapsed(t *testi
 			}},
 		}},
 	}
-	req := AnthropicToChatRequest(anthReq)
+	req, err := AnthropicToChatRequest(anthReq)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
 	if len(req.Messages) != 1 {
 		t.Fatalf("messages: got %d", len(req.Messages))
 	}
@@ -147,7 +153,10 @@ func TestAnthropicToChatRequest_ToolResultNestedContentPreservesCacheControl(t *
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	req := AnthropicToChatRequest(&anthReq)
+	req, err := AnthropicToChatRequest(&anthReq)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
 	if len(req.Messages) != 1 {
 		t.Fatalf("messages: got %d want 1", len(req.Messages))
 	}

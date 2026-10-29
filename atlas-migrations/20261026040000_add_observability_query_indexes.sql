@@ -1,3 +1,8 @@
+-- atlas:txmode none
+-- ⚠️ 上面这行必须留在文件第 1 行：Atlas 只从文件开头的指令块读取 txmode，
+--    一旦挪到中间的注释之后就会失效，CONCURRENTLY 被包进事务，
+--    报 "CREATE INDEX CONCURRENTLY cannot run inside a transaction block (25001)"。
+--    2026-10-26 首次上线即因此失败，勿再移动。
 -- atlas-migrations/20261026040000_add_observability_query_indexes.sql
 -- Feature: 补齐用量/运维查询缺的两个索引（call_logs.provider、usage_daily.stat_date）
 --
@@ -29,8 +34,6 @@
 -- ⚠️ 目录内放 *.down.sql 会被 Atlas 当作独立前向迁移执行，不要落盘 down 文件）：
 --   DROP INDEX CONCURRENTLY IF EXISTS idx_call_logs_provider_ts;
 --   DROP INDEX CONCURRENTLY IF EXISTS idx_usage_daily_stat_date;
-
--- atlas:txmode none
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_call_logs_provider_ts"
   ON "call_logs" ("provider", "ts");

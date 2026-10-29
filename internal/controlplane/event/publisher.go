@@ -11,10 +11,13 @@ import (
 
 const configChangeChannel = "config:change"
 
-// Redis key prefixes for auth caches (must match gateway/auth service constants)
+// Redis key prefixes for auth caches.
+// 必须与 internal/gateway/infra/key_cache.go、internal/auth/service 里的常量保持一致；
+// 网关侧前缀带版本号（v2），改版本时这里要同时保留旧前缀，否则吊销会漏删。
 const (
-	authVerifyCachePrefix  = "key:auth:verify:"   // auth service Redis cache
-	gatewayCachePrefix     = "gateway:keycache:"  // gateway KeyCache Redis cache
+	authVerifyCachePrefix = "key:auth:verify:"     // 内嵌 auth service 的 Redis 缓存
+	gatewayCachePrefixV1  = "gateway:keycache:"    // 旧版网关 KeyCache（兼容保留）
+	gatewayCachePrefixV2  = "gateway:keycache:v2:" // 当前网关 KeyCache
 )
 
 // Publisher Redis 变更事件发布器
@@ -49,7 +52,8 @@ func (p *Publisher) InvalidateKeyAuthCache(ctx context.Context, keyHash string) 
 	}
 	keys := []string{
 		authVerifyCachePrefix + keyHash,
-		gatewayCachePrefix + keyHash,
+		gatewayCachePrefixV1 + keyHash,
+		gatewayCachePrefixV2 + keyHash,
 	}
 	if err := p.rdb.Del(ctx, keys...).Err(); err != nil {
 		slog.Warn("failed to invalidate key auth cache", "key_hash", keyHash[:8]+"...", "error", err)

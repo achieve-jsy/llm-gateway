@@ -125,14 +125,90 @@ health_check() {
     for i in $(seq 1 "$HEALTH_RETRIES"); do
         # 用 curl 发 GET 探活：宿主机上的 GNU wget --spider 会发 HEAD，
         # 而 gin 的 /health、/healthz 仅注册 GET，HEAD 会 404 导致误判不健康。
+        #
+        # 控制面优先用 /readyz（会 ping Postgres/Redis）：/healthz 只证明进程活着，
+        # 而网关鉴权链路是 gateway -> CP /internal/v1/auth/verify-key -> PG api_keys。
+        # 只看 /healthz 时，「进程活着但读不了库」的新颜色会被判健康、切上流量，用户侧
+        # 表现为 API Key 全部报错。旧镜像没有 /readyz，用 404 判定并回退到 /healthz，
+        # 保证 rollback 到旧版本仍可正常完成。
+        local cp_probe="http://localhost:${cp_port}/readyz?deep=1"
+        local cp_code
+        cp_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$cp_probe" || true)
+        if [ "$cp_code" = "404" ]; then
+            cp_probe="http://localhost:${cp_port}/healthz"
+            cp_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$cp_probe" || true)
+        fi
         if curl -fsS -o /dev/null --max-time 5 "http://localhost:${gw_port}/ready" && \
-           curl -fsS -o /dev/null --max-time 5 "http://localhost:${cp_port}/healthz"; then
-            log "${color} is healthy (attempt ${i}/${HEALTH_RETRIES})"
+           [ "$cp_code" = "200" ]; then
+            log "${color} is healthy (attempt ${i}/${HEALTH_RETRIES}, cp_probe=${cp_probe##*/})"
             return 0
         fi
         sleep "$HEALTH_INTERVAL"
     done
     return 1
+}
+
+# auth_smoke_check 在切流前验证「鉴权链路」本身：
+#   1) 合成一个必定不存在的 sk- token 请求 /v1/models，必须得到 401 + code=invalid_api_key。
+#      这个 401 来自控制面返回的 key_not_found，等价于「gateway -> CP verify-key -> PG
+#      api_keys」整条链路跑通且没有超时/内部错误；若返回 503 auth_service_unavailable，
+#      说明链路坏了——正是「发布后 API Key 报错」的那一类故障。
+#      —— 这条检查不需要任何密钥变量。
+#   2) 若配置了 AUTH_SMOKE_KEY（可选），再用真实探针 Key 请求一次并要求 200：额外覆盖
+#      组织归属/预算等业务闸门，但需要一把专用 Key 及其轮换管理。
+auth_smoke_check() {
+    local color="$1"
+    local port
+    port=$(get_gateway_port "$color")
+    local body="/tmp/auth_smoke.$$"
+    local code errcode
+    # 每次都用新 token，保证命中不了 KeyCache，必然穿透到控制面
+    local probe="sk-smoke-$(date +%s)-$RANDOM"
+
+    code=$(curl -s -o "$body" -w '%{http_code}' --max-time 10 \
+        -H "Authorization: Bearer ${probe}" "http://localhost:${port}/v1/models" || true)
+    # 容错解析 code 字段（兼容 '"code":"x"' 与 '"code": "x"' 两种序列化）
+    errcode=$(sed -n 's/.*"code"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$body" 2>/dev/null | head -1)
+    if [ "$code" != "401" ] || [ "$errcode" != "invalid_api_key" ]; then
+        log "ERROR: ${color} 鉴权链路冒烟失败：合成 Key 期望 401/invalid_api_key，实际 ${code}/${errcode:-<none>}：$(head -c 300 "$body" 2>/dev/null)"
+        rm -f "$body"
+        return 1
+    fi
+    log "${color} 鉴权链路冒烟通过（合成 Key -> 401 invalid_api_key，verify-key 链路可达）"
+
+    if [ -n "${AUTH_SMOKE_KEY:-}" ]; then
+        code=$(curl -s -o "$body" -w '%{http_code}' --max-time 10 \
+            -H "Authorization: Bearer ${AUTH_SMOKE_KEY}" "http://localhost:${port}/v1/models" || true)
+        if [ "$code" != "200" ]; then
+            log "ERROR: ${color} 真实探针 Key 冒烟失败（GET /v1/models -> HTTP ${code}）：$(head -c 300 "$body" 2>/dev/null)"
+            rm -f "$body"
+            return 1
+        fi
+        log "${color} 真实探针 Key 冒烟通过（GET /v1/models -> 200）"
+
+        # 可选：真实对话探针。只有这里能覆盖「预算/配额闸门」与「上游凭据解密」
+        # （ENCRYPTION_KEY 被轮换时，/v1/models 仍会 200，但真正调上游会失败）。
+        # 需要显式配置 AUTH_SMOKE_MODEL；设 AUTH_SMOKE_CHAT=false 可关闭。
+        if [ "${AUTH_SMOKE_CHAT:-true}" != "false" ]; then
+            if [ -z "${AUTH_SMOKE_MODEL:-}" ]; then
+                log "INFO: 未配置 AUTH_SMOKE_MODEL，跳过 chat 探针"
+            else
+                code=$(curl -s -o "$body" -w '%{http_code}' --max-time 30 \
+                    -H "Authorization: Bearer ${AUTH_SMOKE_KEY}" -H 'Content-Type: application/json' \
+                    -d "{\"model\":\"${AUTH_SMOKE_MODEL}\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" \
+                    "http://localhost:${port}/v1/chat/completions" || true)
+                if [ "$code" != "200" ]; then
+                    log "ERROR: ${color} chat 探针失败（model=${AUTH_SMOKE_MODEL} -> HTTP ${code}）：$(head -c 300 "$body" 2>/dev/null)"
+                    rm -f "$body"
+                    return 1
+                fi
+                log "${color} chat 探针通过（model=${AUTH_SMOKE_MODEL} -> 200）"
+            fi
+        fi
+    else
+        log "INFO: 未配置 AUTH_SMOKE_KEY，跳过真实 Key 冒烟（合成 Key 已覆盖 verify-key 链路）"
+    fi
+    rm -f "$body"
 }
 
 extract_ready_fingerprint() {
@@ -478,6 +554,13 @@ main() {
         stop_env "$target" 30 || true
         die "${target} does not advertise tier_snapshot_schema=1 and redis_v2=true"
     }
+    # 2.5 鉴权链路冒烟：切流前唯一覆盖 gateway -> CP verify-key -> PG api_keys 的检查。
+    # 失败则保持当前流量不变（旧色仍在服务），避免把「API Key 全部报错」推给用户。
+    if ! auth_smoke_check "$target"; then
+        log "Authenticated smoke check failed for ${target}. Current traffic stays on previous env."
+        stop_env "$target" 30 || true
+        die "${target} 鉴权链路不可用；deploy aborted, nothing switched."
+    fi
 
     # 3. 切换 nginx 到新环境
     capture_current_upstream

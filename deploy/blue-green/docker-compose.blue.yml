@@ -105,7 +105,8 @@ services:
         target: /datalog
         read_only: true
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8081/healthz"]
+      # /readyz 会 ping Postgres/Redis，避免「进程活着但读不了 api_keys」被判健康
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8081/readyz"]
       interval: 10s
       timeout: 5s
       retries: 3

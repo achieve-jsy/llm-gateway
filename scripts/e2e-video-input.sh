@@ -146,6 +146,14 @@ for _ in $(seq 1 60); do
 done
 sleep 6
 
+# 就绪探针必须真的检查依赖（PG/Redis）：蓝绿切流门禁与 compose healthcheck 依赖它。
+check "CP /readyz → 200" "200" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${CP_PORT}/readyz")"
+check "CP /readyz 报告 postgres=ok" "ok:ok" \
+  "$(curl -s "http://127.0.0.1:${CP_PORT}/readyz" | python3 -c 'import json,sys;c=json.load(sys.stdin)["checks"];print(c["postgres"]+":"+c["redis"])')"
+check "CP /readyz?deep=1（库里有可用 Key）-> 200" "200" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${CP_PORT}/readyz?deep=1")"
+check "合成 Key -> 401 invalid_api_key（verify 链路可达）" "401:invalid_api_key" \
+  "$(c=$(curl -s -o "$WORK/smoke.json" -w '%{http_code}' -H 'Authorization: Bearer sk-smoke-e2e' "http://127.0.0.1:${GW_PORT}/v1/models"); echo "$c:$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["error"]["code"])' "$WORK/smoke.json")")"
+
 say "6/8 控制面 payload 能力位"
 payload=$(curl -s "http://127.0.0.1:$CP_PORT/api/v1/internal/groups" -H "X-Internal-Token: $INTERNAL_TOKEN")
 check "video-model 下发 supports_video_input=true" "True" \

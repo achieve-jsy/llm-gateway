@@ -7,9 +7,9 @@ import (
 	"time"
 
 	acrypto "github.com/example/llm-gateway/internal/auth/crypto"
-	"github.com/gin-gonic/gin"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/gin-gonic/gin"
 	j "github.com/golang-jwt/jwt/v5"
 )
 
@@ -43,12 +43,31 @@ func AuthMiddleware(authClient *infra.AuthClient, jwtManager *acrypto.JWTManager
 			authStart := time.Now()
 			resp, err := authClient.VerifyKey(c.Request.Context(), token)
 			if err != nil {
+				// 这个分支此前不打任何日志：发布/蓝绿切流期间 verify 失败时，服务端没有任何证据
+				// 能区分「控制面不可达 / 内部 token 失效(403) / 5xx / 3s 超时」，而用户侧一律显示
+				// 「API Key 无效」。补上错误与耗时后，才能把故障时刻与切流时间对齐。
+				slog.ErrorContext(c.Request.Context(), "auth: verify key failed",
+					"error", err,
+					"key_suffix", maskKeySuffix(token),
+					"elapsed_ms", time.Since(authStart).Milliseconds(),
+					"client_ip", c.ClientIP(),
+					"path", c.Request.URL.Path,
+				)
 				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
 					"error": gin.H{"type": "service_unavailable", "message": "auth service unavailable", "code": "auth_service_unavailable"},
 				})
 				return
 			}
 			if resp.Data.Status != "active" {
+				// 同 503 分支：401 也必须留痕，否则「某批 key 突然全部 invalid」无法定位到
+				// 具体是 key 被禁用/过期，还是控制面读到了不一致的数据。
+				slog.WarnContext(c.Request.Context(), "auth: key not active",
+					"status", resp.Data.Status,
+					"key_id", resp.Data.KeyID,
+					"key_suffix", maskKeySuffix(token),
+					"elapsed_ms", time.Since(authStart).Milliseconds(),
+					"client_ip", c.ClientIP(),
+				)
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 					"error": gin.H{"type": "authentication_error", "message": "invalid or disabled API key", "code": "invalid_api_key"},
 				})
@@ -161,4 +180,12 @@ func AuthMiddleware(authClient *infra.AuthClient, jwtManager *acrypto.JWTManager
 
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gwmodel.ErrUnauthorized})
 	}
+}
+
+// maskKeySuffix 只保留 key 末 4 位，避免日志落全量密钥。
+func maskKeySuffix(token string) string {
+	if len(token) <= 8 {
+		return "****"
+	}
+	return "****" + token[len(token)-4:]
 }

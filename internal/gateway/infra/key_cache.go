@@ -13,7 +13,13 @@ import (
 )
 
 const (
-	keyCacheRedisPrefix = "gateway:keycache:"
+	// keyCacheRedisPrefix 带版本号，避免滚动发布/蓝绿并存（旧色 drain 600s）期间两代进程
+	// 互相读到对方写入的条目：VerifyKeyResp 的字段一直在增量演进（key_type / budget_chain /
+	// usable_groups / bypass_org_check…），旧条目被新代码读到会出现"零值字段"（预算链为空、
+	// 可用组为空），表现为 403 或"模型组不可用"，用户侧同样归类成"密钥不可用"。
+	// 改这个前缀时必须同步 internal/controlplane/event/publisher.go 的吊销列表，
+	// 否则吊销的 key 会在新网关里继续命中旧前缀条目。
+	keyCacheRedisPrefix = "gateway:keycache:v2:"
 	// keyCacheRedisTTL / keyCacheLocalTTL：Key 验证结果缓存时长。
 	// 主动吊销通过 HandleChangeEvent（key_disabled/key_deleted）立即失效，
 	// 因此可以设置较长的 TTL 而不影响安全性。

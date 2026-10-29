@@ -70,9 +70,20 @@ func (r *KeyRepo) Delete(id uuid.UUID) error {
 	return r.db.Delete(&model.ApiKey{}, "id = ?", id).Error
 }
 
+// keyLastUsedThrottle 是 last_used_at 的写库节流窗口。
+//
+// 为什么必须节流：网关每次 KeyCache 未命中都会同步调用 VerifyKey，而 VerifyKey 会写一次
+// last_used_at。发布/蓝绿切流瞬间新实例的本地缓存为空，若每条请求都同步写一次，会把控制面
+// 的数据库连接池打满并拉长 verify 延迟；网关对 verify 有 3s 硬超时（infra/auth_client.go），
+// 一旦超时全部被映射成 503 auth_service_unavailable，用户侧则表现为「API Key 报错」。
+// 60s 的精度对"最近使用"这个语义完全够用。
+const keyLastUsedThrottle = 60 * time.Second
+
 func (r *KeyRepo) TouchLastUsed(hash string) {
 	now := time.Now()
-	_ = r.db.Model(&model.ApiKey{}).Where("key_hash = ?", hash).Update("last_used_at", now).Error
+	_ = r.db.Model(&model.ApiKey{}).
+		Where("key_hash = ? AND (last_used_at IS NULL OR last_used_at < ?)", hash, now.Add(-keyLastUsedThrottle)).
+		Update("last_used_at", now).Error
 }
 
 func (r *KeyRepo) UpdateHashAndKey(id uuid.UUID, keyHash, encryptedKey, keyHint string) error {

@@ -497,3 +497,34 @@ df -h /datalog
 - 不得在功能开启期间停止 `trace-sealer`（未封 spool 必须继续被封）；
 - 不得在验证窗口内切换蓝绿流量（见停止点 A / B）；
 - 不得把 `TRACE_BODY_*` 放进全局 `config/prod.yaml`（两个颜色会写进同一个 `inst=` 目录）。
+
+### 鉴权链路的发布门禁（/readyz + 鉴权冒烟）
+
+网关的 API Key 验证链路是 `gateway → CP /internal/v1/auth/verify-key → PG api_keys`。
+蓝绿切流此前只校验 `gateway /ready`（Redis 快照 + 模型数）与 `CP /healthz`（仅进程存活），
+这条鉴权链路从未在切流前被验证，因此「新颜色 CP 读不了库 / verify 不通」只能在切流后由
+用户发现，表现为「API Key 全部报错」（`503 auth_service_unavailable` 或 `401 invalid_api_key`）。
+
+现在的门禁：
+
+1. `CP /readyz`：ping Postgres 与 Redis，依赖不可用时返回 503。compose healthcheck 与
+   `deploy-blue-green.sh` 的 `health_check()` 都改用它；旧镜像没有该路由时脚本按 404 回退到
+   `/healthz`，保证回滚到旧版本仍可完成。
+2. `CP /readyz?deep=1`：额外要求「库里至少有一个未禁用且未过期的 API Key」。单纯 ping 通排除不了
+   「连到另一个空库/错库」——那种情况下 verify 会正常返回 key_not_found，冒烟看似通过，但所有真实
+   Key 都会 401。切流门禁用的是 deep 模式。
+3. `auth_smoke_check()`：切流**之前**打一次真实的 `/v1/models`，失败则中止发布、旧颜色继续服务。
+   默认**不需要任何密钥变量**：用一个每次随机、必定不存在的合成 `sk-` token 请求，期望
+   `401 + code=invalid_api_key`——这个 401 正是控制面执行 `api_keys` 查询并返回 key_not_found 的结果，
+   等价于 `gateway -> CP verify-key -> PG api_keys` 整条链路可达且无超时/内部错误；返回
+   `503 auth_service_unavailable` 即判定链路故障。
+   可选（推荐）：配置 `TEST_AUTH_SMOKE_KEY` / `PROD_AUTH_SMOKE_KEY`（一把 `bypass_org_check=true` 的探针
+   Key）后，再用真实 Key 请求 `GET /v1/models` 并要求 200，覆盖组织归属闸门。再配
+   `AUTH_SMOKE_MODEL`（一个便宜的快模型/模型组名）会追加一次真实
+   `POST /v1/chat/completions`（`max_tokens=1`，30s 超时）——这是唯一能发现「上游凭据解不开
+   （如 `ENCRYPTION_KEY` 被轮换）」与「预算/配额闸门拦截」的检查；`AUTH_SMOKE_CHAT=false` 可关闭
+   该探针（例如上游正在维护、不希望它阻塞发布）。
+
+配套的可观测性：网关在 `auth: verify key failed`（503 分支）与 `auth: key not active`（401 分支）
+都会打日志（含 key 末 4 位、耗时、客户端 IP），此前这两个分支没有任何日志。
+

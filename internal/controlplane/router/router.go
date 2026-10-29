@@ -48,10 +48,15 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	r.Use(middleware.Logger())
 	r.Use(middleware.RequestID())
 
-	// 健康检查（无需认证）
+	// 健康检查（无需认证）：只证明进程存活，不检查依赖。
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+
+	// 就绪检查（无需认证）：额外 ping Postgres/Redis。
+	// 蓝绿切流门禁与 compose healthcheck 必须用它而不是 /healthz——否则「进程活着但读不了
+	// api_keys」的新颜色会被判为健康、切上流量，用户侧表现为 API Key 全部报错。
+	r.GET("/readyz", handler.ReadinessHandler(db, rdb))
 
 	// 初始化依赖
 	settingsRepo := repository.NewSettingsRepo(db)

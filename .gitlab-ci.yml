@@ -364,6 +364,8 @@ deploy-app-test:
         # 密钥/连接串由 GitLab CI/CD 变量注入到本 SSH 会话，compose 才读得到。
         # 切勿删除这些 export（详见 test-env-config skill）。
         export DATABASE_URL='${TEST_DATABASE_URL}'
+        # 可选：配置后用真实探针 Key 额外验证一次（默认用合成 Key 冒烟，不需要此变量）
+        export AUTH_SMOKE_KEY='${TEST_AUTH_SMOKE_KEY:-}' AUTH_SMOKE_MODEL='${TEST_AUTH_SMOKE_MODEL:-}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
         export REDIS_DB='${TEST_REDIS_DB}'
         export JWT_SECRET='${TEST_JWT_SECRET}'
@@ -410,6 +412,8 @@ rollback-test:
         export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30 SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true
         export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export DATABASE_URL='${TEST_DATABASE_URL}'
+        # 可选：配置后用真实探针 Key 额外验证一次（默认用合成 Key 冒烟，不需要此变量）
+        export AUTH_SMOKE_KEY='${TEST_AUTH_SMOKE_KEY:-}' AUTH_SMOKE_MODEL='${TEST_AUTH_SMOKE_MODEL:-}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
         export REDIS_DB='${TEST_REDIS_DB}'
         export JWT_SECRET='${TEST_JWT_SECRET}'
@@ -515,6 +519,8 @@ deploy-app-test-fast:
         export DRAIN_TIMEOUT=10 STOP_TIMEOUT=30 SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true
         export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export DATABASE_URL='${TEST_DATABASE_URL}'
+        # 可选：配置后用真实探针 Key 额外验证一次（默认用合成 Key 冒烟，不需要此变量）
+        export AUTH_SMOKE_KEY='${TEST_AUTH_SMOKE_KEY:-}' AUTH_SMOKE_MODEL='${TEST_AUTH_SMOKE_MODEL:-}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
         export REDIS_DB='${TEST_REDIS_DB}'
         export JWT_SECRET='${TEST_JWT_SECRET}'
@@ -561,6 +567,8 @@ deploy-app-test-fast:
         export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         export LEGACY_CONTAINERS='llm-gw-gateway llm-gw-control-plane'
         export DATABASE_URL='${TEST_DATABASE_URL}'
+        # 可选：配置后用真实探针 Key 额外验证一次（默认用合成 Key 冒烟，不需要此变量）
+        export AUTH_SMOKE_KEY='${TEST_AUTH_SMOKE_KEY:-}' AUTH_SMOKE_MODEL='${TEST_AUTH_SMOKE_MODEL:-}'
         export REDIS_ADDR='${TEST_REDIS_ADDR}' REDIS_PASSWORD='${TEST_REDIS_PASSWORD}'
         export REDIS_DB='${TEST_REDIS_DB}'
         export JWT_SECRET='${TEST_JWT_SECRET}'
@@ -627,6 +635,8 @@ deploy-prod:
         export SAFE_SWITCH_ENABLED=true KEEP_OLD_ENV=true DEPLOY_LOCK_TIMEOUT=600
         export READY_STABLE_CHECKS=3 READY_STABLE_INTERVAL=2 READY_MIN_MODEL_COUNT=1 READY_REQUIRE_STABLE_VERSION=true
         export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
+        # 可选：配置后用真实探针 Key 额外验证一次（默认用合成 Key 冒烟，不需要此变量）
+        export AUTH_SMOKE_KEY='${PROD_AUTH_SMOKE_KEY:-}' AUTH_SMOKE_MODEL='${PROD_AUTH_SMOKE_MODEL:-}'
         export DATABASE_URL='${PROD_DATABASE_URL}'
         export REDIS_ADDR='${PROD_REDIS_ADDR}' REDIS_DB='${PROD_REDIS_DB}' REDIS_PASSWORD='${PROD_REDIS_PASSWORD}'
         export JWT_SECRET='${PROD_JWT_SECRET}'

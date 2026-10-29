@@ -94,6 +94,7 @@ type geminiPart struct {
 	Text                string                  `json:"text,omitempty"`
 	InlineData          *geminiBlob             `json:"inline_data,omitempty"`
 	FileData            *geminiFileData         `json:"file_data,omitempty"`
+	VideoMetadata       *geminiVideoMetadata    `json:"video_metadata,omitempty"`
 	FunctionCall        *geminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionCallAlt     *geminiFunctionCall     `json:"function_call,omitempty"`
 	FunctionResponse    *geminiFunctionResponse `json:"functionResponse,omitempty"`
@@ -121,6 +122,14 @@ type geminiBlob struct {
 type geminiFileData struct {
 	MimeType string `json:"mime_type,omitempty"`
 	FileURI  string `json:"file_uri,omitempty"`
+}
+
+// geminiVideoMetadata 视频采样参数：fps 越大理解越细但 token 越多；
+// 起止偏移用字符串（Gemini 侧格式如 "10s"、"1m30s"）。
+type geminiVideoMetadata struct {
+	FPS         *float64 `json:"fps,omitempty"`
+	StartOffset string   `json:"start_offset,omitempty"`
+	EndOffset   string   `json:"end_offset,omitempty"`
 }
 
 type geminiFunctionCall struct {
@@ -514,9 +523,114 @@ func geminiPartsFromContentParts(parts []core.ContentPart) ([]geminiPart, error)
 				MimeType: mimeTypeForAudioFormat(part.InputAudio.Format),
 				Data:     part.InputAudio.Data,
 			}})
+		case "video_url", "input_video", "video":
+			if part.VideoURL == nil {
+				return nil, core.NewInvalidRequestError("gemini native video_url part requires a video_url object", nil)
+			}
+			videoPart, err := geminiPartFromVideoURL(part.VideoURL)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, videoPart)
+		default:
+			// fail-closed：未知片段宁可 400，也不要静默丢内容后返回 200（历史缺陷形态）。
+			return nil, core.NewInvalidRequestError("gemini native does not support content part type: "+part.Type, nil)
 		}
 	}
 	return out, nil
+}
+
+// geminiFilesBase Gemini Files API 基础路径（file_id 只给相对路径时补齐）。
+const geminiFilesBase = "https://generativelanguage.googleapis.com/v1beta/"
+
+// geminiPartFromVideoURL 把 Chat 侧 video_url 转成 Gemini 的 inline_data / file_data。
+//
+// Gemini 只接受三类视频引用：data: URL（内联字节）、Files API / GCS 资源 URI、
+// YouTube 链接；它**不会**主动抓取任意 http(s) 地址。因此普通 URL 直接报错并提示改用
+// file_id —— 这与 image_url 分支的 fail-closed 语义一致，避免"发出去但上游只看到文字"
+// 的假成功。
+func geminiPartFromVideoURL(video *core.VideoURLContent) (geminiPart, error) {
+	rawURL := strings.TrimSpace(video.URL)
+	if strings.HasPrefix(rawURL, "data:") {
+		mimeType, data, err := parseDataURL(rawURL)
+		if err != nil {
+			return geminiPart{}, err
+		}
+		if mimeType == "" {
+			mimeType = "video/mp4"
+		}
+		return geminiPart{InlineData: &geminiBlob{MimeType: mimeType, Data: data}}, nil
+	}
+
+	uri := rawURL
+	if uri == "" {
+		uri = strings.TrimSpace(video.FileID)
+	}
+	if uri == "" {
+		return geminiPart{}, core.NewInvalidRequestError("gemini native video_url requires url or file_id", nil)
+	}
+	if !isGeminiVideoURI(uri) {
+		return geminiPart{}, core.NewInvalidRequestError(
+			"gemini native video_url does not fetch arbitrary http(s) URLs; upload the file to the Gemini Files API and pass its URI or file_id, or use a YouTube / gs:// URI",
+			nil,
+		)
+	}
+	return geminiPart{
+		FileData: &geminiFileData{
+			MimeType: videoMimeTypeForURI(uri),
+			FileURI:  normalizeGeminiFileURI(uri),
+		},
+		VideoMetadata: geminiVideoMetadataFrom(video),
+	}, nil
+}
+
+// geminiVideoMetadataFrom 把 Chat 侧的 fps / 起止秒数映射到 Gemini 的 video_metadata。
+// 全空时返回 nil（不下发空对象）。
+func geminiVideoMetadataFrom(video *core.VideoURLContent) *geminiVideoMetadata {
+	if video == nil || (video.FPS == nil && video.StartOffset == nil && video.EndOffset == nil) {
+		return nil
+	}
+	meta := &geminiVideoMetadata{FPS: video.FPS}
+	if video.StartOffset != nil {
+		meta.StartOffset = strconv.FormatFloat(*video.StartOffset, 'f', -1, 64) + "s"
+	}
+	if video.EndOffset != nil {
+		meta.EndOffset = strconv.FormatFloat(*video.EndOffset, 'f', -1, 64) + "s"
+	}
+	return meta
+}
+
+func isGeminiVideoURI(uri string) bool {
+	lower := strings.ToLower(uri)
+	return strings.HasPrefix(lower, "files/") ||
+		strings.HasPrefix(lower, "gs://") ||
+		strings.Contains(lower, "generativelanguage.googleapis.com/") ||
+		strings.Contains(lower, "youtube.com/") ||
+		strings.Contains(lower, "youtu.be/")
+}
+
+// normalizeGeminiFileURI 允许只传 files/xxx 这种相对 file_id，补全为完整 Files API URI。
+func normalizeGeminiFileURI(uri string) string {
+	if strings.HasPrefix(uri, "files/") {
+		return geminiFilesBase + uri
+	}
+	return uri
+}
+
+func videoMimeTypeForURI(uri string) string {
+	lower := strings.ToLower(uri)
+	switch {
+	case strings.Contains(lower, "youtube.com/") || strings.Contains(lower, "youtu.be/"):
+		return "video/*"
+	case strings.Contains(lower, ".webm"):
+		return "video/webm"
+	case strings.Contains(lower, ".mov"):
+		return "video/quicktime"
+	case strings.Contains(lower, ".avi"):
+		return "video/x-msvideo"
+	default:
+		return "video/mp4"
+	}
 }
 
 func geminiPartFromImageURL(image *core.ImageURLContent) (geminiPart, error) {

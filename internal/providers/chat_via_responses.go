@@ -75,9 +75,9 @@ func ConvertMessagesToResponsesInput(messages []core.Message) (instructions stri
 				systemParts = append(systemParts, text)
 			}
 		case "user":
-			content, ok := convertChatContentToResponsesInput(msg.Content, "user")
-			if !ok {
-				return "", nil, core.NewInvalidRequestError("invalid chat message content for responses bridge", nil)
+			content, err := convertChatContentToResponsesInput(msg.Content, "user")
+			if err != nil {
+				return "", nil, err
 			}
 			items = append(items, map[string]any{
 				"type":    "message",
@@ -97,9 +97,9 @@ func ConvertMessagesToResponsesInput(messages []core.Message) (instructions stri
 				}
 			}
 			if len(msg.ToolCalls) == 0 || text != "" {
-				content, ok := convertChatContentToResponsesInput(msg.Content, "assistant")
-				if !ok {
-					return "", nil, core.NewInvalidRequestError("invalid assistant message content for responses bridge", nil)
+				content, err := convertChatContentToResponsesInput(msg.Content, "assistant")
+				if err != nil {
+					return "", nil, err
 				}
 				items = append(items, map[string]any{
 					"type":    "message",
@@ -140,7 +140,7 @@ func ConvertMessagesToResponsesInput(messages []core.Message) (instructions stri
 	return instructions, items, nil
 }
 
-func convertChatContentToResponsesInput(content any, role string) (any, bool) {
+func convertChatContentToResponsesInput(content any, role string) (any, error) {
 	textType := "input_text"
 	if role == "assistant" {
 		textType = "output_text"
@@ -148,37 +148,52 @@ func convertChatContentToResponsesInput(content any, role string) (any, bool) {
 
 	switch c := content.(type) {
 	case nil:
-		return []map[string]any{{"type": textType, "text": ""}}, true
+		return []map[string]any{{"type": textType, "text": ""}}, nil
 	case string:
-		return []map[string]any{{"type": textType, "text": c}}, true
+		return []map[string]any{{"type": textType, "text": c}}, nil
 	case []core.ContentPart:
 		items := make([]map[string]any, 0, len(c))
 		for _, part := range c {
 			switch part.Type {
-			case "text":
+			case "text", "input_text":
 				items = append(items, map[string]any{"type": textType, "text": part.Text})
-			case "image_url":
+			case "image_url", "input_image":
 				if part.ImageURL == nil {
-					continue
+					return nil, core.NewInvalidRequestError("responses bridge image_url part requires an image_url object", nil)
 				}
 				items = append(items, map[string]any{
 					"type":      "input_image",
 					"image_url": part.ImageURL.URL,
 				})
+			case "video_url", "input_video", "video":
+				// Responses 方言用 input_video 承载视频（与 responses_content.go 的反向解析对称）。
+				// 历史缺陷：无此分支，视频被静默丢弃后返回 200，上游只看到文字。
+				if part.VideoURL == nil {
+					return nil, core.NewInvalidRequestError("responses bridge video_url part requires a video_url object", nil)
+				}
+				items = append(items, map[string]any{
+					"type":      "input_video",
+					"video_url": part.VideoURL,
+				})
+			case "input_audio":
+				return nil, core.NewInvalidRequestError("responses bridge does not support input_audio content parts", nil)
+			default:
+				// fail-closed：未知片段宁可 400，也不要静默丢内容后返回 200。
+				return nil, core.NewInvalidRequestError("responses bridge does not support content part type: "+part.Type, nil)
 			}
 		}
 		if len(items) == 0 {
 			items = append(items, map[string]any{"type": textType, "text": core.ExtractTextContent(content)})
 		}
-		return items, true
+		return items, nil
 	case []any:
 		normalized, ok := core.NormalizeContentParts(c)
 		if !ok {
-			return []map[string]any{{"type": textType, "text": core.ExtractTextContent(content)}}, true
+			return []map[string]any{{"type": textType, "text": core.ExtractTextContent(content)}}, nil
 		}
 		return convertChatContentToResponsesInput(normalized, role)
 	default:
-		return []map[string]any{{"type": textType, "text": core.ExtractTextContent(content)}}, true
+		return []map[string]any{{"type": textType, "text": core.ExtractTextContent(content)}}, nil
 	}
 }
 

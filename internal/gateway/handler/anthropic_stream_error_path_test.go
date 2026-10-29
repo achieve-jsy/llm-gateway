@@ -8,6 +8,9 @@ package handler
 // 并自动做一次非流式重试。因此这里钉住两条契约：
 //  1. 上游读失败 → 错误沿 pipe 传给调用方（由上层写 event: error），**不补发**
 //     content_block_stop / message_delta / message_stop；
+//     （注："错误传到客户端且不发 message_stop"这一点 stream_error_test.go 的
+//     UpstreamErrorPropagates 已覆盖；本文件的增量是**已打开的 tool_use 块不得被 stop**——
+//     否则客户端会把半截 JSON 当完整参数执行。）
 //  2. 客户端提前 Close → 转换 goroutine 必须退出（不泄漏），且不 panic。
 
 import (
@@ -94,19 +97,42 @@ func TestAnthropicStream_ErrorPath_UpstreamReadError_NoNormalTermination(t *test
 
 // TestAnthropicStream_ErrorPath_ClientCloseMidStream 断言客户端提前关闭时转换 goroutine
 // 会退出（不泄漏）、不 panic，且关闭后的 Read 直接返回错误。
+//
+// 上游特意用 io.Pipe：只写一个 chunk 就**停住不关写端**，于是转换 goroutine 必然阻塞在
+// 读取上游上，只有 adapter.Close() 真的关掉上游读端才能被唤醒。删掉 Close() 里的
+// a.upstream.Close() 会让这个用例超时红——用 io.NopCloser + 整段 body 的写法没有这种
+// 敏感性（流会被自然读完，wg 照样 done）。
 func TestAnthropicStream_ErrorPath_ClientCloseMidStream(t *testing.T) {
-	sse := openAISSE(t,
-		chunkWithToolCalls(toolCallDeltaWithArgs(0, "call_ls", "Bash", `{"command":"ls"}`)),
-	)
-	adapter := newAnthropicStreamAdapter(
-		io.NopCloser(strings.NewReader(sse)),
-		"req_close_path", "claude-3-5-sonnet-20241022", 50,
-	)
+	// 只发一个 chunk，且刻意不带 [DONE]：流「还有后续」但永远不来。
+	first := "data: " + `{"id":"chatcmpl-partial","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_ls","type":"function","function":{"name":"Bash","arguments":"{\"command\":"}}]}}]}` + "\n\n"
 
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	go func() {
+		_, _ = pw.Write([]byte(first))
+		// 写完就停：pipe 写端保持打开，上游一直「等着发后续」。
+	}()
+
+	adapter := newAnthropicStreamAdapter(pr, "req_close_path", "claude-3-5-sonnet-20241022", 50)
 	buf := make([]byte, 64)
-	if _, err := adapter.Read(buf); err != nil {
-		t.Fatalf("首次 Read 应成功：%v", err)
+	type readResult struct {
+		n   int
+		err error
 	}
+	firstRead := make(chan readResult, 1)
+	go func() {
+		n, err := adapter.Read(buf)
+		firstRead <- readResult{n: n, err: err}
+	}()
+	select {
+	case res := <-firstRead:
+		if res.err != nil {
+			t.Fatalf("首次 Read 应成功：%v", res.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("首次 Read 超时：上游首个 chunk 没有被解析出任何事件")
+	}
+
 	if err := adapter.Close(); err != nil {
 		t.Fatalf("Close 返回错误：%v", err)
 	}
@@ -126,7 +152,7 @@ func TestAnthropicStream_ErrorPath_ClientCloseMidStream(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("客户端关闭后转换 goroutine 未退出（goroutine 泄漏）")
+		t.Fatal("客户端关闭后转换 goroutine 未退出：Close() 很可能没有关闭上游读端")
 	}
 }
 

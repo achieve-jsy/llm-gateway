@@ -163,7 +163,6 @@ func TestComponentResponsesToolArgsPlaceholderObject(t *testing.T) {
 	calls, finish := assembleStreamedToolCalls(t, body)
 	require.Len(t, calls, 1)
 	call := calls[0]
-	assert.NotContains(t, call.Args, "{}{", `占位 "{}" 不能被拼进真参数：%q`, call.Args)
 	assert.Equal(t, `{"command":"ls"}`, call.Args)
 	obj := requireJSONObject(t, call.Args)
 	assert.Equal(t, "ls", obj["command"])

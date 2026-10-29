@@ -27,9 +27,11 @@ func NewRollupService(db *gorm.DB) *RollupService {
 
 // Run 执行一次聚合：整日重算指定日期的 usage_daily
 // day: 要聚合的日期（按 call_logs.ts 筛选）
+//
+// 天边界按业务时区（Asia/Shanghai / ARCHIVE_TZ）取，而不是 day.Location()：
+// 后者在 Go 进程处于 UTC 时会把"本地日"算成 UTC 日，与 stat_date 语义差 8 小时。
 func (s *RollupService) Run(ctx context.Context, day time.Time) error {
-	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
-	dayEnd := dayStart.Add(24 * time.Hour)
+	dayStart, dayEnd := TSWholeDayRange(day)
 
 	slog.InfoContext(ctx, "rollup_start",
 		"day", dayStart.Format("2006-01-02"),
@@ -41,7 +43,7 @@ func (s *RollupService) Run(ctx context.Context, day time.Time) error {
 			req_count, success_count, prompt_tokens, cached_tokens,
 			cache_write_tokens, completion_tokens, reasoning_tokens, est_cost_usd)
 		SELECT
-			date(ts) AS stat_date,
+			(ts AT TIME ZONE ?)::date AS stat_date,
 			key_id,
 			COALESCE(MAX(key_name), ''),
 			COALESCE(MAX(user_id), ''),
@@ -59,7 +61,7 @@ func (s *RollupService) Run(ctx context.Context, day time.Time) error {
 			SUM(est_cost_usd)
 		FROM call_logs
 		WHERE ts >= ? AND ts < ?
-		GROUP BY date(ts), key_id, COALESCE(dept_id, ''), COALESCE(studio_id, ''), model
+		GROUP BY 1, key_id, COALESCE(dept_id, ''), COALESCE(studio_id, ''), model
 		ON CONFLICT (stat_date, key_id, dept_id, studio_id, model) DO UPDATE SET
 			key_name           = EXCLUDED.key_name,
 			dept_name          = EXCLUDED.dept_name,
@@ -71,7 +73,7 @@ func (s *RollupService) Run(ctx context.Context, day time.Time) error {
 			completion_tokens  = EXCLUDED.completion_tokens,
 			reasoning_tokens   = EXCLUDED.reasoning_tokens,
 			est_cost_usd       = EXCLUDED.est_cost_usd
-	`, dayStart, dayEnd)
+	`, archiveTZ(), dayStart, dayEnd)
 
 	if result.Error != nil {
 		slog.ErrorContext(ctx, "rollup_error",
@@ -547,10 +549,12 @@ type LogRow struct {
 
 // LogsResponse 明细查询响应
 type LogsResponse struct {
-	Rows     []LogRow `json:"rows"`
-	Total    int64    `json:"total"`
-	Page     int      `json:"page"`
-	PageSize int      `json:"page_size"`
+	Rows  []LogRow `json:"rows"`
+	Total int64    `json:"total"`
+	// TotalCapped 为 true 表示命中行数超过上限，total 是下界而非精确值。
+	TotalCapped bool `json:"total_capped,omitempty"`
+	Page        int  `json:"page"`
+	PageSize    int  `json:"page_size"`
 	// NextCursor 仅 keyset 分页（logs client 传 cursor 时）返回，供下一页继续；空表示无更多页。
 	NextCursor string `json:"next_cursor,omitempty"`
 }
@@ -639,12 +643,22 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 		query = query.Where("call_logs.status != 200")
 	}
 
+	// 总数封顶，不做精确 COUNT(*)。
+	// 精确计数要把整个时间窗扫一遍（实测 30 天窗口 idx_call_logs_ts 范围扫 1023k buffer /
+	// 1.38s）；用户看列表只关心能否翻页。LIMIT maxCountedRows+1 探测配合 index-only scan
+	// 通常是 20ms 级（实测 100001 行只需 22 buffer / 13.7ms）。
+	const maxCountedRows = 100000
 	var total int64
-	if err := query.Count(&total).Error; err != nil {
+	if err := query.Session(&gorm.Session{}).Select("1").Limit(maxCountedRows + 1).Count(&total).Error; err != nil {
 		if isTableNotExistError(err) {
 			return &LogsResponse{Rows: []LogRow{}, Total: 0, Page: params.Page, PageSize: params.PageSize}, nil
 		}
 		return nil, fmt.Errorf("count call_logs: %w", err)
+	}
+	capped := false
+	if total > maxCountedRows {
+		total = maxCountedRows
+		capped = true
 	}
 
 	var rows []LogRow
@@ -680,7 +694,7 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 		return nil, fmt.Errorf("query call_logs: %w", err)
 	}
 
-	resp := &LogsResponse{Rows: rows, Total: total, Page: params.Page, PageSize: params.PageSize}
+	resp := &LogsResponse{Rows: rows, Total: total, TotalCapped: capped, Page: params.Page, PageSize: params.PageSize}
 	// 只要返回了 rows 就给出 NextCursor（含首屏），便于客户端探测并持续 keyset 翻页。
 	if len(rows) > 0 {
 		last := rows[len(rows)-1]
@@ -882,7 +896,7 @@ type UsageOptions struct {
 	Studios   []NamedOption `json:"studios"`
 }
 
-// QueryOptions 返回过去 90 天内出现过的 provider / dept / studio 枚举
+// QueryOptions 返回最近 7 天内出现过的 provider / dept / studio 枚举
 func (s *RollupService) QueryOptions(ctx context.Context) (*UsageOptions, error) {
 	opts := &UsageOptions{
 		Providers: []string{},
@@ -890,11 +904,16 @@ func (s *RollupService) QueryOptions(ctx context.Context) (*UsageOptions, error)
 		Studios:   []NamedOption{},
 	}
 
-	// providers
+	// providers / studios 只看**最近 7 天**出现过的值（原为 90 天）。
+	// 实测：90 天窗口要扫 350 万行才拿到 42 个取值（2.2–4.0s / 917k buffer），
+	// 而下拉框真正关心的是"最近有流量的渠道"。7 天窗口 + idx_call_logs_provider_ts
+	// 实测降到约 276ms。窗口内有流量的取值依然一定会出现。
+	const optWindowSQL = "ts >= NOW() - INTERVAL '7 days'"
+
 	var providers []string
 	if err := s.db.WithContext(ctx).Table("call_logs").
 		Select("DISTINCT provider").
-		Where("provider != '' AND ts >= NOW() - INTERVAL '90 days'").
+		Where("provider IS NOT NULL AND provider <> '' AND " + optWindowSQL).
 		Pluck("provider", &providers).Error; err == nil {
 		opts.Providers = providers
 	}
@@ -923,7 +942,7 @@ func (s *RollupService) QueryOptions(ctx context.Context) (*UsageOptions, error)
 	var studios []studioRow
 	if err := s.db.WithContext(ctx).Table("call_logs").
 		Select("DISTINCT studio_id, COALESCE(MAX(studio_name),'') AS studio_name").
-		Where("studio_id != '' AND ts >= NOW() - INTERVAL '90 days'").
+		Where("studio_id IS NOT NULL AND studio_id <> '' AND " + optWindowSQL).
 		Group("studio_id").
 		Find(&studios).Error; err == nil {
 		for _, st := range studios {

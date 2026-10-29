@@ -7,6 +7,7 @@ import (
 	"time"
 
 	obsmodel "github.com/example/llm-gateway/internal/observability/model"
+	"github.com/example/llm-gateway/internal/observability/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/example/llm-gateway/internal/orgservice/rbac/policy"
 	"github.com/gin-gonic/gin"
@@ -409,6 +410,7 @@ func (h *UsageHandler) DashboardModelsEnhanced(c *gin.Context) {
 
 	actor := rbac.GetActor(c)
 	usagePol := policy.UsagePolicy{}
+	modelWinFrom, modelWinTo := service.ParseDayWindow(startStr, endStr)
 
 	type rawModelRow struct {
 		Model           string  `gorm:"column:model"`
@@ -431,7 +433,7 @@ func (h *UsageHandler) DashboardModelsEnhanced(c *gin.Context) {
 			COALESCE(AVG(duration_ms), 0) AS avg_duration_ms,
 			COALESCE(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY duration_ms), 0) AS p90_duration_ms,
 			COALESCE(AVG(first_token_ms), 0) AS avg_first_token_ms`).
-		Where("ts >= ?::date AND ts < (?::date + INTERVAL '1 day')", startStr, endStr).
+		Where("ts >= ? AND ts < ?", modelWinFrom, modelWinTo).
 		Where("LENGTH(model) <= 128"). // 过滤脏数据：model 字段误填 prompt 内容的异常记录
 		Scopes(usagePol.QueryScope(actor))
 	if filterUserID != "" {
@@ -560,17 +562,18 @@ func (h *UsageHandler) DashboardUserDetail(c *gin.Context) {
 		Tokens int64   `json:"tokens"    gorm:"column:tokens"`
 	}
 	var trend []trendPoint
+	// 天分组键按业务时区切：UTC 的 ts::date 会把北京时间 0–8 点的调用算到前一天。
 	_ = db.Raw(`
 		SELECT
-			ts::date::text AS date,
+			`+service.TSKeySQL("")+`::date::text AS date,
 			COUNT(*) AS calls,
 			COALESCE(SUM(est_cost_usd), 0) AS cost,
 			COALESCE(SUM(total_tokens), 0) AS tokens
 		FROM call_logs
 		WHERE ts >= ? AND ts < ? AND COALESCE(user_id, 'unknown') = ?
 			AND (? = '' OR inbound_endpoint = ?)
-		GROUP BY ts::date
-		ORDER BY ts::date ASC
+		GROUP BY 1
+		ORDER BY 1 ASC
 	`, from, toExcl, userID, endpoint, endpoint).Scan(&trend)
 
 	// 模型分布
@@ -700,15 +703,15 @@ func (h *UsageHandler) DashboardModelDetail(c *gin.Context) {
 	var trend []trendPoint
 	_ = db.Raw(`
 		SELECT
-			ts::date::text AS date,
+			`+service.TSKeySQL("")+`::date::text AS date,
 			COUNT(*) AS calls,
 			COALESCE(SUM(est_cost_usd), 0) AS cost,
 			COALESCE(SUM(total_tokens), 0) AS tokens
 		FROM call_logs
 		WHERE ts >= ? AND ts < ? AND model = ?
 			AND (? = '' OR inbound_endpoint = ?)
-		GROUP BY ts::date
-		ORDER BY ts::date ASC
+		GROUP BY 1
+		ORDER BY 1 ASC
 	`, from, toExcl, modelName, endpoint, endpoint).Scan(&trend)
 
 	// 用户分布（Top 20）

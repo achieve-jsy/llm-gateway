@@ -159,10 +159,11 @@ type UpdateGroupRequest struct {
 	FailoverCooldownSeconds *int    `json:"failover_cooldown_seconds"`
 	TimeoutSeconds          *int    `json:"timeout_seconds"`
 
-	IsCapabilityOverride    *bool  `json:"is_capability_override"`
-	OverrideSupportsVision  *bool  `json:"override_supports_vision"`
-	OverrideSupportsFC      *bool  `json:"override_supports_function_calling"`
-	OverrideSupportsTC      *bool  `json:"override_supports_tool_choice"`
+	IsCapabilityOverride   *bool `json:"is_capability_override"`
+	OverrideSupportsVision *bool `json:"override_supports_vision"`
+	OverrideSupportsFC     *bool `json:"override_supports_function_calling"`
+	OverrideSupportsTC     *bool `json:"override_supports_tool_choice"`
+	OverrideSupportsVideo  *bool `json:"override_supports_video_input"`
 	// mode/context/output 手动覆盖：空串/0 = 继承成员聚合值
 	OverrideMode            *string `json:"override_mode"`
 	OverrideContextLength   *int    `json:"override_context_length"`
@@ -315,6 +316,9 @@ func (s *GroupService) Update(id uint, req UpdateGroupRequest) (*model.Group, er
 	}
 	if req.OverrideSupportsTC != nil {
 		group.OverrideSupportsTC = *req.OverrideSupportsTC
+	}
+	if req.OverrideSupportsVideo != nil {
+		group.OverrideSupportsVideoInput = *req.OverrideSupportsVideo
 	}
 	if req.OverrideMode != nil {
 		group.OverrideMode = strings.TrimSpace(*req.OverrideMode)
@@ -542,6 +546,7 @@ func (s *GroupService) ResetCapability(id uint) (*model.Group, error) {
 	group.OverrideSupportsVision = false
 	group.OverrideSupportsFC = false
 	group.OverrideSupportsTC = false
+	group.OverrideSupportsVideoInput = false
 	group.OverrideMode = ""
 	group.OverrideContextLength = nil
 	group.OverrideMaxOutputTokens = nil

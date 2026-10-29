@@ -1,0 +1,29 @@
+-- atlas-migrations/20261022014556_add_group_override_supports_video_input.sql
+-- Feature: 模型组增加「视频输入」组级开关（能力设置页第 4 个开关）
+--
+-- 背景：视频输入能力此前只有两个来源——model_catalog 的 supports_video_input（LiteLLM
+-- 同步，会被下次同步覆盖）与 models.override_supports_video_input（三态，仅 API 可改）。
+-- 组能力是对成员的保守 AND 聚合，`model_groups` 只有 vision / function_calling /
+-- tool_choice 三个 override 列，管理员在"能力设置"页**没有任何入口**声明整组支持视频。
+--
+-- 语义（配合 is_capability_override 生效）：
+--   is_capability_override = false（自动）：逐成员按 catalog/override 判定，组级能力保持
+--       保守 AND，混合组在路由期只挑真支持视频的成员。
+--   is_capability_override = true （手动）：整组成员跟随本开关——
+--       true  = 整组声明支持视频（需管理员人工确认组内上游都吃 video_url）
+--       false = 整组声明不支持视频
+--   判定入口唯一：internal/controlplane/service.EffectiveMemberVideoInput（下发给
+--   gateway 的逐成员标志）与 model_info_service.applyGroupOverride（对外组能力），
+--   两处都调用同一语义，避免开关只改展示不改路由。
+--
+-- 为什么是手写 SQL 而不是 make atlas-diff：同 20261021024215 / 20261021024708 的结论
+-- （本仓库 diff 稳定产出与本次改动无关的存量漂移——实测数百行，含 alert_events /
+-- api_keys / model_daily_stats 等 20+ 张表与 legacy migrations/ 独有的建表语句）。
+-- 本次 diff 中与本改动相关的只有一行：
+--   ALTER TABLE "model_groups" ADD COLUMN "override_supports_video_input" boolean NOT NULL DEFAULT false;
+-- 采用 IF NOT EXISTS 保证可重放（理由同前两个迁移）。
+--
+-- 回滚（本项目不使用 Atlas 的 down 迁移机制；目录内不要落盘 *.down.sql）：
+--   ALTER TABLE model_groups DROP COLUMN IF EXISTS override_supports_video_input;
+
+ALTER TABLE model_groups ADD COLUMN IF NOT EXISTS override_supports_video_input BOOLEAN NOT NULL DEFAULT false;

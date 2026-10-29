@@ -215,5 +215,16 @@ code=$(curl -s -o "$WORK/r6.json" -w '%{http_code}' -X POST "http://127.0.0.1:$G
   -d "{\"model\":\"e2e-text-group\",\"messages\":[$VID]}")
 check "清回 NULL 后（跟随 catalog）→ 又变 400" "400" "$code"
 
+say "9. 组级「视频输入」开关（手动覆盖 -> 整组支持 -> 清回自动）"
+docker exec "$PG_CONTAINER" psql -q -U gateway -d "$DB" -c "UPDATE model_groups SET is_capability_override = true, override_supports_video_input = true WHERE id = 9002;" >/dev/null
+sleep 8
+code=$(curl -s -o "$WORK/r7.json" -w '%{http_code}' -X POST "http://127.0.0.1:$GW_PORT/v1/chat/completions"   -H 'Content-Type: application/json' -H "Authorization: Bearer $API_KEY"   -d "{\"model\":\"e2e-text-group\",\"messages\":[$VID]}")
+check "组级手动开启视频（组内只有 text-model）-> 200" "200" "$code"
+check "/v1/model/info 组能力同步为支持视频" "True"   "$(curl -s "http://127.0.0.1:$GW_PORT/v1/model/info" -H "Authorization: Bearer $API_KEY" | python3 -c 'import json,sys;print([m["model_info"].get("supports_video_input") for m in json.load(sys.stdin)["data"] if m["model_name"]=="e2e-text-group"][0])')"
+docker exec "$PG_CONTAINER" psql -q -U gateway -d "$DB" -c "UPDATE model_groups SET is_capability_override = false, override_supports_video_input = false WHERE id = 9002;" >/dev/null
+sleep 8
+code=$(curl -s -o "$WORK/r8.json" -w '%{http_code}' -X POST "http://127.0.0.1:$GW_PORT/v1/chat/completions"   -H 'Content-Type: application/json' -H "Authorization: Bearer $API_KEY"   -d "{\"model\":\"e2e-text-group\",\"messages\":[$VID]}")
+check "清回自动聚合后 -> 又变 400" "400" "$code"
+
 say "结果：PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]] || exit 1

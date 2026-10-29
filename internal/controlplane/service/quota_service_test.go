@@ -104,6 +104,7 @@ func setupQuotaServiceTestDB(t *testing.T) *gorm.DB {
 		override_supports_vision INTEGER NOT NULL DEFAULT 0,
 		override_supports_function_calling INTEGER NOT NULL DEFAULT 0,
 		override_supports_tool_choice INTEGER NOT NULL DEFAULT 0,
+		override_supports_video_input INTEGER NOT NULL DEFAULT 0,
 		quota_rpm INTEGER,
 		quota_max_concurrency INTEGER,
 		budget_tier_id TEXT,

@@ -132,7 +132,7 @@ atlas-migrations/<ts>_add_video_input_capability.sql    A-2 A-3
 | **X-1** | `/v1/models` 暴露模态 | `gateway/handler/bound_models.go:58-77`（Key 绑定组视角）**与** `gateway/handler/models.go:56-72`（registry 视角，两个入口都要改）、`core/types.go:146-154` | 加 `architecture.input_modalities: ["text","image","video"]`（保持 OpenAI 兼容子集，未知字段不影响老客户端） | **OpenRouter** `/api/v1/models` 的 `architecture.input_modalities`（实测 468 模型中 90 个含 video） |
 | **X-2** | OpenCode 插件识别 video | `tools/opencode-models-discovery/src/litellm.ts:85-97,124-134` + 重建 bundle `internal/controlplane/handler/assets/opencode-models-discovery.js` + bump `package.json:4` | `supports_video_input → modalities 加 'video' + attachment=true` | 顺手修已存在断链：插件读 `supports_reasoning`（`litellm.ts:113`）但网关不输出 |
 | **X-3** | 媒体内容代理 | 复用 `internal/archive`（`store.go:144-157` `ArchiveStore`、`local.go:25`） | `GET /v1/videos/{id}/content` 反代，避免上游直链/48h 过期外泄 | LiteLLM / New API 都有反代；对应 `video-integration-comparison.md` P2-12 |
-| **X-4** | admin UI | `web/src/views/admin/`（catalog/model/group 页） | 模型级"支持视频输入"开关 + 组级 override 开关 + 能力列展示 | — |
+| **X-4** | admin UI | `web/src/views/admin/`（catalog/model/group 页） | 模型级"支持视频输入"开关 + 组级 override 开关 + 能力列展示。**已实现组级开关**：`model_groups.override_supports_video_input` + 模型组详情「能力设置」页第 4 个开关（20261022014556）；手动模式下组成员跟随组开关路由（`service.EffectiveMemberVideoInput`），模型级三态 UI 仍未做 | — |
 
 ---
 

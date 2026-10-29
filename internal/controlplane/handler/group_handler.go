@@ -535,7 +535,8 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 					mi.Name = m.UpstreamName()
 					mi.ModelType = m.ModelType
 					mi.ProviderID = m.ProviderID
-					mi.SupportsVideoInput = service.EffectiveSupportsVideoInput(m)
+					// 手动覆盖模式跟随组开关，自动模式逐成员判定（见 service.EffectiveMemberVideoInput）
+					mi.SupportsVideoInput = service.EffectiveMemberVideoInput(&g, m)
 					providerEnabled := false
 					if h.providerRepo != nil {
 						p, err := h.providerRepo.GetByID(m.ProviderID)

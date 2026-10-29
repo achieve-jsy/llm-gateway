@@ -247,6 +247,23 @@ func EffectiveSupportsVideoInput(m *model.Model) bool {
 	return m.Catalog != nil && m.Catalog.SupportsVideoInput
 }
 
+// EffectiveMemberVideoInput 返回「该成员在本组内」是否支持视频输入。
+//
+// 自动模式（IsCapabilityOverride=false）：逐成员判定，混合组里只有真支持视频的成员
+// 会被 gateway 的路由期过滤命中，组级能力保持保守 AND。
+// 手动模式（IsCapabilityOverride=true）：整组成员跟随组开关——这是管理员在能力设置
+// 页人工声明的结果（页面上会提示需要人工确认整组上游都吃视频）。若只改组级标志而不
+// 影响成员标志，开关打开后视频请求仍会被过滤成"无可用模型"。
+func EffectiveMemberVideoInput(g *model.Group, m *model.Model) bool {
+	if m == nil {
+		return false
+	}
+	if g != nil && g.IsCapabilityOverride {
+		return g.OverrideSupportsVideoInput
+	}
+	return EffectiveSupportsVideoInput(m)
+}
+
 // aggregateVideoCaps 视频能力保守聚合：分辨率/宽高比/场景取交集，时长取最窄区间。
 func aggregateVideoCaps(info *GroupModelInfo, members []*model.Model) {
 	if info == nil || len(members) == 0 {
@@ -391,6 +408,7 @@ func applyGroupOverride(info GroupModelInfo, g *model.Group) GroupModelInfo {
 	info.SupportsVision = g.OverrideSupportsVision
 	info.SupportsFunctionCalling = g.OverrideSupportsFC
 	info.SupportsToolChoice = g.OverrideSupportsTC
+	info.SupportsVideoInput = g.OverrideSupportsVideoInput
 	// mode/context/output 按字段覆盖：空/NULL/<=0 时回退到成员聚合值。
 	if strings.TrimSpace(g.OverrideMode) != "" {
 		info.Mode = strings.TrimSpace(g.OverrideMode)

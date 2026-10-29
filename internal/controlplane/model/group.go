@@ -33,6 +33,9 @@ type Group struct {
 	OverrideSupportsVision  bool   `gorm:"not null;default:false" json:"override_supports_vision"`
 	OverrideSupportsFC      bool   `gorm:"not null;default:false;column:override_supports_function_calling" json:"override_supports_function_calling"`
 	OverrideSupportsTC      bool   `gorm:"not null;default:false;column:override_supports_tool_choice" json:"override_supports_tool_choice"`
+	// OverrideSupportsVideoInput 组级视频输入声明（配合 IsCapabilityOverride 生效）：
+	// 手动模式下整组成员都按此开关判定视频能力，管理员需人工确认整组上游都吃视频。
+	OverrideSupportsVideoInput bool `gorm:"not null;default:false;column:override_supports_video_input" json:"override_supports_video_input"`
 	// mode/context/output 覆盖（空或 NULL = 继承成员聚合值）
 	OverrideMode            string `gorm:"column:override_mode;type:varchar(50);default:null" json:"override_mode,omitempty"`
 	OverrideContextLength   *int   `gorm:"column:override_context_length;default:null" json:"override_context_length,omitempty"`

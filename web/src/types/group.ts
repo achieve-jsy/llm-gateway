@@ -24,6 +24,8 @@ export interface Group {
   override_supports_vision: boolean
   override_supports_function_calling: boolean
   override_supports_tool_choice: boolean
+  // 组级「视频输入」声明（仅手动覆盖模式生效）；开启后整组按支持视频路由
+  override_supports_video_input: boolean
   override_mode: string
   override_context_length: number | null
   override_max_output_tokens: number | null
@@ -83,6 +85,7 @@ export interface UpdateGroupRequest {
   override_supports_vision?: boolean
   override_supports_function_calling?: boolean
   override_supports_tool_choice?: boolean
+  override_supports_video_input?: boolean
   override_mode?: string
   override_context_length?: number | null
   override_max_output_tokens?: number | null

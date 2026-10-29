@@ -142,6 +142,12 @@
               <el-form-item label="Tool Choice">
                 <el-switch v-model="capForm.override_supports_tool_choice" />
               </el-form-item>
+              <el-form-item label="视频输入 (Video)">
+                <el-switch v-model="capForm.override_supports_video_input" />
+                <span style="margin-left: 12px; color: #e6a23c; font-size: 12px">
+                  开启后整组成员都按「支持视频」路由，请先确认组内上游都接受 video_url
+                </span>
+              </el-form-item>
               <el-form-item label="Mode">
                 <el-input
                   v-model="capForm.override_mode"
@@ -189,6 +195,7 @@
               <el-tag v-if="capAggregated.supports_vision" type="success" size="small" effect="light">图像输入</el-tag>
               <el-tag v-if="capAggregated.supports_function_calling" type="warning" size="small" effect="light">工具调用</el-tag>
               <el-tag v-if="capAggregated.supports_tool_choice" type="warning" size="small" effect="plain">tool_choice</el-tag>
+              <el-tag v-if="capAggregated.supports_video_input" type="success" size="small" effect="plain">视频输入</el-tag>
             </template>
           </div>
         </div>
@@ -302,6 +309,7 @@ const capForm = ref({
   override_supports_vision: false,
   override_supports_function_calling: false,
   override_supports_tool_choice: false,
+  override_supports_video_input: false,
   override_mode: '',
   override_context_length: null as number | null,
   override_max_output_tokens: null as number | null,
@@ -394,6 +402,7 @@ function syncCapFormFromGroup(g: any) {
     override_supports_vision: !!g.override_supports_vision,
     override_supports_function_calling: !!g.override_supports_function_calling,
     override_supports_tool_choice: !!g.override_supports_tool_choice,
+    override_supports_video_input: !!g.override_supports_video_input,
     override_mode: g.override_mode || '',
     override_context_length: g.override_context_length ?? null,
     override_max_output_tokens: g.override_max_output_tokens ?? null,
@@ -477,6 +486,7 @@ async function saveCapability() {
       override_supports_vision: capForm.value.override_supports_vision,
       override_supports_function_calling: capForm.value.override_supports_function_calling,
       override_supports_tool_choice: capForm.value.override_supports_tool_choice,
+      override_supports_video_input: capForm.value.override_supports_video_input,
       override_mode: capForm.value.override_mode || '',
       override_context_length: capForm.value.override_context_length ?? null,
       override_max_output_tokens: capForm.value.override_max_output_tokens ?? null,

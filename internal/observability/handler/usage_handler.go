@@ -951,6 +951,17 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 	actor := rbac.GetActor(c)
 	usagePol := policy.UsagePolicy{}
 
+	// 「今天」与天分组键都按业务时区（Asia/Shanghai / ARCHIVE_TZ）算。
+	// 原实现用 PG 的 CURRENT_DATE 与 ts::date —— 二者都跟着**服务器时区**（UTC）走，
+	// 北京时间 0–8 点的调用会被切到前一天，同时把"历史/今天"的分界线也挪了 8 小时。
+	dayExpr := service.TSKeySQL("")
+	loc := service.BusinessLocation()
+	nowLocal := time.Now().In(loc)
+	todayStart := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), 0, 0, 0, 0, loc)
+	todayEnd := todayStart.AddDate(0, 0, 1)
+	// 明细路径（有过滤条件/非全局视角）的窗口：前端传本地日历日，按业务时区取日界线。
+	detailFrom, detailTo := service.ParseDayWindow(startStr, endStr)
+
 	type trendRow struct {
 		Date        string  `gorm:"column:date"`
 		Calls       int64   `gorm:"column:calls"`
@@ -978,7 +989,7 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 				SUM(req_count - success_count) AS errors,
 				SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
 				SUM(est_cost_usd) AS cost`).
-			Where("stat_date >= ?::date AND stat_date <= ?::date AND stat_date < CURRENT_DATE", startStr, endStr).
+			Where("stat_date >= ?::date AND stat_date <= ?::date AND stat_date < ?::date", startStr, endStr, todayStart.Format("2006-01-02")).
 			Group("stat_date").
 			Order("stat_date ASC").
 			Scan(&histRows).Error; err != nil {
@@ -989,14 +1000,14 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 		var todayRows []trendRow
 		if err := h.db.WithContext(c.Request.Context()).
 			Table("call_logs").
-			Select(`ts::date::text AS date,
+			Select(dayExpr+`::date::text AS date,
 				COUNT(*) AS calls,
 				COUNT(*) FILTER (WHERE status != 200) AS errors,
 				SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
 				SUM(est_cost_usd) AS cost`).
-			Where("ts >= CURRENT_DATE AND ts < (?::date + INTERVAL '1 day')", endStr).
-			Group("ts::date").
-			Order("ts::date ASC").
+			Where("ts >= ? AND ts < ?", todayStart, todayEnd).
+			Group(dayExpr).
+			Order(dayExpr + " ASC").
 			Scan(&todayRows).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -1007,12 +1018,12 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 	if !useFastPath {
 		q := h.db.WithContext(c.Request.Context()).
 			Table("call_logs").
-			Select(`ts::date::text AS date,
+			Select(dayExpr+`::date::text AS date,
 				COUNT(*) AS calls,
 				COUNT(*) FILTER (WHERE status != 200) AS errors,
 				SUM(prompt_tokens + completion_tokens + reasoning_tokens) AS total_tokens,
 				SUM(est_cost_usd) AS cost`).
-			Where("ts >= ?::date AND ts < (?::date + INTERVAL '1 day')", startStr, endStr).
+			Where("ts >= ? AND ts < ?", detailFrom, detailTo).
 			Scopes(usagePol.QueryScope(actor))
 		if filterUserID != "" {
 			q = q.Where("user_id = ?", filterUserID)
@@ -1028,8 +1039,8 @@ func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 		if endpoint != "" {
 			q = q.Where("inbound_endpoint = ?", endpoint)
 		}
-		if err := q.Group("ts::date").
-			Order("ts::date ASC").
+		if err := q.Group(dayExpr).
+			Order(dayExpr + " ASC").
 			Scan(&rows).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

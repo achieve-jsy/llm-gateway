@@ -234,6 +234,16 @@ JSON）；同理并行调用的块被关掉会把后续参数丢进别人的块�
 `tests/providers/responses_stream_toolargs_test.go`（组件层）：参数只在 added 里给 / 传统 delta 分片 /
 added 为裸 `"{}"` 占位三种上游形态，断言下游 `arguments` 拼接后是合法 JSON。
 
+`tests/integration/gateway_anthropic_tool_args_e2e_test.go`（进程内全链路 E2E，**不需要 Docker**，
+`make test` 就会跑到）：真实 `http.Client` → gin → `MessagesHandler` → `ChatOrchestrator` →
+`providers.Router` → `providers/openai` 适配器 → `httptest` 假上游（回放事故 SSE）→ 客户端侧按
+Anthropic SDK 语义累加。只有两处替身：假上游、调度器（生产决策来自 Redis 快照）。
+
+| 用例 | 钉住的行为 |
+|---|---|
+| `TestE2E_AnthropicMessagesStream_FirstChunkToolArgs` | 流式：累加后的 `tool_use.input` 必须含 `command`，且 `stop_reason=tool_use`、block index 严格升序（修前 input 为空） |
+| `TestE2E_AnthropicMessagesNonStream_ToolUseInput` | 非流式：同一断言，走的是另一份代码（`core.responseMessageToAnthropicBlocks`） |
+
 `internal/providers/chat_via_responses_stream_toolargs_test.go`：A 首帧即全量 / B delta 回归 /
 C 仅 completed / D `output_item.done`（含缺 added 的兼容形态）/ E 并行不串台 / F 空参数收口 /
 G `"{}"` 占位不重复拼接 / H delta-only 流补 id/name / I name 晚到由 done/completed 补 /
@@ -280,7 +290,11 @@ id 兜底）都已用"临时退回对应改动"的方式确认过会失败，避
 - 判断某个后端是不是"首块即全量参数"：抓上游 SSE，看 `tool_calls[0]` 的第一个分块是否
   `function.arguments` 非空（或 `id`/`name`/`arguments` 全在同一块）。
 - 网关日志关键字：`dropping tool_call arguments for a closed block`（交错/回填类异常）、
-  `tool_call never got a function name`（上游始终没给 name，已按空 name 补块）。
+  `tool_call never got a function name`（上游始终没给 name，已按空 name 补块）、
+  `dropping malformed upstream SSE frame`（上游发了非法 JSON 帧，该帧被丢弃；**修前**这类坏帧
+  会把缓冲一直占着，后续所有分块都被拼进去、永远过不了 `json.Valid`，整条流的尾巴被静默吞掉，
+  看起来像"模型自己说完了"）、
+  `dropping oversized upstream SSE frame`（攒帧超过 1MB 兜底上限，通常是坏流）。
 - 客户端侧复现：非流式正常、流式 `tool_use.input` 为空 → 优先怀疑这条转换链。
 
 ## 9. 参考来源

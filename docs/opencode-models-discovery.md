@@ -281,8 +281,9 @@ enhanceConfig() 执行（5 秒超时）
 安装脚本（mac/windows）做的事：
 
 1. 校验 `python3` / `curl`（mac）或 `Invoke-WebRequest`（windows）；
-2. 下载插件到 `~/.config/opencode/plugins/`，清理旧单数 `plugin/` 副本；
-3. 写入 `opencode.json`：把本 provider 配成
+2. **探测本地 OpenCode 大版本**（见下节「V1 / V2 双路径」），决定走哪条写入路径；
+3. 下载插件到 `~/.config/opencode/plugins/`，清理旧单数 `plugin/` 副本（仅 V1）；
+4. 写入 `opencode.json`：把本 provider 配成
    ```json
    "options": {
      "baseURL": "https://gateway/v1",
@@ -296,10 +297,26 @@ enhanceConfig() 执行（5 秒超时）
    }
    ```
    provider 的 `name` 取后台「系统设置 → 接入配置 → 供应商名称」（默认「某公司」）；
-4. 同名 provider 直接覆盖（按 provider id）；
-5. 回调上报结果。
+5. 同名 provider 直接覆盖（按 provider id）；
+6. 回调上报结果。
 
 > 对外地址（含端口/scheme）以 token 里的 `BaseURL`（管理员在「接入配置」里设的对外网关地址）为准，避免反代场景下 `Host`/`X-Forwarded-*` 丢端口或改写 scheme。
+
+### 6.1 V1 / V2 双路径
+
+OpenCode 2 对插件做了不兼容改造（新 `@opencode/plugin` API），**V1 插件实现在 V2 里完全不运行**，且 V1 的模型级字段 `attachment`/`reasoning` 在 V2 被忽略。因此脚本按版本分两条路径：
+
+| | V1（1.x） | V2（2.x） |
+|---|---|---|
+| 版本探测 | `opencode --version` 主版本 = 1 | 主版本 = 2 |
+| 配置形状 | `provider.<id>` + `npm` + `options.modelsDiscovery` | `providers.<id>` + `package: "aisdk:@ai-sdk/openai-compatible"` + `settings` |
+| 模型来源 | 插件每次启动动态发现 + 富化 | **安装时**从 `/v1/models` + `/v1/model/info` 抓一次，静态写入 `models` |
+| 能力表达 | `attachment` / `tool_call` / `modelsDiscovery` | `capabilities{tools,input,output,reasoning}` + `limit{context,output}` |
+| 插件 | 下发 vendor bundle + 自更新 | 不装（装了也不运行），顺手清理旧副本 |
+
+探测顺序：`opencode --version`（含 `~/.opencode/bin/opencode` 兜底路径）→ 探测不到且有 `~/.config/opencode/cli.json`（V2 终端客户端首次启动生成）判 V2 → 其余按 V1。逃生口：`GET /api/v1/opencode-config/script?...&ver=v1|v2` 可强制指定。
+
+V2 的代价是**快照**：网关后台新增模型/改能力后，V2 用户需重跑一次配置脚本；V1 用户仍是动态的。要让 V2 也动态，需要把插件移植到 `@opencode/plugin`（`Plugin.define` + `ctx.provider.transform`），目前未做。
 
 ---
 

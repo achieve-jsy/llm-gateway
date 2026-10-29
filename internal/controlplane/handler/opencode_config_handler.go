@@ -46,7 +46,7 @@ type SettingsServiceProvider interface {
 }
 
 type OpencodeConfigHandler struct {
-	rdb        *redis.Client
+	rdb         *redis.Client
 	settingsSvc SettingsServiceProvider
 }
 
@@ -165,6 +165,13 @@ func (h *OpencodeConfigHandler) GetScript(c *gin.Context) {
 		supplierName = h.settingsSvc.GetSupplierName(ctx)
 	}
 
+	// 可选的版本覆盖 ?ver=v1|v2：正常由脚本自行探测 `opencode --version` 的主版本，
+	// 这里只留一个逃生口（自制 wrapper 吃掉 --version、或用户明确要求按某个格式写入时）。
+	forceVersion := strings.ToLower(strings.TrimSpace(c.Query("ver")))
+	if forceVersion != "v1" && forceVersion != "v2" {
+		forceVersion = ""
+	}
+
 	params := scriptParams{
 		Token:        token,
 		ProviderID:   rec.ProviderID,
@@ -173,6 +180,7 @@ func (h *OpencodeConfigHandler) GetScript(c *gin.Context) {
 		CallbackURL:  callbackURL,
 		PluginURL:    pluginURL,
 		SupplierName: supplierName,
+		ForceVersion: forceVersion,
 	}
 
 	var buf bytes.Buffer
@@ -278,13 +286,14 @@ func (h *OpencodeConfigHandler) GetStatus(c *gin.Context) {
 }
 
 type scriptParams struct {
-	Token       string
-	ProviderID  string
-	BaseURL     string
-	APIKey      string
+	Token        string
+	ProviderID   string
+	BaseURL      string
+	APIKey       string
 	CallbackURL  string
 	PluginURL    string
 	SupplierName string
+	ForceVersion string // "" = 自动探测；"v1" / "v2" = 强制
 }
 
 // macTmplRaw macOS/Linux bash 脚本模板
@@ -300,6 +309,8 @@ API_KEY="{{.APIKey}}"
 CALLBACK_URL="{{.CallbackURL}}"
 PLUGIN_URL="{{.PluginURL}}"
 SUPPLIER_NAME="{{.SupplierName}}"
+# 服务端可强制指定版本（?ver=v1|v2），留空则由本脚本自动探测。
+FORCE_VERSION="{{.ForceVersion}}"
 CONFIG_FILE="$HOME/.config/opencode/opencode.json"
 # opencode 标准插件目录为复数 plugins/（单数 plugin/ 在新版可能不被加载）。
 PLUGIN_DIR="$HOME/.config/opencode/plugins"
@@ -307,6 +318,8 @@ PLUGIN_FILE="$PLUGIN_DIR/opencode-models-discovery.js"
 # 旧版脚本曾下到单数目录，清理掉以免重复加载或加载到旧副本。
 LEGACY_PLUGIN_FILE="$HOME/.config/opencode/plugin/opencode-models-discovery.js"
 DISCOVERY_PLUGIN="opencode-models-discovery"
+# BASE_URL 形如 https://host/v1；去掉尾斜杠后拼 /models、/model/info。
+API_BASE="${BASE_URL%/}"
 
 # ── 颜色 & 输出函数 ───────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -355,7 +368,39 @@ if ! mkdir -p "$CONFIG_DIR" 2>/dev/null; then
   exit 1
 fi
 
+# ── 探测本地 OpenCode 大版本 ──────────────────────────────────────────────────
+# V1 打 1.x.y，V2 打 2.x.y，命令名都是 opencode。探测不到（未安装/输出异常）
+# 时按 V1 处理，保持原有行为；cli.json 是 V2 终端客户端首次启动才生成的，
+# 只能当「确认是 V2」的正向信号，不能反推。
+OC_BIN="$(command -v opencode 2>/dev/null || true)"
+# curl 安装的 V2 落在 ~/.opencode/bin，非登录 shell 里可能不在 PATH。
+if [ -z "$OC_BIN" ] && [ -x "$HOME/.opencode/bin/opencode" ]; then
+  OC_BIN="$HOME/.opencode/bin/opencode"
+fi
+OC_VERSION=""
+if [ -n "$OC_BIN" ]; then
+  OC_VERSION="$("$OC_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+fi
+OC_MAJOR="${OC_VERSION%%.*}"
+
+MODE="v1"
+if [ -n "$FORCE_VERSION" ]; then
+  MODE="$FORCE_VERSION"
+elif [ -n "$OC_MAJOR" ] && [ "$OC_MAJOR" -ge 2 ] 2>/dev/null; then
+  MODE="v2"
+elif [ -z "$OC_MAJOR" ] && [ -f "$HOME/.config/opencode/cli.json" ]; then
+  MODE="v2"
+fi
+
 info "环境检验通过（python3 ✓  curl ✓  配置目录可写 ✓）"
+if [ "$MODE" = "v2" ]; then
+  info "检测到 OpenCode ${OC_VERSION:-未知} —— V2 模式（写入原生 V2 配置 + 静态模型清单）"
+else
+  info "检测到 OpenCode ${OC_VERSION:-未知} —— V1 模式（下发发现插件，模型动态发现）"
+  if [ -z "$OC_BIN" ]; then
+    warn "未找到 opencode 命令；若你用的是 OpenCode 2，请安装后重新执行本脚本"
+  fi
+fi
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -364,27 +409,206 @@ echo ""
 step "阶段 2/4  下载模型发现插件..."
 
 PLUGIN_INSTALLED=0
-# 清理旧的单数目录副本，避免重复加载或加载旧版本。
-rm -f "$LEGACY_PLUGIN_FILE" 2>/dev/null || true
-if mkdir -p "$PLUGIN_DIR" 2>/dev/null && \
-   curl -fsSL "$PLUGIN_URL" -o "$PLUGIN_FILE.tmp" 2>/dev/null && [ -s "$PLUGIN_FILE.tmp" ]; then
-  mv "$PLUGIN_FILE.tmp" "$PLUGIN_FILE"
-  PLUGIN_INSTALLED=1
-  info "插件已下载: $PLUGIN_FILE"
+if [ "$MODE" = "v2" ]; then
+  # V1 插件实现不会在 V2 里运行，装上去只会刷加载失败日志；顺手清掉旧副本。
+  rm -f "$PLUGIN_FILE" "$LEGACY_PLUGIN_FILE" 2>/dev/null || true
+  info "V2 模式：跳过插件安装（V1 插件在 OpenCode 2 不运行）"
 else
-  rm -f "$PLUGIN_FILE.tmp" 2>/dev/null || true
-  PLUGIN_INSTALLED=0
-  warn "插件下载失败（不影响配置写入），可稍后重试"
+  # 清理旧的单数目录副本，避免重复加载或加载旧版本。
+  rm -f "$LEGACY_PLUGIN_FILE" 2>/dev/null || true
+  if mkdir -p "$PLUGIN_DIR" 2>/dev/null && \
+     curl -fsSL "$PLUGIN_URL" -o "$PLUGIN_FILE.tmp" 2>/dev/null && [ -s "$PLUGIN_FILE.tmp" ]; then
+    mv "$PLUGIN_FILE.tmp" "$PLUGIN_FILE"
+    PLUGIN_INSTALLED=1
+    info "插件已下载: $PLUGIN_FILE"
+  else
+    rm -f "$PLUGIN_FILE.tmp" 2>/dev/null || true
+    PLUGIN_INSTALLED=0
+    warn "插件下载失败（不影响配置写入），可稍后重试"
+  fi
 fi
 
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 阶段 3：写入 OpenCode 配置（模型交给插件按 key 动态发现+富化）
+# 阶段 3：写入 OpenCode 配置（V1 只写 provider 元数据；V2 额外写静态模型清单）
 # ══════════════════════════════════════════════════════════════════════════════
 step "阶段 3/4  写入 OpenCode 配置..."
 
-python3 - << PYEOF
+WRITE_STATUS=0
+if [ "$MODE" = "v2" ]; then
+if ! python3 - << PYEOF
+# V2：写原生形状 providers.<id>，并把模型清单/能力在安装时抓一次、静态写进去。
+# 原因是 V1 插件实现在 V2 里不运行，也没有等价的"启动时注入模型"的免费路径。
+import json, os, sys, urllib.request
+
+config_path   = os.path.expanduser("$CONFIG_FILE")
+provider_id   = "$PROVIDER_ID"
+base_url      = "$BASE_URL"
+api_base      = "$API_BASE"
+api_key       = "$API_KEY"
+supplier_name = "$SUPPLIER_NAME"
+
+def api_get(path):
+    req = urllib.request.Request(api_base + path, headers={
+        "Authorization": "Bearer " + api_key,
+        "Content-Type": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.load(resp)
+
+# 1) 模型清单（对外是模型组名）
+model_ids = []
+try:
+    for m in api_get("/models").get("data", []):
+        mid = m.get("id")
+        if isinstance(mid, str) and mid:
+            model_ids.append(mid)
+except Exception:
+    model_ids = []
+
+if not model_ids:
+    sys.exit("无法从 " + api_base + "/models 获取模型清单")
+
+# 2) 能力（LiteLLM /model/info），拿不到就退化成 OpenCode 的默认假设
+info_map = {}
+try:
+    for e in api_get("/model/info").get("data", []):
+        mi = e.get("model_info") or {}
+        key = e.get("model_name") or mi.get("key")
+        if isinstance(key, str) and key:
+            info_map[key] = mi
+except Exception:
+    info_map = {}
+
+def usable(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+
+def reasoning_efforts(mi):
+    # 与 V1 插件同一套判定：只有暴露了 reasoning_effort 才给 effort 变体。
+    if mi.get("supports_reasoning") is not True:
+        return None
+    if "reasoning_effort" not in (mi.get("supported_openai_params") or []):
+        return None
+    efforts = []
+    if mi.get("supports_none_reasoning_effort") is True:
+        efforts.append("none")
+    if mi.get("supports_minimal_reasoning_effort") is True:
+        efforts.append("minimal")
+    if mi.get("supports_low_reasoning_effort") is not False:
+        efforts.append("low")
+    efforts.extend(["medium", "high"])
+    if mi.get("supports_xhigh_reasoning_effort") is True:
+        efforts.append("xhigh")
+    if mi.get("supports_max_reasoning_effort") is True:
+        efforts.append("max")
+    return efforts
+
+models = {}
+for mid in model_ids:
+    mi = info_map.get(mid) or info_map.get(mid.lower()) or {}
+    mode = mi.get("mode")
+    # 只写 chat 模型：V2 只把 chat 模型提供进会话。
+    if isinstance(mode, str) and mode and mode != "chat":
+        continue
+
+    entry = {"name": mid}
+    caps = {}
+    if mi.get("supports_function_calling") is True or mi.get("supports_tool_choice") is True:
+        caps["tools"] = True
+
+    inputs = mi.get("input_modalities") or mi.get("supported_modalities")
+    if isinstance(inputs, list) and inputs:
+        inputs = [str(x).lower() for x in inputs]
+        if "text" not in inputs:
+            inputs = ["text"] + inputs
+    elif mi.get("supports_vision") is True:
+        inputs = ["text", "image"]
+    elif mi.get("supports_vision") is False:
+        inputs = ["text"]
+    else:
+        inputs = None
+    if inputs:
+        caps["input"] = inputs
+
+    outputs = mi.get("output_modalities")
+    if isinstance(outputs, list) and outputs:
+        caps["output"] = [str(x).lower() for x in outputs]
+
+    efforts = reasoning_efforts(mi)
+    if efforts:
+        caps["reasoning"] = {"supported": True, "effort": efforts}
+
+    if caps:
+        entry["capabilities"] = caps
+
+    ctx_limit = mi.get("max_input_tokens") if usable(mi.get("max_input_tokens")) else mi.get("max_tokens")
+    out_limit = mi.get("max_output_tokens") if usable(mi.get("max_output_tokens")) else mi.get("max_tokens")
+    if usable(ctx_limit) and usable(out_limit):
+        entry["limit"] = {"context": int(ctx_limit), "output": int(out_limit)}
+
+    models[mid] = entry
+
+# 3) 写入配置
+cfg = {}
+if os.path.exists(config_path):
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+    except json.JSONDecodeError:
+        cfg = {}
+
+if not isinstance(cfg.get("providers"), dict):
+    cfg["providers"] = {}
+providers = cfg["providers"]
+action = "更新（覆盖）" if provider_id in providers else "新增"
+providers[provider_id] = {
+    "name": supplier_name,
+    "package": "aisdk:@ai-sdk/openai-compatible",
+    "settings": {"baseURL": base_url, "apiKey": api_key},
+    "models": models,
+}
+
+# 删掉旧版 V1 形状（provider 单数）里的同名条目：同一个 provider 条目不能混两种格式。
+legacy = cfg.get("provider")
+if isinstance(legacy, dict):
+    legacy.pop(provider_id, None)
+    if not legacy:
+        cfg.pop("provider", None)
+
+# 清掉插件声明：V1 插件实现不会在 V2 里运行。
+for key in ("plugin", "plugins"):
+    entries = cfg.get(key)
+    if isinstance(entries, list):
+        kept = []
+        for p in entries:
+            if isinstance(p, list) and p:
+                name = p[0]
+            elif isinstance(p, dict):
+                name = p.get("package")
+            else:
+                name = p
+            if name == "$DISCOVERY_PLUGIN":
+                continue
+            kept.append(p)
+        if kept:
+            cfg[key] = kept
+        else:
+            cfg.pop(key, None)
+
+with open(config_path, "w") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+
+print(f"RESULT_TARGET_ID={provider_id}")
+print(f"RESULT_ACTION={action}")
+print(f"RESULT_MODEL_COUNT={len(models)}")
+PYEOF
+then
+  WRITE_STATUS=1
+fi
+else
+if ! python3 - << PYEOF
 import json, os
 
 config_path      = os.path.expanduser("$CONFIG_FILE")
@@ -450,8 +674,10 @@ with open(config_path, "w") as f:
 print(f"RESULT_TARGET_ID={target_id}")
 print(f"RESULT_ACTION={action}")
 PYEOF
-
-WRITE_STATUS=$?
+then
+  WRITE_STATUS=1
+fi
+fi
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -465,7 +691,23 @@ if [ $WRITE_STATUS -ne 0 ]; then
   exit 1
 fi
 
-if python3 -c "
+MODEL_COUNT=0
+if [ "$MODE" = "v2" ]; then
+  MODEL_COUNT="$(python3 -c "
+import json
+with open('$CONFIG_FILE') as f:
+    cfg = json.load(f)
+provider = (cfg.get('providers') or {}).get('$PROVIDER_ID') or {}
+print(len(provider.get('models') or {}))
+" 2>/dev/null || echo 0)"
+  if [ "${MODEL_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+    info "验证通过：providers.$PROVIDER_ID 已写入 ${MODEL_COUNT} 个模型"
+  else
+    err "验证失败：配置文件中未找到 providers.$PROVIDER_ID 的模型"
+    send_callback "failed" "配置验证失败"
+    exit 1
+  fi
+elif python3 -c "
 import json, sys
 with open('$CONFIG_FILE') as f:
     cfg = json.load(f)
@@ -491,10 +733,15 @@ divider
 info "配置文件：$CONFIG_FILE"
 info "Provider：${PROVIDER_ID}（已写入）"
 
-if [ "$PLUGIN_INSTALLED" = "1" ]; then
-  info "插件：已下载到 ${PLUGIN_FILE}（每次启动按 key 动态发现并富化模型能力）"
+if [ "$MODE" = "v2" ]; then
+  info "模型：${MODEL_COUNT} 个（安装时快照，已带上图像输入/工具调用/上下文上限）"
+  warn "V2 模式不安装发现插件（V1 插件在 OpenCode 2 不运行）；网关后台新增模型后请重新执行本脚本"
 else
-  warn "插件：下载失败（配置已写入），请确认能访问 ${PLUGIN_URL} 后重试"
+  if [ "$PLUGIN_INSTALLED" = "1" ]; then
+    info "插件：已下载到 ${PLUGIN_FILE}（每次启动按 key 动态发现并富化模型能力）"
+  else
+    warn "插件：下载失败（配置已写入），请确认能访问 ${PLUGIN_URL} 后重试"
+  fi
 fi
 
 echo ""

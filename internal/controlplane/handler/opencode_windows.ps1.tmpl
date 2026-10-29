@@ -16,12 +16,16 @@ $API_KEY          = "{{.APIKey}}"
 $CALLBACK_URL     = "{{.CallbackURL}}"
 $PLUGIN_URL       = "{{.PluginURL}}"
 $SUPPLIER_NAME    = "{{.SupplierName}}"
+# 服务端可强制指定版本（?ver=v1|v2），留空则由本脚本自动探测。
+$FORCE_VERSION    = "{{.ForceVersion}}"
 $CONFIG_FILE      = "$env:USERPROFILE\.config\opencode\opencode.json"
 # opencode 标准插件目录为复数 plugins/（单数 plugin/ 在新版可能不被加载）。
 $PLUGIN_DIR       = "$env:USERPROFILE\.config\opencode\plugins"
 $PLUGIN_FILE      = "$PLUGIN_DIR\opencode-models-discovery.js"
 $LEGACY_PLUGIN_FILE = "$env:USERPROFILE\.config\opencode\plugin\opencode-models-discovery.js"
 $DISCOVERY_PLUGIN = "opencode-models-discovery"
+# BASE_URL 形如 https://host/v1；去掉尾斜杠后拼 /models、/model/info。
+$API_BASE         = $BASE_URL.TrimEnd('/')
 
 function Send-Callback($status, $msg = "") {
     try {
@@ -53,7 +57,7 @@ Write-Divider
 Write-Host ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 阶段 1：环境检验
+# 阶段 1：环境检验 + 探测 OpenCode 大版本
 # ══════════════════════════════════════════════════════════════════════════════
 Write-Step "阶段 1/4  检验本地环境..."
 
@@ -80,9 +84,42 @@ if (-not (Test-Path $configDir)) {
     New-Item -ItemType Directory -Path $configDir -Force | Out-Null
 }
 
+# ── 探测本地 OpenCode 大版本 ──────────────────────────────────────────────────
+# V1 打 1.x.y，V2 打 2.x.y，命令名都是 opencode。探测不到（未安装/输出异常）
+# 时按 V1 处理，保持原有行为；cli.json 是 V2 终端客户端首次启动才生成的，
+# 只能当「确认是 V2」的正向信号，不能反推。
+$ocMajor = ""
+$ocCmd = Get-Command opencode -ErrorAction SilentlyContinue
+if ($ocCmd) {
+    try {
+        $ocVer = (& $ocCmd.Source --version 2>$null) -join " "
+        if ($ocVer -match '(\d+)\.\d+\.\d+') { $ocMajor = $Matches[1] }
+    } catch {}
+}
+$cliJson = "$env:USERPROFILE\.config\opencode\cli.json"
+
+$MODE = "v1"
+if ($FORCE_VERSION) {
+    $MODE = $FORCE_VERSION
+} elseif ($ocMajor -and [int]$ocMajor -ge 2) {
+    $MODE = "v2"
+} elseif (-not $ocMajor -and (Test-Path $cliJson)) {
+    $MODE = "v2"
+}
+$isV2 = ($MODE -eq "v2")
+
 $npmAvailable = $null -ne (Get-Command npm -ErrorAction SilentlyContinue)
 
 Write-Ok "环境检验通过（python ✓  curl ✓  配置目录可写 ✓）"
+$ocVerLabel = if ($ocMajor) { "$ocMajor.x" } else { "版本未知" }
+if ($isV2) {
+    Write-Ok "检测到 OpenCode $ocVerLabel — V2 模式（写入原生 V2 配置 + 静态模型清单）"
+} else {
+    Write-Ok "检测到 OpenCode $ocVerLabel — V1 模式（下发发现插件，模型动态发现）"
+    if (-not $ocCmd) {
+        Write-Warn "未找到 opencode 命令；若你用的是 OpenCode 2，请安装后重新执行本脚本"
+    }
+}
 Write-Host ""
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -91,90 +128,255 @@ Write-Host ""
 Write-Step "阶段 2/4  下载模型发现插件..."
 
 $pluginInstalled = $false
-# 清理旧的单数目录副本，避免重复加载或加载旧版本。
-if (Test-Path $LEGACY_PLUGIN_FILE) { Remove-Item $LEGACY_PLUGIN_FILE -Force -ErrorAction SilentlyContinue }
-try {
-    if (-not (Test-Path $PLUGIN_DIR)) {
-        New-Item -ItemType Directory -Path $PLUGIN_DIR -Force | Out-Null
+if ($isV2) {
+    # V1 插件实现不会在 V2 里运行，装上去只会刷加载失败日志；顺手清掉旧副本。
+    foreach ($f in @($PLUGIN_FILE, $LEGACY_PLUGIN_FILE)) {
+        if (Test-Path $f) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
     }
-    Invoke-WebRequest -Uri $PLUGIN_URL -OutFile $PLUGIN_FILE -TimeoutSec 15 -UseBasicParsing
-    if ((Test-Path $PLUGIN_FILE) -and ((Get-Item $PLUGIN_FILE).Length -gt 0)) {
-        $pluginInstalled = $true
-        Write-Ok "插件已下载: $PLUGIN_FILE"
-    } else {
-        Write-Warn "插件下载失败（不影响配置写入），可稍后重试"
+    Write-Ok "V2 模式：跳过插件安装（V1 插件在 OpenCode 2 不运行）"
+} else {
+    # 清理旧的单数目录副本，避免重复加载或加载旧版本。
+    if (Test-Path $LEGACY_PLUGIN_FILE) { Remove-Item $LEGACY_PLUGIN_FILE -Force -ErrorAction SilentlyContinue }
+    try {
+        if (-not (Test-Path $PLUGIN_DIR)) {
+            New-Item -ItemType Directory -Path $PLUGIN_DIR -Force | Out-Null
+        }
+        Invoke-WebRequest -Uri $PLUGIN_URL -OutFile $PLUGIN_FILE -TimeoutSec 15 -UseBasicParsing
+        if ((Test-Path $PLUGIN_FILE) -and ((Get-Item $PLUGIN_FILE).Length -gt 0)) {
+            $pluginInstalled = $true
+            Write-Ok "插件已下载: $PLUGIN_FILE"
+        } else {
+            Write-Warn "插件下载失败（不影响配置写入），可稍后重试"
+        }
+    } catch {
+        Write-Warn "插件下载失败（不影响配置写入）: $_"
     }
-} catch {
-    Write-Warn "插件下载失败（不影响配置写入）: $_"
 }
 Write-Host ""
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 阶段 3：写入 OpenCode 配置（模型交给插件按 key 动态发现+富化）
+# 阶段 3：写入 OpenCode 配置
 # ══════════════════════════════════════════════════════════════════════════════
 Write-Step "阶段 3/4  写入 OpenCode 配置..."
 
 $writeOk = $false
 $resultAction = ""
 $resultPlugin = ""
+$modelCount = 0
 $targetId = $PROVIDER_ID
 
 try {
-    # 读取现有配置
-    if (Test-Path $CONFIG_FILE) {
-        $cfg = Get-Content $CONFIG_FILE -Raw -Encoding UTF8 | ConvertFrom-Json
-    } else {
-        $cfg = [PSCustomObject]@{}
-    }
+    if ($isV2) {
+        # ── V2：原生形状 providers.<id> + 安装时抓一次的静态模型清单 ──────────
+        # V1 插件实现在 V2 里不运行，也没有等价的"启动时注入模型"的免费路径。
+        $authHeaders = @{ Authorization = "Bearer $API_KEY" }
 
-    # 确保 provider 字段存在
-    if (-not $cfg.PSObject.Properties['provider']) {
-        $cfg | Add-Member -NotePropertyName provider -NotePropertyValue ([PSCustomObject]@{})
-    }
+        $modelIds = @()
+        try {
+            $modelsResp = Invoke-RestMethod -Uri "$API_BASE/models" -Headers $authHeaders -TimeoutSec 20
+            foreach ($m in @($modelsResp.data)) {
+                if ($m.id) { $modelIds += [string]$m.id }
+            }
+        } catch {
+            Write-Fail "获取模型清单失败: $_"
+            Send-Callback "failed" "获取模型清单失败"
+            exit 1
+        }
+        if ($modelIds.Count -eq 0) {
+            Write-Fail "网关未返回任何模型，已中止（请检查 Key 可见的模型组）"
+            Send-Callback "failed" "模型清单为空"
+            exit 1
+        }
 
-    # 同名 provider 直接覆盖（不再按 URL 不同新建带时间戳的副本）
-    if ($cfg.provider.PSObject.Properties[$PROVIDER_ID]) {
-        $resultAction = "更新（覆盖）"
-    } else {
-        $resultAction = "新增"
-    }
+        # 能力来源：LiteLLM /model/info；拿不到就退化成 OpenCode 的默认假设。
+        $infoMap = @{}
+        try {
+            $infoResp = Invoke-RestMethod -Uri "$API_BASE/model/info" -Headers $authHeaders -TimeoutSec 20
+            foreach ($e in @($infoResp.data)) {
+                if (-not $e.model_info) { continue }
+                $k = if ($e.model_name) { [string]$e.model_name } else { [string]$e.model_info.key }
+                if ($k) { $infoMap[$k] = $e.model_info }
+            }
+        } catch {}
 
-    # 写入 provider 配置：不写死 models，交给插件按 key 动态发现，并通过
-    # /v1/model/info 富化能力（attachment/图像输入、tool_call、上下文上限等）。
-    # modelsDiscovery.enabled=true 仅对本 provider 开启发现，其它渠道不会被同步。
-    $providerConfig = [PSCustomObject]@{
-        npm     = "@ai-sdk/openai-compatible"
-        name    = $SUPPLIER_NAME
-        options = [PSCustomObject]@{
-            baseURL = $BASE_URL
-            apiKey  = $API_KEY
-            modelsDiscovery = [PSCustomObject]@{
-                enabled           = $true
-                endpoint          = "/v1/models"
-                modelInfoEndpoint = "/v1/model/info"
-                modelInfoFormat   = "litellm"
+        $models = [ordered]@{}
+        foreach ($mid in $modelIds) {
+            $mi = $infoMap[$mid]
+            if (-not $mi) { $mi = $infoMap[$mid.ToLower()] }
+            $miMode = if ($mi) { [string]$mi.mode } else { "" }
+            # 只写 chat 模型：V2 只把 chat 模型提供进会话。
+            if ($miMode -and $miMode -ne "chat") { continue }
+
+            $entry = [ordered]@{ name = $mid }
+            $caps = [ordered]@{}
+            if ($mi -and ($mi.supports_function_calling -eq $true -or $mi.supports_tool_choice -eq $true)) {
+                $caps.tools = $true
+            }
+
+            $inputs = $null
+            if ($mi) {
+                if ($mi.input_modalities) {
+                    $inputs = @($mi.input_modalities | ForEach-Object { ([string]$_).ToLower() })
+                } elseif ($mi.supported_modalities) {
+                    $inputs = @($mi.supported_modalities | ForEach-Object { ([string]$_).ToLower() })
+                } elseif ($mi.supports_vision -eq $true) {
+                    $inputs = @("text", "image")
+                } elseif ($mi.supports_vision -eq $false) {
+                    $inputs = @("text")
+                }
+            }
+            if ($inputs) {
+                if ($inputs -notcontains "text") { $inputs = @("text") + $inputs }
+                $caps.input = $inputs
+            }
+            if ($mi -and $mi.output_modalities) {
+                $caps.output = @($mi.output_modalities | ForEach-Object { ([string]$_).ToLower() })
+            }
+            # 与 V1 插件同一套判定：只有暴露了 reasoning_effort 才给 effort 变体。
+            if ($mi -and $mi.supports_reasoning -eq $true -and (@($mi.supported_openai_params) -contains "reasoning_effort")) {
+                $efforts = @()
+                if ($mi.supports_none_reasoning_effort -eq $true)    { $efforts += "none" }
+                if ($mi.supports_minimal_reasoning_effort -eq $true) { $efforts += "minimal" }
+                if ($mi.supports_low_reasoning_effort -ne $false)    { $efforts += "low" }
+                $efforts += "medium"
+                $efforts += "high"
+                if ($mi.supports_xhigh_reasoning_effort -eq $true)   { $efforts += "xhigh" }
+                if ($mi.supports_max_reasoning_effort -eq $true)     { $efforts += "max" }
+                $caps.reasoning = [ordered]@{ supported = $true; effort = $efforts }
+            }
+            if ($caps.Count -gt 0) { $entry.capabilities = $caps }
+
+            $ctxLimit = 0
+            $outLimit = 0
+            if ($mi) {
+                if ($mi.max_input_tokens -and [double]$mi.max_input_tokens -gt 0) {
+                    $ctxLimit = [int64]$mi.max_input_tokens
+                } elseif ($mi.max_tokens -and [double]$mi.max_tokens -gt 0) {
+                    $ctxLimit = [int64]$mi.max_tokens
+                }
+                if ($mi.max_output_tokens -and [double]$mi.max_output_tokens -gt 0) {
+                    $outLimit = [int64]$mi.max_output_tokens
+                } elseif ($mi.max_tokens -and [double]$mi.max_tokens -gt 0) {
+                    $outLimit = [int64]$mi.max_tokens
+                }
+            }
+            if ($ctxLimit -gt 0 -and $outLimit -gt 0) {
+                $entry.limit = [ordered]@{ context = $ctxLimit; output = $outLimit }
+            }
+
+            $models[$mid] = [PSCustomObject]$entry
+        }
+
+        if ($models.Count -eq 0) {
+            Write-Fail "没有可写入的 chat 模型，已中止"
+            Send-Callback "failed" "没有可写入的 chat 模型"
+            exit 1
+        }
+
+        # 读取现有配置
+        if (Test-Path $CONFIG_FILE) {
+            $cfg = Get-Content $CONFIG_FILE -Raw -Encoding UTF8 | ConvertFrom-Json
+        } else {
+            $cfg = [PSCustomObject]@{}
+        }
+        if (-not $cfg.PSObject.Properties['providers']) {
+            $cfg | Add-Member -NotePropertyName providers -NotePropertyValue ([PSCustomObject]@{}) -Force
+        }
+
+        $resultAction = if ($cfg.providers.PSObject.Properties[$PROVIDER_ID]) { "更新（覆盖）" } else { "新增" }
+        $providerConfig = [ordered]@{
+            name     = $SUPPLIER_NAME
+            package  = "aisdk:@ai-sdk/openai-compatible"
+            settings = [ordered]@{ baseURL = $BASE_URL; apiKey = $API_KEY }
+            models   = $models
+        }
+        $cfg.providers | Add-Member -NotePropertyName $PROVIDER_ID -NotePropertyValue ([PSCustomObject]$providerConfig) -Force
+
+        # 删掉旧版 V1 形状（provider 单数）里的同名条目：一个 provider 条目不能混两种格式。
+        if ($cfg.PSObject.Properties['provider']) {
+            $legacy = $cfg.provider
+            if ($legacy.PSObject.Properties[$PROVIDER_ID]) {
+                $legacy.PSObject.Properties.Remove($PROVIDER_ID)
+            }
+            if (@($legacy.PSObject.Properties).Count -eq 0) {
+                $cfg.PSObject.Properties.Remove('provider')
             }
         }
-    }
-    # 不写死 models：交给插件按 key 动态发现并富化能力。若静态写入模型，
-    # 插件会把它们视为"已存在"而不再发现，导致启动 toast 不弹、且能力
-    #（图像输入/工具调用/上下文上限）无法注入——与 macOS 脚本保持一致。
-    $cfg.provider | Add-Member -NotePropertyName $targetId -NotePropertyValue $providerConfig -Force
 
-    # 本地文件插件已下发到 plugin 目录（opencode 自动加载），移除 plugin 数组里旧的
-    # npm 引用，避免重复加载或联网安装旧版本。
-    if ($cfg.PSObject.Properties['plugin']) {
-        $kept = @()
-        foreach ($p in @($cfg.plugin)) {
-            $name = if ($p -is [System.Array] -and $p.Count -gt 0) { $p[0] } else { $p }
-            if ($name -ne $DISCOVERY_PLUGIN) { $kept += ,$p }
+        # 清掉插件声明：V1 插件实现不会在 V2 里运行。
+        foreach ($key in @('plugin', 'plugins')) {
+            if (-not $cfg.PSObject.Properties[$key]) { continue }
+            $kept = @()
+            foreach ($p in @($cfg.$key)) {
+                $name = if ($p -is [System.Array] -and $p.Count -gt 0) { $p[0] } elseif ($p.PSObject.Properties['package']) { $p.package } else { $p }
+                if ([string]$name -ne $DISCOVERY_PLUGIN) { $kept += ,$p }
+            }
+            if ($kept.Count -gt 0) {
+                $cfg | Add-Member -NotePropertyName $key -NotePropertyValue $kept -Force
+            } else {
+                $cfg.PSObject.Properties.Remove($key)
+            }
         }
-        if ($kept.Count -gt 0) { $cfg.plugin = $kept }
-        else { $cfg.PSObject.Properties.Remove('plugin') }
-    }
-    $resultPlugin = if ($pluginInstalled) { "已下载到 $PLUGIN_FILE" } else { "下载失败（请确认可访问 $PLUGIN_URL）" }
 
-    $cfg | ConvertTo-Json -Depth 10 | Set-Content $CONFIG_FILE -Encoding UTF8
+        $modelCount = $models.Count
+    } else {
+        # ── V1：原有逻辑（模型交给插件按 key 动态发现+富化）──────────────────
+        # 读取现有配置
+        if (Test-Path $CONFIG_FILE) {
+            $cfg = Get-Content $CONFIG_FILE -Raw -Encoding UTF8 | ConvertFrom-Json
+        } else {
+            $cfg = [PSCustomObject]@{}
+        }
+
+        # 确保 provider 字段存在
+        if (-not $cfg.PSObject.Properties['provider']) {
+            $cfg | Add-Member -NotePropertyName provider -NotePropertyValue ([PSCustomObject]@{})
+        }
+
+        # 同名 provider 直接覆盖（不再按 URL 不同新建带时间戳的副本）
+        if ($cfg.provider.PSObject.Properties[$PROVIDER_ID]) {
+            $resultAction = "更新（覆盖）"
+        } else {
+            $resultAction = "新增"
+        }
+
+        # 写入 provider 配置：不写死 models，交给插件按 key 动态发现，并通过
+        # /v1/model/info 富化能力（attachment/图像输入、tool_call、上下文上限等）。
+        # modelsDiscovery.enabled=true 仅对本 provider 开启发现，其它渠道不会被同步。
+        $providerConfig = [PSCustomObject]@{
+            npm     = "@ai-sdk/openai-compatible"
+            name    = $SUPPLIER_NAME
+            options = [PSCustomObject]@{
+                baseURL = $BASE_URL
+                apiKey  = $API_KEY
+                modelsDiscovery = [PSCustomObject]@{
+                    enabled           = $true
+                    endpoint          = "/v1/models"
+                    modelInfoEndpoint = "/v1/model/info"
+                    modelInfoFormat   = "litellm"
+                }
+            }
+        }
+        # 不写死 models：交给插件按 key 动态发现并富化能力。若静态写入模型，
+        # 插件会把它们视为"已存在"而不再发现，导致启动 toast 不弹、且能力
+        #（图像输入/工具调用/上下文上限）无法注入——与 macOS 脚本保持一致。
+        $cfg.provider | Add-Member -NotePropertyName $targetId -NotePropertyValue $providerConfig -Force
+
+        # 本地文件插件已下发到 plugin 目录（opencode 自动加载），移除 plugin 数组里旧的
+        # npm 引用，避免重复加载或联网安装旧版本。
+        if ($cfg.PSObject.Properties['plugin']) {
+            $kept = @()
+            foreach ($p in @($cfg.plugin)) {
+                $name = if ($p -is [System.Array] -and $p.Count -gt 0) { $p[0] } else { $p }
+                if ($name -ne $DISCOVERY_PLUGIN) { $kept += ,$p }
+            }
+            if ($kept.Count -gt 0) { $cfg.plugin = $kept }
+            else { $cfg.PSObject.Properties.Remove('plugin') }
+        }
+        $resultPlugin = if ($pluginInstalled) { "已下载到 $PLUGIN_FILE" } else { "下载失败（请确认可访问 $PLUGIN_URL）" }
+    }
+
+    $cfg | ConvertTo-Json -Depth 20 | Set-Content $CONFIG_FILE -Encoding UTF8
     $writeOk = $true
 
 } catch {
@@ -198,11 +400,19 @@ if (-not $writeOk) {
 
 try {
     $verify = Get-Content $CONFIG_FILE -Raw -Encoding UTF8 | ConvertFrom-Json
-    $found = $verify.provider.PSObject.Properties | Where-Object { $_.Name -like "*$PROVIDER_ID*" }
-    if (-not $found) { throw "Provider 未找到" }
-    Write-Ok "验证通过：配置文件写入正确"
+    if ($isV2) {
+        $provider = $verify.providers.PSObject.Properties[$PROVIDER_ID]
+        if (-not $provider) { throw "providers.$PROVIDER_ID 未找到" }
+        $modelCount = @($provider.Value.models.PSObject.Properties).Count
+        if ($modelCount -le 0) { throw "providers.$PROVIDER_ID 没有模型" }
+        Write-Ok "验证通过：providers.$PROVIDER_ID 已写入 $modelCount 个模型"
+    } else {
+        $found = $verify.provider.PSObject.Properties | Where-Object { $_.Name -like "*$PROVIDER_ID*" }
+        if (-not $found) { throw "Provider 未找到" }
+        Write-Ok "验证通过：配置文件写入正确"
+    }
 } catch {
-    Write-Fail "验证失败：配置文件中未找到 Provider"
+    Write-Fail "验证失败：$($_.Exception.Message)"
     Send-Callback "failed" "配置验证失败"
     exit 1
 }
@@ -218,8 +428,13 @@ Write-Line "  执行完成" Green
 Write-Divider
 Write-Ok "配置文件：$CONFIG_FILE"
 Write-Ok "Provider：$targetId（$resultAction）"
-Write-Ok "模型列表：由插件按 key 动态发现并富化能力"
-Write-Ok "插件：$DISCOVERY_PLUGIN（$resultPlugin）"
+if ($isV2) {
+    Write-Ok "模型：$modelCount 个（安装时快照，已带上图像输入/工具调用/上下文上限）"
+    Write-Warn "V2 模式不安装发现插件（V1 插件在 OpenCode 2 不运行）；网关后台新增模型后请重新执行本脚本"
+} else {
+    Write-Ok "模型列表：由插件按 key 动态发现并富化能力"
+    Write-Ok "插件：$DISCOVERY_PLUGIN（$resultPlugin）"
+}
 Write-Host ""
 Write-Line "  下一步：重启 opencode，即可在模型列表中看到 $SUPPLIER_NAME 的模型（含图像输入等能力）。" Cyan
 Write-Host ""

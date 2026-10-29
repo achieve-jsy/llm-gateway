@@ -252,3 +252,24 @@ func TestAnthropicStream_ToolArgs_TextToolText(t *testing.T) {
 		t.Errorf("content_block_stop 数量 = %d, want 3", n)
 	}
 }
+
+// TestAnthropicStream_MalformedFrameDoesNotSwallowRest 覆盖「上游中途发了一帧非法 JSON」。
+//
+// 转换器用 dataBuf 攒多行 data；若坏帧让 dataBuf 一直非空且一直非法，后续**所有**分块
+// 都会被拼进这个坏缓冲、永不被处理——整条流的尾巴被静默吞掉，最后仍按正常收尾发
+// message_stop，看起来像「模型自己说完了」。这是本轮排查 E2E 时真实撞到的形态：
+// 用例第一版手写 SSE 漏了反斜杠，于是「参数丢了」其实是坏帧把整段吞了。
+func TestAnthropicStream_MalformedFrameDoesNotSwallowRest(t *testing.T) {
+	good1 := `{"id":"c","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"content":"a"}}]}`
+	bad := `{"choices":[{"index":0,"delta":{"content":"BROKEN` // 缺右括号与引号
+	good2 := `{"id":"c","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"content":"b"},"finish_reason":"stop"}]}`
+	sse := "data: " + good1 + "\n\n" +
+		"data: " + bad + "\n\n" +
+		"data: " + good2 + "\n\n" +
+		"data: [DONE]\n\n"
+
+	events := parseAnthropicEvents(t, feedAnthropicStream(t, sse, 50))
+	if got := collectTextDeltas(events); got != "ab" {
+		t.Errorf("文本拼接 = %q, want \"ab\"（坏帧只能丢弃自己，不能吞掉后面的分块）", got)
+	}
+}

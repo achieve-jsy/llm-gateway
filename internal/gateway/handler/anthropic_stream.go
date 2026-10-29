@@ -128,6 +128,14 @@ func (a *anthropicStreamAdapter) convert() {
 
 		// Skip empty lines and event-type lines (event: ...)
 		if line == "" {
+			// SSE 事件边界：dataBuf 里若还剩攒不成一帧的非法内容（上游发了坏帧），必须丢弃
+			// 并告警。否则它会一直非空、一直非法，后续所有分块都被拼进这个坏缓冲、永远过不了
+			// json.Valid —— 整条流的尾巴被静默吞掉，客户端只看到前半段却收到正常的 message_stop。
+			if dataBuf.Len() > 0 {
+				slog.Warn("anthropic stream: dropping malformed upstream SSE frame",
+					"request_id", a.state.requestID, "model", a.state.model, "bytes", dataBuf.Len())
+				dataBuf.Reset()
+			}
 			continue
 		}
 		if strings.HasPrefix(line, "event:") {
@@ -149,6 +157,12 @@ func (a *anthropicStreamAdapter) convert() {
 			// But in our case, each SSE event is on a single "data:" line.
 			// Check if we have a full JSON object.
 			if !json.Valid(dataBuf.Bytes()) {
+				// 兜底上限：坏流不该把内存撑爆（正常多行 data 远小于此）。
+				if dataBuf.Len() > maxBufferedSSEFrameBytes {
+					slog.Warn("anthropic stream: dropping oversized upstream SSE frame",
+						"request_id", a.state.requestID, "model", a.state.model, "bytes", dataBuf.Len())
+					dataBuf.Reset()
+				}
 				continue
 			}
 			a.processChunk(dataBuf.Bytes())
@@ -284,6 +298,9 @@ type openAIToolCallDelta struct {
 		Arguments string `json:"arguments,omitempty"`
 	} `json:"function,omitempty"`
 }
+
+// maxBufferedSSEFrameBytes 是攒帧缓冲的上限：超过它说明上游在发垃圾或坏流，直接丢弃。
+const maxBufferedSSEFrameBytes = 1 << 20
 
 // processChunk parses an OpenAI chunk and emits corresponding Anthropic events.
 func (a *anthropicStreamAdapter) processChunk(data []byte) {

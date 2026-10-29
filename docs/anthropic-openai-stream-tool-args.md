@@ -249,13 +249,31 @@ id 兜底）都已用"临时退回对应改动"的方式确认过会失败，避
    **新的一次调用**处理（另开块）。这覆盖了上游复用 index / 省略 index（恒为 0）的形态；
    真正的"同一次调用参数在块关闭后继续到达"无法表达，只能丢弃并 `slog.Warn`（实际不会发生：
    OpenAI/vLLM/SGLang 的工具调用参数按 index 顺序单调流出）。
-2. **多 choice（`n > 1`）只转换第一个**：Anthropic 的一条 `message` 只能装一份内容，所以
-   `choices[1..]` 被丢弃并 `slog.Warn`（带 choices 数量）。这比"把多个 choice 的 delta 灌进同一份状态"
-   安全：后者会让文本串台、并行工具调用的参数互相污染。若确有 per-choice 需求，只能拆成多条 message
-   （协议层不支持），或由调用方显式发起多次请求。
+2. **多 choice（`n > 1`）只转换 `choice.index == 0` 的那一份**：Anthropic 的一条 `message` 只能装
+   一份内容，其余 choice 的内容（文本与工具调用）都被丢弃，并 `slog.Warn` 一次（带本次 chunk 的
+   `choices_in_chunk`）。**判据是 `choice.index`，不是数组下标**——`n > 1` 时上游通常每个 chunk 只带
+   一个 choice（靠 index 区分，官方 SDK 也按 index 累加），按位置取"第一个元素"会把别的 choice
+   当成第一份，串台照旧发生。
+   收尾原因则尽量取全：`choices[0]` 没带 `finish_reason` 时，从被丢弃的 choice 里取第一个非空值，
+   避免 `max_tokens` / `content_filter` 被推断成 `end_turn`（客户端会以为模型自然说完，进而执行
+   被截断的工具参数）。
+   这比"把多个 choice 的 delta 灌进同一份状态"安全：后者会让文本串台、并行工具调用的参数互相污染。
+   若确有 per-choice 需求，只能拆成多条 message（协议层不支持），或由调用方显式发起多次请求。
 3. **非法 JSON 的收口**：流式通道无法在收尾把非法 JSON 改写成 `{}`（客户端已按分片累加）；
    非流式通道（`core.responseMessageToAnthropicBlocks`）对非法 JSON 有"包成 JSON 字符串"的兜底。
 4. **LiteLLM 的 hold-and-release 严格顺序**未采用，见 §4.4 取舍说明。
+5. **数据级错误帧不解析**：上游形如 `data: {"error": {"message": "..."}}` 的帧（而不是 HTTP 错误码）
+   在本通道与 chat 通道一样**只当普通帧跳过**。若上游发完这一帧就静默断连（没有 `[DONE]`、没有
+   EOF 之外的信号），转换器会按"正常收尾"补 `message_delta` + `message_stop`，`stop_reason` 为
+   `end_turn`；此时若还有工具块开着，`closeAllBlocks` 会给半截 JSON 补 `content_block_stop`，
+   客户端会把不完整参数当完整参数执行。
+   不在本通道单点修的理由：chat 通道/Responses 通道对数据级错误帧同样不解析，单改一侧会让两个
+   通道的错误语义分叉；正确做法是三通道一起把这类帧识别成"流内错误"（发 `event: error` 并
+   `CloseWithError`）。在此之前，排障按 §8 的关键字定位，不要只看 `stop_reason`。
+6. **usage-only chunk 的 `message_start`**：若整条流只有末尾的 usage chunk（上游没给任何内容），
+   转换器会在发 `message_delta` 之前补发 `message_start`，否则客户端先收到 `message_delta` 会判
+   事件顺序非法。这一条已修（见 `TestAnthropicStream_UsageOnlyChunk_EmitsMessageStart`），记在此处
+   是为了说明"首事件必须是 message_start"是硬约束。
 
 ## 8. 排障速查
 

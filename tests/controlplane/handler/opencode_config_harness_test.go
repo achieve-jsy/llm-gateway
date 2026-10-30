@@ -311,3 +311,81 @@ func dig(root any, keys ...string) any {
 	}
 	return cur
 }
+
+// ── Windows 脚本执行辅助 ─────────────────────────────────────────────────────
+
+// findPowerShell 找可用的 PowerShell；都没有就跳过（CI 的 Linux 镜像通常没有）。
+func findPowerShell(t *testing.T) string {
+	t.Helper()
+	for _, name := range []string{"pwsh", "powershell"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	t.Skip("缺少 PowerShell（pwsh/powershell），跳过 Windows 脚本测试")
+	return ""
+}
+
+// runWinScript 在指定 USERPROFILE 下用 PowerShell 真跑一遍安装脚本。
+func runWinScript(t *testing.T, scriptText, userProfile string, pathDirs ...string) (string, int) {
+	t.Helper()
+	shell := findPowerShell(t)
+
+	dir := t.TempDir()
+	scriptFile := filepath.Join(dir, "install.ps1")
+	require.NoError(t, os.WriteFile(scriptFile, []byte(scriptText), 0o644))
+	require.NoError(t, os.MkdirAll(userProfile, 0o755))
+
+	dirs := append([]string{}, pathDirs...)
+	dirs = append(dirs, "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+
+	cmd := exec.Command(shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptFile)
+	cmd.Env = mergedEnv(t, map[string]string{
+		"USERPROFILE": userProfile,
+		"HOME":        userProfile,
+		"PATH":        strings.Join(dirs, ":"),
+	})
+	out, err := cmd.CombinedOutput()
+	code := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("执行 PowerShell 脚本失败: %v\n%s", err, out)
+		}
+		code = exitErr.ExitCode()
+	}
+	return string(out), code
+}
+
+// winUserPath 还原 PowerShell 模板拼出来的路径：模板用 \ 拼 ".config\opencode\..."，
+// 在 macOS/Linux 上 \ 不是分隔符，文件就真叫 ".config\opencode\opencode.json"。
+// 先找正斜杠版本，找不到再退回反斜杠字面量，两种平台都能读到。
+func winUserPath(t *testing.T, profile string, parts ...string) string {
+	t.Helper()
+	for _, p := range winCandidates(t, profile, parts...) {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return filepath.Join(append([]string{profile}, parts...)...)
+}
+
+// winCandidates 返回某用户目录下文件的两个候选路径：正斜杠版本 + 反斜杠字面量版本
+// （pwsh 在 macOS/Linux 上不会把 "\" 当分隔符，文件会真叫 ".config\opencode\..."）。
+func winCandidates(t *testing.T, profile string, parts ...string) []string {
+	t.Helper()
+	return []string{
+		filepath.Join(append([]string{profile}, parts...)...),
+		filepath.Join(profile, strings.Join(parts, "\\")),
+	}
+}
+
+// readWinConfig 读取 Windows 脚本写出的 opencode.json。
+func readWinConfig(t *testing.T, profile string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(winUserPath(t, profile, ".config", "opencode", "opencode.json"))
+	require.NoError(t, err, "配置文件未生成")
+	var cfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	return cfg
+}

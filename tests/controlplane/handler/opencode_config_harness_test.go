@@ -109,6 +109,9 @@ type fakeGateway struct {
 	Info map[string]map[string]any
 	// InfoStatus 非 0 时 /v1/model/info 用该状态码失败，用来测降级。
 	InfoStatus int
+	// PluginBody 是 /api/v1/opencode-config/plugin 返回的内容；为空时返回假插件。
+	// 用真实 opencode 二进制跑 E2E 时必须给真 bundle，否则 V1 加载插件会失败。
+	PluginBody []byte
 
 	mu        sync.Mutex
 	callbacks []map[string]any
@@ -162,6 +165,10 @@ func newFakeGateway(t *testing.T) *fakeGateway {
 	})
 	mux.HandleFunc("/api/v1/opencode-config/plugin", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript")
+		if len(g.PluginBody) > 0 {
+			_, _ = w.Write(g.PluginBody)
+			return
+		}
 		_, _ = w.Write([]byte("// fake plugin\n"))
 	})
 	mux.HandleFunc("/api/v1/opencode-config/callback", func(w http.ResponseWriter, r *http.Request) {

@@ -326,6 +326,17 @@ V2 的代价是**快照**：网关后台新增模型/改能力后，V2 用户需
 回归测试见 `tests/controlplane/handler/opencode_config_*_test.go`：假网关 + 假 HOME 真跑一遍脚本再断言落盘结果，
 缺 bash / python3 / pwsh 时自动跳过。
 
+还有一条**用真实 opencode 二进制**的端到端用例（默认跳过，需显式指定二进制）：
+
+```bash
+OPENCODE_E2E_V1_BIN=$(command -v opencode) \
+OPENCODE_E2E_V2_BIN=/path/to/opencode-v2 \
+go test ./tests/controlplane/handler -run TestRealOpenCodeEndToEnd -v -timeout 10m
+```
+
+它会跑一遍安装脚本，再让 opencode 自己 `models` 列出本网关的模型（V2 用 `--standalone` 起私有服务，避免和常驻后台服务抢端口）。
+已实测：2.2.0 与 1.15.13 都能列出 `biangfeng-gateway/*`，V2 的 `opencode debug config` 也保留了 `capabilities`/`limit`。
+
 ---
 
 ## 7. 构建与发布

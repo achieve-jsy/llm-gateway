@@ -13,7 +13,8 @@ import (
 func seedLegacyPluginState(t *testing.T, home string) {
 	t.Helper()
 	seedOpencodeConfig(t, home, map[string]any{
-		"plugin": []any{"opencode-models-discovery", "keep-me"},
+		"plugin":  []any{"opencode-models-discovery", "keep-me"},
+		"plugins": []any{map[string]any{"package": "opencode-models-discovery"}, map[string]any{"package": "keep-me-2"}},
 	})
 	pluginDir := filepath.Join(home, ".config", "opencode", "plugins")
 	require.NoError(t, os.MkdirAll(pluginDir, 0o755))
@@ -51,7 +52,12 @@ func TestMacScript_V1KeepsDynamicDiscovery(t *testing.T) {
 	assert.Nil(t, dig(entry, "models"), "V1 不写死模型，交给插件发现")
 
 	assert.Nil(t, cfg["providers"], "V1 不能出现 V2 形状")
+	// 两套插件声明都要清：老版本写 plugin，新版本读 plugins，只清一套会留下重复加载
 	assert.Equal(t, []any{"keep-me"}, cfg["plugin"])
+	plugins, ok := cfg["plugins"].([]any)
+	require.True(t, ok, "plugins 数组应保留其它插件")
+	require.Len(t, plugins, 1)
+	assert.Equal(t, "keep-me-2", dig(plugins[0], "package"))
 
 	pluginFile := filepath.Join(home, ".config", "opencode", "plugins", "opencode-models-discovery.js")
 	content, err := os.ReadFile(pluginFile)
@@ -136,4 +142,53 @@ func TestMacScript_ForceV1OnV2Binary(t *testing.T) {
 	cfg := readOpencodeConfig(t, home)
 	require.NotNil(t, dig(cfg, "provider", "biangfeng-gateway"))
 	assert.Nil(t, cfg["providers"], "强制 V1 时不能出现 V2 形状")
+}
+
+// TestMacScript_ForceV2OnV1Binary 测什么：手动 ?ver=v2 覆盖掉 1.x 的自动探测。
+// 期望：即使本机是 V1 也按 V2 形状写（给已经装好 2.x 但版本号探测不出来的用户兜底）。
+func TestMacScript_ForceV2OnV1Binary(t *testing.T) {
+	gw := newFakeGateway(t)
+	f := tokenFixture{BaseURL: gw.BaseURL(), APIKey: "sk-test"}
+	r, _ := newScriptEngine(t, f)
+	code, script := fetchScript(t, r, "mac", "v2")
+	require.Equal(t, 200, code)
+	require.Contains(t, script, `FORCE_VERSION="v2"`)
+
+	home := t.TempDir()
+	binDir := writeFakeOpencode(t, home, "1.19.5")
+
+	out, exitCode := runMacScript(t, script, home, binDir)
+	require.Equal(t, 0, exitCode, "脚本应成功退出，输出:\n%s", out)
+
+	cfg := readOpencodeConfig(t, home)
+	require.NotNil(t, dig(cfg, "providers", "biangfeng-gateway"), "强制 V2 时应写 V2 形状")
+	assert.Nil(t, cfg["provider"])
+}
+
+// TestMacScript_OpenCodeBinDirFallback 测什么：opencode 不在 PATH、但装在
+// ~/.opencode/bin/opencode（curl 装的 V2）时仍要判成 V2。
+// 期望：走 V2 形状。PATH 用软链接沙箱，确保里面真没有 opencode。
+func TestMacScript_OpenCodeBinDirFallback(t *testing.T) {
+	gw := newFakeGateway(t)
+	f := tokenFixture{BaseURL: gw.BaseURL(), APIKey: "sk-test"}
+	r, _ := newScriptEngine(t, f)
+	code, script := fetchScript(t, r, "mac", "")
+	require.Equal(t, 200, code)
+
+	home := t.TempDir()
+	writeFakeOpencode(t, filepath.Join(home, ".opencode"), "2.0.3")
+
+	path := isolatedToolPath(t) + ":/usr/bin:/bin:/usr/sbin:/sbin"
+	for _, dir := range []string{"/usr/bin", "/bin", "/usr/sbin", "/sbin"} {
+		if _, err := os.Stat(filepath.Join(dir, "opencode")); err == nil {
+			t.Skipf("%s 里有真实 opencode，构造不出兜底场景", dir)
+		}
+	}
+
+	out, exitCode := runMacScriptPath(t, script, home, path)
+	require.Equal(t, 0, exitCode, "脚本应成功退出，输出:\n%s", out)
+
+	cfg := readOpencodeConfig(t, home)
+	require.NotNil(t, dig(cfg, "providers", "biangfeng-gateway"), "应判成 V2")
+	assert.Nil(t, cfg["provider"])
 }

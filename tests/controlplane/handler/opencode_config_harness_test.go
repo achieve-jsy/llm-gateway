@@ -101,6 +101,8 @@ func fetchScript(t *testing.T, r *gin.Engine, osType, ver string) (int, string) 
 type fakeGateway struct {
 	Server *httptest.Server
 
+	// Models / Info / InfoStatus 只在第一次发请求前设置，之后视为只读（handler 无锁读）。
+	//
 	// Models 是 /v1/models 返回的模型 id 列表。
 	Models []string
 	// Info 是 model id → LiteLLM model_info 的内容；缺失的模型不返回能力。
@@ -235,6 +237,12 @@ func scriptPath(t *testing.T, pathDirs ...string) string {
 // runMacScript 在指定 HOME 下用 bash 真跑一遍安装脚本，返回合并输出与退出码。
 func runMacScript(t *testing.T, scriptText, home string, pathDirs ...string) (string, int) {
 	t.Helper()
+	return runMacScriptPath(t, scriptText, home, scriptPath(t, pathDirs...))
+}
+
+// runMacScriptPath 同 runMacScript，但 PATH 由调用方完全决定（用于构造"PATH 里没有 opencode"）。
+func runMacScriptPath(t *testing.T, scriptText, home, path string) (string, int) {
+	t.Helper()
 	requireTool(t, "bash")
 
 	dir := t.TempDir()
@@ -242,10 +250,14 @@ func runMacScript(t *testing.T, scriptText, home string, pathDirs ...string) (st
 	require.NoError(t, os.WriteFile(scriptFile, []byte(scriptText), 0o755))
 	require.NoError(t, os.MkdirAll(home, 0o755))
 
+	// 脚本末尾会用 osascript 打开 opencode://；测试里换成 no-op，避免真弹系统通知。
+	noopDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(noopDir, "osascript"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
 	cmd := exec.Command("bash", scriptFile)
 	cmd.Env = mergedEnv(t, map[string]string{
 		"HOME": home,
-		"PATH": scriptPath(t, pathDirs...),
+		"PATH": noopDir + ":" + path,
 	})
 	out, err := cmd.CombinedOutput()
 	code := 0
@@ -357,35 +369,17 @@ func runWinScript(t *testing.T, scriptText, userProfile string, pathDirs ...stri
 	return string(out), code
 }
 
-// winUserPath 还原 PowerShell 模板拼出来的路径：模板用 \ 拼 ".config\opencode\..."，
-// 在 macOS/Linux 上 \ 不是分隔符，文件就真叫 ".config\opencode\opencode.json"。
-// 先找正斜杠版本，找不到再退回反斜杠字面量，两种平台都能读到。
-func winUserPath(t *testing.T, profile string, parts ...string) string {
+// isolatedToolPath 只用指向 bash/python3/curl 的软链接构成 PATH 前段，屏蔽宿主上
+// 其它同名命令（例如真实 opencode），用来测"PATH 里找不到 opencode"这类分支。
+func isolatedToolPath(t *testing.T) string {
 	t.Helper()
-	for _, p := range winCandidates(t, profile, parts...) {
-		if _, err := os.Stat(p); err == nil {
-			return p
+	dir := t.TempDir()
+	for _, tool := range []string{"bash", "python3", "curl"} {
+		src, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("缺少 %s，跳过脚本执行测试", tool)
 		}
+		require.NoError(t, os.Symlink(src, filepath.Join(dir, tool)))
 	}
-	return filepath.Join(append([]string{profile}, parts...)...)
-}
-
-// winCandidates 返回某用户目录下文件的两个候选路径：正斜杠版本 + 反斜杠字面量版本
-// （pwsh 在 macOS/Linux 上不会把 "\" 当分隔符，文件会真叫 ".config\opencode\..."）。
-func winCandidates(t *testing.T, profile string, parts ...string) []string {
-	t.Helper()
-	return []string{
-		filepath.Join(append([]string{profile}, parts...)...),
-		filepath.Join(profile, strings.Join(parts, "\\")),
-	}
-}
-
-// readWinConfig 读取 Windows 脚本写出的 opencode.json。
-func readWinConfig(t *testing.T, profile string) map[string]any {
-	t.Helper()
-	raw, err := os.ReadFile(winUserPath(t, profile, ".config", "opencode", "opencode.json"))
-	require.NoError(t, err, "配置文件未生成")
-	var cfg map[string]any
-	require.NoError(t, json.Unmarshal(raw, &cfg))
-	return cfg
+	return dir
 }

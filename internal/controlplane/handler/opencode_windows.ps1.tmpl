@@ -23,6 +23,11 @@ $CONFIG_FILE      = "$env:USERPROFILE\.config\opencode\opencode.json"
 $PLUGIN_DIR       = "$env:USERPROFILE\.config\opencode\plugins"
 $PLUGIN_FILE      = "$PLUGIN_DIR\opencode-models-discovery.js"
 $LEGACY_PLUGIN_FILE = "$env:USERPROFILE\.config\opencode\plugin\opencode-models-discovery.js"
+# V2 插件与 V1 契约不兼容，文件名区分开；装哪版就清掉另一版。
+$PLUGIN_V2_FILE   = "$PLUGIN_DIR\opencode-models-discovery-v2.js"
+$LEGACY_PLUGIN_V2_FILE = "$env:USERPROFILE\.config\opencode\plugin\opencode-models-discovery-v2.js"
+# V2 插件从同目录的 sidecar 读网关地址/key（插件执行时 opencode.json 还没进注册表）。
+$PLUGIN_SIDECAR   = "$PLUGIN_DIR\opencode-models-discovery.json"
 $DISCOVERY_PLUGIN = "opencode-models-discovery"
 # BASE_URL 形如 https://host/v1；去掉尾斜杠后拼 /models、/model/info。
 $API_BASE         = $BASE_URL.TrimEnd('/')
@@ -136,14 +141,41 @@ Write-Step "阶段 2/4  下载模型发现插件..."
 
 $pluginInstalled = $false
 if ($isV2) {
-    # V1 插件实现不会在 V2 里运行，装上去只会刷加载失败日志；顺手清掉旧副本。
-    foreach ($f in @($PLUGIN_FILE, $LEGACY_PLUGIN_FILE)) {
+    # V2 用另一套插件契约：下发 V2 插件 + sidecar，让它启动时自己发现模型。
+    # V1 插件在 2.x 里不会被加载，顺手清掉免得留垃圾。
+    foreach ($f in @($PLUGIN_FILE, $LEGACY_PLUGIN_FILE, $LEGACY_PLUGIN_V2_FILE)) {
         if (Test-Path $f) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
     }
-    Write-Ok "V2 模式：跳过插件安装（V1 插件在 OpenCode 2 不运行）"
+    try {
+        if (-not (Test-Path $PLUGIN_DIR)) {
+            New-Item -ItemType Directory -Path $PLUGIN_DIR -Force | Out-Null
+        }
+        Invoke-WebRequest -Uri "${PLUGIN_URL}?ver=v2" -OutFile $PLUGIN_V2_FILE -TimeoutSec 15 -UseBasicParsing
+        if ((Test-Path $PLUGIN_V2_FILE) -and ((Get-Item $PLUGIN_V2_FILE).Length -gt 0)) {
+            # sidecar 用 ConvertTo-Json 生成，不拼字符串，避免引号/中文把 JSON 打坏。
+            $sidecar = [ordered]@{
+                providerID   = $PROVIDER_ID
+                providerName = $SUPPLIER_NAME
+                baseURL      = $BASE_URL
+                apiKey       = $API_KEY
+            }
+            $sidecar | ConvertTo-Json -Depth 4 | Set-Content -Path $PLUGIN_SIDECAR -Encoding UTF8
+            $pluginInstalled = $true
+            Write-Ok "V2 插件已下载: ${PLUGIN_V2_FILE}（启动时自动发现模型）"
+        } else {
+            Write-Warn "V2 插件下载失败（配置里的静态模型清单仍可用），可稍后重试"
+        }
+    } catch {
+        foreach ($f in @($PLUGIN_V2_FILE, $PLUGIN_SIDECAR)) {
+            if (Test-Path $f) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
+        }
+        Write-Warn "V2 插件安装失败（配置里的静态模型清单仍可用）: $_"
+    }
 } else {
-    # 清理旧的单数目录副本，避免重复加载或加载旧版本。
-    if (Test-Path $LEGACY_PLUGIN_FILE) { Remove-Item $LEGACY_PLUGIN_FILE -Force -ErrorAction SilentlyContinue }
+    # 清理旧的单数目录副本与另一版本的产物，避免重复加载或加载旧版本。
+    foreach ($f in @($LEGACY_PLUGIN_FILE, $PLUGIN_V2_FILE, $LEGACY_PLUGIN_V2_FILE, $PLUGIN_SIDECAR)) {
+        if (Test-Path $f) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
+    }
     try {
         if (-not (Test-Path $PLUGIN_DIR)) {
             New-Item -ItemType Directory -Path $PLUGIN_DIR -Force | Out-Null
@@ -442,7 +474,11 @@ Write-Ok "配置文件：$CONFIG_FILE"
 Write-Ok "Provider：$targetId（$resultAction）"
 if ($isV2) {
     Write-Ok "模型：$modelCount 个（安装时快照，已带上图像输入/工具调用/上下文上限）"
-    Write-Warn "V2 模式不安装发现插件（V1 插件在 OpenCode 2 不运行）；网关后台新增模型后请重新执行本脚本"
+    if ($pluginInstalled) {
+        Write-Ok "插件：V2 版已安装（每次启动自动发现，网关后台新增模型无需重跑本脚本）"
+    } else {
+        Write-Warn "插件：V2 版未安装，当前只有安装时快照；网关后台新增模型需重新执行本脚本"
+    }
 } else {
     Write-Ok "模型列表：由插件按 key 动态发现并富化能力"
     Write-Ok "插件：$DISCOVERY_PLUGIN（$resultPlugin）"

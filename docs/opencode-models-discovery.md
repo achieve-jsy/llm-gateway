@@ -310,13 +310,24 @@ OpenCode 2 对插件做了不兼容改造（新 `@opencode/plugin` API），**V1
 |---|---|---|
 | 版本探测 | `opencode --version` 主版本 = 1 | 主版本 = 2 |
 | 配置形状 | `provider.<id>` + `npm` + `options.modelsDiscovery` | `providers.<id>` + `package: "aisdk:@ai-sdk/openai-compatible"` + `settings` |
-| 模型来源 | 插件每次启动动态发现 + 富化 | **安装时**从 `/v1/models` + `/v1/model/info` 抓一次，静态写入 `models` |
+| 模型来源 | 插件每次启动动态发现 + 富化 | 安装时静态快照 **+ V2 插件每次启动重新发现**（两边合并） |
 | 能力表达 | `attachment` / `tool_call` / `modelsDiscovery` | `capabilities{tools,input,output,reasoning}` + `limit{context,output}` |
-| 插件 | 下发 vendor bundle + 自更新 | 不装（装了也不运行），顺手清理旧副本 |
+| 插件 | `opencode-models-discovery.js`（V1 契约）+ 自更新 | `opencode-models-discovery-v2.js`（V2 契约）+ 同目录 `opencode-models-discovery.json` sidecar |
+
+V2 插件为什么另起一份：2.x 换掉了整套插件契约，V1 bundle 在 2.x 里根本不会被加载。V2 版是
+`export default { id, setup(ctx) }`，在 `ctx.provider.transform` 里用 `ctx.provider.models.update` 写模型。
+三个实测踩坑（改这块先看）：`setup` 的返回值会被 await，所以「先抓清单再注册 transform」最稳；
+transform 里看不到配置文件里的 provider，需要自己 `provider.add`（同 id 会与配置合并，不产生重复）；
+模型的 `capabilities.output` 是必填键，整块覆盖时漏了它会让 V2 编码响应当场 500。
+
+sidecar（`~/.config/opencode/plugins/opencode-models-discovery.json`）存 providerID / 供应商名 / baseURL / apiKey：
+插件执行时 `opencode.json` 里的 provider 还没并进注册表，读不到，只能由安装脚本单独给。
 
 探测顺序：`opencode --version`（含 `~/.opencode/bin/opencode` 兜底路径）→ 探测不到且有 `~/.config/opencode/cli.json`（V2 终端客户端首次启动生成）判 V2 → 其余按 V1。逃生口：`GET /api/v1/opencode-config/script?...&ver=v1|v2` 可强制指定。
 
-V2 的代价是**快照**：网关后台新增模型/改能力后，V2 用户需重跑一次配置脚本；V1 用户仍是动态的。要让 V2 也动态，需要把插件移植到 `@opencode/plugin`（`Plugin.define` + `ctx.provider.transform`），目前未做。
+**动态发现（V1/V2 都成立）**：装了对应版本的插件后，网关后台新增模型只需重启 opencode，不用重跑配置脚本。
+V2 保留静态快照作为兜底——插件下载失败、或启动时网关不可达，仍能列出安装那一刻的模型。
+网关侧**删除**的模型不会自动消失（快照还在，插件只做增量），要彻底同步得重跑一次脚本。
 
 已知降级：`/v1/models` 可达但 `/v1/model/info` 失败时，脚本只能把 `/v1/models` 里的全部模型写进 V2 `models` ——
 `chat` / `embedding` 的判定信息只在 `model_info.mode` 里，拿不到就没法过滤，所以 embedding 模型也会出现在列表里
@@ -336,6 +347,8 @@ go test ./tests/controlplane/handler -run TestRealOpenCodeEndToEnd -v -timeout 1
 
 它会跑一遍安装脚本，再让 opencode 自己 `models` 列出本网关的模型（V2 用 `--standalone` 起私有服务，避免和常驻后台服务抢端口）。
 已实测：2.2.0 与 1.15.13 都能列出 `biangfeng-gateway/*`，V2 的 `opencode debug config` 也保留了 `capabilities`/`limit`。
+
+两个版本都会额外验证**动态发现**：装完之后往假网关塞一个新模型，再跑一次 opencode（不重跑安装脚本），断言它自动出现。
 
 ---
 

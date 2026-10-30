@@ -77,7 +77,21 @@ func newScriptEngine(t *testing.T, f tokenFixture) (*gin.Engine, *miniredis.Mini
 
 	r := gin.New()
 	r.GET("/api/v1/opencode-config/script", h.GetScript)
+	r.GET("/api/v1/opencode-config/plugin", h.GetPlugin)
+	r.GET("/api/v1/opencode-config/plugin/version", h.GetPluginVersion)
 	return r, mr
+}
+
+// fetchPlugin 取一次插件 bundle；ver 为空时按 V1（默认）返回，返回体、版本头与状态码。
+func fetchPlugin(t *testing.T, r *gin.Engine, ver string) (int, string, string) {
+	t.Helper()
+	target := "/api/v1/opencode-config/plugin"
+	if ver != "" {
+		target += "?ver=" + url.QueryEscape(ver)
+	}
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, target, nil))
+	return w.Code, w.Body.String(), w.Header().Get("X-Plugin-Version")
 }
 
 // fetchScript 取一次安装脚本；ver 为空时不带该查询参数（模拟前端默认行为）。
@@ -101,7 +115,8 @@ func fetchScript(t *testing.T, r *gin.Engine, osType, ver string) (int, string) 
 type fakeGateway struct {
 	Server *httptest.Server
 
-	// Models / Info / InfoStatus 只在第一次发请求前设置，之后视为只读（handler 无锁读）。
+	// Models / Info / InfoStatus 一开始设好；SetModels 允许用例中途换掉模型清单
+	// （V2 动态发现用例要模拟「装完之后网关新增模型」），所以 handler 读写都走 mu。
 	//
 	// Models 是 /v1/models 返回的模型 id 列表。
 	Models []string
@@ -115,6 +130,13 @@ type fakeGateway struct {
 
 	mu        sync.Mutex
 	callbacks []map[string]any
+}
+
+// SetModels 热替换 /v1/models 的模型清单（模型能力沿用 Info 里的定义）。
+func (g *fakeGateway) SetModels(ids []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.Models = append([]string(nil), ids...)
 }
 
 // newFakeGateway 起一个带默认夹具的假网关：4 个模型（1 个 embedding、1 个纯文本、
@@ -142,19 +164,26 @@ func newFakeGateway(t *testing.T) *fakeGateway {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, _ *http.Request) {
-		data := make([]map[string]any, 0, len(g.Models))
-		for _, id := range g.Models {
+		g.mu.Lock()
+		ids := append([]string(nil), g.Models...)
+		g.mu.Unlock()
+		data := make([]map[string]any, 0, len(ids))
+		for _, id := range ids {
 			data = append(data, map[string]any{"id": id})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": data})
 	})
 	mux.HandleFunc("/v1/model/info", func(w http.ResponseWriter, _ *http.Request) {
-		if g.InfoStatus != 0 {
-			writeJSON(w, g.InfoStatus, map[string]any{"error": "boom"})
+		g.mu.Lock()
+		infoStatus := g.InfoStatus
+		ids := append([]string(nil), g.Models...)
+		g.mu.Unlock()
+		if infoStatus != 0 {
+			writeJSON(w, infoStatus, map[string]any{"error": "boom"})
 			return
 		}
 		data := make([]map[string]any, 0, len(g.Info))
-		for _, id := range g.Models {
+		for _, id := range ids {
 			info, ok := g.Info[id]
 			if !ok {
 				continue

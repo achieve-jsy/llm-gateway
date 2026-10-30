@@ -649,7 +649,10 @@ func (s *RollupService) QueryLogs(ctx context.Context, params LogsQueryParams) (
 	// 通常是 20ms 级（实测 100001 行只需 22 buffer / 13.7ms）。
 	const maxCountedRows = 100000
 	var total int64
-	if err := query.Session(&gorm.Session{}).Select("1").Limit(maxCountedRows + 1).Count(&total).Error; err != nil {
+	// 用子查询封顶后再 count：直接 query.Select("1").Count() 会生成 COUNT("1")，
+	// PostgreSQL 报 column "1" does not exist，整个明细接口 500（前端 catch 成 No Data）。
+	cappedQuery := query.Session(&gorm.Session{}).Select("1").Limit(maxCountedRows + 1)
+	if err := s.db.WithContext(ctx).Table("(?) AS capped", cappedQuery).Count(&total).Error; err != nil {
 		if isTableNotExistError(err) {
 			return &LogsResponse{Rows: []LogRow{}, Total: 0, Page: params.Page, PageSize: params.PageSize}, nil
 		}

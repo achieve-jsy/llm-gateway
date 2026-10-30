@@ -243,10 +243,10 @@ func runMacScript(t *testing.T, scriptText, home string, pathDirs ...string) (st
 	require.NoError(t, os.MkdirAll(home, 0o755))
 
 	cmd := exec.Command("bash", scriptFile)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"PATH="+scriptPath(t, pathDirs...),
-	)
+	cmd.Env = mergedEnv(t, map[string]string{
+		"HOME": home,
+		"PATH": scriptPath(t, pathDirs...),
+	})
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if err != nil {
@@ -257,6 +257,26 @@ func runMacScript(t *testing.T, scriptText, home string, pathDirs ...string) (st
 		code = exitErr.ExitCode()
 	}
 	return string(out), code
+}
+
+// mergedEnv 覆盖指定环境变量，其余沿用当前进程（避免同一个 key 出现两次）。
+func mergedEnv(t *testing.T, overrides map[string]string) []string {
+	t.Helper()
+	env := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, kv := range os.Environ() {
+		key, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if _, replaced := overrides[key]; replaced {
+			continue
+		}
+		env = append(env, kv)
+	}
+	for k, v := range overrides {
+		env = append(env, k+"="+v)
+	}
+	return env
 }
 
 // readOpencodeConfig 读取 <home>/.config/opencode/opencode.json 并解析。

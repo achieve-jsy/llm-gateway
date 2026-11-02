@@ -39,16 +39,14 @@ func (s *RollupService) Run(ctx context.Context, day time.Time) error {
 
 	result := s.db.WithContext(ctx).Exec(`
 		INSERT INTO usage_daily (
-			stat_date, key_id, key_name, user_id, dept_id, dept_name, studio_id, model,
+			stat_date, key_id, user_id, dept_id, studio_id, model,
 			req_count, success_count, prompt_tokens, cached_tokens,
 			cache_write_tokens, completion_tokens, reasoning_tokens, est_cost_usd)
 		SELECT
 			(ts AT TIME ZONE ?)::date AS stat_date,
 			key_id,
-			COALESCE(MAX(key_name), ''),
 			COALESCE(MAX(user_id), ''),
 			COALESCE(dept_id, ''),
-			COALESCE(MAX(dept_name), ''),
 			COALESCE(studio_id, ''),
 			model,
 			COUNT(*) AS req_count,
@@ -63,8 +61,6 @@ func (s *RollupService) Run(ctx context.Context, day time.Time) error {
 		WHERE ts >= ? AND ts < ?
 		GROUP BY 1, key_id, COALESCE(dept_id, ''), COALESCE(studio_id, ''), model
 		ON CONFLICT (stat_date, key_id, dept_id, studio_id, model) DO UPDATE SET
-			key_name           = EXCLUDED.key_name,
-			dept_name          = EXCLUDED.dept_name,
 			req_count          = EXCLUDED.req_count,
 			success_count      = EXCLUDED.success_count,
 			prompt_tokens      = EXCLUDED.prompt_tokens,

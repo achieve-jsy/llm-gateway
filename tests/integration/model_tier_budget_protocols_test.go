@@ -67,6 +67,12 @@ func (integrationProtocolScheduler) Failover(string, string, *core.ChatRequest) 
 func (integrationProtocolScheduler) FailoverExcluding(string, []string, *core.ChatRequest) (*gwscheduler.RouteDecision, error) {
 	return nil, errors.New("unused")
 }
+
+// FailoverExcludingVideo 是 Scheduler 接口后来新增的方法，本 stub 之前漏了它，
+// 导致 -tags=integration 编译不过（基线问题，与本用例逻辑无关）。
+func (integrationProtocolScheduler) FailoverExcludingVideo(string, []string, bool, *core.ChatRequest) (*gwscheduler.RouteDecision, error) {
+	return nil, errors.New("unused")
+}
 func (integrationProtocolScheduler) GetGroupConfig(string) *gwscheduler.GroupRoutingConfig {
 	return nil
 }

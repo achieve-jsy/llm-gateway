@@ -121,13 +121,34 @@ privacy:
 
 ## 六、已知缺口
 
-- **本次只覆盖两个端点**：`POST /v1/chat/completions` 与 `POST /v1/messages`。以下链路**明确未脱敏**，
-  在 mask 模式下调用它们等于绕过策略（客户端/部署层面要自己保证不走到这些入口）：
-  `/v1/responses`、`/v1/embeddings`、`/v1/rerank`、`/v1/p/:provider/*path`（provider passthrough 直通）、
-  `/api/event_logging/batch`、视频/素材接口。
-  需要覆盖时，同样走 `redact.Session` 的 `Protect*` / `Restore*`，不要另写一套正则。
-- **只有 chat / messages 做了注入点**：`internal/gateway/server/router.go` 的 `setup()` 里只调了
-  `chatHandler.SetRedactor` / `messagesHandler.SetRedactor`，新增链路必须补上自己的注入，否则不会生效。
+### 6.1 端点覆盖
+
+已接入（5 条，都在 `router.setup()` 里注入，改造方式一致）：
+
+| 端点 | 请求侧 | 响应侧 |
+|------|--------|--------|
+| `POST /v1/chat/completions` | messages / 多模态文本 part | 非流式就地还原；流式逐 event 还原 |
+| `POST /v1/messages` | Anthropic messages / system | 同上（Anthropic 事件格式） |
+| `POST /v1/responses` | `input`（string 或 `input_text` 元素）+ `instructions` | `output[].content[].text` / `summary[].text` |
+| `POST /v1/embeddings` | `input` 的字符串（含 `[]string` / 混合数组里的字符串） | 无文本（向量）⇒ 不还原 |
+| `POST /v1/rerank` | `query` 与 `documents[].text` | 回显文档的 `document.text` |
+
+**明确未脱敏**（在 mask 模式下调用它们等于绕过策略，部署层面要自己拦住入口）：
+
+- `/v1/p/:provider/*path`（provider passthrough 直通）：请求体是任意字节流，可能含二进制/多模态，无法安全判别「哪里是文本」。
+- `/api/event_logging/batch`、视频/素材接口：不是对话内容；batch 的响应发生在异步轮询阶段，Session 无法闭环。
+- `/v1/responses/input_tokens`、`/v1/responses/{id}`、`/compact`：本 worktree 只注册了 `POST /v1/responses`。
+
+新增链路时：照现有 handler 的结构接（每请求一个 Session、failover 外脱敏一次、fail-closed），并在
+`router.setup()` 补一行 `SetRedactor`，否则不会生效（注入是编译期强约束，漏了会立刻编译失败）。
+
+### 6.2 字段级缺口
+
+- 工具定义（`tools` / `tool_choice`）、`function_call` 的 `call_id`/`name`/`arguments`、`tool_use.input` 一律不动：
+  这些是协议字段，改写会让模型与客户端对不上号。
+- 媒体（image / audio / video / base64 / URL）一律不动，即使 URL 里长得像密钥。
+- `metadata`、`annotations`、`error.message`、usage 等非正文文本不改写（`error.message` 若是上游回显占位符，
+  客户端会看到 `{{..}}` 而不是原文——不是原文泄漏）。
 - **只做单轮文本替换**：占位符跨请求是否一致取决于 `privacy.key_path`（见 5.3）；上游若自行改写占位符
   （例如加空格、换行），还原会失败并原样返回占位符（不报错、不泄漏原文）。
 - **模型可能伪造占位符**：模型学会了占位符格式后可能自己编一个（`{{EMAIL_xxxxxxxx}}`）。引擎只还原自己映射表里

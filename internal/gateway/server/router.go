@@ -161,9 +161,11 @@ func setup(
 
 	// 脱敏注入：引擎全局共享（并发安全），每个请求由 handler 内部 NewSession() + defer Close()。
 	// nil / off 时 handler 内部是 no-op。
-	// 只挂 chat / messages 两条纯文本链路；embeddings / responses / rerank / passthrough / batch 未覆盖。
+	// 只挂 chat / messages / responses / embeddings / rerank 五条纯文本链路；passthrough / batch 未覆盖。
 	chatHandler.SetRedactor(redactEngine)
 	messagesHandler.SetRedactor(redactEngine)
+	embeddingsHandler.SetRedactor(redactEngine)
+	rerankHandler.SetRedactor(redactEngine)
 
 	// Convert *providers.Router to interface carefully to avoid the nil-interface trap.
 	// A nil *providers.Router assigned to a non-nil interface value would cause panics
@@ -198,6 +200,7 @@ func setup(
 	rerankHandler.SetBudgetDeps(budgetDeps)
 	messagesHandler.SetBudgetDeps(budgetDeps)
 	responsesHandler.SetBudgetDeps(budgetDeps)
+	responsesHandler.SetRedactor(redactEngine)
 	var tierBudgetGate *budget.Gate
 	if tierHolder != nil && rdb != nil {
 		admissionConfig := budget.AdmissionConfig{}

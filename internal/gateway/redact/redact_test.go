@@ -42,7 +42,7 @@ func TestMaskRestoreRoundTrip(t *testing.T) {
 	}
 
 	resp := &core.ChatResponse{Choices: []core.Choice{{Message: core.ResponseMessage{
-		Content: "问题在于 " + masked[strings.Index(masked, "{{"):] ,
+		Content: "问题在于 " + masked[strings.Index(masked, "{{"):],
 	}}}}
 	s.RestoreChat(resp)
 	got, _ := resp.Choices[0].Message.Content.(string)

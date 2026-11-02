@@ -1,4 +1,4 @@
-h1:hEl087/h45Us22KO7EUw/9luTW6x1sNYq8x0Bbj6FV4=
+h1:7CA1NnYnpLdGVbU7pK5RdOPlJoIZk83RF/SxzSqlFTE=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -59,3 +59,4 @@ h1:hEl087/h45Us22KO7EUw/9luTW6x1sNYq8x0Bbj6FV4=
 20261021024708_add_models_override_supports_video_input.sql h1:zlsx50JirjWbFU237MjsGS61lcGHW8+PMTT35EJbzp4=
 20261022014556_add_group_override_supports_video_input.sql h1:SGiz+N9Vdt3X2rOrz1JiJkAOVw2QsYkRNMewT2oXeDY=
 20261026040000_add_observability_query_indexes.sql h1:ZQbAe7YQmY/7jy+W3UZlUQFAqgvv0HHY8is+y9jYKDU=
+20261030062033_add_org_quota_and_crypto_tables.sql h1:PE7Ew0978gV6bIiehCqG5UDZNtWbeQta0pqJ40KC9a4=

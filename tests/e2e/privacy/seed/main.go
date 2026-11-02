@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"os"
 
-	ucmodel "github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -45,28 +44,6 @@ func main() {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		fatal("连接数据库失败: " + err.Error())
-	}
-	// 本地 E2E 库由 atlas-migrations 建表；代码 HEAD 里有些列还没有对应迁移
-	// （例如 models.quota_rpm），这里对用到的几张表做一次增量 AutoMigrate 补齐，
-	// 只加列不删列。生产环境仍以 Atlas 迁移为准。
-	if err := db.AutoMigrate(
-		&ucmodel.ApiKey{}, &ucmodel.ProviderDefinition{},
-		&ucmodel.Provider{}, &ucmodel.ModelCatalog{}, &ucmodel.Model{},
-		&crypto.EncryptionKey{},
-	); err != nil {
-		fatal("补齐本地 E2E 表结构失败: " + err.Error())
-	}
-	// 凭证加密的 KEK/DEK 表由 control-plane 里的 crypto 包按需写入，
-	// 但仓库没有它对应的 Atlas 迁移（历史遗留），新库需要先补这张表。
-	if err := db.Exec(`CREATE TABLE IF NOT EXISTS encryption_keys (
-		version integer PRIMARY KEY,
-		encrypted_key text NOT NULL,
-		algorithm varchar(50) NOT NULL DEFAULT '',
-		status varchar(20) NOT NULL DEFAULT 'active',
-		created_at timestamptz NOT NULL DEFAULT now(),
-		retired_at timestamptz
-	)`).Error; err != nil {
-		fatal("创建 encryption_keys 表失败: " + err.Error())
 	}
 	if err := crypto.InitFromDB(db); err != nil {
 		fatal("初始化凭证加密失败（检查 ENCRYPTION_KEY）: " + err.Error())

@@ -9,6 +9,7 @@ package redact
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -31,6 +32,9 @@ type Config struct {
 	CacheDir      string
 	Kinds         map[string]bool
 	Allow         []string
+	// KeyPath 是占位符 HMAC 密钥文件。设为固定路径后同一凭证在各请求/重启后
+	// 得到同一占位符，上游前缀缓存不被打散；留空则每个会话临时生成。
+	KeyPath string
 }
 
 // Engine 持有跨请求共享的 Protector。并发安全，可全局单例。
@@ -60,6 +64,7 @@ func New(cfg Config) (*Engine, error) {
 		CacheDir:      cfg.CacheDir,
 		Kinds:         cfg.Kinds,
 		Allow:         cfg.Allow,
+		KeyPath:       cfg.KeyPath,
 	}
 	if mode == ModeDetect {
 		// detect 只报不遮，永远不因 Block 动作中断请求。
@@ -103,6 +108,32 @@ type Session struct {
 
 // Hits 返回本次请求的命中（不含凭证原文）。
 func (s *Session) Hits() []privacy.Detection { return s.hits }
+
+// HitsByKind 按命中类型聚合，供指标与审计使用（不含量、不含凭证原文）。
+func (s *Session) HitsByKind() map[string]int {
+	if len(s.hits) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(s.hits))
+	for _, h := range s.hits {
+		out[h.Kind]++
+	}
+	return out
+}
+
+// logHits 记录一次命中的类型汇总。只记类型与次数，永远不记内容。
+func (s *Session) logHits(ctx context.Context) {
+	kinds := s.HitsByKind()
+	if len(kinds) == 0 {
+		return
+	}
+	slog.InfoContext(ctx, "privacy_hits",
+		"mode", s.mode,
+		"engine_version", privacy.Version,
+		"count", len(s.hits),
+		"kinds", kinds,
+	)
+}
 
 // Close 清空映射。请求结束时必须调用。
 func (s *Session) Close() {
@@ -153,6 +184,7 @@ func (s *Session) ProtectChat(ctx context.Context, req *core.ChatRequest) error 
 		}
 		req.Messages[i].Content = out
 	}
+	s.logHits(ctx)
 	return nil
 }
 
@@ -173,6 +205,7 @@ func (s *Session) ProtectAnthropic(ctx context.Context, req *core.AnthropicMessa
 		}
 		req.Messages[i].Content = out
 	}
+	s.logHits(ctx)
 	return nil
 }
 

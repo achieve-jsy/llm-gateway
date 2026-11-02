@@ -27,12 +27,14 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/config"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	"github.com/example/llm-gateway/internal/gateway/loader"
+	"github.com/example/llm-gateway/internal/gateway/middleware"
 	gatewaymodel "github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/example/llm-gateway/internal/gateway/privacy"
 	"github.com/example/llm-gateway/internal/gateway/provider"
 	"github.com/example/llm-gateway/internal/gateway/quota"
+	"github.com/example/llm-gateway/internal/gateway/redact"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/gateway/server"
-	"github.com/example/llm-gateway/internal/gateway/middleware"
 	ta "github.com/example/llm-gateway/internal/tracearchive"
 
 	// Register all GoModel provider adapters.
@@ -96,6 +98,24 @@ func main() {
 		MaxStringLenInTrace: cfg.Observability.TraceMaxStringLen,
 		MaxBase64LenInTrace: cfg.Observability.TraceMaxBase64Len,
 	})
+
+	// 构造可逆脱敏引擎。失败必须响亮退出：mask 模式想要的正是「原文不出网」，
+	// 静默降级成 off 会让用户以为已脱敏，实际把凭证原样发给上游。
+	redactEngine, err := redact.New(redact.Config{
+		Mode:          cfg.Privacy.Mode,
+		RulesOnly:     cfg.Privacy.RulesOnly,
+		Actions:       cfg.Privacy.Actions,
+		MaxInputBytes: cfg.Privacy.MaxInputBytes,
+		CacheDir:      cfg.Privacy.CacheDir,
+		KeyPath:       cfg.Privacy.KeyPath,
+	})
+	if err != nil {
+		log.Fatalf("failed to init privacy redaction engine: %v", err)
+	}
+	slog.Info("privacy redaction configured",
+		"mode", redactEngine.Mode(), "version", privacy.Version,
+		"rules_only", cfg.Privacy.RulesOnly, "max_input_bytes", cfg.Privacy.MaxInputBytes,
+		"key_path_set", cfg.Privacy.KeyPath != "")
 
 	// 初始化 Redis
 	rdb, err := infra.InitRedis(cfg.Redis)
@@ -339,7 +359,7 @@ func main() {
 			server.BudgetAlertDispatcherConfig{},
 		)
 	}
-	r := server.SetupWithBudgetAlertDispatcher(budgetAlertDispatcher, providerLoader.Router, icache, state, authClient, authJWTManager, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter, bindClient, rdb, tierHolder,
+	r := server.SetupWithBudgetAlertDispatcher(budgetAlertDispatcher, providerLoader.Router, icache, state, authClient, authJWTManager, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter, redactEngine, bindClient, rdb, tierHolder,
 		func(reload func(entries []gatewaymodel.ProviderEntry)) {
 			reloadSeedance = reload
 		},

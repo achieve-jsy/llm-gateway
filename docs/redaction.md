@@ -118,6 +118,8 @@ privacy:
   这是真实的账单影响。把 `key_path` 指到一个固定文件后，同一凭证跨请求、跨重启都得到同一占位符，
   前缀缓存不被打散。
 - 该密钥文件同时决定了「同一凭证的指纹是否可比」，**不要放进输出目录、不要提交仓库**，权限保持 0600。
+- **多副本**必须共享同一份密钥文件（同一个挂载卷 / Secret），否则同一凭证在 A 副本与 B 副本得到不同占位符，
+  跨副本命中的前缀缓存依然会失效；网关启动时若 `mode=mask` 且没配 `key_path`，会打一条 WARN 提醒。
 - 还原依赖产生占位符的那个 Session 的映射表，跨请求不共享映射；网关每次请求都是「打入 → 上游 → 还原」闭环，
   客户端拿到的始终是原文，历史里带回来的占位符会被重新识别成同一占位符。
 
@@ -190,6 +192,7 @@ bash tests/e2e/privacy/run.sh
 4. **detect**：原文照发上游，同时落一行 `privacy_hits`；
 5. **block**：HTTP 500 `redaction_failed`，且上游请求计数不增加（fail-closed 真的没发出去）。
 
-`seed` 会对用到的几张表做一次增量 `AutoMigrate`：仓库的 `atlas-migrations` 相对当前代码有列漂移
-（例如 `models.quota_rpm`、`model_catalog.supports_video_input` 没有对应迁移），新库直接跑代码会报
-`column does not exist`。生产仍以 Atlas 为准，这里只是把本地 E2E 库补齐。
+这条 E2E 也顺手逼出了一个独立问题：`atlas-migrations` 相对代码缺表缺列（orgservice 的 `studios` /
+`user_roles` / `dept_studio_map`、配额列 `quota_rpm`、`encryption_keys` 等），从零建库后服务一启动就报
+`column does not exist`。已由 `atlas-migrations/20261030062033_add_org_quota_and_crypto_tables.sql` 补齐，
+`seed` 不再做任何 `AutoMigrate`——本地库与生产库都只认 Atlas。

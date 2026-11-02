@@ -116,6 +116,11 @@ func main() {
 		"mode", redactEngine.Mode(), "version", privacy.Version,
 		"rules_only", cfg.Privacy.RulesOnly, "max_input_bytes", cfg.Privacy.MaxInputBytes,
 		"key_path_set", cfg.Privacy.KeyPath != "")
+	if redactEngine.Mode() == redact.ModeMask && cfg.Privacy.KeyPath == "" {
+		// 不配 key_path 时占位符按会话随机生成：同一凭证每次请求都换占位符，
+		// 上游 prefix cache 会整段失效（真实成本）。多副本还要求各副本读到同一份密钥文件。
+		slog.Warn("privacy mask 未配置 key_path：占位符逐请求变化，将击穿上游前缀缓存；多副本部署需共享同一密钥文件（见 docs/redaction.md 5.3）")
+	}
 
 	// 初始化 Redis
 	rdb, err := infra.InitRedis(cfg.Redis)

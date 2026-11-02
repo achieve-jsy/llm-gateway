@@ -11,6 +11,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/privacy"
@@ -59,7 +60,7 @@ func New(cfg Config) (*Engine, error) {
 	}
 	pc := privacy.Config{
 		RulesOnly:     cfg.RulesOnly || mode == ModeDetect,
-		Actions:       cfg.Actions,
+		Actions:       normalizeActions(cfg.Actions),
 		MaxInputBytes: cfg.MaxInputBytes,
 		CacheDir:      cfg.CacheDir,
 		Kinds:         cfg.Kinds,
@@ -75,6 +76,21 @@ func New(cfg Config) (*Engine, error) {
 		return nil, err
 	}
 	return &Engine{mode: mode, protector: p}, nil
+}
+
+// normalizeActions 把 actions 的 key 统一成大写 Kind。
+// Viper 的 GetStringMapString 会把 YAML 里的 key 全小写，而引擎按 Kind
+// （大写下划线，如 GITLAB_TOKEN）精确匹配；不归一化的话，
+// 配置文件里写的 block 会静默退化成默认的 mask。
+func normalizeActions(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[strings.ToUpper(k)] = v
+	}
+	return out
 }
 
 // Mode 返回当前模式。

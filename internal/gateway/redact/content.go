@@ -40,6 +40,18 @@ func (s *Session) ProtectContent(ctx context.Context, content core.MessageConten
 			v[i].Text = out
 		}
 		return v, nil
+	case []core.AnthropicContentBlock:
+		for i := range v {
+			if v[i].Type != "text" || v[i].Text == "" {
+				continue
+			}
+			out, err := s.ProtectText(ctx, v[i].Text)
+			if err != nil {
+				return nil, err
+			}
+			v[i].Text = out
+		}
+		return v, nil
 	case []any:
 		for _, item := range v {
 			m, ok := item.(map[string]any)
@@ -71,6 +83,13 @@ func (s *Session) RestoreContent(content core.MessageContent) core.MessageConten
 	case string:
 		return s.RestoreText(v)
 	case []core.ContentPart:
+		for i := range v {
+			if v[i].Text != "" {
+				v[i].Text = s.RestoreText(v[i].Text)
+			}
+		}
+		return v
+	case []core.AnthropicContentBlock:
 		for i := range v {
 			if v[i].Text != "" {
 				v[i].Text = s.RestoreText(v[i].Text)

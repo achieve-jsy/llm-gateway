@@ -8,6 +8,10 @@ import "encoding/json"
 // (UnknownJSONFields) and emitted again during marshaling so callers
 // can round-trip extensions; Swagger ignores ExtraFields, and typed fields
 // should be preferred when available.
+//
+// 视频输入：Responses 方言的 {"type":"input_video", ...} 在 providers 层归一为
+// Chat 侧的 {"type":"video_url", ...}（见 providers.ConvertResponsesContentToChatContent），
+// core 不新增第二种视频类型，避免两套方言在网关内长期并存。
 type ResponsesRequest struct {
 	Model             string            `json:"model"`
 	Provider          string            `json:"provider,omitempty"` // Gateway routing hint; stripped before upstream execution.

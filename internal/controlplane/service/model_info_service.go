@@ -17,12 +17,12 @@ import (
 //   - 上下文/输出上限：取成员中的最小正值，避免超过最弱成员的实际能力；
 //   - mode：任一成员为 chat 即为 chat，否则取首个非空 mode。
 type GroupModelInfo struct {
-	Mode                    string  `json:"mode"`
-	MaxInputTokens          int     `json:"max_input_tokens"`
-	MaxOutputTokens         int     `json:"max_output_tokens"`
-	SupportsVision          bool    `json:"supports_vision"`
-	SupportsFunctionCalling bool    `json:"supports_function_calling"`
-	SupportsToolChoice      bool    `json:"supports_tool_choice"`
+	Mode                    string `json:"mode"`
+	MaxInputTokens          int    `json:"max_input_tokens"`
+	MaxOutputTokens         int    `json:"max_output_tokens"`
+	SupportsVision          bool   `json:"supports_vision"`
+	SupportsFunctionCalling bool   `json:"supports_function_calling"`
+	SupportsToolChoice      bool   `json:"supports_tool_choice"`
 	// 单价：USD per 1,000,000 tokens。组内成员价格不一致时取最大值（保守上界），
 	// 单模型组即为精确值；0 表示缺价（成员未绑定 catalog 或未配置 manual 价）。
 	InputPricePerMillion  float64 `json:"input_price_per_million"`
@@ -281,9 +281,27 @@ func intersectStrings(a, b []string) []string {
 	return out
 }
 
+// memberMode 归一单个成员的媒体类型。
+//
+// 优先取 catalog 的 mode，但**必须经 NormalizeCatalogMode 归一**：catalog（LiteLLM）的
+// mode 词表与 model_type 词表**不是同一套**（见 model_type_normalize.go），例如
+// image_generation/image_edit → image、video_generation → video、responses/completion → chat。
+// 不归一会造成两类错误：
+//  1. 组信息对外暴露词表外的值（如 image_generation），而消费方（网关 /v1/models、
+//     /v1/model/info、前端、OpenCode 插件）与写入侧的 model_type 是同一套 7 值枚举；
+//  2. **更严重**：aggregateGroupModelInfo 用 `info.Mode == "video"` 决定是否调用
+//     aggregateVideoCaps，若返回 video_generation，视频组的分辨率/宽高比/时长能力会被
+//     **静默跳过**（组信息里这些字段全空，前端/看板据此误判该组不支持视频）。
+//
+// 归一失败（该 mode 无枚举落点，如 audio_transcription/ocr）时退回 DB 的 model_type，
+// 而不是把未知词表暴露出去——model_type 已在写入侧（CreateModelFromCatalog）保证落在合法枚举内。
 func memberMode(m *model.Model) string {
-	if m.Catalog != nil && strings.TrimSpace(m.Catalog.Mode) != "" {
-		return strings.TrimSpace(m.Catalog.Mode)
+	if m.Catalog != nil {
+		if mode := strings.TrimSpace(m.Catalog.Mode); mode != "" {
+			if normalized, err := NormalizeCatalogMode(mode); err == nil {
+				return normalized
+			}
+		}
 	}
 	return strings.TrimSpace(m.ModelType)
 }

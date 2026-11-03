@@ -887,8 +887,8 @@ func TestModelInfoService_GetGroupModelInfo_CachePrices(t *testing.T) {
 				PriceMode: "catalog",
 				CatalogID: uuidPtr(catID1),
 				Catalog: &model.ModelCatalog{
-					ID:                     catID1,
-					Mode:                   "chat",
+					ID:                    catID1,
+					Mode:                  "chat",
 					InputPricePerMillion:  2,
 					OutputPricePerMillion: 8,
 					CacheReadPrice:        nil,
@@ -961,24 +961,24 @@ func TestModelInfoService_GetGroupModelInfo_CachePrices(t *testing.T) {
 				ID: modelID1, Name: "m1", ModelType: "chat", Enabled: boolPtr(true),
 				CatalogID: uuidPtr(catID1),
 				Catalog: &model.ModelCatalog{
-					ID:                      catID1,
-					Mode:                    "chat",
-					InputPricePerMillion:   100,
-					OutputPricePerMillion:  200,
-					CacheReadPrice:         nil,
-					CacheWritePrice:        nil,
+					ID:                    catID1,
+					Mode:                  "chat",
+					InputPricePerMillion:  100,
+					OutputPricePerMillion: 200,
+					CacheReadPrice:        nil,
+					CacheWritePrice:       nil,
 				},
 			},
 			modelID2: {
 				ID: modelID2, Name: "m2", ModelType: "chat", Enabled: boolPtr(true),
 				CatalogID: uuidPtr(catID2),
 				Catalog: &model.ModelCatalog{
-					ID:                      catID2,
-					Mode:                    "chat",
-					InputPricePerMillion:   3,
-					OutputPricePerMillion:  12,
-					CacheReadPrice:         fp(0.5),
-					CacheWritePrice:        fp(0.3),
+					ID:                    catID2,
+					Mode:                  "chat",
+					InputPricePerMillion:  3,
+					OutputPricePerMillion: 12,
+					CacheReadPrice:        fp(0.5),
+					CacheWritePrice:       fp(0.3),
 				},
 			},
 		}
@@ -1061,4 +1061,114 @@ func TestModelInfoService_GetGroupModelInfo_CachePrices(t *testing.T) {
 		assert.NotNil(t, info.CacheWritePricePerMillion)
 		assert.Equal(t, 2.0, *info.CacheWritePricePerMillion)
 	})
+}
+
+// TestModelInfoService_MemberModeNormalization 覆盖组信息里 mode 的词表归一。
+//
+// 回归背景：catalog（LiteLLM）的 mode 词表与 model_type 词表不是同一套（A12）。
+// 曾直接把 catalog.Mode 原样当作组 mode 返回，导致组信息暴露 image_generation /
+// video_generation 这类词表外的值（消费方与写入侧用的是同一套 7 值枚举）。
+func TestModelInfoService_MemberModeNormalization(t *testing.T) {
+	cases := []struct {
+		name        string
+		catalogMode string
+		modelType   string
+		wantMode    string
+	}{
+		{"image_generation 归一到 image", "image_generation", "image", "image"},
+		{"image_edit 归一到 image", "image_edit", "image", "image"},
+		{"video_generation 归一到 video", "video_generation", "video", "video"},
+		{"responses 归一到 chat", "responses", "chat", "chat"},
+		{"completion 归一到 chat", "completion", "chat", "chat"},
+		{"无枚举落点时退回 model_type（不暴露未知词表）", "audio_transcription", "chat", "chat"},
+		{"catalog mode 为空时用 model_type", "", "image", "image"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			groupID := uint(1)
+			g := model.Group{
+				ID:      groupID,
+				Name:    "m",
+				Enabled: true,
+				Models:  []model.GroupModel{{GroupID: groupID, ModelID: modelID1}},
+			}
+			models := map[uuid.UUID]*model.Model{
+				modelID1: {
+					ID:        modelID1,
+					Name:      "member",
+					ModelType: tc.modelType,
+					Enabled:   boolPtr(true),
+					CatalogID: uuidPtr(catID1),
+					Catalog:   &model.ModelCatalog{ID: catID1, Mode: tc.catalogMode},
+				},
+			}
+			svc := service.NewModelInfoService(
+				&fakeGroupInfoRepo{listFunc: func() ([]model.Group, error) { return []model.Group{g}, nil }},
+				&fakeModelInfoRepo{getByIDsFunc: func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) { return models, nil }},
+			)
+			result, err := svc.GetGroupModelInfo(nil)
+			require.NoError(t, err)
+			require.Contains(t, result, "m")
+			assert.Equal(t, tc.wantMode, result["m"].Mode,
+				"catalog mode=%q model_type=%q 应归一为 %q", tc.catalogMode, tc.modelType, tc.wantMode)
+		})
+	}
+}
+
+// TestModelInfoService_VideoCapsNotSkippedForCatalogVideoGeneration 锁定一个更严重的后果：
+// aggregateGroupModelInfo 用 `info.Mode == "video"` 作为「是否聚合视频能力」的开关，
+// 若成员 mode 返回 video_generation，则该开关不成立 → 视频组的分辨率/宽高比/时长
+// 会被**静默跳过**（字段全空）。本用例在修复前必然失败（VideoAPIEndpoint 为空）。
+func TestModelInfoService_VideoCapsNotSkippedForCatalogVideoGeneration(t *testing.T) {
+	groupID := uint(7)
+	g := model.Group{
+		ID:      groupID,
+		Name:    "seedance-group",
+		Enabled: true,
+		Models: []model.GroupModel{
+			{GroupID: groupID, ModelID: modelID1},
+			{GroupID: groupID, ModelID: modelID2},
+		},
+	}
+	models := map[uuid.UUID]*model.Model{
+		modelID1: {
+			ID: modelID1, Name: "m1", ModelType: "video", Enabled: boolPtr(true),
+			CatalogID:                  uuidPtr(catID1),
+			Catalog:                    &model.ModelCatalog{ID: catID1, Mode: "video_generation"},
+			VideoSupportedResolutions:  []string{"1080p", "720p"},
+			VideoSupportedAspectRatios: []string{"16:9", "9:16"},
+			VideoSupportedActions:      []string{"text2video", "image2video"},
+			VideoMinDurationSeconds:    5,
+			VideoMaxDurationSeconds:    10,
+		},
+		modelID2: {
+			ID: modelID2, Name: "m2", ModelType: "video", Enabled: boolPtr(true),
+			CatalogID:                  uuidPtr(catID2),
+			Catalog:                    &model.ModelCatalog{ID: catID2, Mode: "video_generation"},
+			VideoSupportedResolutions:  []string{"720p", "480p"},
+			VideoSupportedAspectRatios: []string{"16:9"},
+			VideoSupportedActions:      []string{"text2video"},
+			VideoMinDurationSeconds:    3,
+			VideoMaxDurationSeconds:    5,
+		},
+	}
+	svc := service.NewModelInfoService(
+		&fakeGroupInfoRepo{listFunc: func() ([]model.Group, error) { return []model.Group{g}, nil }},
+		&fakeModelInfoRepo{getByIDsFunc: func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) { return models, nil }},
+	)
+	result, err := svc.GetGroupModelInfo(nil)
+	require.NoError(t, err)
+	require.Contains(t, result, "seedance-group")
+
+	info := result["seedance-group"]
+	assert.Equal(t, "video", info.Mode, "组 mode 必须是 video（而非 catalog 的 video_generation）")
+	assert.NotEmpty(t, info.VideoAPIEndpoint,
+		"mode 归一为 video 后必须进入 aggregateVideoCaps，否则视频能力被静默跳过")
+	// 保守聚合：分辨率取交集、时长取最窄区间。
+	assert.Equal(t, []string{"720p"}, info.VideoSupportedResolutions)
+	assert.Equal(t, []string{"16:9"}, info.VideoSupportedAspectRatios)
+	assert.Equal(t, []string{"text2video"}, info.VideoSupportedActions)
+	assert.Equal(t, 5, info.VideoMinDurationSeconds, "最窄下界取组内最大 min")
+	assert.Equal(t, 5, info.VideoMaxDurationSeconds, "最窄上界取组内最小 max")
 }

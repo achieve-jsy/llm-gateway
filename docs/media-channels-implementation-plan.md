@@ -304,6 +304,34 @@
 
 **冻结的内部 API 契约（两队按同一份实现，禁止单方面改）**：`POST /internal/v1/video/tasks` 增量字段 `kind/action/vendor_task_id/progress/idempotency_key/private_data/dept_id/studio_id`，且 **`(api_key_id, idempotency_key)` 命中时返回 200 + 既有任务、不新建不打上游**（新建 201）；`PATCH /internal/v1/video/tasks/:id` 增量 `status/progress/usage/cost_micro_usd/billed_at/poll_failures/vendor_task_id/expected_status`（**CAS**，状态只能 `queued→in_progress→completed|failed|expired` 前进）响应 `{updated,task}`；`GET /internal/v1/video/tasks/:id` 取单条全量；既有 `PATCH /:id/status` 与 `GET /:id/provider-type` 必须保持向后兼容。金额用 **`cost_micro_usd` 整数微美元**避免浮点。
 
+### Batch 2 派发任务书（D 队 · 渠道适配器 Kling / Vidu）
+
+**基线**：Batch 1 最终 HEAD。**前置条件**：Batch 1 合并后 C1 的 `media_tasks` 与 C2 的 `/v1/videos` 三件套已就绪——**D 队只做「上游翻译层」，不碰路由、不碰落库**。
+
+**模板（照抄，不要从零发明）**：
+- `internal/providers/seedance/volcengine/`：`registration.go`(70) / `creds.go`(111，多字段凭证) / `adapter.go`(209) / `signer.go`(144) —— **Kling 的 HS256 JWT 就是 `signer.go` 的直接类比**
+- `internal/providers/seedance/relay/`：`registration.go`(67) / `adapter.go`(135) —— 更简的转发型适配器（Vidu 可参考）
+- 新适配器实现 `core.MediaTaskProvider`（`Submit`/`Query`，A8 已定义）并注册进 `providers.MediaAdapterRegistry`（A9）；**不要扩 `core.Provider`**；**不要碰** `core/video.VideoProvider`（`CreateTask`/`GetTask`，那是 Seedance legacy 链路）
+
+| 项 | 落点 | 关键约束 |
+|---|---|---|
+| **D1** Kling 适配器 | `internal/providers/kling/` | 鉴权 **HS256 JWT**：`iss`=accessKey、`exp`=now+1800、`nbf`=now-5、**签名密钥=secretKey**；header `Authorization: Bearer <token>`。⚠️ 我们的 `credential_schema` 是 `access_key`/`secret_key` **两列**，直接各自取值即可，**不要拼成 `accessKey|secretKey`**（那是 New API 插件的单字段约定）。提交 `POST /v1/videos/{text2video\|image2video}`；查询 `GET /v1/videos/{op}/{task_id}`；另需 `Accept: application/json`、提交加 `Content-Type: application/json`、`User-Agent: kling-sdk/1.0` |
+| **D2** Kling 请求翻译 | 同上 | `model` 与 `model_name` **同值且必填**；`duration` 是**字符串**（缺省 `"5"`，1–3600）；`mode` 缺省 `std`，**`kling-v2-master` 给 std 上游会直接报错 → 必须提前 400**；`aspect_ratio` 由 `size` 映射（1024x1024/512x512→1:1、1280x720/1920x1080→16:9、720x1280/1080x1920→9:16、其他→1:1）；`cfg_scale` 固定 `0.5`；`metadata` 会平铺进 body，需防覆盖同名字段 |
+| **D3** Vidu 适配器 | `internal/providers/vidu/` | 鉴权 `Authorization: Token <apiKey>`；提交 `POST {base}/ent/v2/{text2video\|img2video\|start-end2video\|reference2video}`（**action 由 `images` 数组长度决定**：0 张→text2video、1 张→image2video、2 张→首尾帧、>2 张→参考图；`vidu2.0` 无图直接报错）；查询 `GET {base}/ent/v2/tasks/{task_id}/creations` |
+| **D4** Vidu 请求翻译 | 同上 | `duration` 按模型收紧（vidu2.0∈{4,8}、viduq1 仅 5、viduq2∈1–10）；`resolution ∈ {360p,540p,720p,1080p}`（viduq1 强制 1080p）；**组合约束：vidu2.0 时长 8 只允许 720p**；`movement_amplitude` 固定 `auto`；multipart 文件字段仅 `input_reference`（最多 1 个、`dataUrl` 编码、**上限 15728640 字节**），`metadata` 必须是 JSON 对象字符串 |
+| **D5** 状态与产物翻译 | 两家 | **上游状态枚举逐字对齐，未知值一律报错/`UNKNOWN`，绝不当成功。** Kling：`data.task_status ∈ {submitted, processing, succeed, failed}`；⚠️ **陷阱**：`kling/plugin.js:225` 那张 `NOT_START/SUBMITTED/QUEUED/IN_PROGRESS/SUCCESS/FAILURE` 表是插件**反向渲染**（内部态→对外 Kling 形状），**不是上游返回值**，别照抄错方向。Vidu：`created/queueing/processing/success/failed`。产物：Kling **`data.task_result.videos[]`（数组，多产物要全取，不是只取首个）**；Vidu `body.creations[0].url`。失败原因：Kling `data.task_status_msg`、Vidu `body.err_code` |
+| **D6** 用量估算 | 两家 | Kling 终态**优先取 `data.final_unit_deduction`**（上游实际扣减值），本地按每秒 units（v1 std 0.2 / pro 0.7；v1-6 std 0.4 / pro 0.7；v2-master pro 2.0）估算**仅作准入**；Vidu **上游若不返回 credits，只能按「duration × resolution 档位单价」计价** |
+
+**D 队必须知道的既有事实（本轮核实）**：
+
+1. 🔴 **生产库没有任何 Kling / Vidu 渠道，也没有任何 `image` 类型模型**（只读核实：43 个 provider = 空 23 / openai-compatible 12 / vertex 4 / bailian 2 / azure 1 / seedance-relay 1；`models.model_type` = chat 372 / video 3 / rerank 2 / rerank_vl 1 / embedding_vl 1 / embedding 1）。含义：**适配器无法用真实上游凭据做端到端验证**，只能做**契约测试 + fake/回放**（用 `httptest` 或 golden 报文，**测试中禁止联网**）。真实联调需先由运维/负责人配置这两家渠道（Kling 的 AK/SK 可直接复用既有 `api_key`+`access_key`+`secret_key` schema，**无需改数据结构**）。
+2. **Vidu 的 resolution 维度定价列尚未落地**（设计文档 §7.2 的 `billing_unit`/`unit_price_usd`，属 E 队/后续）。D6 的 Vidu 计价要么等它、要么先按 duration 单价近似并**在代码注释与报告里显式标注这是近似**。
+3. **Q1b 未决**：Vidu 各 resolution 档位的单价数值需要产品/运营给出，否则只能按 duration 计价。
+4. 两家上游都声明 `credentialless: true`（产物直跳）→ Phase 1 的 `content` 端点用 **302 直跳**，D 队**不需要**做转存/代理。
+5. 契约测试一律放 `tests/providers/{kling,vidu}/`（Q3），**禁止** `internal/**/*_test.go`。
+6. 闸门同 Batch 1：`make build`（**不用** `go build ./...`）、`make test`（基线 47 包 0 FAIL）、**lint 零新增**（基线 total 125 / staticcheck 9 / ineffassign 12 / gosimple 4）、无迁移则不需要 atlas 检查。
+
+
 ## 3. 批次与依赖图
 
 ```mermaid

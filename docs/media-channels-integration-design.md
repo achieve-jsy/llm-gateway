@@ -19,9 +19,15 @@
 | # | 决策 | 取值 | 理由 | 被推翻的代价 |
 |---|---|---|---|---|
 | D1 | 对外协议 | **新增 OpenAI 形状 `/v1/videos`（create/retrieve/content）；gpt-image 用 `/v1/images/generations|edits`**；Seedance 旧的 `/v1/contents/generations/tasks` **保留不动** | 对齐 OpenAI 生态（客户端 SDK 直接可用），与 New API 一致（`pkg/jsplugin/routing.go:93-96`）；避免把 Kling 的 `mode`/`cfg_scale` 语义硬塞进 Volcengine 的 `content`/`ratio` | 要改 §6.3 路由、§7.1 表设计、对外文档 |
-| D2 | 任务持久化 | **新建通用 `media_tasks` + `media_task_events`**，`video_tasks` 保持原样（视作 legacy） | `video_tasks` 下游消费点多（控制面 ops 列表/统计/趋势/前端/repo）；新表能一次设计对（归属、CAS、用量、终态） | 若改为扩 `video_tasks`，需 Expand-Contract 且要改 20+ 消费点 |
+| D2 | 任务持久化 | ⚠️ **已被用户决策取代（2026-10-16）**。原取值：「新建通用 `media_tasks` + `media_task_events`，`video_tasks` 保持原样（视作 legacy）」。**实际拍板 = 扩列 + 改名**：给 `video_tasks`/`video_task_events` 增 delta 列后 **`RENAME` 为 `media_tasks`/`media_task_events`**（不新建表、不删旧表、不复制数据） | 原取值被推翻的依据（逐条核实）：① 生产 `video_tasks` **只有 112 行**（2026-07-10 → 2026-10-15）、`video_task_events` 327 行 → **存量极小，改名成本远低于原估计**；② **无任何视图/物化视图引用** `video_tasks`，外键仅 1 个（`fk_video_task_events_task`）；③ Go 侧改名触点**只有 `TableName()` 一处**（`internal/controlplane/model/video_task.go:29-31`）→ 原估计的「要改 20+ 消费点」不成立；④ 新建表反而要求两套表长期双轨，看板/用例要同时理解两套 | `RENAME` 会留下 **21 个仍叫 `video_*` 的具名对象**（6 个二级索引 / 2 个主键 / 1 个外键 / 12 个 Atlas 自动生成的 NOT NULL 约束），需显式 `RENAME CONSTRAINT`/`RENAME TO` 或接受后续 diff 的 churn —— 见实施计划 §2「C1-补充」 |
 | D3 | 计费口径 | **实现 `price_mode=video`（枚举已存在但全仓无实现）+ 新增按张/按秒/按 credit 的定价列**；**无价默认拒绝**（开关可关） | 不实现就永远是「静默 0 元」；见 §8 | 若不做，本方案上线即产生不可见的免费额度 |
 | D4 | 结果交付 | **Phase 1-4 透传上游 URL + `302` 跳转；Phase 5 再加网关代理/转存** | New API 的 content 端点也是 `credentialless` 直跳上游（`plugins/tasks/kling/plugin.js:324-326`、`vidu/plugin.js:301-303`），先直跳成本最低 | 若一开始就做转存，需要对象存储 + SSRF 防护 + 带宽评估 |
+
+> **决策落地状态（2026-10-16 更新）**：**D1** 的路由接缝已由 A7–A10 落地（`routes_media.go` 两个空注册函数 + `docs/media-api.md` + `tests/contract/contracts.json` 占位）；**D2** 已按上表取代后的取值执行；**D3** 主体已落地——A1 交付 12 个媒体价列 + 按 catalog `mode` 权威分派 + `EstimateMediaCost`，A2 交付无价拒绝（**402 `media_pricing_missing`**）与 `usage_missing` 打标；仅 `price_mode=manual` 的媒体价列（原 §7.2 的 `billing_unit`/`unit_price_usd`）**尚未落地**（这类模型计费必然 `usage_missing=true`）；**D4** 按 Phase 1（302 直跳）执行。
+>
+> ⚠️ **已核实的前置事实（影响 Batch 2/3 排期）**：生产库（**只读**核实）**没有任何 Kling / Vidu 渠道**——43 个 provider 的类型分布为 `空 23 / openai-compatible 12 / vertex 4 / bailian 2 / azure 1 / seedance-relay 1`，视频渠道只有 Seedance 一个；`models.model_type` 也**还没有任何 `image` 行**（chat 372 / video 3 / rerank 2 / rerank_vl 1 / embedding_vl 1 / embedding 1）。含义：**Kling/Vidu 适配器无法用真实上游凭据做端到端验证**，只能靠契约测试 + fake/回放；要在真实环境跑通，需先由运维/负责人配置这两家渠道的凭证（Kling 的 AK/SK 可直接复用既有 `api_key` + `access_key` + `secret_key` 的 credential schema，无需改数据结构）。
+>
+> 📌 **关于「不改造 Seedance 现有链路」与 D2 的关系**：表改名对 Seedance 是**透明的**——同一张表、同一份 `VideoTask` 代码，变的只是物理表名；Seedance 的对外路径 `/v1/contents/generations/tasks` 与 `docs/seedance-api.md` 契约**均不变**。
 
 **不做什么**（明确边界，防范围失控）：
 

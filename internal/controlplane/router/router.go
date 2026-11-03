@@ -989,6 +989,11 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/usage/dashboard/user-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserDetail)
 		adminGroup.GET("/usage/dashboard/model-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelDetail)
 		adminGroup.GET("/usage/scoped/logs", guard(rbac.PermUsageViewScoped), usageH2.ScopedLogs)
+		// Token 使用分析报告：Report JSON / 四象限成员点集 / 严重异常待核查反馈回写
+		reportH := obshandler.NewReportHandler(db)
+		adminGroup.GET("/usage/report", guard(rbac.PermUsageViewScoped), reportH.Report)
+		adminGroup.GET("/usage/report/members", guard(rbac.PermUsageViewScoped), reportH.Members)
+		adminGroup.POST("/usage/report/anomaly/:user_id/feedback", guard(rbac.PermUsageViewScoped), reportH.AnomalyFeedback)
 	}
 
 	// 内部接口（InternalAuth 已在 internalGroup 上，复用）

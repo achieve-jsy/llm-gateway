@@ -182,12 +182,16 @@ type OpsErrors struct {
 
 // OpsFilter 运维看板通用过滤参数
 type OpsFilter struct {
-	TimeRange string
-	Start     string // B12: 自定义时间范围起始(ISO 8601)
-	End       string // B12: 自定义时间范围结束(ISO 8601)
-	GroupID   string // 模型组 ID
-	Provider  string // 提供商名称
-	Model     string // 模型名称
+	TimeRange     string
+	Start         string // B12: 自定义时间范围起始(ISO 8601)
+	End           string // B12: 自定义时间范围结束(ISO 8601)
+	GroupID       string // 模型组 ID
+	Provider      string // 提供商名称
+	Model         string // 模型名称
+	UserID        string // gap#10: 用户 ID
+	KeyID         string // gap#10: API Key ID
+	Account       string // gap#10: 账户名(对应 provider)
+	MaxDurationMs string // gap#10: 最大耗时过滤(duration_ms <= ?)
 }
 
 // buildFilterClause 根据 OpsFilter 生成 SQL WHERE 子句和参数。
@@ -221,6 +225,23 @@ func (h *OpsHandler) buildFilterClause(ctx context.Context, filter OpsFilter, ti
 	if filter.Model != "" {
 		clause += " AND model = ?"
 		args = append(args, filter.Model)
+	}
+	// gap#10: 补 user/api-key/account/max_duration 过滤维度
+	if filter.UserID != "" {
+		clause += " AND user_id = ?"
+		args = append(args, filter.UserID)
+	}
+	if filter.KeyID != "" {
+		clause += " AND key_id = ?"
+		args = append(args, filter.KeyID)
+	}
+	if filter.Account != "" {
+		clause += " AND provider = ?"
+		args = append(args, filter.Account)
+	}
+	if filter.MaxDurationMs != "" {
+		clause += " AND duration_ms <= ?"
+		args = append(args, filter.MaxDurationMs)
 	}
 	return clause, args
 }

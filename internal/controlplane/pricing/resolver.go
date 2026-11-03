@@ -78,6 +78,8 @@ func (t *PricingTable) Refresh(ctx context.Context, db *gorm.DB) error {
 		PriceMode             string   `gorm:"column:price_mode"`
 		InputPrice            float64  `gorm:"column:input_price"`
 		OutputPrice           float64  `gorm:"column:output_price"`
+		ModelCacheReadPrice   *float64 `gorm:"column:model_cache_read_price"`
+		ModelCacheWritePrice  *float64 `gorm:"column:model_cache_write_price"`
 		InputPricePerMillion  *float64 `gorm:"column:input_price_per_million"`
 		OutputPricePerMillion *float64 `gorm:"column:output_price_per_million"`
 		CacheReadPrice        *float64 `gorm:"column:cache_read_price"`
@@ -93,6 +95,7 @@ func (t *PricingTable) Refresh(ctx context.Context, db *gorm.DB) error {
 		Table("models m").
 		Select("m.name AS model_name, p.name AS provider_name, p.type AS provider_type, " +
 			"m.model_type, m.price_mode, m.input_price, m.output_price, " +
+			"m.cache_read_price AS model_cache_read_price, m.cache_write_price AS model_cache_write_price, " +
 			"c.input_price_per_million, c.output_price_per_million, " +
 			"c.cache_read_price, c.cache_write_price, " +
 			"c.tier_threshold, c.input_price_above_tier, c.output_price_above_tier, " +
@@ -110,7 +113,7 @@ func (t *PricingTable) Refresh(ctx context.Context, db *gorm.DB) error {
 	ambiguousProviderKeys := make(map[string]bool)
 	for _, r := range rows {
 		p := ResolveModelPricing(
-			r.PriceMode, r.InputPrice, r.OutputPrice,
+			r.PriceMode, r.InputPrice, r.OutputPrice, r.ModelCacheReadPrice, r.ModelCacheWritePrice,
 			r.InputPricePerMillion, r.OutputPricePerMillion,
 			r.CacheReadPrice, r.CacheWritePrice,
 			r.TierThreshold, r.InputPriceAboveTier, r.OutputPriceAboveTier,
@@ -204,6 +207,7 @@ func ResolveUsagePricing(input UsagePricingInput) core.ModelPricing {
 func ResolveModelPricing(
 	priceMode string,
 	inputPrice, outputPrice float64,
+	modelCacheReadPrice, modelCacheWritePrice *float64,
 	inputPricePerMillion, outputPricePerMillion *float64,
 	cacheReadPrice, cacheWritePrice *float64,
 	tierThreshold *int64,
@@ -217,10 +221,14 @@ func ResolveModelPricing(
 			InputPerMtok:  &inputPrice,
 			OutputPerMtok: &outputPrice,
 		}
-		if cacheReadPrice != nil {
+		if modelCacheReadPrice != nil {
+			p.CachedInputPerMtok = modelCacheReadPrice
+		} else if cacheReadPrice != nil {
 			p.CachedInputPerMtok = cacheReadPrice
 		}
-		if cacheWritePrice != nil {
+		if modelCacheWritePrice != nil {
+			p.CacheWritePerMtok = modelCacheWritePrice
+		} else if cacheWritePrice != nil {
 			p.CacheWritePerMtok = cacheWritePrice
 		}
 		return p

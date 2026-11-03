@@ -53,8 +53,8 @@ type PlannerJSONMap map[string]any
 //   - InputPrice / OutputPrice：仅 price_mode=manual 时作为实付价生效；
 //     price_mode=catalog 时忽略，读取 model_catalog 价格。
 //
-// 价格语义：InputPrice / OutputPrice 单位统一为 USD per 1,000,000 tokens，
-// 与 model_catalog.InputPricePerMillion / OutputPricePerMillion 同语义。
+// 价格语义：InputPrice / OutputPrice / CacheReadPrice / CacheWritePrice
+// 单位统一为 USD per 1,000,000 tokens，与 model_catalog 对应价格字段同语义。
 type Model struct {
 	ID                      uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	Name                    string         `gorm:"type:varchar(200);not null;uniqueIndex:idx_models_name_provider_unique,composite:name_provider" json:"name"`
@@ -74,6 +74,8 @@ type Model struct {
 	MaxOutputTokens         int            `gorm:"default:0" json:"max_output_tokens"`
 	InputPrice              float64        `gorm:"type:decimal(14,6);default:0" json:"input_price"`
 	OutputPrice             float64        `gorm:"type:decimal(14,6);default:0" json:"output_price"`
+	CacheReadPrice          *float64       `gorm:"type:decimal(14,6)" json:"cache_read_price,omitempty"`
+	CacheWritePrice         *float64       `gorm:"type:decimal(14,6)" json:"cache_write_price,omitempty"`
 	PriceMode               string         `gorm:"type:varchar(10);not null;default:catalog" json:"price_mode"`
 	Weight                  int            `gorm:"not null;default:1" json:"weight"`
 	CatalogID               *uuid.UUID     `gorm:"type:uuid;index:idx_models_catalog_id" json:"catalog_id,omitempty"`

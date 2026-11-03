@@ -42,6 +42,8 @@ type QuickOnboardModelInput struct {
 	MaxOutputTokens *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
 	InputPrice      *float64 `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
+	CacheReadPrice  *float64 `json:"cache_read_price" binding:"omitempty,min=0"`
+	CacheWritePrice *float64 `json:"cache_write_price" binding:"omitempty,min=0"`
 	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
 	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
 }
@@ -416,6 +418,12 @@ func buildQuickOnboardModel(providerID uuid.UUID, input QuickOnboardModelInput) 
 	}
 	if input.OutputPrice != nil {
 		m.OutputPrice = *input.OutputPrice
+	}
+	if input.CacheReadPrice != nil {
+		m.CacheReadPrice = input.CacheReadPrice
+	}
+	if input.CacheWritePrice != nil {
+		m.CacheWritePrice = input.CacheWritePrice
 	}
 	return m
 }

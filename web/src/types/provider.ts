@@ -109,6 +109,8 @@ export interface QuickOnboardModelInput {
   price_mode?: 'catalog' | 'manual'
   input_price?: number
   output_price?: number
+  cache_read_price?: number
+  cache_write_price?: number
   weight?: number
 }
 

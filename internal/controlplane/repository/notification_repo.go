@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"strings"
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
@@ -120,7 +121,7 @@ const adminHistoryBase = `SELECT * FROM (
 
 // adminHistoryWhere 组装统一视图的过滤条件（channel/type/level 精确，keyword 匹配标题或正文，
 // user 匹配用户名或邮箱，start/end 过滤 created_at）。空值条件跳过。返回 WHERE 子句与参数。
-func adminHistoryWhere(channel, notifType, level, keyword, user string, startTime, endTime *time.Time) (string, []interface{}) {
+func adminHistoryWhere(channel, notifType string, types []string, level, keyword, user string, startTime, endTime *time.Time) (string, []interface{}) {
 	var conds []string
 	var args []interface{}
 	add := func(cond string, arg ...interface{}) {
@@ -132,6 +133,14 @@ func adminHistoryWhere(channel, notifType, level, keyword, user string, startTim
 	}
 	if notifType != "" {
 		add("t.notification_type = ?", notifType)
+	} else if len(types) > 0 {
+		// 分类展开后的多类型：IN 查询；单类型走上面的等值分支，保持旧路径不变。
+		ph := make([]string, len(types))
+		for i := range types {
+			ph[i] = "?"
+			args = append(args, types[i])
+		}
+		add("t.notification_type IN ("+strings.Join(ph, ",")+")")
 	}
 	if level != "" {
 		add("t.level = ?", level)
@@ -169,12 +178,14 @@ func joinConds(conds []string) string {
 }
 
 // ListAllPaged 管理端通知历史分页查询：inapp + email + webhook 三渠道统一视图。
+// notifType 为单类型精确筛选；types 为分类展开后的多类型集合（notifType 为空时生效）。
 func (r *NotificationRepo) ListAllPaged(
 	channel, notifType, level, keyword, user string,
+	types []string,
 	startTime, endTime *time.Time,
 	page, pageSize int,
 ) ([]model.AdminNotificationRecord, int64, error) {
-	where, args := adminHistoryWhere(channel, notifType, level, keyword, user, startTime, endTime)
+	where, args := adminHistoryWhere(channel, notifType, types, level, keyword, user, startTime, endTime)
 
 	var total int64
 	if err := r.db.Raw("SELECT COUNT(*) FROM ("+adminHistoryBase+") t "+where, args...).Scan(&total).Error; err != nil {
@@ -182,7 +193,7 @@ func (r *NotificationRepo) ListAllPaged(
 	}
 
 	pageArgs := append(append([]interface{}{}, args...), pageSize, (page-1)*pageSize)
-	var items []model.AdminNotificationRecord
+	items := []model.AdminNotificationRecord{}
 	pageSQL := adminHistoryBase + " " + where + " ORDER BY t.created_at DESC, t.channel, t.id LIMIT ? OFFSET ?"
 	if err := r.db.Raw(pageSQL, pageArgs...).Scan(&items).Error; err != nil {
 		return nil, 0, err

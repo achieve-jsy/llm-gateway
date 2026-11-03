@@ -6,12 +6,26 @@
 
     <div class="filter-bar">
       <el-select
+        v-model="filterCategory"
+        placeholder="按分类筛选"
+        clearable
+        style="width: 160px"
+        @change="handleCategoryChange"
+      >
+        <el-option
+          v-for="c in categoryOptions"
+          :key="c.name"
+          :label="c.displayName"
+          :value="c.name"
+        />
+      </el-select>
+      <el-select
         v-model="filterType"
         placeholder="按类型筛选"
         clearable
         filterable
         style="width: 200px"
-        @change="handleFilterChange"
+        @change="handleTypeChange"
       >
         <el-option
           v-for="t in typeOptions"
@@ -175,6 +189,7 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 
+const filterCategory = ref('')
 const filterType = ref('')
 const filterChannel = ref('')
 const filterLevel = ref('')
@@ -182,6 +197,7 @@ const filterKeyword = ref('')
 const filterUser = ref('')
 const dateRange = ref<[Date, Date] | null>(null)
 
+const categoryOptions = ref<Array<{ name: string; displayName: string }>>([])
 const typeOptions = ref<Array<{ name: string; displayName: string }>>([])
 
 const CHANNEL_MAP: Record<string, string> = {
@@ -270,7 +286,8 @@ async function loadItems() {
       page: currentPage.value,
       page_size: pageSize.value,
     }
-    if (filterType.value) params.type = filterType.value
+    if (filterCategory.value) params.category = filterCategory.value
+    else if (filterType.value) params.type = filterType.value
     if (filterChannel.value) params.channel = filterChannel.value
     if (filterLevel.value) params.level = filterLevel.value
     if (filterKeyword.value) params.keyword = filterKeyword.value
@@ -293,10 +310,26 @@ async function loadItems() {
 async function loadTypes() {
   try {
     const metadata = await getNotificationConfigMetadata()
+    categoryOptions.value = metadata.categories || []
     typeOptions.value = metadata.types
   } catch {
+    categoryOptions.value = []
     typeOptions.value = []
   }
+}
+
+function handleCategoryChange() {
+  // 分类与类型是同一筛选维度的粗细粒度：选分类时清空类型。
+  if (filterCategory.value) filterType.value = ''
+  currentPage.value = 1
+  loadItems()
+}
+
+function handleTypeChange() {
+  // 选类型时清空分类，二者互斥。
+  if (filterType.value) filterCategory.value = ''
+  currentPage.value = 1
+  loadItems()
 }
 
 function handleFilterChange() {

@@ -15,68 +15,74 @@
 
       <div v-if="loading" v-loading="true" style="min-height: 120px" />
       <template v-else>
-        <el-table :data="typeRows" border size="small" row-key="name">
-          <el-table-column label="通知类型" min-width="200">
-            <template #default="{ row }">
-              <div class="type-cell">
-                <span class="type-name">{{ row.displayName }}</span>
-                <span class="type-desc">{{ row.description }}</span>
-              </div>
-            </template>
-          </el-table-column>
+        <div v-for="grp in categoryGroups" :key="grp.name" class="category-group">
+          <div class="category-header">
+            <span class="category-name">{{ grp.displayName }}</span>
+            <span class="category-count">{{ grp.types.length }} 个类型</span>
+          </div>
+          <el-table :data="grp.types" border size="small" row-key="name">
+            <el-table-column label="通知类型" min-width="200">
+              <template #default="{ row }">
+                <div class="type-cell">
+                  <span class="type-name">{{ row.displayName }}</span>
+                  <span class="type-desc">{{ row.description }}</span>
+                </div>
+              </template>
+            </el-table-column>
 
-          <!-- 站内信：直接开关 -->
-          <el-table-column width="100" align="center">
-            <template #header>
-              <span>站内信</span>
-            </template>
-            <template #default="{ row }">
-              <span v-if="!row.channels.includes('inapp')" class="na">—</span>
-              <el-switch
-                v-else
-                :model-value="ruleEnabled(row.name, 'inapp')"
-                :loading="savingCell === `${row.name}:inapp`"
-                @change="(v: boolean | string | number) => saveRule(row.name, 'inapp', !!v)"
-              />
-            </template>
-          </el-table-column>
+            <!-- 站内信：直接开关 -->
+            <el-table-column width="100" align="center">
+              <template #header>
+                <span>站内信</span>
+              </template>
+              <template #default="{ row }">
+                <span v-if="!row.channels.includes('inapp')" class="na">—</span>
+                <el-switch
+                  v-else
+                  :model-value="ruleEnabled(row.name, 'inapp')"
+                  :loading="savingCell === `${row.name}:inapp`"
+                  @change="(v: boolean | string | number) => saveRule(row.name, 'inapp', !!v)"
+                />
+              </template>
+            </el-table-column>
 
-          <!-- 邮件：状态圆点 + 配置 -->
-          <el-table-column width="100" align="center">
-            <template #header>
-              <span>邮件</span>
-            </template>
-            <template #default="{ row }">
-              <span v-if="!row.channels.includes('email')" class="na">—</span>
-              <div v-else class="channel-cell">
-                <el-tooltip :content="stateLabel(emailEffective(row.name))" placement="top">
-                  <span class="status-dot" :class="emailEffective(row.name)" />
-                </el-tooltip>
-                <el-button link type="primary" size="small" @click="openEdit(row.name, 'email')">
-                  配置
-                </el-button>
-              </div>
-            </template>
-          </el-table-column>
+            <!-- 邮件：状态圆点 + 配置 -->
+            <el-table-column width="100" align="center">
+              <template #header>
+                <span>邮件</span>
+              </template>
+              <template #default="{ row }">
+                <span v-if="!row.channels.includes('email')" class="na">—</span>
+                <div v-else class="channel-cell">
+                  <el-tooltip :content="stateLabel(emailEffective(row.name))" placement="top">
+                    <span class="status-dot" :class="emailEffective(row.name)" />
+                  </el-tooltip>
+                  <el-button link type="primary" size="small" @click="openEdit(row.name, 'email')">
+                    配置
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
 
-          <!-- Webhook：状态圆点 + 配置 -->
-          <el-table-column width="100" align="center">
-            <template #header>
-              <span>Webhook</span>
-            </template>
-            <template #default="{ row }">
-              <span v-if="!row.channels.includes('webhook')" class="na">—</span>
-              <div v-else class="channel-cell">
-                <el-tooltip :content="stateLabel(webhookActive(row.name))" placement="top">
-                  <span class="status-dot" :class="webhookActive(row.name)" />
-                </el-tooltip>
-                <el-button link type="primary" size="small" @click="openEdit(row.name, 'webhook')">
-                  配置
-                </el-button>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
+            <!-- Webhook：状态圆点 + 配置 -->
+            <el-table-column width="100" align="center">
+              <template #header>
+                <span>Webhook</span>
+              </template>
+              <template #default="{ row }">
+                <span v-if="!row.channels.includes('webhook')" class="na">—</span>
+                <div v-else class="channel-cell">
+                  <el-tooltip :content="stateLabel(webhookActive(row.name))" placement="top">
+                    <span class="status-dot" :class="webhookActive(row.name)" />
+                  </el-tooltip>
+                  <el-button link type="primary" size="small" @click="openEdit(row.name, 'webhook')">
+                    配置
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
 
         <p v-if="!emailEnabled" class="hint">
           邮件总开关未开启，邮件列状态均为关闭。请先到「系统设置 → 邮件通知」开启。
@@ -242,7 +248,28 @@ let targetKeySeq = 0
 
 const emailEnabled = computed(() => settingsStore.systemSettings.email_enabled)
 
-const typeRows = computed(() => metadata.value?.types ?? [])
+interface CategoryGroup {
+  name: string
+  displayName: string
+  types: NonNullable<NotificationConfigMetadata['types']>
+}
+
+// 矩阵按业务域分类分组（顺序取 metadata.categories，类型按注册表原序过滤进组）。
+const categoryGroups = computed<CategoryGroup[]>(() => {
+  const cats = metadata.value?.categories ?? []
+  const types = metadata.value?.types ?? []
+  const groups: CategoryGroup[] = cats.map(c => ({
+    name: c.name,
+    displayName: c.displayName,
+    types: types.filter(t => t.category === c.name),
+  }))
+  const covered = new Set(cats.map(c => c.name))
+  const uncategorized = types.filter(t => !covered.has(t.category))
+  if (uncategorized.length) {
+    groups.push({ name: '_other', displayName: '其他', types: uncategorized })
+  }
+  return groups
+})
 
 // 对话框可用变量提示：通用注入变量 + 当前类型的 registry 业务变量（DefaultVariables）。
 // 与后端真实渲染（service.renderForChannel 注入 TemplateData + Notification 字段）保持一致。
@@ -565,6 +592,40 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.category-group {
+  margin-bottom: 20px;
+}
+
+.category-group:last-child {
+  margin-bottom: 0;
+}
+
+.category-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+}
+
+.category-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.category-count {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.category-group .el-table {
+  border-radius: 0 0 6px 6px;
 }
 
 @media (max-width: 768px) {

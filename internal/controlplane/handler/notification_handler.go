@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -17,7 +18,7 @@ type NotificationRepoInterface interface {
 	MarkRead(userID, notificationID uuid.UUID) error
 	MarkAllRead(userID uuid.UUID) error
 	GetHistory(userID uuid.UUID) ([]model.Notification, error)
-	ListAllPaged(channel, notifType, level, keyword, user string, startTime, endTime *time.Time, page, pageSize int) ([]model.AdminNotificationRecord, int64, error)
+	ListAllPaged(channel, notifType, level, keyword, user string, types []string, startTime, endTime *time.Time, page, pageSize int) ([]model.AdminNotificationRecord, int64, error)
 }
 
 type NotificationHandler struct {
@@ -100,12 +101,23 @@ func (h *NotificationHandler) GetHistory(c *gin.Context) {
 
 // GetAdminHistory GET /api/v1/notifications/admin/history
 // 管理端全渠道通知历史（站内信 + email/webhook 投递），支持分页与筛选。
+// category 为业务域分类，展开为该分类下的全部通知类型做 IN 筛选；type 为单类型精确筛选（两者互斥）。
 func (h *NotificationHandler) GetAdminHistory(c *gin.Context) {
 	channel := c.Query("channel")
 	notifType := c.Query("type")
 	level := c.Query("level")
 	keyword := c.Query("keyword")
 	user := c.Query("user")
+	category := c.Query("category")
+
+	var types []string
+	if category != "" {
+		for _, t := range service.GetNotificationTypeRegistry() {
+			if t.Category == category {
+				types = append(types, t.Name)
+			}
+		}
+	}
 
 	var startTime, endTime *time.Time
 	for _, f := range []struct {
@@ -136,7 +148,7 @@ func (h *NotificationHandler) GetAdminHistory(c *gin.Context) {
 		pageSize = 20
 	}
 
-	items, total, err := h.repo.ListAllPaged(channel, notifType, level, keyword, user, startTime, endTime, page, pageSize)
+	items, total, err := h.repo.ListAllPaged(channel, notifType, level, keyword, user, types, startTime, endTime, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{"type": "internal_error", "message": "获取通知历史失败", "code": CodeInternalError},

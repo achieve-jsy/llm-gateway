@@ -99,7 +99,7 @@ func TestNotificationRepo_ListAllPaged_NoFilter(t *testing.T) {
 	seedHistoryRows(t, db)
 	repo := NewNotificationRepo(db)
 
-	items, total, err := repo.ListAllPaged("", "", "", "", "", nil, nil, 1, 20)
+	items, total, err := repo.ListAllPaged("", "", "", "", "", nil, nil, nil, 1, 20)
 	if err != nil {
 		t.Fatalf("ListAllPaged: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestNotificationRepo_ListAllPaged_Filters(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			items, total, err := repo.ListAllPaged(tc.channel, tc.notifType, tc.level, tc.keyword, tc.user, nil, nil, 1, 20)
+			items, total, err := repo.ListAllPaged(tc.channel, tc.notifType, tc.level, tc.keyword, tc.user, nil, nil, nil, 1, 20)
 			if err != nil {
 				t.Fatalf("ListAllPaged: %v", err)
 			}
@@ -173,20 +173,67 @@ func TestNotificationRepo_ListAllPaged_Filters(t *testing.T) {
 	}
 }
 
+func TestNotificationRepo_ListAllPaged_ByTypes(t *testing.T) {
+	db := newHistoryTestDB(t)
+	seedHistoryRows(t, db)
+	repo := NewNotificationRepo(db)
+
+	// 单类型集合：budget_alert 命中站内信 + email 两条。
+	items, total, err := repo.ListAllPaged("", "", "", "", "", []string{"budget_alert"}, nil, nil, 1, 20)
+	if err != nil {
+		t.Fatalf("ListAllPaged: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("types [budget_alert] total: want 2, got %d", total)
+	}
+	for _, it := range items {
+		if it.NotificationType != "budget_alert" {
+			t.Errorf("types [budget_alert] row type: want budget_alert, got %q", it.NotificationType)
+		}
+	}
+
+	// 多类型集合（分类展开后）：system_startup 命中一条。
+	items, total, err = repo.ListAllPaged("", "", "", "", "", []string{"system_startup", "ops_channel_down"}, nil, nil, 1, 20)
+	if err != nil {
+		t.Fatalf("ListAllPaged multi: %v", err)
+	}
+	if total != 1 || items[0].NotificationType != "system_startup" {
+		t.Fatalf("types multi: want 1 system_startup, got total=%d items=%+v", total, items)
+	}
+
+	// 分类无命中：类型集合不在数据中 → 0 条。
+	items, total, err = repo.ListAllPaged("", "", "", "", "", []string{"ops_channel_down", "ops_channel_recovered"}, nil, nil, 1, 20)
+	if err != nil {
+		t.Fatalf("ListAllPaged empty: %v", err)
+	}
+	if total != 0 || len(items) != 0 {
+		t.Fatalf("types no-match: want 0, got total=%d items=%+v", total, items)
+	}
+
+	// 单类型等值优先于类型集合：notifType=budget_alert 时忽略 types。
+	items, total, err = repo.ListAllPaged("", "budget_alert", "", "", "", []string{"system_startup"}, nil, nil, 1, 20)
+	if err != nil {
+		t.Fatalf("ListAllPaged precedence: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("notifType precedence total: want 2, got %d", total)
+	}
+}
+
 func TestNotificationRepo_ListAllPaged_PaginationAndTimeRange(t *testing.T) {
 	db := newHistoryTestDB(t)
 	seedHistoryRows(t, db)
 	repo := NewNotificationRepo(db)
 
 	// 分页：page_size=2 → 第 1 页 2 条、第 2 页 1 条
-	page1, total, err := repo.ListAllPaged("", "", "", "", "", nil, nil, 1, 2)
+	page1, total, err := repo.ListAllPaged("", "", "", "", "", nil, nil, nil, 1, 2)
 	if err != nil {
 		t.Fatalf("page1: %v", err)
 	}
 	if total != 3 || len(page1) != 2 {
 		t.Fatalf("page1: total=%d items=%d", total, len(page1))
 	}
-	page2, _, err := repo.ListAllPaged("", "", "", "", "", nil, nil, 2, 2)
+	page2, _, err := repo.ListAllPaged("", "", "", "", "", nil, nil, nil, 2, 2)
 	if err != nil {
 		t.Fatalf("page2: %v", err)
 	}
@@ -196,7 +243,7 @@ func TestNotificationRepo_ListAllPaged_PaginationAndTimeRange(t *testing.T) {
 
 	// 时间范围：end_time 截到 09:30 → 只剩 inapp(08:00) 与 email(09:00)
 	end := time.Date(2026, 8, 3, 9, 30, 0, 0, time.UTC)
-	items, total, err := repo.ListAllPaged("", "", "", "", "", nil, &end, 1, 20)
+	items, total, err := repo.ListAllPaged("", "", "", "", "", nil, nil, &end, 1, 20)
 	if err != nil {
 		t.Fatalf("time range: %v", err)
 	}
@@ -211,7 +258,7 @@ func TestNotificationRepo_ListAllPaged_PaginationAndTimeRange(t *testing.T) {
 
 	// 时间范围：start_time 从 09:30 起 → 只剩 webhook(10:00)
 	start := time.Date(2026, 8, 3, 9, 30, 0, 0, time.UTC)
-	items, total, err = repo.ListAllPaged("", "", "", "", "", &start, nil, 1, 20)
+	items, total, err = repo.ListAllPaged("", "", "", "", "", nil, &start, nil, 1, 20)
 	if err != nil {
 		t.Fatalf("start range: %v", err)
 	}

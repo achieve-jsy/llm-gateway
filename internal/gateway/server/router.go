@@ -193,9 +193,12 @@ func setup(
 
 	// 脱敏注入：引擎全局共享（并发安全），每个请求由 handler 内部 NewSession() + defer Close()。
 	// nil / off 时 handler 内部是 no-op。
-	// 只挂 chat / messages / responses / embeddings / rerank 五条纯文本链路；passthrough / batch 未覆盖。
+	// 挂 chat / messages / responses / gemini / embeddings / rerank 六条纯文本链路；
+	// passthrough / batch 未覆盖。gemini 曾经漏挂 —— 它的 body 不是 ChatRequest 形状，
+	// 加 handler 时被忽略，结果 mask 模式下唯独 /v1beta 把 prompt 原文发给了上游。
 	chatHandler.SetRedactor(redactEngine)
 	messagesHandler.SetRedactor(redactEngine)
+	geminiHandler.SetRedactor(redactEngine)
 	embeddingsHandler.SetRedactor(redactEngine)
 	rerankHandler.SetRedactor(redactEngine)
 

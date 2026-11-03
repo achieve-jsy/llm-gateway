@@ -18,7 +18,9 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
+	"github.com/example/llm-gateway/internal/gateway/privacy"
 	"github.com/example/llm-gateway/internal/gateway/quota"
+	"github.com/example/llm-gateway/internal/gateway/redact"
 	"github.com/example/llm-gateway/internal/protocol"
 	"github.com/gin-gonic/gin"
 )
@@ -47,6 +49,11 @@ type GeminiHandler struct {
 	requestQuota   *quota.QuotaMiddleware
 	quotaGate      *quota.ModelQuotaGate // v0.15: 模型层配额检查
 	protocolPolicy *protocol.Policy      // relaykit 协议策略
+	// redactor 是进程内共享的脱敏引擎（并发安全）。nil 或 off 时所有方法 no-op。
+	// Gemini 入站此前完全没有脱敏 —— 它的 body 不是 ChatRequest 形状，被漏掉了，
+	// 结果是 mask 模式下 chat/messages/responses 都已脱敏，唯独 /v1beta 把
+	// prompt 原文发给上游。
+	redactor *redact.Engine
 }
 
 // NewGeminiHandler 创建 GeminiHandler。
@@ -70,6 +77,11 @@ func (h *GeminiHandler) SetRequestQuotaGate(gate *quota.QuotaMiddleware) {
 // SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
 func (h *GeminiHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
 	h.quotaGate = gate
+}
+
+// SetRedactor 注入脱敏引擎（router setup 时调用一次；nil 表示不脱敏）。
+func (h *GeminiHandler) SetRedactor(engine *redact.Engine) {
+	h.redactor = engine
 }
 
 // SetProtocolPolicy 注入 relaykit 协议策略。
@@ -192,8 +204,35 @@ func (h *GeminiHandler) Handle(c *gin.Context) {
 
 	baseCtx := orchestrator.WithGinContext(c.Request.Context(), c)
 
+	// 隐私脱敏：与 /v1/chat/completions 完全同一套规则。
+	//   - 只做一次，且必须在 failover 循环之外：failover 复用同一个 chatReq，
+	//     放进循环会把占位符再套一层；
+	//   - 放在组调度之后：复杂度评分/粘性路由仍看到原文；
+	//   - engine 为 nil 或 off 时不建 session（所有方法本就 no-op）。
+	// 脱敏与原生旁路互斥：原生把客户端原文直发上游，而脱敏改写的是解析后的
+	// ChatRequest，两者不可能同时成立 —— 由 nativeRelayBlockedByRedaction 拦下
+	// 原生分支，让请求走下面的降级路径（脱敏生效）。
+	var redactSession *redact.Session
+	if h.redactor != nil && h.redactor.Mode() != redact.ModeOff {
+		redactSession = h.redactor.NewSession()
+		defer redactSession.Close()
+		protectTraceBody(c, redactSession)
+
+		if perr := redactSession.ProtectChat(c.Request.Context(), chatReq); perr != nil {
+			// fail-closed：保护失败绝不能把原文发给上游，也不能 failover ——
+			// 换渠道只是把同一份原文重发一遍。
+			slog.Error("privacy: protect gemini request failed, request aborted (fail-closed)",
+				"request_id", c.GetString("request_id"),
+				"model", chatReq.Model,
+				"error", perr.Error(),
+			)
+			respondGeminiError(c, http.StatusInternalServerError, "INTERNAL", "redaction_failed")
+			return
+		}
+	}
+
 	// 5. 原生旁路：必须在门控之后，否则会绕过调度/预算/配额。
-	if native, ok := h.orchestrator.(NativeChatOrchestratorInterface); ok && h.geminiNativeEnabled(c) {
+	if native, ok := h.orchestrator.(NativeChatOrchestratorInterface); ok && h.geminiNativeEnabled(c) && !nativeRelayBlockedByRedaction(h.redactor) {
 		nativeBody := withGeminiBodyModel(rawBody, originalModel)
 		if stream {
 			nativeStream, nativeErr := native.ChatNativeStream(baseCtx, chatReq, nativeBody, core.NativeRelayGemini)
@@ -224,10 +263,10 @@ func (h *GeminiHandler) Handle(c *gin.Context) {
 
 	// 6. 降级：Chat 管线 + relaykit 回程转换。
 	if stream {
-		h.handleGeminiStream(c, baseCtx, chatReq, session, originalModel)
+		h.handleGeminiStream(c, baseCtx, chatReq, session, originalModel, redactSession)
 		return
 	}
-	h.handleGeminiNonStream(c, baseCtx, chatReq, session, originalModel)
+	h.handleGeminiNonStream(c, baseCtx, chatReq, session, originalModel, redactSession)
 }
 
 // buildGeminiChatRequest 用 relaykit 把 Gemini 原生请求转成内部 ChatRequest。
@@ -269,7 +308,7 @@ func buildGeminiChatRequest(rawBody []byte, modelName string, stream bool) (*cor
 //
 // failover 循环与 messages/responses 的转换路径同构：只有「建立请求就失败」时换渠道重试，
 // 转换/编码阶段的错误属于本地问题，重试没有意义。
-func (h *GeminiHandler) handleGeminiNonStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, session *protocol.Session, originalModel string) {
+func (h *GeminiHandler) handleGeminiNonStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, session *protocol.Session, originalModel string, redactSession *redact.Session) {
 	c.Set("stream", false)
 	timeout := h.requestTimeout(originalModel, false)
 
@@ -284,7 +323,7 @@ func (h *GeminiHandler) handleGeminiNonStream(c *gin.Context, baseCtx context.Co
 			if lastErr != nil {
 				c.Set("error_message", "")
 			}
-			h.finishGeminiNonStream(c, session, resp)
+			h.finishGeminiNonStream(c, session, resp, redactSession)
 			return
 		}
 		lastErr = err
@@ -335,7 +374,13 @@ func (h *GeminiHandler) handleGeminiNonStream(c *gin.Context, baseCtx context.Co
 }
 
 // finishGeminiNonStream 把已拿到的 Chat 响应桥接成 Gemini 格式并写出。
-func (h *GeminiHandler) finishGeminiNonStream(c *gin.Context, session *protocol.Session, resp *core.ChatResponse) {
+func (h *GeminiHandler) finishGeminiNonStream(c *gin.Context, session *protocol.Session, resp *core.ChatResponse, redactSession *redact.Session) {
+	// 还原占位符必须在桥接之前：resp 还是 ChatResponse，占位符字段还认得出来；
+	// 一旦转成 Gemini 结构并序列化，就只能按字节瞎猜了。
+	if redactSession != nil && resp != nil {
+		redactSession.RestoreChat(resp)
+	}
+
 	geminiResult, convErr := protocol.BridgeChatResponseToSource(session, resp)
 	if convErr != nil || geminiResult == nil || geminiResult.Value == nil {
 		message := "relaykit produced nil response value"
@@ -358,7 +403,7 @@ func (h *GeminiHandler) finishGeminiNonStream(c *gin.Context, session *protocol.
 // handleGeminiStream 流式降级：ChatStream → relaykit SSE → Gemini SSE。
 //
 // 建立流失败可以换渠道重试；流一旦建立就不再切换（客户端已经可能收到首帧）。
-func (h *GeminiHandler) handleGeminiStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, session *protocol.Session, originalModel string) {
+func (h *GeminiHandler) handleGeminiStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, session *protocol.Session, originalModel string, redactSession *redact.Session) {
 	c.Set("stream", true)
 	timeout := h.requestTimeout(originalModel, true)
 
@@ -389,7 +434,13 @@ func (h *GeminiHandler) handleGeminiStream(c *gin.Context, baseCtx context.Conte
 				"",
 			)
 			// Gemini SSE 用 data: {...} 帧，出错时用 OpenAI 方言写 data: {"error":...}。
-			HandleStreamResponseAs(c, geminiStream, DialectOpenAI)
+			// 有脱敏 session 时逐个 event 先还原占位符再写出（占位符被切在两帧
+			// 之间时允许压一帧，由 rw 跨帧拼回）；nil 时等价于直接写。
+			var rw *privacy.RestoringWriter
+			if redactSession != nil {
+				rw = redactSession.RestoringWriter(c.Writer)
+			}
+			HandleStreamResponseAsRestoring(c, geminiStream, DialectOpenAI, rw)
 			return
 		}
 		lastErr = err

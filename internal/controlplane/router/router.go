@@ -292,7 +292,9 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	keyRequestSvc := service.NewKeyRequestService(keyRequestRepo, deptPolicyRepo, settingsRepo)
 	keyRequestSvc.SetKeyCreator(keySvc)
 	keyRequestSvc.SetBudgetService(budgetSvc)
-	keyRequestSvc.SetNotificationRepo(notificationRepo)
+	// 接入 sharedNotifier（站内信 + 邮件），使 Key 申请审批结果也发邮件；
+	// 原先直写 NotificationRepo 只发站内信。
+	keyRequestSvc.SetNotificationRepo(service.NewKeyRequestNotifierAdapter(sharedNotifier))
 
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖

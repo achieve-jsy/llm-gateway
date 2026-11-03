@@ -260,3 +260,22 @@ func (a *KeyActivityNotifierAdapter) Notify(userUUID uuid.UUID, title, body, lev
 		RefID:   refID,
 	})
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 适配器：供 KeyRequestService 使用，把 Notifier 适配成 keyRequestNotifier
+// ─────────────────────────────────────────────────────────────────────────────
+
+// KeyRequestNotifierAdapter 实现 keyRequestNotifier（Create 签名），把通知交给
+// 外部 Notifier 分发。用它替换原先直写站内信的 NotificationRepo，使 Key 申请审批
+// （通过 / 自动通过）也能走 sharedNotifier 的站内信 + 邮件双通道。
+type KeyRequestNotifierAdapter struct {
+	inner Notifier
+}
+
+func NewKeyRequestNotifierAdapter(n Notifier) *KeyRequestNotifierAdapter {
+	return &KeyRequestNotifierAdapter{inner: n}
+}
+
+func (a *KeyRequestNotifierAdapter) Create(n *model.Notification) error {
+	return a.inner.Notify(context.Background(), n)
+}

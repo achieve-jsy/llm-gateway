@@ -353,12 +353,104 @@ func (s *ExpansionService) assertCanDecideInTx(
 	return ErrNotInApprovalPool
 }
 
-func enqueueExpansionNotificationInTx(tx *gorm.DB, request *model.ExpansionRequest, userID uuid.UUID, event, title, content string) error {
+func enqueueExpansionNotificationInTx(tx *gorm.DB, request *model.ExpansionRequest, userID uuid.UUID, event, title, content, level string) error {
+	if level == "" {
+		level = model.NotificationLevelInfo
+	}
 	return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "dedupe_key"}}, DoNothing: true}).Create(&model.NotificationOutbox{
 		ID: uuid.New(), DedupeKey: "expansion:" + request.ID.String() + ":" + request.CurrentLevel + ":" + event + ":" + userID.String(),
-		UserID: userID, Type: event, Level: model.NotificationLevelInfo, Title: title, Content: content,
+		UserID: userID, Type: event, Level: level, Title: title, Content: content,
 		RefType: "expansion_request", RefID: request.ID.String(), Status: "pending", NextAttempt: time.Now().UTC(),
 	}).Error
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 扩容审批通知：面向用户的中文文案
+// ─────────────────────────────────────────────────────────────────────────────
+
+// expansionScopeLabel 返回 scope 类型的人类可读中文名。
+func expansionScopeLabel(scopeType string) string {
+	switch scopeType {
+	case model.BudgetScopeCompany:
+		return "公司"
+	case model.BudgetScopeStudio:
+		return "工作室"
+	case model.BudgetScopeDeptDaily:
+		return "部门日常额度"
+	case model.BudgetScopeDeptService:
+		return "部门服务额度"
+	case model.BudgetScopeMember:
+		return "成员额度"
+	default:
+		return "预算"
+	}
+}
+
+// expansionPeriodLabel 返回额度周期中文名。
+func expansionPeriodLabel(periodType string) string {
+	switch budgetdomain.PeriodType(periodType) {
+	case budgetdomain.PeriodDaily:
+		return "日"
+	case budgetdomain.PeriodWeekly:
+		return "周"
+	default:
+		return "月"
+	}
+}
+
+// expansionDimensionLabel 返回限额维度中文名。
+func expansionDimensionLabel(dimension budgetdomain.DimensionType) string {
+	if dimension == budgetdomain.DimensionTier {
+		return "模型等级"
+	}
+	return "总预算"
+}
+
+// expansionDurationLabel 返回持续类型中文名。
+func expansionDurationLabel(duration budgetdomain.DurationType) string {
+	if duration == budgetdomain.DurationCurrentPeriod {
+		return "临时"
+	}
+	return "长期"
+}
+
+// expansionNotifyObjectLabel 构造申请对象的人类可读描述，如：
+// 「研发部 · 总预算 · 月额度 · 长期」；scope/tier 名称解析失败时退化为类型名。
+func (s *ExpansionService) expansionNotifyObjectLabel(ctx context.Context, request *model.ExpansionRequest) string {
+	scope := expansionScopeLabel(request.ScopeType)
+	if s.budgetSvc != nil && request.ScopeID != "" {
+		if names, err := s.ResolveScopeNames(request.ScopeType, []string{request.ScopeID}); err == nil && names != nil {
+			if n := names[request.ScopeID]; n != "" {
+				scope = n
+			}
+		}
+	}
+	var b strings.Builder
+	b.WriteString(scope)
+	if request.DimensionType == budgetdomain.DimensionTier && request.ModelTierID != nil && s.budgetTierSvc != nil && s.budgetTierSvc.tiers != nil {
+		if tier, err := s.budgetTierSvc.tiers.FindByID(ctx, *request.ModelTierID); err == nil && tier != nil && tier.Name != "" {
+			b.WriteString(" · " + tier.Name)
+		}
+	}
+	b.WriteString(" · " + expansionDimensionLabel(request.DimensionType))
+	b.WriteString(" · " + expansionPeriodLabel(request.PeriodType) + "额度 · " + expansionDurationLabel(request.DurationType))
+	return b.String()
+}
+
+// expansionNotifyBody 构造扩容审批通知正文：对象描述 + 额度变化 + 附加明细。
+func (s *ExpansionService) expansionNotifyBody(ctx context.Context, request *model.ExpansionRequest, detail string) string {
+	objectLabel := s.expansionNotifyObjectLabel(ctx, request)
+	var b strings.Builder
+	b.WriteString(objectLabel)
+	b.WriteString("，当前上限 $")
+	b.WriteString(fixedAmount(decimal.NewFromFloat(request.CurrentAmount)))
+	b.WriteString("，目标上限 $")
+	b.WriteString(fixedAmount(decimal.NewFromFloat(request.RequestedAmount)))
+	if strings.TrimSpace(detail) != "" {
+		b.WriteString("。")
+		b.WriteString(strings.TrimSpace(detail))
+	}
+	return b.String()
 }
 
 func ensureRequestAllocationInTx(ctx context.Context, tx *gorm.DB, request *model.ExpansionRequest, actorID uuid.UUID) error {
@@ -409,7 +501,8 @@ func (s *ExpansionService) rejectInTx(ctx context.Context, tx *gorm.DB, request 
 	}); err != nil {
 		return err
 	}
-	return enqueueExpansionNotificationInTx(tx, request, request.RequesterID, model.NotificationTypeExpansionRejected, "扩容申请已驳回", comment)
+	return enqueueExpansionNotificationInTx(tx, request, request.RequesterID, model.NotificationTypeExpansionRejected, "扩容申请已驳回",
+		s.expansionNotifyBody(ctx, request, "驳回意见："+comment), model.NotificationLevelWarning)
 }
 
 func (s *ExpansionService) DecideWorkflow(
@@ -545,19 +638,23 @@ func (s *ExpansionService) applyNonApprovalDecision(
 				return err
 			}
 			for _, recipient := range recipients {
-				if err := enqueueExpansionNotificationInTx(tx, &platformRequest, recipient, model.NotificationTypeExpansionSubmitted, "新的平台级扩容审批申请", request.Reason); err != nil {
+				if err := enqueueExpansionNotificationInTx(tx, &platformRequest, recipient, model.NotificationTypeExpansionSubmitted, "新的平台级扩容审批申请",
+					s.expansionNotifyBody(ctx, &platformRequest, "申请原因："+request.Reason), model.NotificationLevelInfo); err != nil {
 					return err
 				}
 			}
 		}
 		event, title := model.NotificationTypeExpansionDecision, "扩容申请状态更新"
+		decisionLevel := model.NotificationLevelInfo
 		if input.Action == model.ExpansionActionReject {
 			event, title = model.NotificationTypeExpansionRejected, "扩容申请已驳回"
+			decisionLevel = model.NotificationLevelWarning
 		}
 		if input.Action == model.ExpansionActionEscalate {
 			title = "扩容申请已升级审批"
 		}
-		return enqueueExpansionNotificationInTx(tx, request, request.RequesterID, event, title, input.Comment)
+		return enqueueExpansionNotificationInTx(tx, request, request.RequesterID, event, title,
+			s.expansionNotifyBody(ctx, request, "审批意见："+input.Comment), decisionLevel)
 	})
 	if stale {
 		return nil, ErrPrecheckStale
@@ -704,7 +801,8 @@ func (s *ExpansionService) approveWorkflow(
 		}); err != nil {
 			return err
 		}
-		if err := enqueueExpansionNotificationInTx(tx, request, request.RequesterID, model.NotificationTypeExpansionApproved, "扩容申请已批准并生效", request.Reason); err != nil {
+		if err := enqueueExpansionNotificationInTx(tx, request, request.RequesterID, model.NotificationTypeExpansionApproved, "扩容申请已批准并生效",
+			s.expansionNotifyBody(ctx, request, "申请原因："+request.Reason), model.NotificationLevelInfo); err != nil {
 			return err
 		}
 		result.TargetType, result.TargetID, result.AppliedAt, result.SyncStatus = targetType, targetID, now, "pending"
@@ -728,7 +826,8 @@ func (s *ExpansionService) approveWorkflow(
 				if updateErr := tx.WithContext(ctx).Model(&model.ExpansionRequest{}).Where("id = ?", requestID).Update("sync_status", "failed").Error; updateErr != nil {
 					return updateErr
 				}
-				return enqueueExpansionNotificationInTx(tx, candidate, candidate.RequesterID, model.NotificationTypeExpansionApplyFailed, "扩容申请生效失败", err.Error())
+				return enqueueExpansionNotificationInTx(tx, candidate, candidate.RequesterID, model.NotificationTypeExpansionApplyFailed, "扩容申请生效失败",
+					s.expansionNotifyBody(ctx, candidate, "生效失败原因："+err.Error()), model.NotificationLevelCritical)
 			})
 			result.SyncStatus = "failed"
 			recordExpansionApply(ctx, string(candidate.DimensionType), string(candidate.DurationType), "sync_failed")

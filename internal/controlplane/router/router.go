@@ -335,37 +335,6 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// 内部调度器接口（X-Auth-Token 认证，在 handler 内自行校验）
 	r.GET("/api/v1/internal/groups", groupHandler.ListEnabledGroups)
 
-	// Channel Monitor 初始化和路由注册
-	channelMonitorRepo := repository.NewChannelMonitorRepo(db)
-	channelMonitorSvc := service.NewChannelMonitorService(channelMonitorRepo)
-	channelMonitorSvc.SetSettingsReader(settingsRepo)
-	channelMonitorHandler := handler.NewChannelMonitorHandler(channelMonitorSvc)
-	channelMonitorUserHandler := handler.NewChannelMonitorUserHandler(channelMonitorSvc)
-
-	// Channel Monitor Runner (后台调度)
-	channelMonitorRunner := service.NewChannelMonitorRunner(channelMonitorSvc)
-	channelMonitorSvc.SetRunner(channelMonitorRunner)
-	go func() {
-		// 启动时加载所有 enabled 的监控
-		channelMonitorRunner.StartAll(context.Background())
-	}()
-	// 每日维护 cron
-	go func() {
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
-		for range ticker.C {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			if err := channelMonitorSvc.RunDailyMaintenance(ctx); err != nil {
-				slog.Error("channel_monitor: daily maintenance failed", "error", err)
-			}
-			cancel()
-		}
-	}()
-
-	// 用户侧公开路由（无需认证）
-	r.GET("/api/v1/public/channel-monitors", channelMonitorUserHandler.ListPublic)
-	r.GET("/api/v1/public/channel-monitors/:id/status", channelMonitorUserHandler.GetStatus)
-
 	// 管理接口组（JWT 认证）
 	adminGroup := r.Group("/api/v1")
 	adminGroup.Use(middleware.JWTAuth())
@@ -438,26 +407,11 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 运维看板（Ops Dashboard）
 		systemMetricsCollector := service.NewSystemMetricsCollector(db, rdb)
 		systemMetricsCollector.Start(context.Background())
-
-		// 系统日志异步写入器（供 sink-health 读取真实状态）
-		sysLogWriter := service.NewSystemLogWriter(db)
-		sysLogWriter.Start()
-		service.SetSystemLogWriter(sysLogWriter)
-
-		// 日志清理 cron（Redis leader lock 保证单实例）
-		opsCleanup := service.NewOpsCleanupService(db, rdb)
-		// 从 AdvancedSettings 加载保留天数配置
-		if val, err := settingsRepo.GetValue("ops_advanced_settings"); err == nil && val != "" {
-			opsCleanup.LoadRetentionFromSettings(val)
-		}
-		opsCleanup.Start(context.Background())
-
 		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
 
-			// WP9: 邮件服务 + 定时报表服务
-			emailSvc := service.NewEmailService()
-			scheduledReportSvc := service.NewScheduledReportService(db, rdb, emailSvc)
-			scheduledReportSvc.Start()
+		// 告警评估器（定时评估告警规则并触发告警事件）
+		alertEvaluator := service.NewAlertEvaluator(db, rdb, settingsRepo)
+		alertEvaluator.Start(context.Background())
 		adminGroup.GET("/ops/groups", opsHandler.GetGroupOptions)
 		adminGroup.GET("/ops/providers", opsHandler.ListProviders)
 		adminGroup.GET("/ops/models", opsHandler.ListModels)
@@ -514,6 +468,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/ops/realtime-traffic", opsHandler.GetRealtimeTraffic)
 		adminGroup.GET("/ops/request-errors/:id/correlation", opsHandler.GetRequestErrorCorrelation)
 		adminGroup.GET("/ops/upstream-errors/:id", opsHandler.GetUpstreamErrorDetail)
+		adminGroup.PUT("/ops/request-errors/:id/resolve", opsHandler.ResolveRequestError)
+		adminGroup.PUT("/ops/upstream-errors/:id/resolve", opsHandler.ResolveUpstreamError)
 
 		// 运维看板 v2：后台任务
 		adminGroup.GET("/ops/jobs", opsHandler.ListJobs)
@@ -530,8 +486,6 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 运维看板 v3：错误日志增强视图
 		adminGroup.GET("/ops/error-logs", opsHandler.ListErrorLogs)
 		adminGroup.PUT("/ops/error-logs/:id/resolve", opsHandler.ResolveErrorLog)
-		adminGroup.PUT("/ops/request-errors/:id/resolve", opsHandler.ResolveRequestError)
-		adminGroup.PUT("/ops/upstream-errors/:id/resolve", opsHandler.ResolveUpstreamError)
 
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
@@ -714,27 +668,12 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		// 部门 Key 创建策略配置
 		adminGroup.GET("/dept-policies/:dept_id/key-creation", keyRequestHandler.GetDeptPolicy)
 		adminGroup.PUT("/dept-policies/:dept_id/key-creation", guard(rbac.PermKeyRequestSetPolicy), keyRequestHandler.SetDeptPolicy)
-
-			// Channel Monitor 管理路由
-			adminGroup.GET("/channel-monitors", channelMonitorHandler.List)
-			adminGroup.POST("/channel-monitors", channelMonitorHandler.Create)
-			adminGroup.GET("/channel-monitors/:id", channelMonitorHandler.Get)
-			adminGroup.PUT("/channel-monitors/:id", channelMonitorHandler.Update)
-			adminGroup.DELETE("/channel-monitors/:id", channelMonitorHandler.Delete)
-			adminGroup.POST("/channel-monitors/:id/run", channelMonitorHandler.RunCheck)
-			adminGroup.GET("/channel-monitors/:id/history", channelMonitorHandler.GetHistory)
-			// Channel Monitor 请求模板
-			adminGroup.GET("/channel-monitor-templates", channelMonitorHandler.ListTemplates)
-			adminGroup.POST("/channel-monitor-templates", channelMonitorHandler.CreateTemplate)
-			adminGroup.GET("/channel-monitor-templates/:id", channelMonitorHandler.GetTemplate)
-			adminGroup.PUT("/channel-monitor-templates/:id", channelMonitorHandler.UpdateTemplate)
-			adminGroup.DELETE("/channel-monitor-templates/:id", channelMonitorHandler.DeleteTemplate)
-		}
+	}
 
 	// 员工自助查询预算（JWTAuth 即可，不需要 admin）
 	r.GET("/api/v1/my/budget", middleware.JWTAuth(), budgetHandler.MyBudget)
 
-// WebSocket 端点（浏览器 WS 不支持 Authorization header，由 handler 内部验证）
+	// WebSocket 端点（浏览器 WS 不支持 Authorization header，由 handler 内部验证）
 	wsHandler := handler.NewOpsWSHandler(rdb)
 	r.GET("/api/v1/ops/ws/qps", wsHandler.HandleQPSWebSocket)
 

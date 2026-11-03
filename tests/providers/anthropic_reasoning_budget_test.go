@@ -102,3 +102,40 @@ func TestAnthropicConversion_DoesNotShrinkSufficientMaxTokens(t *testing.T) {
 	require.Equal(t, 1024, got.Thinking.BudgetTokens)
 	require.Equal(t, 8000, got.MaxTokens, "客户端给的 max_tokens 已经够大，不该被改写")
 }
+
+// low 档必须有明确预算，不能落进 default 兜底。
+// normalizeEffort 把任何非法值都归一到 low，"low 走 default" 等于让最低档
+// 和未知值共用 5000 —— 比 medium 只小一半，与"低"的语义不符。
+func TestAnthropicConversion_LowEffortUsesExplicitLowTier(t *testing.T) {
+	srv, got := captureAnthropicUpstream(t)
+	p := newAnthropicForTest(t, srv.URL+"/v1")
+
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:     "claude-sonnet-4-5",
+		MaxTokens: intPtr(8000),
+		Reasoning: &core.Reasoning{Effort: "low"},
+		Messages:  []core.Message{{Role: "user", Content: "hi"}},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 2000, got.Thinking.BudgetTokens,
+		"low 档应映射到明确的 2000，而不是落到 default 的 5000")
+	require.Equal(t, 8000, got.MaxTokens, "max_tokens 已足够，不该被改写")
+}
+
+// 非法 effort 会被 normalizeEffort 归一到 low，结果应与 low 一致。
+func TestAnthropicConversion_InvalidEffortNormalizedToLowTier(t *testing.T) {
+	srv, got := captureAnthropicUpstream(t)
+	p := newAnthropicForTest(t, srv.URL+"/v1")
+
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:     "claude-sonnet-4-5",
+		MaxTokens: intPtr(8000),
+		Reasoning: &core.Reasoning{Effort: "ultra-mega"},
+		Messages:  []core.Message{{Role: "user", Content: "hi"}},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 2000, got.Thinking.BudgetTokens,
+		"非法 effort 归一到 low 后，预算也必须是 low 档")
+}

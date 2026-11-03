@@ -148,3 +148,61 @@ func (o *canceledChatOrch) ChatStream(_ context.Context, _ *core.ChatRequest) (i
 	atomic.AddInt32(&o.calls, 1)
 	return nil, context.Canceled
 }
+
+// alwaysFailChatOrch 每次都返回可 failover 的 503。
+// 配合 failoverScheduler 永远给出新目标，若不设轮次上限就会无限重试下去。
+type alwaysFailChatOrch struct{ calls int32 }
+
+func (o *alwaysFailChatOrch) Chat(_ context.Context, _ *core.ChatRequest) (*core.ChatResponse, error) {
+	atomic.AddInt32(&o.calls, 1)
+	return nil, &model.UnifiedError{HTTPStatus: http.StatusServiceUnavailable, Message: "down"}
+}
+
+func (o *alwaysFailChatOrch) ChatStream(_ context.Context, _ *core.ChatRequest) (io.ReadCloser, error) {
+	atomic.AddInt32(&o.calls, 1)
+	return nil, &model.UnifiedError{HTTPStatus: http.StatusServiceUnavailable, Message: "down"}
+}
+
+// failover 必须有轮次上限。
+//
+// 组内模型数只是循环的天然边界，边界可能很大；一个请求会把整组挨个打一遍。
+// 上限收口在 GroupAwareDispatcher.handleFailover，本测试通过"永远失败 + 永远
+// 给出新目标"的桩把上限逼出来：3 轮 failover 意味着首次 + 3 次切换 = 4 次上游。
+func TestChatFailover_RespectsMaxRounds(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	nc := cache.NewGroupNameCache("")
+	nc.SetNames([]string{"chat-group"})
+	sch := &failoverScheduler{
+		decision: &scheduler.RouteDecision{
+			GroupName: "chat-group", ModelID: "c1", ModelName: "gpt-4o-mini",
+			ModelType: "chat", ProviderName: "ch-a",
+		},
+		failTarget: &scheduler.RouteDecision{
+			GroupName: "chat-group", ModelID: "c2", ModelName: "backup",
+			ModelType: "chat", ProviderName: "ch-b",
+		},
+		// 让桩无视 excludeIDs，才能真正走到轮次上限那一支。
+		endless: true,
+	}
+	gd := orchestrator.NewGroupAwareDispatcher(sch, nc)
+	orch := &alwaysFailChatOrch{}
+	h := handler.NewChatHandlerWithGroup(orch, gd)
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("key_id", "test-key")
+		c.Set("request_id", "req-chat-cap")
+	})
+	r.POST("/v1/chat/completions", h.Handle)
+
+	body := `{"model":"chat-group","messages":[{"role":"user","content":"hi"}]}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	require.NotEqual(t, http.StatusOK, w.Code)
+	require.EqualValues(t, 4, atomic.LoadInt32(&orch.calls),
+		"failover 上限 3 轮：首次 + 3 次切换 = 4 次上游调用，不能无限重试")
+}

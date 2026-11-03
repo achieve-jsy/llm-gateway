@@ -136,6 +136,11 @@ func containsGroup(groups []string, target string) bool {
 	return false
 }
 
+// maxFailoverRounds 限制单个请求的 failover 轮次。
+// 3 轮意味着最多打 4 次上游（首次 + 3 次切换）；再多通常说明整组都不可用，
+// 继续尝试只会把延迟拖长，而成功率不会更高。
+const maxFailoverRounds = 3
+
 func (d *GroupAwareDispatcher) HandleFailover(c *gin.Context, groupName, failedModelID string, req *core.ChatRequest) (*scheduler.RouteDecision, error) {
 	needsVideo := req != nil && core.HasVideoContent(req.Messages)
 	return d.handleFailover(c, groupName, failedModelID, req, needsVideo)
@@ -155,6 +160,20 @@ func (d *GroupAwareDispatcher) handleFailover(c *gin.Context, groupName, failedM
 	if dc != nil {
 		rounds = dc.FailoverRounds
 		triedIDs = dc.TriedModelIDs
+	}
+
+	// 轮次上限：组内模型数本身就是循环的天然边界，但边界可能很大（十几个渠道），
+	// 一个请求会把整组挨个打一遍，延迟与上游成本都失控。这里统一收口 —— chat /
+	// messages / responses / gemini 共 9 处 failover 调用点都经由本函数，加一道闸
+	// 就不必在每个 handler 循环里各写一遍计数器。
+	if rounds >= maxFailoverRounds {
+		slog.Warn("group failover: 达到轮次上限，停止重试",
+			"group_name", groupName,
+			"rounds", rounds,
+			"limit", maxFailoverRounds,
+			"tried_ids", triedIDs,
+		)
+		return nil, model.ErrNoOtherModelAvailable
 	}
 
 	// 将本轮失败的模型加入已尝试列表（去重）

@@ -9,6 +9,7 @@ package handler_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +33,12 @@ import (
 type failoverScheduler struct {
 	decision   *scheduler.RouteDecision
 	failTarget *scheduler.RouteDecision
+
+	// endless 让 pick 无视 excludeIDs 且每次返回全新的模型 ID。
+	// 只用于验证 handler 的 failover 轮次上限：正常情况下 pick 靠 excludeIDs
+	// 保证有界，那样就永远走不到上限那一支。
+	endless    bool
+	endlessSeq int32
 }
 
 func (f *failoverScheduler) Route(_ string, _ *core.ChatRequest) (*scheduler.RouteDecision, error) {
@@ -44,6 +51,12 @@ func (f *failoverScheduler) Route(_ string, _ *core.ChatRequest) (*scheduler.Rou
 func (f *failoverScheduler) pick(excludeIDs []string) (*scheduler.RouteDecision, error) {
 	if f.failTarget == nil {
 		return nil, model.ErrNoOtherModelAvailable
+	}
+	if f.endless {
+		n := atomic.AddInt32(&f.endlessSeq, 1)
+		d := *f.failTarget
+		d.ModelID = fmt.Sprintf("endless-%d", n)
+		return &d, nil
 	}
 	for _, id := range excludeIDs {
 		if id == f.failTarget.ModelID {

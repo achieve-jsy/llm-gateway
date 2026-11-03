@@ -82,8 +82,16 @@ func applyReasoning(req *anthropicRequest, model string, r *core.Reasoning) {
 	}
 }
 
+// reasoningEffortToBudgetTokens 把 effort 档位映射成思考预算。
+//
+// 注意 normalizeEffort 只认 low/medium/high，且把任何非法值都归一到 low ——
+// 所以 "low" 必须显式列出来。它此前落进 default，导致"最低档"和"未知值"
+// 共用 5000，比 medium 只小一半；配合 applyReasoning 的 max_tokens 抬升，
+// 一个 max_tokens=64 的低档请求会被抬到 6024。
 func reasoningEffortToBudgetTokens(effort string) int {
 	switch normalizeEffort(effort) {
+	case "low":
+		return 2000
 	case "medium":
 		return 10000
 	case "high":

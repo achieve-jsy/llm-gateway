@@ -1,0 +1,56 @@
+-- atlas-migrations/20260910125402_add_call_logs_quota_rejection_fields.sql
+-- Feature: 配额拒绝事实落库（call_logs 增加 quota_gate / quota_layer / quota_limit）
+--
+-- 背景：2026-09-10 生产出现用户被持久限流（并发配额计数器被钉死在限额上）。
+-- 事后排查时 call_logs 的 429 行只有状态码、response_body 为空，也没有
+-- "被哪个闸门拒绝、限额是多少" 的字段，只能靠反推流量分布（在飞并发 / 滚动 60s
+-- 通过数）才敢判断是并发闸还是 RPM 闸，成本极高且结论不够直接。
+-- 本迁移把该事实落库，使同类事故可直接查库定位。
+--
+-- 语义（三列均可空，只有"被配额闸门拒绝"的行才非空）：
+--   quota_gate  : concurrency | rpm                 （哪个闸门拒绝）
+--   quota_layer : subject | group | model | default （哪一层配额生效）
+--   quota_limit : 该次判定实际生效的限额值（NULL=非配额拒绝；0=该层未设限/已关闭）
+--
+-- 取值来源：gateway 侧 quota.WriteQuotaRejected 直接从本次判定的 QuotaViolation
+-- （v.Gate / v.Layer / v.Limit）写入 gin context，再由观测链路透传落库；
+-- 不从响应体、HTTP 头或任何事后推断取值，避免并发闸与 RPM 闸被混淆。
+--
+-- 纯观测列，不参与任何配额判定。可空 + 无默认值，保证滚动/蓝绿发布期旧代码写入不受影响
+-- （Expand-Contract：只加不减）。
+--
+-- 为什么统一用 `ADD COLUMN IF NOT EXISTS`（对齐 20260615044045_v0.7_quota_permission.sql 等既有写法）：
+-- 本迁移是纯新增、无数据回填，没有任何"列已存在就必须报错"的正当理由；而团队无法核对目标库
+-- 是否已有这三列（无权也不应访问生产/共享库），信息不可得时应选可重放的一侧，避免无谓阻断 CI 的 migrate stage。
+--
+-- ⚠️ 该写法的代价（务必知悉，不要以为它兜住了正确性）：
+-- `IF NOT EXISTS` 在"同名但**类型不同**"的历史列面前会**静默跳过**，既不报错也不纠正；
+-- 因此列类型的正确性**不是**由这条语句保证的，而是由
+--   ① 干净库上 `atlas migrate apply --dir "file://atlas-migrations"` 全量 apply，
+--   ② 与 `cd tools/atlas-loader && go run main.go` 导出的期望 schema
+--      逐列比对（本次实测 call_logs 55 列 == 55 列，quota_gate/quota_layer=varchar(32)、quota_limit=bigint 逐字一致）
+--      注：本次 apply 是在剔除他人未跟踪 WIP `*.down.sql` 的副本上做的（否则会因他人 down 先执行而整批失败，
+--      与本迁移无关）；副本与真实目录除那 4 个他人 pair 文件外逐字节相同。
+-- 两者共同保证。凡改动这三列类型时，必须重跑上述比对，不能依赖本语句生效。
+--
+-- 回滚（本项目部署流程不使用 Atlas 的 down 迁移机制；回滚 SQL 内联备查，生产优先用新迁移修复）：
+--   Atlas 虽支持 `atlas migrate down` 与 `--plan`（其帮助原文含 "ignoring existing down files"），
+--   且 Atlas 会把目录内 `*.down.sql` 当作**独立前向迁移**、按文件名字典序执行
+--   （同一 version 内 down 先于 up）。但**本迁移自身不落盘 down 文件**，且 Atlas 的 down
+--   机制依赖 down 文件，故 `atlas migrate apply --to-version <更早版本>` 对本 version
+--   只会**前向**推进、**不会**执行下面这段回滚（已在本机 Atlas v1.2.3 + PG 18 复核，
+--   在剔除他人 down 的副本上实证两种情形）：
+--     情形一 目标库已在本 version：只输出 "No migration files to execute"、exit=0，非降级；
+--     情形二 目标库仍落后于本 version：只跑了 3 个前向迁移（15 条语句）、exit=0，
+--           本迁移的三列**并未**被删除。
+--   （说明：`atlas-migrations/` 目录内另有他人未提交 WIP 的 `*.down.sql`
+--     ——20260824093000_trace_archive、20260824093500_usage_settlement_daily——
+--     与本迁移无关，不得据此推断本迁移存在 down 文件。）
+--   回滚时请手动执行以下 SQL，再按需删除 atlas_schema_revisions 中 version='20260910125402' 的记录。
+--   ALTER TABLE call_logs DROP COLUMN IF EXISTS quota_limit;
+--   ALTER TABLE call_logs DROP COLUMN IF EXISTS quota_layer;
+--   ALTER TABLE call_logs DROP COLUMN IF EXISTS quota_gate;
+
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS quota_gate VARCHAR(32);
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS quota_layer VARCHAR(32);
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS quota_limit BIGINT;

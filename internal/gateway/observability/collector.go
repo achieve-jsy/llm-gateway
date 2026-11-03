@@ -234,6 +234,17 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 		IPAddress:       ctx.ClientIP(),
 		Status:          getInt(ctx, "status"),
 		UpstreamStatus:  getInt(ctx, "upstream_status"),
+		// 配额拒绝事实：仅当本请求确实被配额闸门拒绝时（quota_gate 非空）才记录限额，
+		// 避免把"未发生配额判定"的行写成 limit=0 而误导排查。
+		QuotaGate:  getString(ctx, "quota_gate"),
+		QuotaLayer: getString(ctx, "quota_layer"),
+		QuotaLimit: func() *int {
+			if _, ok := ctx.Get("quota_limit"); !ok {
+				return nil
+			}
+			limit := getInt(ctx, "quota_limit")
+			return &limit
+		}(),
 		DurationMs: func() int64 {
 			if startTime, ok := ctx.Get("start_time"); ok {
 				if t, ok := startTime.(time.Time); ok {

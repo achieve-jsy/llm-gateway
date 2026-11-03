@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	brtypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,9 +35,9 @@ func TestBedrock_New_PreservesCustomRegion(t *testing.T) {
 
 func TestBedrock_ListModels_ReturnsConfiguredModels(t *testing.T) {
 	a := New(Config{
-		AccessKeyID:     "AKID",
+		AccessKeyID:    "AKID",
 		SecretAccessKey: "secret",
-		Models:          []string{"anthropic.claude-3-opus-20240229-v1:0", "anthropic.claude-3-sonnet-20240229-v1:0"},
+		Models:         []string{"anthropic.claude-3-opus-20240229-v1:0", "amazon.nova-pro-v1:0"},
 	})
 	models, err := a.ListModels(context.Background())
 	require.NoError(t, err)
@@ -51,158 +54,176 @@ func TestBedrock_ListModels_Empty(t *testing.T) {
 	assert.Empty(t, models)
 }
 
-// ─── convertToBedrockRequest ───────────────────────────────────────────────
+// ─── convertMessages ──────────────────────────────────────────────────────
 
-func TestBedrock_ConvertToBedrockRequest_BasicMapping(t *testing.T) {
-	maxTok := 512
-	req := &model.ChatCompletionRequest{
-		Model: "anthropic.claude-3-opus",
-		Messages: []model.Message{
-			{Role: "user", Content: "Hello"},
-		},
-		MaxTokens: &maxTok,
+func TestBedrock_ConvertMessages_BasicMapping(t *testing.T) {
+	msgs := []model.Message{
+		{Role: "user", Content: "Hello"},
 	}
-	br := convertToBedrockRequest(req)
+	messages, system := convertMessages(msgs)
 
-	assert.Equal(t, anthropicVersion, br.AnthropicVersion)
-	assert.Equal(t, 512, br.MaxTokens)
-	require.Len(t, br.Messages, 1)
-	assert.Equal(t, "user", br.Messages[0].Role)
-	assert.Equal(t, "Hello", br.Messages[0].Content)
+	assert.Empty(t, system)
+	require.Len(t, messages, 1)
+	assert.Equal(t, brtypes.ConversationRoleUser, messages[0].Role)
+	require.Len(t, messages[0].Content, 1)
+	textBlock, ok := messages[0].Content[0].(*brtypes.ContentBlockMemberText)
+	require.True(t, ok)
+	assert.Equal(t, "Hello", textBlock.Value)
 }
 
-func TestBedrock_ConvertToBedrockRequest_ExtractsSystemMessage(t *testing.T) {
-	req := &model.ChatCompletionRequest{
-		Model: "anthropic.claude-3",
-		Messages: []model.Message{
-			{Role: "system", Content: "You are helpful."},
-			{Role: "user", Content: "Hi"},
-		},
+func TestBedrock_ConvertMessages_ExtractsSystem(t *testing.T) {
+	msgs := []model.Message{
+		{Role: "system", Content: "You are helpful."},
+		{Role: "user", Content: "Hi"},
 	}
-	br := convertToBedrockRequest(req)
-	assert.Equal(t, "You are helpful.", br.System)
-	require.Len(t, br.Messages, 1)
-	assert.Equal(t, "user", br.Messages[0].Role)
+	messages, system := convertMessages(msgs)
+
+	require.Len(t, system, 1)
+	sysBlock, ok := system[0].(*brtypes.SystemContentBlockMemberText)
+	require.True(t, ok)
+	assert.Equal(t, "You are helpful.", sysBlock.Value)
+	require.Len(t, messages, 1)
+	assert.Equal(t, brtypes.ConversationRoleUser, messages[0].Role)
 }
 
-func TestBedrock_ConvertToBedrockRequest_DefaultMaxTokens(t *testing.T) {
+func TestBedrock_ConvertMessages_MergesAdjacentSameRole(t *testing.T) {
+	msgs := []model.Message{
+		{Role: "user", Content: "Hello"},
+		{Role: "user", Content: "How are you?"},
+	}
+	messages, _ := convertMessages(msgs)
+
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].Content, 2)
+}
+
+func TestBedrock_ConvertMessages_PrependsUserWhenFirstIsAssistant(t *testing.T) {
+	msgs := []model.Message{
+		{Role: "assistant", Content: "I am here"},
+	}
+	messages, _ := convertMessages(msgs)
+
+	require.GreaterOrEqual(t, len(messages), 2)
+	assert.Equal(t, brtypes.ConversationRoleUser, messages[0].Role)
+}
+
+// ─── buildInferenceConfig ─────────────────────────────────────────────────
+
+func TestBedrock_BuildInferenceConfig_DefaultMaxTokens(t *testing.T) {
 	req := &model.ChatCompletionRequest{
-		Model:    "anthropic.claude-3",
+		Model:    "test-model",
 		Messages: []model.Message{{Role: "user", Content: "x"}},
 	}
-	br := convertToBedrockRequest(req)
-	assert.Equal(t, defaultMaxTokens, br.MaxTokens)
+	cfg := buildInferenceConfig(req)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.MaxTokens)
+	assert.Equal(t, int32(defaultMaxTokens), *cfg.MaxTokens)
 }
 
-func TestBedrock_ConvertToBedrockRequest_MergesAdjacentSameRole(t *testing.T) {
+func TestBedrock_BuildInferenceConfig_CustomMaxTokens(t *testing.T) {
+	maxTok := 512
 	req := &model.ChatCompletionRequest{
-		Model: "anthropic.claude-3",
-		Messages: []model.Message{
-			{Role: "user", Content: "Hello"},
-			{Role: "user", Content: "How are you?"},
-		},
+		Model:     "test-model",
+		Messages:  []model.Message{{Role: "user", Content: "x"}},
+		MaxTokens: &maxTok,
 	}
-	br := convertToBedrockRequest(req)
-	require.Len(t, br.Messages, 1)
-	assert.Contains(t, br.Messages[0].Content, "Hello")
-	assert.Contains(t, br.Messages[0].Content, "How are you?")
+	cfg := buildInferenceConfig(req)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.MaxTokens)
+	assert.Equal(t, int32(512), *cfg.MaxTokens)
 }
 
-func TestBedrock_ConvertToBedrockRequest_PrependsUserMessage_WhenFirstIsAssistant(t *testing.T) {
+func TestBedrock_BuildInferenceConfig_Temperature(t *testing.T) {
+	temp := model.JSONFloat64(0.7)
 	req := &model.ChatCompletionRequest{
-		Model: "anthropic.claude-3",
-		Messages: []model.Message{
-			{Role: "assistant", Content: "I am here"},
-		},
+		Model:       "test-model",
+		Messages:    []model.Message{{Role: "user", Content: "x"}},
+		Temperature: &temp,
 	}
-	br := convertToBedrockRequest(req)
-	require.GreaterOrEqual(t, len(br.Messages), 1)
-	assert.Equal(t, "user", br.Messages[0].Role)
+	cfg := buildInferenceConfig(req)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.Temperature)
+	assert.InDelta(t, float32(0.7), *cfg.Temperature, 0.001)
 }
 
-func TestBedrock_ConvertToBedrockRequest_StopSequenceString(t *testing.T) {
+func TestBedrock_BuildInferenceConfig_StopSequence(t *testing.T) {
 	req := &model.ChatCompletionRequest{
-		Model:    "anthropic.claude-3",
+		Model:    "test-model",
 		Messages: []model.Message{{Role: "user", Content: "x"}},
 		Stop:     "STOP",
 	}
-	br := convertToBedrockRequest(req)
-	assert.Equal(t, []string{"STOP"}, br.StopSequences)
+	cfg := buildInferenceConfig(req)
+	require.NotNil(t, cfg)
+	assert.Equal(t, []string{"STOP"}, cfg.StopSequences)
 }
 
-// ─── convertFromBedrockResponse ───────────────────────────────────────────
+// ─── convertConverseOutput ────────────────────────────────────────────────
 
-func TestBedrock_ConvertFromBedrockResponse_TextBlock(t *testing.T) {
-	stopReason := "end_turn"
-	resp := &bedrockResponse{
-		ID:         "msg-001",
-		Type:       "message",
-		Role:       "assistant",
-		Content:    []bedrockBlock{{Type: "text", Text: "Hello from Bedrock"}},
-		Model:      "anthropic.claude-3-opus",
-		StopReason: &stopReason,
-		Usage:      &bedrockUsage{InputTokens: 10, OutputTokens: 6},
+func TestBedrock_ConvertConverseOutput_TextContent(t *testing.T) {
+	output := &bedrockruntime.ConverseOutput{
+		Output: &brtypes.ConverseOutputMemberMessage{
+			Value: brtypes.Message{
+				Role: brtypes.ConversationRoleAssistant,
+				Content: []brtypes.ContentBlock{
+					&brtypes.ContentBlockMemberText{Value: "Hello from Bedrock"},
+				},
+			},
+		},
+		StopReason: brtypes.StopReasonEndTurn,
+		Usage: &brtypes.TokenUsage{
+			InputTokens:  aws.Int32(10),
+			OutputTokens: aws.Int32(6),
+			TotalTokens:  aws.Int32(16),
+		},
 	}
-	result := convertFromBedrockResponse(resp, "anthropic.claude-3-opus")
+	result := convertConverseOutput(output, "test-model")
 
 	assert.Equal(t, "chat.completion", result.Object)
-	assert.Contains(t, result.ID, "chatcmpl-")
 	require.Len(t, result.Choices, 1)
 	assert.Equal(t, "Hello from Bedrock", result.Choices[0].Message.Content)
 	assert.Equal(t, "assistant", result.Choices[0].Message.Role)
-	assert.NotNil(t, result.Choices[0].FinishReason)
-	assert.Equal(t, "stop", *result.Choices[0].FinishReason) // end_turn → stop
+	require.NotNil(t, result.Choices[0].FinishReason)
+	assert.Equal(t, "stop", *result.Choices[0].FinishReason)
 	require.NotNil(t, result.Usage)
 	assert.Equal(t, 10, result.Usage.PromptTokens)
 	assert.Equal(t, 6, result.Usage.CompletionTokens)
 	assert.Equal(t, 16, result.Usage.TotalTokens)
 }
 
-func TestBedrock_ConvertFromBedrockResponse_ThinkingBlock(t *testing.T) {
-	thinking := "let me reason..."
-	resp := &bedrockResponse{
-		ID:   "msg-002",
-		Type: "message",
-		Content: []bedrockBlock{
-			{Type: "thinking", Thinking: &thinking},
-			{Type: "text", Text: "Answer"},
+func TestBedrock_ConvertConverseOutput_NoUsage(t *testing.T) {
+	output := &bedrockruntime.ConverseOutput{
+		Output: &brtypes.ConverseOutputMemberMessage{
+			Value: brtypes.Message{
+				Role: brtypes.ConversationRoleAssistant,
+				Content: []brtypes.ContentBlock{
+					&brtypes.ContentBlockMemberText{Value: "x"},
+				},
+			},
 		},
+		StopReason: brtypes.StopReasonMaxTokens,
 	}
-	result := convertFromBedrockResponse(resp, "anthropic.claude-3")
-	require.Len(t, result.Choices, 1)
-	assert.Equal(t, "Answer", result.Choices[0].Message.Content)
-	assert.Equal(t, "let me reason...", result.Choices[0].Message.ReasoningContent)
-}
-
-func TestBedrock_ConvertFromBedrockResponse_NoUsage(t *testing.T) {
-	stopReason := "max_tokens"
-	resp := &bedrockResponse{
-		ID:         "msg-003",
-		StopReason: &stopReason,
-		Content:    []bedrockBlock{{Type: "text", Text: "x"}},
-	}
-	result := convertFromBedrockResponse(resp, "model")
-	assert.NotNil(t, result.Choices[0].FinishReason)
-	assert.Equal(t, "length", *result.Choices[0].FinishReason) // max_tokens → length
+	result := convertConverseOutput(output, "model")
+	require.NotNil(t, result.Choices[0].FinishReason)
+	assert.Equal(t, "length", *result.Choices[0].FinishReason)
 	assert.Nil(t, result.Usage)
 }
 
-// ─── stopReasonToOpenAI ────────────────────────────────────────────────────
+// ─── converseStopReasonToOpenAI ───────────────────────────────────────────
 
-func TestBedrock_StopReasonToOpenAI(t *testing.T) {
+func TestBedrock_ConverseStopReasonToOpenAI(t *testing.T) {
 	cases := []struct {
-		in  string
+		in  brtypes.StopReason
 		out string
 	}{
-		{"end_turn", "stop"},
-		{"stop_sequence", "stop"},
-		{"max_tokens", "length"},
-		{"tool_use", "tool_calls"},
-		{"other_reason", "other_reason"},
+		{brtypes.StopReasonEndTurn, "stop"},
+		{brtypes.StopReasonStopSequence, "stop"},
+		{brtypes.StopReasonMaxTokens, "length"},
+		{brtypes.StopReasonToolUse, "tool_calls"},
+		{brtypes.StopReason("other_reason"), "other_reason"},
 	}
 	for _, c := range cases {
-		t.Run(c.in, func(t *testing.T) {
-			assert.Equal(t, c.out, stopReasonToOpenAI(c.in))
+		t.Run(string(c.in), func(t *testing.T) {
+			assert.Equal(t, c.out, converseStopReasonToOpenAI(c.in))
 		})
 	}
 }
@@ -247,17 +268,13 @@ func TestBedrock_ToBedrockError_429RateLimit(t *testing.T) {
 }
 
 // ─── Chat / ChatStream – AWS SDK calls (negative test only) ───────────────
-//
-// Chat and ChatStream use the AWS SDK which requires real AWS credentials.
-// With fake credentials the SDK will fail during signing / connection.
-// We just verify the error is returned and not panicked.
 
 func TestBedrock_Chat_FailsWithFakeCredentials(t *testing.T) {
 	a := New(Config{
-		AccessKeyID:     "FAKEAKID",
+		AccessKeyID:    "FAKEAKID",
 		SecretAccessKey: "FAKESECRET",
-		Region:          "us-east-1",
-		Models:          []string{"anthropic.claude-3-opus-20240229-v1:0"},
+		Region:         "us-east-1",
+		Models:         []string{"anthropic.claude-3-opus-20240229-v1:0"},
 	})
 
 	ctx := context.Background()
@@ -268,7 +285,6 @@ func TestBedrock_Chat_FailsWithFakeCredentials(t *testing.T) {
 		MaxTokens: &maxTok,
 	}
 
-	// Should return an error (auth failure, network error, etc.) — not panic.
 	_, err := a.Chat(ctx, req)
 	assert.Error(t, err)
 }

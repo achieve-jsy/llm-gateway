@@ -343,40 +343,10 @@ func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBloc
 			case string:
 				toolMsg.Content = resContent
 			case []AnthropicContentBlock:
-				// Extract text from sub-blocks (could also contain images)
-				var parts []ContentPart
-				for _, sub := range resContent {
-					if sub.Type == "text" && sub.Text != "" {
-						parts = append(parts, ContentPart{Type: "text", Text: sub.Text})
-					} else if sub.Type == "image" {
-						if p := convertAnthropicImage(sub); p != nil {
-							parts = append(parts, *p)
-						}
-					}
-				}
-				if len(parts) == 1 && parts[0].Type == "text" {
-					toolMsg.Content = parts[0].Text
-				} else if len(parts) > 0 {
-					toolMsg.Content = parts
-				}
+				toolMsg.Content = convertAnthropicToolResultContent(resContent)
 			case []any:
 				// JSON decoding produces []any; decode into typed blocks.
-				subBlocks := decodeContentBlocks(resContent)
-				var parts []ContentPart
-				for _, sub := range subBlocks {
-					if sub.Type == "text" && sub.Text != "" {
-						parts = append(parts, ContentPart{Type: "text", Text: sub.Text})
-					} else if sub.Type == "image" {
-						if p := convertAnthropicImage(sub); p != nil {
-							parts = append(parts, *p)
-						}
-					}
-				}
-				if len(parts) == 1 && parts[0].Type == "text" {
-					toolMsg.Content = parts[0].Text
-				} else if len(parts) > 0 {
-					toolMsg.Content = parts
-				}
+				toolMsg.Content = convertAnthropicToolResultContent(decodeContentBlocks(resContent))
 			case nil:
 				toolMsg.Content = ""
 			default:
@@ -414,6 +384,37 @@ func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBloc
 	}
 
 	return result
+}
+
+// convertAnthropicToolResultContent converts nested tool_result blocks while
+// preserving cache_control on each resulting content part.
+func convertAnthropicToolResultContent(blocks []AnthropicContentBlock) any {
+	var parts []ContentPart
+	for _, block := range blocks {
+		switch block.Type {
+		case "text":
+			if block.Text != "" {
+				parts = append(parts, ContentPart{
+					Type:        "text",
+					Text:        block.Text,
+					ExtraFields: cacheControlExtraFields(block.CacheControl),
+				})
+			}
+		case "image":
+			part := convertAnthropicImage(block)
+			if part != nil {
+				part.ExtraFields = cacheControlExtraFields(block.CacheControl)
+				parts = append(parts, *part)
+			}
+		}
+	}
+	if len(parts) == 1 && parts[0].Type == "text" && parts[0].ExtraFields.IsEmpty() {
+		return parts[0].Text
+	}
+	if len(parts) > 0 {
+		return parts
+	}
+	return nil
 }
 
 // convertAnthropicImage converts an Anthropic image block to an OpenAI ContentPart.

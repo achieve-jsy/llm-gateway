@@ -45,7 +45,6 @@ func countCachePoints(messages []brtypes.Message) int {
 	return n
 }
 
-
 // makeTools builds N tool definitions in the JSON-decoded map shape that
 // convertTools expects. The name must be a plain string (not *string).
 func makeTools(count int) []map[string]any {
@@ -266,7 +265,6 @@ func TestBuildConverseParts_NoAutoInject_WithClientCacheControl(t *testing.T) {
 	}
 }
 
-
 func TestBuildConverseParts_MessagesProtocol_ToolResultCacheControl(t *testing.T) {
 	// 模拟 /v1/messages → AnthropicToChatRequest 后的形态：
 	// system ContentParts 带 cache_control；最后一条 tool 消息 ExtraFields 带 cache_control。
@@ -390,5 +388,114 @@ func TestBuildConverseParts_NoTools_NoToolCachePoint(t *testing.T) {
 
 	if parts.toolCfg != nil {
 		t.Error("expected nil toolCfg when no tools provided")
+	}
+}
+
+func TestBuildConverseParts_ExplicitSystemCacheDoesNotDisableIndependentAutoInjection(t *testing.T) {
+	// system 的显式断点只负责 system 分区，不应关闭 tools 与长会话的自动策略。
+	messages := []core.Message{
+		{
+			Role: "system",
+			Content: []core.ContentPart{{
+				Type: "text",
+				Text: "stable system prompt",
+				ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+					"cache_control": json.RawMessage(`{"type":"ephemeral"}`),
+				}),
+			}},
+		},
+	}
+	for i := 0; i < conversationCacheMinMessages; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		messages = append(messages, makeTextMessage(role, fmt.Sprintf("turn-%d", i)))
+	}
+
+	parts, err := (&Provider{}).buildConverseParts(&core.ChatRequest{
+		Model:    "anthropic.claude-sonnet-4-6",
+		Messages: messages,
+		Tools:    makeTools(2),
+	})
+	if err != nil {
+		t.Fatalf("buildConverseParts: %v", err)
+	}
+	if got := countSystemCachePoints(parts.system); got != 1 {
+		t.Fatalf("explicit system CachePoint: got %d want 1", got)
+	}
+	if got := countToolCachePoints(parts.toolCfg); got != 1 {
+		t.Fatalf("independent auto tool CachePoint: got %d want 1", got)
+	}
+	if got := countCachePoints(parts.messages); got != 1 {
+		t.Fatalf("independent auto conversation CachePoint: got %d want 1", got)
+	}
+}
+
+func TestBuildConverseParts_ExplicitMessageCachePointPreventsAutoConversationInjection(t *testing.T) {
+	// message 分区已有客户端断点时，自动 conversation 断点不能再覆盖/追加。
+	messages := []core.Message{
+		makeTextMessage("system", "sys"),
+		makeMessageWithCacheControl("user", "explicit boundary"),
+	}
+	for i := 0; i < conversationCacheMinMessages-2; i++ {
+		role := "assistant"
+		if i%2 == 1 {
+			role = "user"
+		}
+		messages = append(messages, makeTextMessage(role, fmt.Sprintf("turn-%d", i)))
+	}
+
+	parts, err := (&Provider{}).buildConverseParts(&core.ChatRequest{
+		Model:    "anthropic.claude-sonnet-4-6",
+		Messages: messages,
+		Tools:    makeTools(2),
+	})
+	if err != nil {
+		t.Fatalf("buildConverseParts: %v", err)
+	}
+	if got := countCachePoints(parts.messages); got != 1 {
+		t.Fatalf("message CachePoints: got %d want 1 (explicit only)", got)
+	}
+}
+
+func TestBuildConverseParts_AutoCacheNeverDisplacesFourExplicitCachePoints(t *testing.T) {
+	// 4 个显式断点已占满 Bedrock 配额时，自动 tools 断点必须让位，且不能裁掉客户端断点。
+	messages := []core.Message{
+		{
+			Role: "system",
+			Content: []core.ContentPart{{
+				Type: "text",
+				Text: "explicit system boundary",
+				ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+					"cache_control": json.RawMessage(`{"type":"ephemeral"}`),
+				}),
+			}},
+		},
+	}
+	for i := 0; i < 3; i++ {
+		messages = append(messages, makeMessageWithCacheControl("user", fmt.Sprintf("explicit-%d", i)))
+	}
+
+	parts, err := (&Provider{}).buildConverseParts(&core.ChatRequest{
+		Model:    "anthropic.claude-sonnet-4-6",
+		Messages: messages,
+		Tools:    makeTools(2),
+	})
+	if err != nil {
+		t.Fatalf("buildConverseParts: %v", err)
+	}
+	if got := countSystemCachePoints(parts.system); got != 1 {
+		t.Errorf("explicit system CachePoints: got %d want 1", got)
+	}
+	if got := countCachePoints(parts.messages); got != 3 {
+		t.Errorf("explicit message CachePoints: got %d want 3", got)
+	}
+	if got := countToolCachePoints(parts.toolCfg); got != 0 {
+		t.Errorf("auto tool CachePoints should yield to the four explicit points: got %d", got)
+	}
+	total := countSystemCachePoints(parts.system) + countMessageCachePoints(parts.messages) + countToolCachePoints(parts.toolCfg)
+	if total != maxCachePointsPerRequest {
+		t.Errorf("total CachePoints: got %d want %d", total, maxCachePointsPerRequest)
 	}
 }

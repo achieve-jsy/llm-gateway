@@ -123,3 +123,59 @@ func TestAnthropicToChatRequest_SingleTextWithCacheControl_NotCollapsed(t *testi
 		t.Error("cache_control lost after single-part collapse")
 	}
 }
+
+func TestAnthropicToChatRequest_ToolResultNestedContentPreservesCacheControl(t *testing.T) {
+	raw := []byte(`{
+		"model": "claude-sonnet-4-6",
+		"max_tokens": 1024,
+		"messages": [{
+			"role": "user",
+			"content": [{
+				"type": "tool_result",
+				"tool_use_id": "toolu_nested",
+				"cache_control": {"type": "ephemeral"},
+				"content": [
+					{"type": "text", "text": "result text", "cache_control": {"type": "ephemeral"}},
+					{"type": "image", "source": {"type": "url", "url": "https://example.test/result.png"}, "cache_control": {"type": "ephemeral"}}
+				]
+			}]
+		}]
+	}`)
+
+	var anthReq AnthropicMessagesRequest
+	if err := json.Unmarshal(raw, &anthReq); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	req := AnthropicToChatRequest(&anthReq)
+	if len(req.Messages) != 1 {
+		t.Fatalf("messages: got %d want 1", len(req.Messages))
+	}
+	toolMsg := req.Messages[0]
+	if toolMsg.Role != "tool" {
+		t.Fatalf("role: got %q want tool", toolMsg.Role)
+	}
+	if got := toolMsg.ExtraFields.Lookup("cache_control"); len(got) == 0 {
+		t.Fatal("tool_result cache_control missing from Message.ExtraFields")
+	}
+
+	parts, ok := NormalizeContentParts(toolMsg.Content)
+	if !ok {
+		t.Fatalf("tool_result content: got %T want []ContentPart", toolMsg.Content)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("tool_result parts: got %d want 2", len(parts))
+	}
+	if parts[0].Type != "text" || parts[0].Text != "result text" {
+		t.Errorf("text part: got %+v", parts[0])
+	}
+	if got := parts[0].ExtraFields.Lookup("cache_control"); len(got) == 0 {
+		t.Error("nested text cache_control missing from ContentPart.ExtraFields")
+	}
+	if parts[1].Type != "image_url" || parts[1].ImageURL == nil || parts[1].ImageURL.URL != "https://example.test/result.png" {
+		t.Errorf("image part: got %+v", parts[1])
+	}
+	if got := parts[1].ExtraFields.Lookup("cache_control"); len(got) == 0 {
+		t.Error("nested image cache_control missing from ContentPart.ExtraFields")
+	}
+}

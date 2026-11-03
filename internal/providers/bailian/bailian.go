@@ -1,11 +1,16 @@
 // Package bailian provides Alibaba DashScope (百炼) API integration for the LLM gateway.
-// Bailian uses the DashScope OpenAI-compatible endpoint.
+// Chat/Embeddings 走 OpenAI 兼容模式，Rerank 走原生 API。
+// 兼容 API (/compatible-api/v1/reranks) 只支持 qwen3-rerank，不支持 gte-rerank-v2、
+// qwen3-vl-rerank 等，原生 API 全支持。
 package bailian
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/llmclient"
@@ -13,8 +18,12 @@ import (
 	"github.com/example/llm-gateway/internal/providers/openai"
 )
 
-// defaultBaseURL is the DashScope OpenAI-compatible endpoint.
+// defaultBaseURL is the DashScope OpenAI-compatible endpoint (Chat/Embeddings).
 const defaultBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+// nativeBaseURL is the DashScope native API endpoint for Rerank.
+// 兼容 API 模型覆盖不全，原生 API 支持所有 rerank 模型。
+const nativeBaseURL = "https://dashscope.aliyuncs.com"
 
 // Registration provides factory registration for the Bailian provider.
 var Registration = providers.Registration{
@@ -27,23 +36,35 @@ var Registration = providers.Registration{
 
 // Provider implements the core.Provider interface for Bailian (DashScope).
 type Provider struct {
-	compatible *openai.CompatibleProvider
+	compatible   *openai.CompatibleProvider
+	nativeClient *llmclient.Client // 原生 API client，用于 Rerank
 }
 
 // New creates a new Bailian provider.
 func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
 	baseURL := providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL)
+	compatible := openai.NewCompatibleProvider(cfg.APIKey, opts, openai.CompatibleProviderConfig{
+		ProviderName: "bailian",
+		BaseURL:      baseURL,
+		SetHeaders:   setHeaders,
+	})
 	return &Provider{
-		compatible: openai.NewCompatibleProvider(cfg.APIKey, opts, openai.CompatibleProviderConfig{
-			ProviderName: "bailian",
-			BaseURL:      baseURL,
-			SetHeaders:   setHeaders,
-		}),
+		compatible:   compatible,
+		nativeClient: llmclient.New(nativeClientConfig(), nativeHeaderSetter(cfg.APIKey)),
+	}
+}
+
+func nativeClientConfig() llmclient.Config {
+	return llmclient.DefaultConfig("bailian-native", nativeBaseURL)
+}
+
+func nativeHeaderSetter(apiKey string) llmclient.HeaderSetter {
+	return func(req *http.Request) {
+		setHeaders(req, apiKey)
 	}
 }
 
 // NewWithHTTPClient creates a new Bailian provider with a custom HTTP client.
-// If httpClient is nil, http.DefaultClient is used.
 func NewWithHTTPClient(apiKey string, baseURL string, httpClient *http.Client, hooks llmclient.Hooks) *Provider {
 	resolvedBaseURL := providers.ResolveBaseURL(baseURL, defaultBaseURL)
 	return &Provider{
@@ -52,12 +73,8 @@ func NewWithHTTPClient(apiKey string, baseURL string, httpClient *http.Client, h
 			BaseURL:      resolvedBaseURL,
 			SetHeaders:   setHeaders,
 		}),
+		nativeClient: llmclient.NewWithHTTPClient(httpClient, nativeClientConfig(), nativeHeaderSetter(apiKey)),
 	}
-}
-
-// SetBaseURL allows configuring a custom base URL for the provider.
-func (p *Provider) SetBaseURL(url string) {
-	p.compatible.SetBaseURL(url)
 }
 
 func setHeaders(req *http.Request, apiKey string) {
@@ -82,24 +99,460 @@ func (p *Provider) ListModels(ctx context.Context) (*core.ModelsResponse, error)
 	return p.compatible.ListModels(ctx)
 }
 
-// Responses sends a Responses API request to Bailian using chat-completions translation.
+// Responses sends a Responses API request to Bailian.
 func (p *Provider) Responses(ctx context.Context, req *core.ResponsesRequest) (*core.ResponsesResponse, error) {
 	return providers.ResponsesViaChat(ctx, p, req)
 }
 
-// StreamResponses streams a Responses API request to Bailian using chat-completions translation.
+// StreamResponses streams a Responses API request to Bailian.
 func (p *Provider) StreamResponses(ctx context.Context, req *core.ResponsesRequest) (io.ReadCloser, error) {
 	return providers.StreamResponsesViaChat(ctx, p, req, "bailian")
 }
 
 // Embeddings sends an embeddings request to Bailian.
+// 根据 model_type 精确路由：embedding_vl → multimodal API，embedding → text-embedding API。
 func (p *Provider) Embeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
-	return p.compatible.Embeddings(ctx, req)
+	if req == nil {
+		return nil, core.NewInvalidRequestError("embedding request is required", nil)
+	}
+
+	// 精确路由：根据 model_type 选择 API
+	switch req.ModelType {
+	case "embedding_vl":
+		return p.multimodalEmbeddings(ctx, req)
+	case "embedding":
+		return p.nativeEmbeddings(ctx, req)
+	default:
+		// 向后兼容：model_type 为空时，先试 text-embedding，失败再试 multimodal
+		resp, err := p.nativeEmbeddings(ctx, req)
+		if err == nil {
+			return resp, nil
+		}
+		return p.multimodalEmbeddings(ctx, req)
+	}
 }
 
-// Rerank sends a rerank request to Bailian.
+// ─── 原生 text-embedding API ──────────────────────────────────────────────
+
+const (
+	// maxEmbeddingBatchChars 单次原生 embedding 请求的最大字符数。
+	// 百炼原生 API 对请求体大小有限制，超过约 10KB 会返回 "url error"。
+	// 这里保守设置为 6000 字符，确保 17 段长 HTML 文本不会超限。
+	maxEmbeddingBatchChars = 6000
+)
+
+type bailianTextEmbeddingReq struct {
+	Model      string                       `json:"model"`
+	Input      bailianTextEmbeddingInput    `json:"input"`
+	Parameters bailianTextEmbeddingParams   `json:"parameters,omitempty"`
+}
+
+type bailianTextEmbeddingInput struct {
+	Texts []string `json:"texts"`
+}
+
+type bailianTextEmbeddingParams struct {
+	TextType string `json:"text_type,omitempty"` // "query" or "document"
+}
+
+type bailianTextEmbeddingResp struct {
+	Output struct {
+		Embeddings []bailianTextEmbeddingItem `json:"embeddings"`
+	} `json:"output"`
+	Usage struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+type bailianTextEmbeddingItem struct {
+	Embedding []float64 `json:"embedding"`
+	TextIndex int       `json:"text_index"`
+}
+
+func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+	texts := embeddingInputToStrings(req.Input)
+	if len(texts) == 0 {
+		return nil, core.NewInvalidRequestError("input must be a non-empty string or array of strings", nil)
+	}
+
+	// 大输入分批处理，避免单次请求体超过百炼 API 限制
+	batches := splitTextsForEmbedding(texts, maxEmbeddingBatchChars)
+	if len(batches) == 1 {
+		return p.doNativeEmbedding(ctx, req.Model, batches[0])
+	}
+
+	// 多批次并发请求，合并结果
+	type batchResult struct {
+		data  []core.EmbeddingData
+		usage core.EmbeddingUsage
+	}
+	results := make([]batchResult, len(batches))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var firstErr error
+
+	for i, batch := range batches {
+		wg.Add(1)
+		go func(idx int, b []string) {
+			defer wg.Done()
+			resp, err := p.doNativeEmbedding(ctx, req.Model, b)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				return
+			}
+			results[idx] = batchResult{
+				data:  resp.Data,
+				usage: resp.Usage,
+			}
+		}(i, batch)
+	}
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	// 合并结果：按原始索引排序
+	allData := make([]core.EmbeddingData, 0, len(texts))
+	totalTokens := 0
+	for _, r := range results {
+		allData = append(allData, r.data...)
+		totalTokens += r.usage.TotalTokens
+	}
+
+	return &core.EmbeddingResponse{
+		Object: "list",
+		Data:   allData,
+		Model:  req.Model,
+		Usage: core.EmbeddingUsage{
+			PromptTokens: totalTokens,
+			TotalTokens:  totalTokens,
+		},
+	}, nil
+}
+
+// doNativeEmbedding 发送单个批次的 embedding 请求到原生 text-embedding API。
+func (p *Provider) doNativeEmbedding(ctx context.Context, model string, texts []string) (*core.EmbeddingResponse, error) {
+	bailianReq := bailianTextEmbeddingReq{
+		Model: model,
+		Input: bailianTextEmbeddingInput{Texts: texts},
+	}
+
+	var bailianResp bailianTextEmbeddingResp
+	err := p.nativeClient.Do(ctx, llmclient.Request{
+		Method:   http.MethodPost,
+		Endpoint: "/api/v1/services/embeddings/text-embedding/text-embedding",
+		Body:     bailianReq,
+	}, &bailianResp)
+	if err != nil {
+		return nil, err
+	}
+
+	data := make([]core.EmbeddingData, len(bailianResp.Output.Embeddings))
+	for i, e := range bailianResp.Output.Embeddings {
+		b, _ := json.Marshal(e.Embedding)
+		data[i] = core.EmbeddingData{
+			Object:    "embedding",
+			Embedding: b,
+			Index:     e.TextIndex,
+		}
+	}
+
+	return &core.EmbeddingResponse{
+		Object: "list",
+		Data:   data,
+		Model:  model,
+		Usage: core.EmbeddingUsage{
+			PromptTokens: bailianResp.Usage.TotalTokens,
+			TotalTokens:  bailianResp.Usage.TotalTokens,
+		},
+	}, nil
+}
+
+// splitTextsForEmbedding 将文本切片数组按字符数分批次，每批不超过 maxChars 字符。
+// 保持原始索引以便后续合并结果。
+func splitTextsForEmbedding(texts []string, maxChars int) [][]string {
+	var batches [][]string
+	var currentBatch []string
+	currentChars := 0
+
+	for _, t := range texts {
+		chars := len([]rune(t))
+		// 如果当前文本加上去会超限，而且当前批次非空，就开新批次
+		if currentChars+chars > maxChars && len(currentBatch) > 0 {
+			batches = append(batches, currentBatch)
+			currentBatch = nil
+			currentChars = 0
+		}
+		currentBatch = append(currentBatch, t)
+		currentChars += chars
+	}
+	if len(currentBatch) > 0 {
+		batches = append(batches, currentBatch)
+	}
+	return batches
+}
+
+// ─── 多模态 embedding API (qwen3-vl-embedding 等) ─────────────────────────
+
+type bailianMultimodalEmbeddingReq struct {
+	Model string                            `json:"model"`
+	Input bailianMultimodalEmbeddingInput   `json:"input"`
+}
+
+type bailianMultimodalEmbeddingInput struct {
+	Contents []bailianMultimodalContent `json:"contents"`
+}
+
+type bailianMultimodalContent struct {
+	Text string `json:"text,omitempty"`
+}
+
+type bailianMultimodalEmbeddingResp struct {
+	Output struct {
+		Embeddings []bailianMultimodalEmbeddingItem `json:"embeddings"`
+	} `json:"output"`
+	Usage struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+type bailianMultimodalEmbeddingItem struct {
+	Embedding []float64 `json:"embedding"`
+	Index     int       `json:"index"`
+}
+
+func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+	texts := embeddingInputToStrings(req.Input)
+	if len(texts) == 0 {
+		return nil, core.NewInvalidRequestError("input must be a non-empty string or array of strings", nil)
+	}
+
+	// 大输入分批处理，避免单次请求体超过百炼 API 限制
+	batches := splitTextsForEmbedding(texts, maxEmbeddingBatchChars)
+	if len(batches) == 1 {
+		return p.doMultimodalEmbedding(ctx, req.Model, batches[0], 0)
+	}
+
+	// 多批次并发请求，合并结果
+	type batchResult struct {
+		data  []core.EmbeddingData
+		usage core.EmbeddingUsage
+	}
+	results := make([]batchResult, len(batches))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var firstErr error
+	offset := 0
+
+	for i, batch := range batches {
+		batchOffset := offset
+		offset += len(batch)
+		wg.Add(1)
+		go func(idx int, b []string, off int) {
+			defer wg.Done()
+			resp, err := p.doMultimodalEmbedding(ctx, req.Model, b, off)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				return
+			}
+			results[idx] = batchResult{
+				data:  resp.Data,
+				usage: resp.Usage,
+			}
+		}(i, batch, batchOffset)
+	}
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	allData := make([]core.EmbeddingData, 0, len(texts))
+	totalTokens := 0
+	for _, r := range results {
+		allData = append(allData, r.data...)
+		totalTokens += r.usage.TotalTokens
+	}
+
+	return &core.EmbeddingResponse{
+		Object: "list",
+		Data:   allData,
+		Model:  req.Model,
+		Usage: core.EmbeddingUsage{
+			PromptTokens: totalTokens,
+			TotalTokens:  totalTokens,
+		},
+	}, nil
+}
+
+// doMultimodalEmbedding 发送单个批次的 embedding 请求到多模态 embedding API。
+func (p *Provider) doMultimodalEmbedding(ctx context.Context, model string, texts []string, indexOffset int) (*core.EmbeddingResponse, error) {
+	contents := make([]bailianMultimodalContent, len(texts))
+	for i, t := range texts {
+		contents[i] = bailianMultimodalContent{Text: t}
+	}
+
+	bailianReq := bailianMultimodalEmbeddingReq{
+		Model: model,
+		Input: bailianMultimodalEmbeddingInput{Contents: contents},
+	}
+
+	var bailianResp bailianMultimodalEmbeddingResp
+	err := p.nativeClient.Do(ctx, llmclient.Request{
+		Method:   http.MethodPost,
+		Endpoint: "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
+		Body:     bailianReq,
+	}, &bailianResp)
+	if err != nil {
+		return nil, err
+	}
+
+	data := make([]core.EmbeddingData, len(bailianResp.Output.Embeddings))
+	for i, e := range bailianResp.Output.Embeddings {
+		b, _ := json.Marshal(e.Embedding)
+		data[i] = core.EmbeddingData{
+			Object:    "embedding",
+			Embedding: b,
+			Index:     indexOffset + e.Index,
+		}
+	}
+
+	return &core.EmbeddingResponse{
+		Object: "list",
+		Data:   data,
+		Model:  model,
+		Usage: core.EmbeddingUsage{
+			PromptTokens: bailianResp.Usage.TotalTokens,
+			TotalTokens:  bailianResp.Usage.TotalTokens,
+		},
+	}, nil
+}
+
+// embeddingInputToStrings 将 core.EmbeddingRequest.Input 转换为 []string。
+func embeddingInputToStrings(input any) []string {
+	switch v := input.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []string{v}
+	case []string:
+		return v
+	case []interface{}:
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+// isModelNotSupported 判断错误是否为模型不支持。
+func isModelNotSupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "model_not_supported") ||
+		strings.Contains(msg, "ModelNotSupported") ||
+		strings.Contains(msg, "unsupported model")
+}
+
+// ─── 百炼原生 Rerank 请求/响应格式 ────────────────────────────────────────
+// 兼容 API 只支持 qwen3-rerank，原生 API 支持所有 rerank 模型
+// (qwen3-rerank, gte-rerank-v2, qwen3-vl-rerank 等)。
+
+type bailianRerankReq struct {
+	Model      string                  `json:"model"`
+	Input      bailianRerankInput      `json:"input"`
+	Parameters bailianRerankParameters `json:"parameters,omitempty"`
+}
+
+type bailianRerankInput struct {
+	Query     string   `json:"query"`
+	Documents []string `json:"documents"`
+}
+
+type bailianRerankParameters struct {
+	TopN int `json:"top_n,omitempty"`
+}
+
+type bailianRerankResp struct {
+	Output struct {
+		Results []bailianRerankResult `json:"results"`
+	} `json:"output"`
+	Usage struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
+type bailianRerankResult struct {
+	Index          int     `json:"index"`
+	RelevanceScore float64 `json:"relevance_score"`
+}
+
+// Rerank 使用百炼原生 API (/api/v1/services/rerank/text-rerank/text-rerank)。
+// 兼容 API 模型覆盖不全，原生 API 支持所有 rerank 模型。
 func (p *Provider) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
-	return p.compatible.Rerank(ctx, req)
+	if req == nil {
+		return nil, core.NewInvalidRequestError("rerank request is required", nil)
+	}
+
+	topN := 10
+	if req.TopN != nil && *req.TopN > 0 {
+		topN = *req.TopN
+	}
+
+	bailianReq := bailianRerankReq{
+		Model: req.Model,
+		Input: bailianRerankInput{
+			Query:     req.Query,
+			Documents: req.Documents,
+		},
+		Parameters: bailianRerankParameters{TopN: topN},
+	}
+
+	var bailianResp bailianRerankResp
+	err := p.nativeClient.Do(ctx, llmclient.Request{
+		Method:   http.MethodPost,
+		Endpoint: "/api/v1/services/rerank/text-rerank/text-rerank",
+		Body:     bailianReq,
+	}, &bailianResp)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]core.RerankResult, len(bailianResp.Output.Results))
+	for i, r := range bailianResp.Output.Results {
+		results[i] = core.RerankResult{
+			Index:          r.Index,
+			RelevanceScore: r.RelevanceScore,
+		}
+		if req.ReturnDocuments != nil && *req.ReturnDocuments && r.Index < len(req.Documents) {
+			results[i].Document = &core.RerankDocument{Text: req.Documents[r.Index]}
+		}
+	}
+
+	return &core.RerankResponse{
+		Model:   req.Model,
+		Results: results,
+		Usage: core.RerankUsage{
+			TotalTokens: bailianResp.Usage.TotalTokens,
+		},
+	}, nil
 }
 
 // Passthrough routes an opaque provider-native request to Bailian.

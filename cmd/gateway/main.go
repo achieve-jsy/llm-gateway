@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -27,12 +29,12 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/config"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	"github.com/example/llm-gateway/internal/gateway/loader"
+	"github.com/example/llm-gateway/internal/gateway/middleware"
 	gatewaymodel "github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/provider"
 	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/gateway/server"
-	"github.com/example/llm-gateway/internal/gateway/middleware"
 	ta "github.com/example/llm-gateway/internal/tracearchive"
 
 	// Register all GoModel provider adapters.
@@ -154,9 +156,18 @@ func main() {
 		state.MarkLoadSuccess(result.source, activeRouter.ModelCount(), result.version)
 	}
 
+	// 组名缓存的延迟绑定引用：订阅回调与周期性 reconcile 都在下方 Scheduler 初始化段之前就启动，
+	// 而组名缓存要到那时才创建（controlPlaneURL 为空时始终保持 nil），因此用 atomic.Pointer 传递，
+	// 避免「回调 goroutine 读 / main goroutine 写」的数据竞争。
+	var groupNameCacheRef atomic.Pointer[cache.GroupNameCache]
+
 	// Start config change subscriber so the loader rebuilds atomically on changes.
 	fetchEntries := func() ([]gatewaymodel.ProviderEntry, error) {
 		if snapshot, err := configsync.LoadProviderSnapshot(ctx, rdb); err == nil {
+			// 组名与 provider 条目同源（同一个快照），热更新时一并回流组名缓存：
+			// 否则运行期新建的模型组只能等下一次控制面轮询（最长 30s）才被网关识别，
+			// 期间合法组名仍会被判成直连模型（与 2026-10-16 事故同症状）。
+			applyGroupNamesFromSnapshot(snapshot, groupNameCacheRef.Load())
 			return snapshot.Entries, nil
 		}
 		if controlPlaneURL != "" && internalToken != "" {
@@ -203,7 +214,7 @@ func main() {
 
 	// Periodic reconciliation loop (every 30s) – brings in any changes missed
 	// by pub/sub (e.g. gateway restart after config push).
-	go reconcileProviders(ctx, rdb, providerLoader, state, controlPlaneURL, internalToken)
+	go reconcileProviders(ctx, rdb, providerLoader, state, controlPlaneURL, internalToken, &groupNameCacheRef)
 
 	// 初始化 Scheduler
 	var sch *scheduler.Scheduler
@@ -220,12 +231,17 @@ func main() {
 			defer sch.Shutdown()
 			slog.Info("scheduler started")
 
-			// 初始化模型组名称缓存：阻塞等待首次刷新成功，
-			// 避免 GroupNameCache 尚未就绪时让请求走 direct 路径误返回 404。
-			// 最多尝试 5 次 × 2s 间隔，控制面就绪后即可进入定期刷新循环。
+			// 初始化模型组名称缓存：
+			// 1) 先用控制面写入 Redis 的 provider 快照预热（蓝绿发布时控制面可能尚未监听，
+			//    预热可让组名立即可用，避免合法组名被误判为直连模型）；
+			// 2) 再阻塞等待首次控制面刷新成功；
+			// 3) 最后交给后台循环刷新（首次成功前快速重试）。
+			// 预热失败不阻断启动，也绝不跳过后续控制面刷新。
 			nameCache = cache.NewGroupNameCache(internalToken)
+			groupNameCacheRef.Store(nameCache)
+			preheatGroupNamesFromSnapshot(ctx, rdb, nameCache)
 			if err := nameCache.RefreshWithRetry(ctx, controlPlaneURL, 5, 2*time.Second); err != nil {
-				slog.Error("group name cache failed to initialize, group requests may 404 until next refresh", "error", err)
+				slog.Error("组名缓存初始化失败，首个控制面刷新成功前组名请求可能被拒（503/403）", "error", err)
 			}
 			go refreshGroupNameCache(ctx, nameCache, controlPlaneURL)
 			slog.Info("group name cache started", "initialized", nameCache.IsInitialized())
@@ -514,23 +530,53 @@ func newTraceDBLogger() logger.Interface {
 	)
 }
 
+// refreshGroupNameCache 在后台刷新组名缓存：首次控制面刷新成功前按 2s 快速重试
+// （蓝绿发布时控制面可能晚于网关就绪），成功一次后退回 30s 定期刷新。
+// 具体的重试节奏与状态语义见 cache.GroupNameCache.RefreshLoop。
 func refreshGroupNameCache(ctx context.Context, nc *cache.GroupNameCache, controlPlaneURL string) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	nc.RefreshLoop(ctx, controlPlaneURL,
+		cache.DefaultGroupNameFastRefreshInterval,
+		cache.DefaultGroupNameSteadyRefreshInterval)
+}
 
-	// 立即执行一次
-	nc.Refresh(ctx, controlPlaneURL)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := nc.Refresh(ctx, controlPlaneURL); err != nil {
-				slog.Warn("group name cache refresh failed", "error", err)
-			}
-		}
+// preheatGroupNamesFromSnapshot 用控制面写入 Redis 的 provider 快照预热组名缓存，
+// 作为冷启动/蓝绿发布期间控制面尚未监听时的兜底。
+// 预热失败不阻断启动：快照不存在（redis.Nil）属正常情况，仅 debug；其他错误仅 Warn。
+// 注意预热不等于「控制面已确认」，调用方仍必须执行控制面刷新。
+func preheatGroupNamesFromSnapshot(ctx context.Context, rdb *redis.Client, nc *cache.GroupNameCache) {
+	if nc == nil || rdb == nil {
+		return
 	}
+
+	snapshot, err := configsync.LoadProviderSnapshot(ctx, rdb)
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			// 从未有过配置下发（或 key 已过期）属正常情况，不打 Warn 噪声
+			slog.Debug("provider snapshot not found in redis, skip group name cache preheat")
+			return
+		}
+		slog.Warn("failed to preheat group name cache from provider snapshot", "error", err)
+		return
+	}
+	if snapshot == nil || len(snapshot.GroupNames) == 0 {
+		slog.Debug("provider snapshot carries no group names, skip group name cache preheat")
+		return
+	}
+
+	nc.SetNames(snapshot.GroupNames)
+	slog.Info("group name cache preheated from provider snapshot",
+		"count", len(snapshot.GroupNames), "version", snapshot.Version)
+}
+
+// applyGroupNamesFromSnapshot 把 provider 快照携带的启用组名回流到组名缓存（返回是否写入）。
+//
+// 语义由 cache.ApplySnapshotGroupNames 定义：空 group_names 不覆盖现有缓存——旧控制面不写该字段
+// （omitempty → nil）与「确实没有启用组」在网关侧无法区分，用空列表覆盖会让合法组名被误判为直连模型。
+func applyGroupNamesFromSnapshot(snapshot *configsync.ProviderSnapshot, nc *cache.GroupNameCache) bool {
+	if snapshot == nil || nc == nil {
+		return false
+	}
+	return nc.ApplySnapshotGroupNames(snapshot.GroupNames, snapshot.Version)
 }
 
 func loadProviders(ctx context.Context, rdb *redis.Client, pl *loader.ProviderLoader, controlPlaneURL, token string) (*providerLoadResult, error) {
@@ -562,7 +608,7 @@ func loadProviders(ctx context.Context, rdb *redis.Client, pl *loader.ProviderLo
 	return nil, fmt.Errorf("no provider snapshot or control-plane source available")
 }
 
-func reconcileProviders(ctx context.Context, rdb *redis.Client, pl *loader.ProviderLoader, state *provider.RuntimeState, controlPlaneURL, token string) {
+func reconcileProviders(ctx context.Context, rdb *redis.Client, pl *loader.ProviderLoader, state *provider.RuntimeState, controlPlaneURL, token string, groupNameCacheRef *atomic.Pointer[cache.GroupNameCache]) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -573,6 +619,11 @@ func reconcileProviders(ctx context.Context, rdb *redis.Client, pl *loader.Provi
 		case <-ticker.C:
 			_, _, _, _, _, currentVersion := state.Snapshot()
 			if snapshot, err := configsync.LoadProviderSnapshot(ctx, rdb); err == nil {
+				// 周期 reconcile 与 pub/sub 热更新走同一条回流路径：即使订阅事件丢失，
+				// 组名也能在这个周期内被纠正。
+				if groupNameCacheRef != nil {
+					applyGroupNamesFromSnapshot(snapshot, groupNameCacheRef.Load())
+				}
 				if pl.Router() != nil && pl.Router().ModelCount() > 0 && snapshot.Version == currentVersion {
 					continue
 				}

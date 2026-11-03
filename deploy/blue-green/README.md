@@ -51,6 +51,9 @@ KEEP_OLD_ENV=true ./deploy-blue-green.sh --rollback   # nginx 切回上一个颜
   否则已写出的 `body_ref_*` 会永久停在 spool 上（读侧永远点不动）。
 - 回滚后核对：`systemctl is-active trace-sealer` 必须是 `active`；`cat ${DEPLOY_DIR}/.active-color`
   必须已回到旧颜色。
+- **若被切回/前滚的镜像不感知 `/ready` 的 `checks.group_cache` 字段**：本节这条
+  `--rollback` 路径（只做 `health_check`）不受切流门禁影响；但用正常部署路径去前滚/回退到
+  这类旧镜像会被门禁挡下 ⇒ 详见 §7。
 
 ## 3. 功能降级（最轻的回滚：只关写侧，不动颜色）
 
@@ -111,3 +114,28 @@ SELECT count(*) AS jsonb_rows
 - 不得在两个颜色里设同一个 `inst`（两个写者会写进同一个 `inst=` 目录 ⇒ part 序号与 spool 互踩）。
 - 不得把 `TRACE_BODY_*` 放进 `config/prod.yaml`（全局 YAML 会让两个颜色共用一个 inst）。
 - 不得在功能开启后停止 sealer（未封的 spool 会永久停在磁盘上，`body_ref_*` 永远点不动）。
+
+## 7. 切流门禁：`/ready` 必须带 `checks.group_cache == "ok"`（新网关镜像）
+
+> 背景：2026-10-16 线上蓝绿发布，green 网关启动时组名缓存为空（控制面 `:8083` 未就绪、
+> 5 次重试全部 refused），切流后 14:32:46~14:33:04 共 126 笔合法组名请求被误判为直连模型，
+> 返回 403 `direct_model_not_allowed`。为此 SAFE_SWITCH 的切流门禁增加了「组名缓存就绪」一项。
+
+1. **门禁内容**：`SAFE_SWITCH_ENABLED=true` 时，切流前 `wait_gateway_ready_stable` 会解析目标颜色的
+   `/ready` 载荷，**必须**满足 `checks.group_cache == "ok"` —— 连同 `status=ready`、
+   `checks.redis/registry/scheduler == "ok"`、`details.model_count` 不低于下限、
+   `capabilities.tier_snapshot_schema=1` 且 `redis_v2=true`。任一不满足 ⇒ 取不到切流指纹 ⇒ 不切流。
+2. **仅适用于含该字段的新网关镜像**：本次改动之后的镜像，`/ready` 才会输出 `checks.group_cache`
+   （取值 `ok` / `not_initialized` / `unknown`）。**不含该字段的旧镜像一律被判为不可切流**，
+   即使它的 `health_check`（`/ready` 与 `/healthz` 都能 200）已经通过 —— 门禁是 health_check 之后的第二道闸。
+3. **回退到不感知该字段的旧版本必须走 `--rollback`**：
+   `KEEP_OLD_ENV=true ./deploy-blue-green.sh --rollback` 只做 `health_check`，不走该门禁，因此不受影响。
+   反之，用「重新触发旧 tag 的 deploy-prod」这类正常部署路径前滚/回退到旧镜像，会在 `health_check`
+   通过后被门禁挡下、并随即 tearing down 目标颜色（`.active-color` 不变，部署以非 0 退出）。
+   确需让旧镜像走正常部署路径时，只能临时 `SAFE_SWITCH_ENABLED=false`：**代价是同时失去部署锁与
+   「起新 → 稳定就绪 → 原子切流」保护**（正是 2026-10-16 事故的防护），所以只允许在测试环境或
+   人工盯盘的生产窗口临时使用，用完必须恢复为 `true`。
+4. **门禁失败时的可观测症状**：日志先出现
+   `<color> gateway /ready payload not cutover-ready yet (attempt N/M)`（`<color>` 是目标颜色），
+   随后 `ERROR: <color> gateway /ready did not become cutover-ready; deploy aborted, nothing switched.`
+   与 `Stopping <color> environment (timeout 30s)...`。此时流量仍在原颜色，`.active-color` 未变。

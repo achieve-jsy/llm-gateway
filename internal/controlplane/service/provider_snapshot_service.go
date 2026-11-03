@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -15,15 +16,32 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// GroupNameLister 提供 enabled=true 的模型组名，用于随 provider 快照一起下发。
+// 实现者：internal/controlplane/repository.GroupRepo。
+type GroupNameLister interface {
+	ListEnabledGroupNames() ([]string, error)
+}
+
 // ProviderSnapshotRefresher rebuilds the shared gateway provider snapshot.
 type ProviderSnapshotRefresher struct {
 	modelRepo ModelRepoInterface
 	rdb       *redis.Client
+	// groupLister 为可选依赖：未注入时快照不带组名（行为与改造前一致）。
+	groupLister GroupNameLister
 }
 
 // NewProviderSnapshotRefresher creates a new snapshot refresher.
 func NewProviderSnapshotRefresher(modelRepo ModelRepoInterface, rdb *redis.Client) *ProviderSnapshotRefresher {
 	return &ProviderSnapshotRefresher{modelRepo: modelRepo, rdb: rdb}
+}
+
+// SetGroupNameLister 注入组名来源（刻意用 setter，避免改 NewProviderSnapshotRefresher 的签名
+// 破坏既有调用点与测试 fake）。nil 安全。
+func (r *ProviderSnapshotRefresher) SetGroupNameLister(l GroupNameLister) {
+	if r == nil {
+		return
+	}
+	r.groupLister = l
 }
 
 // RefreshAvailableSnapshot rebuilds and stores the latest available providers snapshot.
@@ -47,6 +65,16 @@ func (r *ProviderSnapshotRefresher) RefreshAvailableSnapshot(ctx context.Context
 		Version:   version,
 		UpdatedAt: time.Now().UTC(),
 		Entries:   entries,
+	}
+
+	// 组名是网关冷启动的预热数据，但 provider 快照本身是可用性关键路径：
+	// 读取组名失败只能告警，绝不能让快照写不出去（否则网关连模型都拉不到）。
+	if r.groupLister != nil {
+		if names, err := r.groupLister.ListEnabledGroupNames(); err != nil {
+			slog.Warn("failed to list enabled group names for provider snapshot", "error", err)
+		} else {
+			snapshot.GroupNames = names
+		}
 	}
 
 	if err := configsync.SaveProviderSnapshot(ctx, r.rdb, snapshot); err != nil {

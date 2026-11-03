@@ -60,9 +60,17 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *c
 		// 直连（非组名）模型请求会绕过档位预算：只有组名路径会设置 tier context，
 		// 导致 budget.Gate.Check 读不到档位而跳过档位限制。启用档位预算
 		// （tierResolver != nil）时一律拒绝，强制走组名访问。
-		// 空 model 放行给下游原有的 unknown_model（404）处理，避免语义退化为 403。
-		if modelName != "" && d.tierResolver != nil {
-			return nil, model.ErrDirectModelNotAllowed
+		// 空 model 放行给下游原有的 unknown_model（404）处理，避免语义退化为 403/503。
+		if modelName != "" {
+			// 缓存未就绪时无法区分「真的直连模型」与「尚未加载的合法组名」：
+			// 必须返回可重试的 503，而不是误判为直连的 403。
+			// 该判断必须先于档位判定，且拒绝时不得解析 tier、不得写 tier context。
+			if !d.nameCache.IsInitialized() {
+				return nil, model.ErrGroupCacheNotReady
+			}
+			if d.tierResolver != nil {
+				return nil, model.ErrDirectModelNotAllowed
+			}
 		}
 		return nil, nil
 	}

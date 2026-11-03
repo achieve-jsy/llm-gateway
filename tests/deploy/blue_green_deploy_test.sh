@@ -68,7 +68,14 @@ case "$url" in
         if [ "${EMPTY_READY_MODELS:-false}" = "true" ]; then
             model_count=0
         fi
-        printf '{"status":"ready","checks":{"redis":"ok","registry":"ok","scheduler":"ok"},"details":{"version":%s,"model_count":%s,"source":"redis-snapshot","loaded_at":"2026-07-17T00:00:00Z"},"capabilities":{"tier_snapshot_schema":1,"redis_v2":true,"snapshot_revision":4}}\n' "$version" "$model_count"
+        # checks.group_cache 可控：READY_GROUP_CACHE=missing 时整体省略该字段（模拟不含该字段的
+        # 旧网关镜像），其余取值按字面写入（默认 ok）。其余字段保持不变。
+        group_cache_field=',"group_cache":"ok"'
+        case "${READY_GROUP_CACHE:-ok}" in
+            missing) group_cache_field="" ;;
+            *)       group_cache_field=",\"group_cache\":\"${READY_GROUP_CACHE:-ok}\"" ;;
+        esac
+        printf '{"status":"ready","checks":{"redis":"ok","registry":"ok","scheduler":"ok"%s},"details":{"version":%s,"model_count":%s,"source":"redis-snapshot","loaded_at":"2026-07-17T00:00:00Z"},"capabilities":{"tier_snapshot_schema":1,"redis_v2":true,"snapshot_revision":4}}\n' "$group_cache_field" "$version" "$model_count"
         ;;
     http://localhost:8081/healthz|http://localhost:8083/healthz)
         exit 0
@@ -146,26 +153,76 @@ test_flapping_ready_version_blocks_cutover() {
     local fixture
     fixture=$(new_fixture ready-flap)
 
-    if run_deploy "$fixture" HEALTH_RETRIES=3 FLAP_READY_VERSION=true; then
+    if run_deploy "$fixture" HEALTH_RETRIES=3 FLAP_READY_VERSION=true >"${fixture}/deploy.log" 2>&1; then
         fail "deployment should fail when gateway ready version does not stabilize"
     fi
 
     [ "$(cat "${fixture}/deploy/.active-color")" = "blue" ] || fail "active color changed after unstable ready payload"
     assert_contains "${fixture}/upstream-active.conf" "127.0.0.1:8080"
     assert_not_contains "${fixture}/calls.log" "nginx -s reload"
+    # 失败原因必须是「指纹取到了但版本反复变化」，而不是别的门禁（否则判别力会被静默削弱）。
+    assert_contains "${fixture}/deploy.log" "green gateway ready fingerprint stable=1/2"
+    assert_not_contains "${fixture}/deploy.log" "green gateway /ready payload not cutover-ready yet"
 }
 
 test_empty_ready_models_blocks_cutover() {
     local fixture
     fixture=$(new_fixture ready-empty)
 
-    if run_deploy "$fixture" HEALTH_RETRIES=2 EMPTY_READY_MODELS=true; then
+    if run_deploy "$fixture" HEALTH_RETRIES=2 EMPTY_READY_MODELS=true >"${fixture}/deploy.log" 2>&1; then
         fail "deployment should fail when gateway ready model_count is empty"
     fi
 
     [ "$(cat "${fixture}/deploy/.active-color")" = "blue" ] || fail "active color changed with empty ready models"
     assert_contains "${fixture}/upstream-active.conf" "127.0.0.1:8080"
     assert_not_contains "${fixture}/calls.log" "nginx -s reload"
+    # 失败原因必须是「model_count=0 取不到切流指纹」，而不是版本不稳定或健康检查失败。
+    assert_contains "${fixture}/deploy.log" "green gateway /ready payload not cutover-ready yet"
+    assert_not_contains "${fixture}/deploy.log" "green gateway ready fingerprint stable="
+    assert_not_contains "${fixture}/deploy.log" "Health check failed for green"
+}
+
+# 冷启动组名缓存未就绪（checks.group_cache=not_initialized）必须阻断切流 ——
+# 这是 2026-10-16 线上蓝绿事故（绿网关组名缓存为空仍被切流、合法组名请求被误判直连）的门禁回归。
+test_group_cache_not_initialized_blocks_cutover() {
+    local fixture
+    fixture=$(new_fixture cache-not-initialized)
+
+    if run_deploy "$fixture" READY_GROUP_CACHE=not_initialized HEALTH_RETRIES=2 >"${fixture}/deploy.log" 2>&1; then
+        fail "deployment should fail when /ready reports group_cache=not_initialized"
+    fi
+
+    [ "$(cat "${fixture}/deploy/.active-color")" = "blue" ] || fail "active color changed with group_cache=not_initialized"
+    assert_contains "${fixture}/upstream-active.conf" "127.0.0.1:8080"
+    assert_not_contains "${fixture}/calls.log" "nginx -s reload"
+    # 目标环境必须先起来并通过 health_check，否则失败原因就不是切流门禁。
+    assert_contains "${fixture}/calls.log" "compose -f ${fixture}/deploy/docker-compose.green.yml -p llm-green up -d"
+    # 失败原因必须是 cutover-ready 门禁本身，而不是健康检查 / capabilities / 锁竞争等其它原因。
+    assert_contains "${fixture}/deploy.log" "green gateway /ready payload not cutover-ready yet"
+    assert_contains "${fixture}/deploy.log" "did not become cutover-ready; deploy aborted"
+    assert_not_contains "${fixture}/deploy.log" "Health check failed for green"
+    assert_not_contains "${fixture}/deploy.log" "does not advertise tier_snapshot_schema=1"
+    assert_not_contains "${fixture}/deploy.log" "Timed out waiting for another deployment"
+}
+
+# 旧网关镜像的 /ready 不含 checks.group_cache 字段，同样必须阻断切流
+# （回退到这类旧版本要走 deploy-blue-green.sh --rollback，见 deploy/blue-green/README.md）。
+test_missing_group_cache_field_blocks_cutover() {
+    local fixture
+    fixture=$(new_fixture cache-missing)
+
+    if run_deploy "$fixture" READY_GROUP_CACHE=missing HEALTH_RETRIES=2 >"${fixture}/deploy.log" 2>&1; then
+        fail "deployment should fail when /ready payload has no group_cache field"
+    fi
+
+    [ "$(cat "${fixture}/deploy/.active-color")" = "blue" ] || fail "active color changed without group_cache field"
+    assert_contains "${fixture}/upstream-active.conf" "127.0.0.1:8080"
+    assert_not_contains "${fixture}/calls.log" "nginx -s reload"
+    assert_contains "${fixture}/calls.log" "compose -f ${fixture}/deploy/docker-compose.green.yml -p llm-green up -d"
+    assert_contains "${fixture}/deploy.log" "green gateway /ready payload not cutover-ready yet"
+    assert_contains "${fixture}/deploy.log" "did not become cutover-ready; deploy aborted"
+    assert_not_contains "${fixture}/deploy.log" "Health check failed for green"
+    assert_not_contains "${fixture}/deploy.log" "does not advertise tier_snapshot_schema=1"
 }
 
 test_concurrent_deploy_waits_then_times_out() {
@@ -200,6 +257,8 @@ test_success_keeps_old_environment
 test_failed_smoke_restores_previous_upstream
 test_flapping_ready_version_blocks_cutover
 test_empty_ready_models_blocks_cutover
+test_group_cache_not_initialized_blocks_cutover
+test_missing_group_cache_field_blocks_cutover
 test_concurrent_deploy_waits_then_times_out
 test_retained_target_is_removed_before_replacement
 echo "PASS: blue-green deployment tests"

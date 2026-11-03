@@ -200,6 +200,17 @@ func (r *GroupRepo) ListEnabled() ([]model.Group, error) {
 	return groups, err
 }
 
+// ListEnabledGroupNames 返回所有 enabled=true 的模型组名（软删由 GORM 自动过滤 deleted_at），
+// 按 name 升序保证确定性。这些名字会随 provider snapshot 一起下发，供网关冷启动预热组名缓存。
+func (r *GroupRepo) ListEnabledGroupNames() ([]string, error) {
+	var names []string
+	err := r.db.Model(&model.Group{}).
+		Where("enabled = ?", true).
+		Order("name ASC").
+		Pluck("name", &names).Error
+	return names, err
+}
+
 func (r *GroupRepo) FindNamesByOpenMode(openMode string) ([]string, error) {
 	var names []string
 	err := r.db.Model(&model.Group{}).

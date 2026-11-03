@@ -168,6 +168,14 @@ func setup(
 	modelInfoHandler := handler.NewModelInfoHandler(controlPlaneURL, internalToken)
 	healthHandler := handler.NewHealthHandler(routerCache.Client(), modelsRouter, state, sch)
 	healthHandler.SetBudgetSnapshotHolder(tierHolder)
+	// 注入组名缓存状态：组名缓存未就绪时 /ready 报 checks.group_cache=not_initialized 并返回 503，
+	// 作为蓝绿发布的切流门禁（避免缓存冷启动期间的组名请求被误判为直连模型）。
+	// nameCache 是 *cache.GroupNameCache，须显式判空，避免「非 nil 接口包 nil 指针」陷阱；
+	// 只在确实启用了组路由（groupDispatch != nil）时注入：没有组路由的装配不读组名目录，
+	// /ready 报 unknown（200，向后兼容），部署门禁（只接受 ok）体现为「未 cutover-ready」。
+	if nameCache != nil && groupDispatch != nil {
+		healthHandler.SetGroupNameCache(nameCache)
+	}
 	var responsesHandler *handler.ResponsesHandler
 	if groupDispatch != nil {
 		responsesHandler = handler.NewResponsesHandlerWithGroup(orch, groupDispatch)

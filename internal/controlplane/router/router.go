@@ -113,6 +113,9 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	healthCheckSvc.SetSnapshotRefresher(snapshotter)
 
 	groupRepo := repository.NewGroupRepo(db)
+	// 组名随 provider 快照一起下发，供网关冷启动预热组名缓存。
+	// 注意：snapshotter 在 groupRepo 之前创建，注入必须放在这里。
+	snapshotter.SetGroupNameLister(groupRepo)
 	keyGroupRepo := repository.NewKeyGroupRepo(db)
 	keyGroupSvc := service.NewKeyGroupService(keyGroupRepo, groupRepo, keyRepo, service.NewEventPublisherAdapter(publisher))
 	keySvc := service.NewKeyService(keyRepo, keyGroupSvc, service.NewEventPublisherAdapter(publisher))
@@ -135,6 +138,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	keyOrgSyncer := service.NewKeyOrgSyncer(db, service.NewEventPublisherAdapter(publisher))
 
 	groupSvc := service.NewGroupService(groupRepo, modelRepo)
+	// 组的新增/更新/删除（含启停）后触发一次快照刷新，让网关尽快看到最新组名。
+	groupSvc.SetSnapshotRefresher(snapshotter)
 	groupSvc.SetFailoverDefaults(
 		settingsSvc.GetDefaultMaxSwitches(context.Background()),
 		settingsSvc.GetDefaultSameModelRetries(context.Background()),

@@ -139,12 +139,14 @@ extract_ready_fingerprint() {
     local payload="$1"
 
     if command -v jq >/dev/null 2>&1; then
+        # 门禁含 checks.group_cache == "ok"：不含该字段的旧网关镜像会被判为不可切流，回退请用 --rollback（详见 README.md §7）。
         printf '%s' "$payload" | jq -r --argjson min_models "$READY_MIN_MODEL_COUNT" '
             def nonempty: type == "string" and length > 0;
             if .status == "ready"
               and .checks.redis == "ok"
               and .checks.registry == "ok"
               and .checks.scheduler == "ok"
+              and .checks.group_cache == "ok"
               and ((.details.model_count // 0) >= $min_models)
               and (.details.source | nonempty)
               and (.details.loaded_at | nonempty)
@@ -160,6 +162,7 @@ extract_ready_fingerprint() {
     fi
 
     if command -v python3 >/dev/null 2>&1; then
+        # 与 jq 分支同一门禁：旧网关镜像的 /ready 无 group_cache 字段会被拒绝，回退请用 --rollback（详见 README.md §7）。
         READY_PAYLOAD="$payload" READY_MIN_MODEL_COUNT="$READY_MIN_MODEL_COUNT" python3 - <<'PY'
 import json, os, sys
 
@@ -178,6 +181,7 @@ ok = (
     and checks.get("redis") == "ok"
     and checks.get("registry") == "ok"
     and checks.get("scheduler") == "ok"
+    and checks.get("group_cache") == "ok"
     and int(details.get("model_count") or 0) >= min_models
     and isinstance(details.get("source"), str) and len(details.get("source")) > 0
     and isinstance(details.get("loaded_at"), str) and len(details.get("loaded_at")) > 0

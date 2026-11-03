@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// groupSnapshotRefreshTimeout 是组变更后异步刷新 provider 快照的超时上限。
+const groupSnapshotRefreshTimeout = 10 * time.Second
 
 var (
 	ErrGroupNotFound          = errors.New("group not found")
@@ -32,6 +36,34 @@ type GroupService struct {
 	failoverDefaults  *FailoverDefaults
 	modelTierRepo     ModelTierRepository
 	snapshotPublisher BudgetConfigPublisher
+	// snapshotRefresher 为可选依赖：组名集合变化后让 provider 快照立刻带上最新的启用组名，
+	// 使网关无需等下一个刷新周期。未注入时行为与改造前完全一致。
+	snapshotRefresher *ProviderSnapshotRefresher
+}
+
+// SetSnapshotRefresher 注入 provider 快照刷新器（组变更后触发一次刷新）。
+func (s *GroupService) SetSnapshotRefresher(snapshotter *ProviderSnapshotRefresher) {
+	s.snapshotRefresher = snapshotter
+}
+
+// refreshSnapshotAfterGroupChange 在组名集合可能变化后刷新 provider 快照。
+//
+// 异步执行 + 超时（对齐 QuotaService.refreshSnapshotAsync）：刷新包含可用模型全量查询、
+// 逐 provider 凭据解密与 Redis 写，绝不能让它支配组管理接口的响应延迟；超时兜底避免
+// 后台 goroutine 在 PG/Redis 抖动时无限阻塞。刷新失败只告警：快照是网关侧的预热/加速数据，
+// 不能改变组管理接口的返回值与错误语义。
+func (s *GroupService) refreshSnapshotAfterGroupChange(action string, groupID uint) {
+	if s.snapshotRefresher == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), groupSnapshotRefreshTimeout)
+		defer cancel()
+		if _, err := s.snapshotRefresher.RefreshAvailableSnapshot(ctx); err != nil {
+			slog.Warn("provider snapshot refresh failed after group change",
+				"action", action, "group_id", groupID, "error", err)
+		}
+	}()
 }
 
 func (s *GroupService) WithBudgetTierSnapshotPublisher(p BudgetConfigPublisher) *GroupService {
@@ -232,6 +264,8 @@ func (s *GroupService) Create(req CreateGroupRequest) (*model.Group, error) {
 		return nil, fmt.Errorf("create group: %w", err)
 	}
 
+	s.refreshSnapshotAfterGroupChange("create", group.ID)
+
 	return group, nil
 }
 
@@ -346,6 +380,8 @@ func (s *GroupService) Update(id uint, req UpdateGroupRequest) (*model.Group, er
 		return nil, fmt.Errorf("update group: %w", err)
 	}
 
+	s.refreshSnapshotAfterGroupChange("update", group.ID)
+
 	return group, nil
 }
 
@@ -362,7 +398,13 @@ func (s *GroupService) Delete(id uint) error {
 		return ErrGroupNotFound
 	}
 
-	return s.repo.SoftDelete(id)
+	if err := s.repo.SoftDelete(id); err != nil {
+		return err
+	}
+
+	s.refreshSnapshotAfterGroupChange("delete", id)
+
+	return nil
 }
 
 func (s *GroupService) GetByID(id uint) (*model.Group, error) {

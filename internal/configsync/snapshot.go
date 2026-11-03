@@ -20,6 +20,10 @@ type ProviderSnapshot struct {
 	Version   int64                        `json:"version"`
 	UpdatedAt time.Time                    `json:"updated_at"`
 	Entries   []gatewaymodel.ProviderEntry `json:"entries"`
+	// GroupNames 为 enabled=true 的模型组名，供网关冷启动预热组名缓存
+	// （避免控制面未就绪时空缓存把合法组名误判为直连模型）。
+	// omitempty + 旧控制面不写该字段：灰度/回滚期间网关读到的是 nil，按「无组名」处理。
+	GroupNames []string `json:"group_names,omitempty"`
 }
 
 // LoadProviderSnapshot reads the shared provider snapshot from Redis.

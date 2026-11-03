@@ -93,6 +93,16 @@ var (
 		Type: "forbidden", Code: "direct_model_not_allowed",
 		Message: "direct model access is not allowed; request the model by its model group name", HTTPStatus: http.StatusForbidden,
 	}
+	// ErrGroupCacheNotReady 组名缓存未就绪：
+	// 缓存未初始化时，网关无法区分「真的直连模型」与「尚未加载的合法组名」，
+	// 此时一律返回可重试的 503（而非 403），避免把合法组名误判为直连模型。
+	// 2026-10-16 线上蓝绿发布期间，green 网关与控制面同时拉起，启动期拉取组名的
+	// 5 次重试全部 connection refused，GroupNameCache 停留在 initialized=false，
+	// 切流后 30s 内共 126 笔合法组名请求被误判为直连而返回 403 direct_model_not_allowed。
+	ErrGroupCacheNotReady = &UnifiedError{
+		Type: "service_unavailable", Code: "group_cache_not_ready",
+		Message: "model group directory is warming up; please retry shortly", HTTPStatus: http.StatusServiceUnavailable,
+	}
 )
 
 // NewUnifiedError 创建自定义统一错误

@@ -791,6 +791,46 @@
       "attachment_bytes": "图片字节存 feedback_attachments.data（bytea），模型上 json:\"-\"；列表只 select 元数据列，任何 JSON 响应都不含 data 字段"
     }
   },
+  "org_workspace": {
+    "base_prefix": "/api/v1",
+    "auth": "jwt Bearer <jwt>（adminGroup）",
+    "purpose": "组织工作台（原型图1/图3）：工作室→团队→成员的权限与成本统一入口。负责人来自 EHR（只读、多值、只增不删），管理员来自本地 RBAC（可授可撤）",
+    "routes": {
+      "GET /admin/org/accounts": {
+        "handler": "AccountHandler.List",
+        "purpose": "账号页：一人一行（不是授权记录一行），带主角色与全部授权明细",
+        "query_keys": ["keyword(姓名/工号/岗位/邮箱)", "role(admin|studio_admin|dept_admin|user)", "studio_id", "dept_id", "page", "page_size"],
+        "response_keys": [
+          "accounts[].user_id", "accounts[].name", "accounts[].employee_id", "accounts[].job_title",
+          "accounts[].email", "accounts[].created_at", "accounts[].studio_id", "accounts[].studio_name",
+          "accounts[].dept_id", "accounts[].dept_name", "accounts[].primary_role(admin>studio_admin>dept_admin>user)",
+          "accounts[].roles[]{role,scope_type,scope_id,scope_name}",
+          "total", "page", "page_size", "role_counts{admin,studio_admin,dept_admin,user}"
+        ],
+        "notes": "role=user 表示无任何授权的员工（不落库，LEFT JOIN 为空推导）"
+      },
+      "GET /admin/org/studios/:id/overview": {
+        "handler": "OrgOverviewHandler.Studio",
+        "purpose": "工作室工作台头部 + 左树下层：人数、管理员、EHR 负责人、下属团队卡",
+        "response_keys": [
+          "studio_id", "studio_name", "member_count", "admins[]{user_id,name,employee_id}",
+          "leaders[]{name,source(ehr|manual)}", "pending_dept_count",
+          "teams[]{dept_id,dept_uuid,dept_name,member_count,admins[],leaders[]}"
+        ],
+        "notes": "leaders 多值：前端文案 张三等N人负责；admins 为空显示 未设置管理员"
+      },
+      "GET /admin/org/departments/:dept_id/members": {
+        "handler": "OrgHandler.GetDeptMembers",
+        "purpose": "团队成员表：原字段 + is_dept_admin + 三块配置摘要",
+        "response_keys": [
+          "members[].is_dept_admin", "members[].config.quota{rpm,max_concurrency,source(inherit|override)}",
+          "members[].config.budget{monthly,daily,weekly,source(member|team|none)}",
+          "members[].config.entitlement{group_count,source(studio_dept|none)}"
+        ],
+        "notes": "budget.source=team 表示继承团队（dept_daily）预算；模型授权只有 studio/dept 两级"
+      }
+    }
+  },
   "org_leaders": {
     "base_prefix": "/api/v1",
     "auth": "jwt Bearer <jwt>（adminGroup，平台管理员）",

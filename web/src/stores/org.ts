@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Studio, OrgDepartment, HubSyncStatus, OrgNodeLeader } from '@/types/org'
+import type {
+  Studio, OrgDepartment, HubSyncStatus, OrgNodeLeader,
+  AccountListResult, StudioOverview, RoleKey,
+} from '@/types/org'
 import http from '@/services/http'
 
 export interface DeptMember {
@@ -79,6 +82,32 @@ export const useOrgStore = defineStore('org', () => {
   // 并发由服务端锁兜住：正在跑时返回 409，调用方按"同步中"处理即可。
   async function triggerSync() {
     const res = await http.post('/api/v1/admin/ai-app-hub/sync', { scope: 'all' }, { timeout: 60000 })
+    return res.data
+  }
+
+  // ─── 账号/角色（一人一行）───────────────────────────────────────────────
+  async function fetchAccounts(query: {
+    keyword?: string; role?: RoleKey | ''; studioId?: string; deptId?: string
+    page?: number; pageSize?: number
+  } = {}): Promise<AccountListResult> {
+    const params: Record<string, any> = {
+      page: query.page || 1,
+      page_size: query.pageSize || 20,
+    }
+    if (query.keyword) params.keyword = query.keyword
+    if (query.role) params.role = query.role
+    if (query.studioId) params.studio_id = query.studioId
+    if (query.deptId) params.dept_id = query.deptId
+    const res = await http.get('/api/v1/admin/org/accounts', { params })
+    return res.data
+  }
+
+  // ─── 工作室概览（头部人数/管理员/负责人 + 下属团队卡）─────────────────────
+  const studioOverview = ref<StudioOverview | null>(null)
+
+  async function fetchStudioOverview(studioId: string): Promise<StudioOverview | null> {
+    const res = await http.get(`/api/v1/admin/org/studios/${studioId}/overview`)
+    studioOverview.value = res.data
     return res.data
   }
 
@@ -186,6 +215,7 @@ export const useOrgStore = defineStore('org', () => {
     studios, departments, unmappedDepts, unmappedCount, loading,
     syncStatus, fetchSyncStatus, triggerSync,
     leaders, fetchLeaders, addLeader,
+    fetchAccounts, studioOverview, fetchStudioOverview,
     fetchStudios, fetchDepartments, fetchUnmapped,
     fetchDeptMembers, searchUsers, fetchRolePage, fetchAllRoles, grantRole, revokeRole, getUserRoles,
   }

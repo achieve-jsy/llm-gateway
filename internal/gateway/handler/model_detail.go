@@ -43,6 +43,8 @@ type modelDetailResponse struct {
 	MaxOutputTokens int  `json:"max_output_tokens,omitempty"`
 	SupportsVision  bool `json:"supports_vision,omitempty"`
 	SupportsTools   bool `json:"supports_function_calling,omitempty"`
+	// SupportsVideoInput 组级是否支持视频输入（保守聚合，全部成员都支持才算）。
+	SupportsVideoInput bool `json:"supports_video_input,omitempty"`
 }
 
 // Handle 处理 GET /v1/models/:model_id
@@ -114,6 +116,7 @@ func (h *ModelDetailHandler) Handle(c *gin.Context) {
 		resp.MaxOutputTokens = info.MaxOutputTokens
 		resp.SupportsVision = info.SupportsVision
 		resp.SupportsTools = info.SupportsFunctionCalling
+		resp.SupportsVideoInput = info.SupportsVideoInput
 	}
 
 	c.JSON(http.StatusOK, resp)

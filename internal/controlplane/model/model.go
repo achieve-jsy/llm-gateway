@@ -44,6 +44,11 @@ type Model struct {
 	CatalogID           *uuid.UUID `gorm:"type:uuid;index:idx_models_catalog_id" json:"catalog_id,omitempty"`
 	CtxOverridden       bool       `gorm:"not null;default:false" json:"ctx_overridden"`
 	MaxOutputOverridden bool       `gorm:"not null;default:false" json:"max_output_overridden"`
+	// OverrideSupportsVideoInput 人工纠偏视频输入能力：nil 表示跟随 catalog
+	// （catalog 未绑定或未声明即不支持），true/false 为强制开关。
+	// 需要它是因为 LiteLLM 对 Ark / DashScope / 智谱 这几个官方支持 video_url 的厂商
+	// 一条 supports_video_input 都没有声明，纯靠 catalog 永远无法对外声明视频能力。
+	OverrideSupportsVideoInput *bool `gorm:"column:override_supports_video_input" json:"override_supports_video_input,omitempty"`
 	// 视频模型参数（model_type=video 时使用；JSON 数组字符串）
 	VideoSupportedResolutions  []string `gorm:"type:jsonb;not null;default:'[]';serializer:json" json:"video_supported_resolutions,omitempty"`
 	VideoSupportedAspectRatios []string `gorm:"type:jsonb;not null;default:'[]';serializer:json" json:"video_supported_aspect_ratios,omitempty"`

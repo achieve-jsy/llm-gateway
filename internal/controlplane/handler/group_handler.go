@@ -453,6 +453,9 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 		Priority       *int      `json:"priority"`
 		Weight         *int      `json:"weight"`
 		ComplexityTier string    `json:"complexity_tier"`
+		// SupportsVideoInput 供 gateway 逐成员过滤（组级聚合是保守 AND，
+		// 混合组必须能在路由期挑出真正支持视频的成员）。
+		SupportsVideoInput bool `json:"supports_video_input"`
 	}
 
 	type groupInfo struct {
@@ -507,6 +510,7 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 				mi.Name = m.UpstreamName()
 				mi.ModelType = m.ModelType
 				mi.ProviderID = m.ProviderID
+				mi.SupportsVideoInput = service.EffectiveSupportsVideoInput(m)
 				providerEnabled := false
 				if h.providerRepo != nil {
 					p, err := h.providerRepo.GetByID(m.ProviderID)

@@ -37,6 +37,8 @@ type CPModelData struct {
 	Priority       *int   `json:"priority"`
 	Weight         *int   `json:"weight"`
 	ComplexityTier string `json:"complexity_tier"`
+	// SupportsVideoInput 该成员是否支持视频输入（控制面 EffectiveSupportsVideoInput 的结果）。
+	SupportsVideoInput bool `json:"supports_video_input"`
 }
 
 // GroupConfig 模型组配置
@@ -67,6 +69,8 @@ type GroupModel struct {
 	Priority       *int   `json:"priority"`
 	Weight         *int   `json:"weight"`
 	ComplexityTier string `json:"complexity_tier"`
+	// SupportsVideoInput 该成员是否支持视频输入（下发给 scheduler 的逐成员判定结果）。
+	SupportsVideoInput bool `json:"supports_video_input"`
 }
 
 // GroupRoutingConfig 内存中的组路由配置
@@ -96,6 +100,8 @@ type ModelRoutingEntry struct {
 	Priority       int    `json:"priority"`
 	Weight         int    `json:"weight"`
 	ComplexityTier string `json:"complexity_tier"`
+	// SupportsVideoInput 该成员是否支持视频输入（Route() 里按请求是否含视频过滤）。
+	SupportsVideoInput bool `json:"supports_video_input"`
 }
 
 // ChannelEndpoint 渠道连接端点信息

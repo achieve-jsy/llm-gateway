@@ -29,7 +29,7 @@ func NewModelInfoHandler(controlPlaneURL, internalToken string) *ModelInfoHandle
 
 // litellmModelInfoEntry 单个模型的 LiteLLM model_info 条目。
 type litellmModelInfoEntry struct {
-	ModelName string         `json:"model_name"`
+	ModelName string           `json:"model_name"`
 	ModelInfo litellmModelInfo `json:"model_info"`
 }
 
@@ -42,6 +42,7 @@ type litellmModelInfo struct {
 	SupportsVision          bool   `json:"supports_vision"`
 	SupportsFunctionCalling bool   `json:"supports_function_calling"`
 	SupportsToolChoice      bool   `json:"supports_tool_choice"`
+	SupportsVideoInput      bool   `json:"supports_video_input"`
 }
 
 type litellmModelInfoResponse struct {
@@ -79,6 +80,7 @@ func (h *ModelInfoHandler) Handle(c *gin.Context) {
 			entry.ModelInfo.SupportsVision = info.SupportsVision
 			entry.ModelInfo.SupportsFunctionCalling = info.SupportsFunctionCalling
 			entry.ModelInfo.SupportsToolChoice = info.SupportsToolChoice
+			entry.ModelInfo.SupportsVideoInput = info.SupportsVideoInput
 		}
 		entries = append(entries, entry)
 	}

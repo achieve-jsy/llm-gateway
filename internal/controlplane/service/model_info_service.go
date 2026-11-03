@@ -17,12 +17,15 @@ import (
 //   - 上下文/输出上限：取成员中的最小正值，避免超过最弱成员的实际能力；
 //   - mode：任一成员为 chat 即为 chat，否则取首个非空 mode。
 type GroupModelInfo struct {
-	Mode                    string  `json:"mode"`
-	MaxInputTokens          int     `json:"max_input_tokens"`
-	MaxOutputTokens         int     `json:"max_output_tokens"`
-	SupportsVision          bool    `json:"supports_vision"`
-	SupportsFunctionCalling bool    `json:"supports_function_calling"`
-	SupportsToolChoice      bool    `json:"supports_tool_choice"`
+	Mode                    string `json:"mode"`
+	MaxInputTokens          int    `json:"max_input_tokens"`
+	MaxOutputTokens         int    `json:"max_output_tokens"`
+	SupportsVision          bool   `json:"supports_vision"`
+	SupportsFunctionCalling bool   `json:"supports_function_calling"`
+	SupportsToolChoice      bool   `json:"supports_tool_choice"`
+	// SupportsVideoInput 视频输入能力（content part video_url）。聚合语义与 vision 相同：
+	// 组内全部成员都支持才算支持；成员的支持度 = override（若有）否则 catalog 声明。
+	SupportsVideoInput bool `json:"supports_video_input"`
 	// 单价：USD per 1,000,000 tokens。组内成员价格不一致时取最大值（保守上界），
 	// 单模型组即为精确值；0 表示缺价（成员未绑定 catalog 或未配置 manual 价）。
 	InputPricePerMillion  float64 `json:"input_price_per_million"`
@@ -160,7 +163,7 @@ func aggregateGroupModelInfo(members []*model.Model) GroupModelInfo {
 	}
 
 	// 能力位用 "全部支持才算支持"：先假定支持，遇到任一不支持即置 false。
-	vision, functionCalling, toolChoice := true, true, true
+	vision, functionCalling, toolChoice, videoInput := true, true, true, true
 	firstMode := ""
 	for _, m := range members {
 		mode := memberMode(m)
@@ -215,11 +218,13 @@ func aggregateGroupModelInfo(members []*model.Model) GroupModelInfo {
 		vision = vision && memberVision
 		functionCalling = functionCalling && memberFC
 		toolChoice = toolChoice && memberTC
+		videoInput = videoInput && EffectiveSupportsVideoInput(m)
 	}
 
 	info.SupportsVision = vision
 	info.SupportsFunctionCalling = functionCalling
 	info.SupportsToolChoice = toolChoice
+	info.SupportsVideoInput = videoInput
 	if info.Mode == "" {
 		info.Mode = firstMode
 	}
@@ -227,6 +232,19 @@ func aggregateGroupModelInfo(members []*model.Model) GroupModelInfo {
 		aggregateVideoCaps(&info, members)
 	}
 	return info
+}
+
+// EffectiveSupportsVideoInput 返回单个成员的视频输入支持度：
+// admin override（三态）优先，否则跟随 catalog 声明；未绑定 catalog 视为不支持。
+// 组级聚合与下发给 gateway 的逐成员路由配置都调用它，保证两处判定一致。
+func EffectiveSupportsVideoInput(m *model.Model) bool {
+	if m == nil {
+		return false
+	}
+	if m.OverrideSupportsVideoInput != nil {
+		return *m.OverrideSupportsVideoInput
+	}
+	return m.Catalog != nil && m.Catalog.SupportsVideoInput
 }
 
 // aggregateVideoCaps 视频能力保守聚合：分辨率/宽高比/场景取交集，时长取最窄区间。

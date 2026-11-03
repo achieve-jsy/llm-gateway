@@ -17,7 +17,7 @@ type Client struct {
 	httpClient *http.Client
 	longClient *http.Client
 	token      string
-	cache      KeyGroupCache    // 进程内 Key-Group 绑定缓存，TTL 60s
+	cache      KeyGroupCache      // 进程内 Key-Group 绑定缓存，TTL 60s
 	sf         singleflight.Group // 防缓存穿透：同一 keyID 同时只有一个飞行中 HTTP 请求
 }
 
@@ -135,6 +135,8 @@ type GroupModelInfo struct {
 	SupportsVision          bool   `json:"supports_vision"`
 	SupportsFunctionCalling bool   `json:"supports_function_calling"`
 	SupportsToolChoice      bool   `json:"supports_tool_choice"`
+	// SupportsVideoInput 组级是否支持视频输入（保守聚合：组内全部成员都支持才算）。
+	SupportsVideoInput bool `json:"supports_video_input"`
 }
 
 // GetGroupModelInfo 从 control-plane 拉取指定模型组名的聚合能力信息。

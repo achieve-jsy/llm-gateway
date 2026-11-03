@@ -1,4 +1,4 @@
-h1:WK1dFb0nNXwvXwsSFm9VgG6iu8HKXuCnwFLESln3ZTo=
+h1:+uWZ0HS5tniVU3ZF9kSMCXUMXxcOCx5z89JlMBDfYIY=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -49,3 +49,4 @@ h1:WK1dFb0nNXwvXwsSFm9VgG6iu8HKXuCnwFLESln3ZTo=
 20260821030328_add_call_logs_user_ts_index.sql h1:urENfTs8JSTqEbdjyNsdsOoADu7bN0JDTeU+Ns3n300=
 20260902072000_add_report_snapshot_anomaly_review_offhours_filing.sql h1:Kg+5agmQilyCeEdolY2rXjdlvf7pnzf8vSge8GdEK/c=
 20261021024215_add_catalog_supports_video_input.sql h1:JcjaUOndVy/K06uMFukc3Ul4W5ToBMp/0j0hbu56FVQ=
+20261021024708_add_models_override_supports_video_input.sql h1:cY3mMsNBs2W+eLT9Ava1QYqiId7FA5RxrwaRUoknoJ0=

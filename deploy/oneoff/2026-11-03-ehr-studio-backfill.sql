@@ -26,6 +26,10 @@ UPDATE studios SET visible = false, source = 'manual'
  WHERE name IN ('test', '测试工作室AI', '互娱事业部', '创新事业部', '战略发展中心', '数字内容创新工作室')
    AND ehr_department_id IS NULL;
 
+-- ④b XLab：2026-11-03 确认**不**认领为 AI-Lab（老行无任何 key/角色引用，留着会挂一个空工作室），隐藏保留。
+UPDATE studios SET visible = false
+ WHERE name = 'XLab' AND ehr_department_id IS NULL;
+
 -- ⑤ 收尾自检：以下查询必须返回 0 行
 --   SELECT * FROM studios WHERE source = 'ehr' AND ehr_department_id IS NULL;
 COMMIT;

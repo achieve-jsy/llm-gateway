@@ -87,225 +87,275 @@
     </div>
 
     <!-- ═══════════════════════════════════════════
-         统计卡片
+         区域 1: 💰 花费总览
     ═══════════════════════════════════════════ -->
-    <div class="mu-stats" v-loading="statsLoading">
-      <div class="mu-stat-card">
-        <div class="mu-stat-card__icon mu-stat-card__icon--blue">
-          <el-icon size="22"><DataLine /></el-icon>
-        </div>
-        <div class="mu-stat-card__body">
-          <p class="mu-stat-card__label">{{ periodLabel }}调用</p>
-          <p class="mu-stat-card__value">{{ fmtNum(statsTotal?.req_count) }}</p>
-          <p class="mu-stat-card__sub">
-            日均 <span class="c-blue">{{ fmtNum(Math.round(dailyAvgCalls)) }}</span> 次
-          </p>
-        </div>
+    <div class="mu-kpi-row" v-loading="statsLoading">
+      <div class="insight-card mu-kpi-card">
+        <h3>总花费</h3>
+        <p class="kpi-value">¥{{ fmtCny(statsTotal?.est_cost_usd) }}</p>
+        <p class="kpi-sub">
+          <span v-if="costChangePct != null" :class="costTrendClass(costChangePct)">
+            {{ costChangePct > 0 ? '↑' : costChangePct < 0 ? '↓' : '—' }}{{ Math.abs(costChangePct) }}% vs 上期
+          </span>
+          <span v-else-if="(statsTotal?.est_cost_usd ?? 0) > 0" class="kpi-sub--muted">较上期 新增</span>
+        </p>
       </div>
-
-      <div class="mu-stat-card">
-        <div class="mu-stat-card__icon mu-stat-card__icon--amber">
-          <el-icon size="22"><Money /></el-icon>
-        </div>
-        <div class="mu-stat-card__body">
-          <p class="mu-stat-card__label">{{ periodLabel }}花费</p>
-          <p class="mu-stat-card__value c-green">¥{{ fmtCny(statsTotal?.est_cost_usd) }}</p>
-          <p class="mu-stat-card__sub">
-            日均 <span class="c-orange">¥{{ fmtCny(dailyAvgCost) }}</span>
-            <span v-if="costChangePct != null" :class="costChangeClass">较上期 {{ costChangePct > 0 ? '+' : '' }}{{ costChangePct }}%</span>
-            <span v-else-if="(statsTotal?.est_cost_usd ?? 0) > 0" class="c-cyan">较上期 新增</span>
-          </p>
-        </div>
+      <div class="insight-card mu-kpi-card">
+        <h3>日均花费</h3>
+        <p class="kpi-value">¥{{ fmtCny(dailyAvgCost) }}</p>
+        <p class="kpi-sub">¥{{ fmtCny(dailyAvgCost) }}/天 · {{ rangeDays }} 天</p>
       </div>
-
-      <div class="mu-stat-card">
-        <div class="mu-stat-card__icon mu-stat-card__icon--cyan">
-          <el-icon size="22"><Cpu /></el-icon>
-        </div>
-        <div class="mu-stat-card__body">
-          <p class="mu-stat-card__label">最爱模型</p>
-          <p class="mu-stat-card__value mu-stat-card__value--model" :title="favoriteModel?.name">{{ favoriteModel?.name || '—' }}</p>
-          <p class="mu-stat-card__sub">
-            占比 <span class="c-cyan">{{ favoriteModel?.pct ?? 0 }}%</span>
-          </p>
-        </div>
+      <div class="insight-card mu-kpi-card">
+        <h3>总请求</h3>
+        <p class="kpi-value">{{ fmtNum(statsTotal?.req_count) }}</p>
+        <p class="kpi-sub">
+          <span v-if="reqChangePct != null" :class="reqTrendClass(reqChangePct)">
+            {{ reqChangePct > 0 ? '↑' : reqChangePct < 0 ? '↓' : '—' }}{{ Math.abs(reqChangePct) }}% vs 上期
+          </span>
+          <span v-else class="kpi-sub--muted">日均 {{ fmtNum(Math.round(dailyAvgCalls)) }} 次</span>
+        </p>
       </div>
+      <div class="insight-card mu-kpi-card">
+        <h3>总 Token</h3>
+        <p class="kpi-value">{{ fmtTokens(totalTokenCount) }}</p>
+        <p class="kpi-sub">
+          <span v-if="tokenChangePct != null" :class="reqTrendClass(tokenChangePct)">
+            {{ tokenChangePct > 0 ? '↑' : tokenChangePct < 0 ? '↓' : '—' }}{{ Math.abs(tokenChangePct) }}% vs 上期
+          </span>
+          <span v-else class="kpi-sub--muted">输入 + 输出合计</span>
+        </p>
+      </div>
+    </div>
 
-      <div class="mu-stat-card">
-        <div class="mu-stat-card__icon mu-stat-card__icon--green">
-          <el-icon size="22"><Finished /></el-icon>
-        </div>
-        <div class="mu-stat-card__body">
-          <p class="mu-stat-card__label">效率指数</p>
-          <p class="mu-stat-card__value">{{ cacheHitPct }}<span class="mu-stat-card__unit">%</span></p>
-          <p class="mu-stat-card__sub">
-            缓存命中 · 均响 <span class="c-green">{{ avgDurationMs != null ? fmtDuration(avgDurationMs) : '—' }}</span>
-          </p>
-        </div>
+    <div v-if="dayStatsRows.length" class="insight-card mu-cost-trend">
+      <h3>📈 每日花费趋势</h3>
+      <div class="mu-chart-body mu-chart-body--trend">
+        <canvas ref="costTrendCanvas" />
       </div>
     </div>
 
     <!-- ═══════════════════════════════════════════
-         图表区
+         区域 2: 🤖 模型偏好
     ═══════════════════════════════════════════ -->
-    <div class="mu-charts" v-if="dayStatsRows.length || modelStatsRows.length">
-      <div class="mu-chart-card">
-        <div class="mu-chart-card__header">
-          <span class="mu-chart-card__title">使用趋势</span>
-        </div>
-        <div class="mu-chart-card__body">
-          <canvas ref="trendCanvas" />
-        </div>
-      </div>
-
-      <div class="mu-chart-card">
-        <div class="mu-chart-card__header">
-          <span class="mu-chart-card__title">模型使用分布</span>
-          <span class="mu-chart-card__hint">点击模型可筛选明细</span>
-        </div>
-        <div class="mu-chart-card__body mu-chart-card__body--doughnut">
-          <canvas ref="distCanvas" />
-        </div>
-      </div>
-
-      <div v-if="modelStatsRows.length" class="mu-chart-card">
-        <div class="mu-chart-card__header">
-          <span class="mu-chart-card__title">Token 构成分析</span>
-        </div>
-        <div class="mu-chart-card__body mu-chart-card__body--doughnut">
-          <canvas ref="tokenBreakdownCanvas" />
-        </div>
-      </div>
-    </div>
-
-    <!-- ═══════════════════════════════════════════
-         Token 深度分析
-    ═══════════════════════════════════════════ -->
-    <template v-if="modelStatsRows.length">
-      <div class="mu-section">
-        <div class="mu-section__header">
-          <span class="mu-section__title">模型 Token 消耗排行</span>
-        </div>
-        <div class="mu-chart-card__body mu-chart-card__body--ranking">
-          <canvas ref="modelTokenRankingCanvas" />
-        </div>
-      </div>
-
-      <div class="mu-section">
-        <div class="mu-section__header">
-          <span class="mu-section__title">Token 成本效率</span>
-        </div>
-        <div class="mu-table-wrap" v-loading="statsLoading">
-          <el-table :data="costEfficiencyRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%">
-            <el-table-column prop="model" label="模型" min-width="160">
-              <template #default="{ row }"><span class="mu-model-name">{{ row.model || '—' }}</span></template>
-            </el-table-column>
-            <el-table-column prop="totalTokens" label="总 Token" min-width="140" align="right" sortable>
-              <template #default="{ row }">
-                <div class="mu-bar-cell">
-                  <span>{{ fmtTokens(row.totalTokens) }}</span>
-                  <div class="mu-minibar">
-                    <div class="mu-minibar__fill mu-minibar__fill--blue" :style="{ width: pct(row.totalTokens, maxTotalTokens) + '%' }" />
-                  </div>
+    <div v-if="modelStatsRows.length" class="mu-two-col">
+      <div class="insight-card">
+        <h3>🤖 我的模型偏好</h3>
+        <div class="mu-model-pref">
+          <div class="mu-model-pref__chart">
+            <canvas ref="distCanvas" />
+          </div>
+          <div class="mu-model-pref__list">
+            <div v-for="(row, i) in modelsByCostRank" :key="row.model" class="mu-model-rank-item">
+              <span class="mu-model-rank-item__idx" :style="{ color: chartColor(i) }">{{ i + 1 }}</span>
+              <div class="mu-model-rank-item__body">
+                <div class="mu-model-rank-item__top">
+                  <span class="mu-model-name" :title="row.model">{{ row.model || '未知' }}</span>
+                  <span class="mu-cost">¥{{ fmtCny(row.est_cost_usd) }}</span>
                 </div>
-              </template>
-            </el-table-column>
-            <el-table-column label="输入占比" min-width="90" align="right">
-              <template #default="{ row }">
-                <span class="c-blue">{{ tokenInputPct(row) }}%</span>
-                <el-tooltip v-if="isClaudeCacheBug(row) && (row.prompt_tokens || 0) > 100000" content="输入 Token 可能包含缓存读取，实际比例可能偏差" placement="top">
-                  <el-icon class="mu-info-icon" style="margin-left:4px;vertical-align:-2px;color:var(--el-text-color-secondary);cursor:help"><InfoFilled /></el-icon>
-                </el-tooltip>
-              </template>
-            </el-table-column>
-            <el-table-column label="输出占比" min-width="90" align="right">
-              <template #default="{ row }">
-                <span class="c-green">{{ tokenOutputPct(row) }}%</span>
-                <el-tooltip v-if="isClaudeCacheBug(row) && (row.prompt_tokens || 0) > 100000" content="输入 Token 可能包含缓存读取，实际比例可能偏差" placement="top">
-                  <el-icon class="mu-info-icon" style="margin-left:4px;vertical-align:-2px;color:var(--el-text-color-secondary);cursor:help"><InfoFilled /></el-icon>
-                </el-tooltip>
-              </template>
-            </el-table-column>
-            <el-table-column label="缓存命中率" min-width="100" align="right">
-              <template #default="{ row }">
-                <el-tooltip v-if="isClaudeCacheBug(row)" content="该模型的缓存数据暂不可用" placement="top">
-                  <span class="c-cyan" style="cursor:help">{{ cacheHitRate(row) }}</span>
-                </el-tooltip>
-                <span v-else class="c-cyan">{{ cacheHitRate(row) }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="est_cost_usd" label="估算成本" min-width="110" align="right" sortable>
-              <template #default="{ row }">
-                <span :class="costColor(row.est_cost_usd)">¥{{ fmtCny(row.est_cost_usd) }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="每百万 Token" min-width="120" align="right">
-              <template #default="{ row }">
-                <span class="mu-cost">¥{{ fmtCny(costPerMillionTokens(row)) }}</span>
-              </template>
-            </el-table-column>
-          </el-table>
+                <div class="mu-minibar">
+                  <div class="mu-minibar__fill" :style="{ width: pct(row.est_cost_usd, maxModelCost) + '%', background: chartColor(i) }" />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-    </template>
+      <div class="insight-card">
+        <h3>📊 性价比对比</h3>
+        <p class="mu-chart-hint">每百万 Token 成本 · 越低越划算</p>
+        <div class="mu-chart-body mu-chart-body--value">
+          <canvas ref="valueBarCanvas" />
+        </div>
+      </div>
+    </div>
 
     <!-- ═══════════════════════════════════════════
-         用量汇总表
+         区域 3: 📅 使用时间习惯
     ═══════════════════════════════════════════ -->
-    <div class="mu-section">
-      <div class="mu-section__header">
-        <span class="mu-section__title">模型使用明细</span>
-        <el-radio-group v-model="groupBy" size="small" @change="loadStats">
-          <el-radio-button value="day">按天</el-radio-button>
-          <el-radio-button value="model">按模型</el-radio-button>
-        </el-radio-group>
+    <div class="mu-two-col">
+      <div class="insight-card">
+        <h3>⏰ 我什么时候用最多？</h3>
+        <div class="mu-chart-body mu-chart-body--hourly">
+          <canvas ref="hourlyCanvas" />
+        </div>
+        <div class="mu-hourly-meta">
+          <span v-if="peakHourLabel">高峰: {{ peakHourLabel }}</span>
+          <span>平均每小时 {{ fmtNum(Math.round(avgReqPerHour)) }} 次请求</span>
+        </div>
       </div>
-      <div class="mu-table-wrap" v-loading="statsLoading">
-        <el-table :data="statsRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%"
-          :default-sort="{ prop: 'est_cost_usd', order: 'descending' }">
-          <el-table-column v-if="groupBy==='day'" prop="stat_date" label="日期" min-width="110" sortable>
-            <template #default="{ row }">{{ fmtDate(row.stat_date) }}</template>
-          </el-table-column>
-          <el-table-column v-if="groupBy==='model'" prop="model" label="模型" min-width="160" sortable>
-            <template #default="{ row }"><span class="mu-model-name">{{ row.model || '—' }}</span></template>
-          </el-table-column>
-          <el-table-column prop="req_count" label="调用" min-width="80" align="right" sortable>
-            <template #default="{ row }">{{ fmtNum(row.req_count) }}</template>
-          </el-table-column>
-          <el-table-column prop="prompt_tokens" label="输入 Token" min-width="110" align="right" sortable>
-            <template #default="{ row }">
-              <div class="mu-bar-cell">
-                <span>{{ fmtTokens(row.prompt_tokens) }}</span>
-                <div class="mu-minibar"><div class="mu-minibar__fill mu-minibar__fill--blue" :style="{ width: pct(row.prompt_tokens, maxPrompt) + '%' }" /></div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="cached_tokens" label="缓存命中" min-width="100" align="right" sortable>
-            <template #default="{ row }">
-              <span class="c-cyan">{{ fmtTokens(row.cached_tokens) }}</span>
-              <span class="mu-pct" v-if="row.prompt_tokens">{{ Math.round(row.cached_tokens / row.prompt_tokens * 100) }}%</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="completion_tokens" label="输出 Token" min-width="110" align="right" sortable>
-            <template #default="{ row }">
-              <div class="mu-bar-cell">
-                <span>{{ fmtTokens(row.completion_tokens) }}</span>
-                <div class="mu-minibar"><div class="mu-minibar__fill mu-minibar__fill--green" :style="{ width: pct(row.completion_tokens, maxCompletion) + '%' }" /></div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="est_cost_usd" label="估算成本" min-width="110" align="right" sortable>
-            <template #default="{ row }">
-              <div class="mu-bar-cell">
-                <span :class="costColor(row.est_cost_usd)">¥{{ fmtPreciseCny(row.est_cost_usd) }}</span>
-                <div class="mu-minibar"><div class="mu-minibar__fill mu-minibar__fill--red" :style="{ width: pct(row.est_cost_usd, maxCost) + '%' }" /></div>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div v-if="!statsLoading && !statsRows.length" class="mu-empty">
-          <el-icon size="48" color="var(--el-text-color-placeholder)"><Histogram /></el-icon>
-          <p>暂无汇总数据</p>
+      <div class="insight-card">
+        <h3>📆 工作日 vs 周末</h3>
+        <div class="mu-wd-we">
+          <div class="mu-wd-we__card">
+            <span class="mu-wd-we__label">工作日</span>
+            <p class="kpi-value kpi-value--sm">¥{{ fmtCny(weekdayWeekend.weekday.costPerDayUsd) }}</p>
+            <p class="kpi-sub">/天 · {{ fmtNum(Math.round(weekdayWeekend.weekday.reqPerDay)) }} 次/天</p>
+          </div>
+          <div class="mu-wd-we__card">
+            <span class="mu-wd-we__label">周末</span>
+            <p class="kpi-value kpi-value--sm">¥{{ fmtCny(weekdayWeekend.weekend.costPerDayUsd) }}</p>
+            <p class="kpi-sub">/天 · {{ fmtNum(Math.round(weekdayWeekend.weekend.reqPerDay)) }} 次/天</p>
+          </div>
+        </div>
+        <div class="mu-wd-we__footer" v-if="busiestQuietest.busiest">
+          <span>你最忙的一天: <b>{{ busiestQuietest.busiestLabel }}</b></span>
+          <span>你最闲的一天: <b>{{ busiestQuietest.quietestLabel }}</b></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════
+         区域 4: ⚡ 效率洞察
+    ═══════════════════════════════════════════ -->
+    <div class="mu-three-col">
+      <div class="insight-card mu-eff-card">
+        <h3>⚡ 平均响应</h3>
+        <p class="kpi-value">{{ avgLatencyMs != null ? fmtDuration(avgLatencyMs) : '—' }}</p>
+        <p class="kpi-sub">首 Token {{ avgTTFTMs != null ? fmtDuration(avgTTFTMs) : '—' }}（流式）</p>
+      </div>
+      <div class="insight-card mu-eff-card">
+        <h3>💾 缓存利用率</h3>
+        <p class="kpi-value">{{ effectiveCacheHitPct }}<span class="kpi-unit">%</span></p>
+        <p class="kpi-sub">节省约 <span class="c-green">¥{{ fmtCny(cacheSavingsUsd) }}</span></p>
+      </div>
+      <div class="insight-card mu-eff-card">
+        <h3>📐 输入输出比</h3>
+        <p class="kpi-value">{{ ioRatioStr }}</p>
+        <p class="kpi-sub">输出占比 {{ outputTokenPct }}% · 高输出比 = 生成更多内容</p>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════
+         区域 5: 📋 模型使用明细（可折叠）
+    ═══════════════════════════════════════════ -->
+    <div class="mu-section mu-detail-section">
+      <div class="mu-section__header mu-detail-toggle" @click="detailExpanded = !detailExpanded">
+        <span class="mu-section__title">📋 模型使用明细</span>
+        <el-button size="small" text :icon="detailExpanded ? ArrowUp : ArrowDown">
+          {{ detailExpanded ? '收起' : '展开' }}
+        </el-button>
+      </div>
+      <div v-show="detailExpanded">
+        <template v-if="modelStatsRows.length">
+          <div class="mu-detail-block">
+            <div class="mu-detail-block__title">模型 Token 消耗排行</div>
+            <div class="mu-chart-body mu-chart-body--ranking">
+              <canvas ref="modelTokenRankingCanvas" />
+            </div>
+          </div>
+          <div class="mu-detail-block">
+            <div class="mu-detail-block__title">Token 成本效率</div>
+            <div class="mu-table-wrap" v-loading="statsLoading">
+              <el-table :data="costEfficiencyRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%">
+                <el-table-column prop="model" label="模型" min-width="160">
+                  <template #default="{ row }"><span class="mu-model-name">{{ row.model || '—' }}</span></template>
+                </el-table-column>
+                <el-table-column prop="totalTokens" label="总 Token" min-width="140" align="right" sortable>
+                  <template #default="{ row }">
+                    <div class="mu-bar-cell">
+                      <span>{{ fmtTokens(row.totalTokens) }}</span>
+                      <div class="mu-minibar">
+                        <div class="mu-minibar__fill mu-minibar__fill--blue" :style="{ width: pct(row.totalTokens, maxTotalTokens) + '%' }" />
+                      </div>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="输入占比" min-width="90" align="right">
+                  <template #default="{ row }">
+                    <span class="c-blue">{{ tokenInputPct(row) }}%</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="输出占比" min-width="90" align="right">
+                  <template #default="{ row }">
+                    <span class="c-green">{{ tokenOutputPct(row) }}%</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="缓存命中率" min-width="100" align="right">
+                  <template #default="{ row }">
+                    <el-tooltip v-if="isClaudeCacheBug(row)" content="该模型的缓存数据暂不可用" placement="top">
+                      <span class="c-cyan" style="cursor:help">{{ cacheHitRate(row) }}</span>
+                    </el-tooltip>
+                    <span v-else class="c-cyan">{{ cacheHitRate(row) }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="est_cost_usd" label="估算成本" min-width="110" align="right" sortable>
+                  <template #default="{ row }">
+                    <span :class="costColor(row.est_cost_usd)">¥{{ fmtCny(row.est_cost_usd) }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="每百万 Token" min-width="120" align="right">
+                  <template #default="{ row }">
+                    <span class="mu-cost">¥{{ fmtCny(costPerMillionTokens(row)) }}</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+          <div class="mu-detail-block">
+            <div class="mu-detail-block__header">
+              <span class="mu-detail-block__title">Token 构成分析</span>
+            </div>
+            <div class="mu-chart-body mu-chart-body--doughnut">
+              <canvas ref="tokenBreakdownCanvas" />
+            </div>
+          </div>
+        </template>
+        <div class="mu-detail-block">
+          <div class="mu-detail-block__header">
+            <span class="mu-detail-block__title">汇总数据</span>
+            <el-radio-group v-model="groupBy" size="small" @change="loadStats">
+              <el-radio-button value="day">按天</el-radio-button>
+              <el-radio-button value="model">按模型</el-radio-button>
+            </el-radio-group>
+          </div>
+          <div class="mu-table-wrap" v-loading="statsLoading">
+            <el-table :data="statsRows" size="small" :header-cell-style="TABLE_HEADER" style="width:100%"
+              :default-sort="{ prop: 'est_cost_usd', order: 'descending' }">
+              <el-table-column v-if="groupBy==='day'" prop="stat_date" label="日期" min-width="110" sortable>
+                <template #default="{ row }">{{ fmtDate(row.stat_date) }}</template>
+              </el-table-column>
+              <el-table-column v-if="groupBy==='model'" prop="model" label="模型" min-width="160" sortable>
+                <template #default="{ row }"><span class="mu-model-name">{{ row.model || '—' }}</span></template>
+              </el-table-column>
+              <el-table-column prop="req_count" label="调用" min-width="80" align="right" sortable>
+                <template #default="{ row }">{{ fmtNum(row.req_count) }}</template>
+              </el-table-column>
+              <el-table-column prop="prompt_tokens" label="输入 Token" min-width="110" align="right" sortable>
+                <template #default="{ row }">
+                  <div class="mu-bar-cell">
+                    <span>{{ fmtTokens(row.prompt_tokens) }}</span>
+                    <div class="mu-minibar"><div class="mu-minibar__fill mu-minibar__fill--blue" :style="{ width: pct(row.prompt_tokens, maxPrompt) + '%' }" /></div>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="cached_tokens" label="缓存命中" min-width="100" align="right" sortable>
+                <template #default="{ row }">
+                  <span class="c-cyan">{{ fmtTokens(row.cached_tokens) }}</span>
+                  <span class="mu-pct" v-if="row.prompt_tokens">{{ Math.round(row.cached_tokens / row.prompt_tokens * 100) }}%</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="completion_tokens" label="输出 Token" min-width="110" align="right" sortable>
+                <template #default="{ row }">
+                  <div class="mu-bar-cell">
+                    <span>{{ fmtTokens(row.completion_tokens) }}</span>
+                    <div class="mu-minibar"><div class="mu-minibar__fill mu-minibar__fill--green" :style="{ width: pct(row.completion_tokens, maxCompletion) + '%' }" /></div>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="est_cost_usd" label="估算成本" min-width="110" align="right" sortable>
+                <template #default="{ row }">
+                  <div class="mu-bar-cell">
+                    <span :class="costColor(row.est_cost_usd)">¥{{ fmtPreciseCny(row.est_cost_usd) }}</span>
+                    <div class="mu-minibar"><div class="mu-minibar__fill mu-minibar__fill--red" :style="{ width: pct(row.est_cost_usd, maxCost) + '%' }" /></div>
+                  </div>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-if="!statsLoading && !statsRows.length" class="mu-empty">
+              <el-icon size="48"><Histogram /></el-icon>
+              <p>暂无汇总数据</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -315,7 +365,7 @@
     ═══════════════════════════════════════════ -->
     <div class="mu-section">
       <div class="mu-section__header">
-        <span class="mu-section__title">调用明细</span>
+        <span class="mu-section__title">📜 调用明细</span>
         <span class="mu-section__count">共 {{ logTotal }} 条</span>
       </div>
       <div class="mu-table-wrap" v-loading="logLoading">
@@ -630,10 +680,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import {
-  Refresh, Download, Search, Histogram, Money, DataLine, Coin,
+  Refresh, Download, Histogram, Money, Coin,
   MagicStick, Top, Bottom, Finished, List, InfoFilled,
   Loading, SuccessFilled, CircleCloseFilled,
-  Close, Grid, Cpu, Key, WarningFilled
+  Close, Grid, Cpu, WarningFilled, ArrowUp, ArrowDown
 } from '@element-plus/icons-vue'
 import {
   Chart, LineController, DoughnutController, BarController, CategoryScale, LinearScale,
@@ -654,52 +704,54 @@ Chart.register(
 const authStore = useAuthStore()
 
 const TABLE_HEADER = {
-  background: 'var(--el-fill-color-light)',
+  background: '#1E293B',
   fontWeight: '600',
-  color: 'var(--el-text-color-secondary)',
+  color: '#94A3B8',
   fontSize: '12px',
-  borderBottom: '1px solid var(--el-border-color-light)',
+  borderBottom: '1px solid #334155',
 }
 
-const CHART_PALETTE = ['#2BA8A2', '#27AE60', '#E0A100', '#5DADE2', '#8B5CF6', '#EC4899', '#E67E22', '#14B8A6']
+const CHART_PALETTE = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316']
+const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+const chartColor = (i: number) => CHART_PALETTE[i % CHART_PALETTE.length]
 
 // USD → CNY 前端换算（常量，后续可改为从配置读取）
 const USD_TO_CNY = 7.2
 const toCny = (usd: number | undefined | null) => (usd ?? 0) * USD_TO_CNY
 const fmtCny = (usd: number | undefined | null) => toCny(usd).toFixed(2)
 
-function cssVar(name: string, fallback = '') {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
-}
-
-function muCssVar(name: string, fallback: string) {
-  const root = document.querySelector('.mu') as HTMLElement | null
-  if (root) {
-    const v = getComputedStyle(root).getPropertyValue(name).trim()
-    if (v) return v
-  }
-  return fallback
-}
-
 function chartTheme() {
   return {
-    textSecondary: cssVar('--el-text-color-secondary', '#94A3B8'),
-    textPrimary: cssVar('--el-text-color-primary', '#303133'),
-    textRegular: cssVar('--el-text-color-regular', '#606266'),
-    primary: cssVar('--el-color-primary', '#2BA8A2'),
-    success: cssVar('--el-color-success', '#27AE60'),
-    warning: cssVar('--el-color-warning', '#E0A100'),
-    grid: cssVar('--el-border-color-lighter', 'rgba(125,125,125,0.12)'),
-    tokenInput: muCssVar('--mu-input', '#2BA8A2'),
-    tokenOutput: muCssVar('--mu-output', '#27AE60'),
-    tokenCache: muCssVar('--mu-cache', '#5DADE2'),
-    tokenReason: muCssVar('--mu-reason', '#8B5CF6'),
+    textSecondary: '#94A3B8',
+    textPrimary: '#F1F5F9',
+    textRegular: '#94A3B8',
+    textMuted: '#64748B',
+    primary: '#3B82F6',
+    success: '#10B981',
+    warning: '#F59E0B',
+    grid: 'rgba(51,65,85,0.5)',
+    tokenInput: '#3B82F6',
+    tokenOutput: '#10B981',
+    tokenCache: '#06B6D4',
+    tokenReason: '#8B5CF6',
+    surface: '#1E293B',
+    border: '#334155',
   }
 }
 
 function gridColor() {
-  const c = cssVar('--el-border-color-lighter')
-  return c ? `color-mix(in srgb, ${c} 60%, transparent)` : 'rgba(125,125,125,0.12)'
+  return 'rgba(51,65,85,0.5)'
+}
+
+function chartTooltip() {
+  const t = chartTheme()
+  return {
+    backgroundColor: t.surface,
+    borderColor: t.border,
+    borderWidth: 1,
+    titleColor: t.textPrimary,
+    bodyColor: t.textSecondary,
+  }
 }
 
 // ── Types ──
@@ -740,7 +792,7 @@ const parseLocalDate = (s: string) => {
 }
 const initEnd = new Date()
 const initStart = new Date()
-initStart.setDate(initEnd.getDate() - 6)
+initStart.setDate(initEnd.getDate() - 29)
 const dateRange = ref<[string, string]>([fmtLocal(initStart), fmtLocal(initEnd)])
 const dateShortcuts = [
   { text: '今天', value: () => { const t = new Date(); const s = fmtLocal(t); return [s, s] as [string, string] } },
@@ -759,7 +811,8 @@ const datePresets = [
   { label: '近30天', days: 29 },
 ]
 
-const activePreset = ref('近7天')
+const activePreset = ref('近30天')
+const detailExpanded = ref(false)
 
 function applyPreset(p: { label: string; days: number }) {
   const end = new Date()
@@ -821,7 +874,7 @@ const statsTotal = ref<StatsTotal | null>(null)
 const dayStatsRows = ref<StatsRow[]>([])
 const modelStatsRows = ref<StatsRow[]>([])
 const prevPeriodTotal = ref<StatsTotal | null>(null)
-const avgDurationMs = ref<number | null>(null)
+const insightLogRows = ref<LogRow[]>([])
 
 // ── Logs state ──
 const logLoading = ref(false)
@@ -866,27 +919,160 @@ const periodLabel = computed(() => {
 })
 const dailyAvgCalls = computed(() => (statsTotal.value?.req_count ?? 0) / rangeDays.value)
 const dailyAvgCost = computed(() => (statsTotal.value?.est_cost_usd ?? 0) / rangeDays.value)
-const costChangePct = computed(() => {
-  const cur = statsTotal.value?.est_cost_usd ?? 0
-  const prev = prevPeriodTotal.value?.est_cost_usd ?? 0
+const totalTokenCount = computed(() =>
+  (statsTotal.value?.prompt_tokens ?? 0) + (statsTotal.value?.completion_tokens ?? 0)
+)
+const prevTokenCount = computed(() => {
+  const p = prevPeriodTotal.value
+  if (!p) return 0
+  return (p.prompt_tokens ?? 0) + (p.completion_tokens ?? 0)
+})
+
+function pctChange(cur: number, prev: number): number | null {
   if (prev <= 0) return null
   return Math.round((cur - prev) / prev * 100)
+}
+
+const costChangePct = computed(() =>
+  pctChange(statsTotal.value?.est_cost_usd ?? 0, prevPeriodTotal.value?.est_cost_usd ?? 0)
+)
+const reqChangePct = computed(() =>
+  pctChange(statsTotal.value?.req_count ?? 0, prevPeriodTotal.value?.req_count ?? 0)
+)
+const tokenChangePct = computed(() =>
+  pctChange(totalTokenCount.value, prevTokenCount.value)
+)
+
+const costTrendClass = (p: number) => (p > 0 ? 'cost-up' : p < 0 ? 'cost-down' : 'kpi-sub--muted')
+const reqTrendClass = (p: number) => (p > 0 ? 'trend-up' : p < 0 ? 'trend-down' : 'kpi-sub--muted')
+
+const maxModelCost = computed(() =>
+  Math.max(...modelStatsRows.value.map(r => r.est_cost_usd || 0), 0.0001)
+)
+
+const modelsByCostRank = computed(() =>
+  [...modelStatsRows.value]
+    .sort((a, b) => (b.est_cost_usd || 0) - (a.est_cost_usd || 0))
+    .slice(0, 6)
+)
+
+const effectiveCacheHitPct = computed(() => {
+  const rows = modelStatsRows.value.filter(r => !isClaudeCacheBug(r))
+  const prompt = rows.reduce((s, r) => s + (r.prompt_tokens || 0), 0)
+  const cached = rows.reduce((s, r) => s + (r.cached_tokens || 0), 0)
+  if (!prompt) return cacheHitPct.value
+  return Math.round(cached / prompt * 100)
 })
-const costChangeClass = computed(() => {
-  const p = costChangePct.value
-  if (p == null) return ''
-  return p > 0 ? 'c-red' : p < 0 ? 'c-green' : ''
+
+const cacheSavingsUsd = computed(() => {
+  const t = statsTotal.value
+  if (!t?.prompt_tokens) return 0
+  const cacheRatio = (t.cached_tokens || 0) / t.prompt_tokens
+  return cacheRatio * (t.est_cost_usd || 0) * 0.9
 })
-const favoriteModel = computed(() => {
-  if (!modelStatsRows.value.length) return null
-  const sorted = [...modelStatsRows.value].sort((a, b) => b.req_count - a.req_count)
-  const top = sorted[0]
-  const total = modelStatsRows.value.reduce((s, r) => s + (r.req_count || 0), 0)
+
+const ioRatioStr = computed(() => {
+  const p = statsTotal.value?.prompt_tokens || 1
+  const c = statsTotal.value?.completion_tokens || 1
+  return `${(p / c).toFixed(1)} : 1`
+})
+
+const outputTokenPct = computed(() => {
+  const p = statsTotal.value?.prompt_tokens || 0
+  const c = statsTotal.value?.completion_tokens || 0
+  const total = p + c
+  if (!total) return 0
+  return Math.round(c / total * 100)
+})
+
+function beijingHour(ts: string): number {
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return 0
+  const parts = d.toLocaleString('en-US', { timeZone: 'Asia/Shanghai', hour: 'numeric', hour12: false })
+  return parseInt(parts, 10) % 24
+}
+
+const hourlyBuckets = computed(() => {
+  const buckets = Array(24).fill(0)
+  insightLogRows.value.forEach(log => {
+    const ts = log.ts
+    if (!ts) return
+    buckets[beijingHour(ts)]++
+  })
+  return buckets
+})
+
+const peakHourLabel = computed(() => {
+  const buckets = hourlyBuckets.value
+  const indexed = buckets.map((v, i) => ({ h: i, v })).filter(x => x.v > 0)
+  if (!indexed.length) return ''
+  indexed.sort((a, b) => b.v - a.v)
+  const top = indexed.slice(0, 3).map(x => x.h).sort((a, b) => a - b)
+  if (top.length === 1) return `${String(top[0]).padStart(2, '0')}:00`
+  const ranges: string[] = []
+  let start = top[0], end = top[0]
+  for (let i = 1; i < top.length; i++) {
+    if (top[i] === end + 1) { end = top[i] }
+    else { ranges.push(`${String(start).padStart(2, '0')}:00-${String(end + 1).padStart(2, '0')}:00`); start = end = top[i] }
+  }
+  ranges.push(`${String(start).padStart(2, '0')}:00-${String(end + 1).padStart(2, '0')}:00`)
+  return ranges.join(', ')
+})
+
+const avgReqPerHour = computed(() => {
+  const total = hourlyBuckets.value.reduce((a, b) => a + b, 0)
+  const activeHours = hourlyBuckets.value.filter(v => v > 0).length || 1
+  return total / activeHours
+})
+
+const weekdayWeekend = computed(() => {
+  let wdCost = 0, wdCount = 0, wdDays = 0
+  let weCost = 0, weCount = 0, weDays = 0
+  dayStatsRows.value.forEach(row => {
+    if (!row.stat_date) return
+    const d = parseLocalDate(row.stat_date.split('T')[0])
+    const dow = d.getDay()
+    if (dow === 0 || dow === 6) {
+      weCost += row.est_cost_usd || 0
+      weCount += row.req_count || 0
+      weDays++
+    } else {
+      wdCost += row.est_cost_usd || 0
+      wdCount += row.req_count || 0
+      wdDays++
+    }
+  })
   return {
-    name: top.model || '未知',
-    pct: total ? Math.round(top.req_count / total * 100) : 0,
+    weekday: { costPerDayUsd: wdCost / (wdDays || 1), reqPerDay: wdCount / (wdDays || 1) },
+    weekend: { costPerDayUsd: weCost / (weDays || 1), reqPerDay: weCount / (weDays || 1) },
   }
 })
+
+const busiestQuietest = computed(() => {
+  if (!dayStatsRows.value.length) return { busiest: null, quietest: null, busiestLabel: '—', quietestLabel: '—' }
+  const sorted = [...dayStatsRows.value].sort((a, b) => (b.req_count || 0) - (a.req_count || 0))
+  const busiest = sorted[0]
+  const quietest = sorted[sorted.length - 1]
+  const dayLabel = (row: StatsRow) => {
+    if (!row.stat_date) return '—'
+    const d = parseLocalDate(row.stat_date.split('T')[0])
+    return WEEKDAY_NAMES[d.getDay()]
+  }
+  return { busiest, quietest, busiestLabel: dayLabel(busiest), quietestLabel: dayLabel(quietest) }
+})
+
+const avgLatencyMs = computed(() => {
+  const rows = insightLogRows.value.filter(r => r.duration_ms != null)
+  if (!rows.length) return null
+  return Math.round(rows.reduce((s, r) => s + (r.duration_ms || 0), 0) / rows.length)
+})
+
+const avgTTFTMs = computed(() => {
+  const rows = insightLogRows.value.filter(r => r.stream && r.first_token_ms != null)
+  if (!rows.length) return null
+  return Math.round(rows.reduce((s, r) => s + (r.first_token_ms || 0), 0) / rows.length)
+})
+
 const cacheHitPct = computed(() => {
   const t = statsTotal.value
   if (!t?.prompt_tokens) return 0
@@ -983,28 +1169,23 @@ async function loadPrevPeriodStats() {
   }
 }
 
-async function loadAvgDuration() {
+async function loadInsightLogs() {
   if (!dateRange.value?.[0]) return
   try {
     const params: Record<string, string | number> = {
       from: dateRange.value[0],
       to: dateRange.value[1],
       page: 1,
-      page_size: 200,
+      page_size: 100,
     }
     if (filterModelName.value) params.model_name = filterModelName.value
     if (filterGroupName.value) params.group_name = filterGroupName.value
     if (filterKeyId.value)     params.key_id     = filterKeyId.value
     if (filterStatus.value)    params.status     = filterStatus.value
     const r = await http.get('/api/v1/my/usage/logs', { params, _silent: true } as any)
-    const rows: LogRow[] = r.data.rows || []
-    if (!rows.length) {
-      avgDurationMs.value = null
-      return
-    }
-    avgDurationMs.value = Math.round(rows.reduce((s, row) => s + (row.duration_ms || 0), 0) / rows.length)
+    insightLogRows.value = r.data.rows || []
   } catch {
-    avgDurationMs.value = null
+    insightLogRows.value = []
   }
 }
 
@@ -1092,10 +1273,14 @@ async function loadStats() {
   }
   await nextTick()
   try {
-    renderTrend()
+    renderCostTrend()
     renderDist()
-    renderTokenBreakdown()
-    renderModelTokenRanking()
+    renderValueBar()
+    renderHourly()
+    if (detailExpanded.value) {
+      renderTokenBreakdown()
+      renderModelTokenRanking()
+    }
   } catch (e) {
     console.error('[my-usage] chart render failed', e)
   }
@@ -1127,7 +1312,9 @@ function loadAll() {
   logPage.value = 1
   loadStats()
   loadLogs()
-  loadAvgDuration()
+  loadInsightLogs().then(() => nextTick(() => {
+    try { renderHourly() } catch (e) { console.error(e) }
+  }))
 }
 
 // ── Trace Drawer ──
@@ -1223,12 +1410,16 @@ const timelineStages = computed(() => {
 })
 
 // ── Charts ──
-const trendCanvas = ref<HTMLCanvasElement | null>(null)
+const costTrendCanvas = ref<HTMLCanvasElement | null>(null)
 const distCanvas  = ref<HTMLCanvasElement | null>(null)
+const valueBarCanvas = ref<HTMLCanvasElement | null>(null)
+const hourlyCanvas = ref<HTMLCanvasElement | null>(null)
 const tokenBreakdownCanvas = ref<HTMLCanvasElement | null>(null)
 const modelTokenRankingCanvas = ref<HTMLCanvasElement | null>(null)
-let trendChart: Chart | null = null
+let costTrendChart: Chart | null = null
 let distChart:  Chart | null = null
+let valueBarChart: Chart | null = null
+let hourlyChart: Chart | null = null
 let tokenBreakdownChart: Chart | null = null
 let modelTokenRankingChart: Chart | null = null
 
@@ -1305,45 +1496,53 @@ const tokenDoughnutCenterPlugin = {
   },
 }
 
-function renderTrend() {
-  const canvas = trendCanvas.value
+function renderCostTrend() {
+  const canvas = costTrendCanvas.value
   if (!canvas || !dayStatsRows.value.length) return
-  trendChart?.destroy()
+  costTrendChart?.destroy()
 
   const colors = chartTheme()
   const sorted = [...dayStatsRows.value].sort((a, b) =>
     (a.stat_date || '').localeCompare(b.stat_date || '')
   )
   const labels = sorted.map(r => fmtDate(r.stat_date))
+  const costData = sorted.map(r => toCny(r.est_cost_usd))
+  const avgCny = toCny(dailyAvgCost.value)
 
-  trendChart = new Chart(canvas, {
+  const ctx = canvas.getContext('2d')
+  let gradient: CanvasGradient | string = colors.primary + '33'
+  if (ctx) {
+    gradient = ctx.createLinearGradient(0, 0, 0, 280)
+    gradient.addColorStop(0, 'rgba(59,130,246,0.35)')
+    gradient.addColorStop(1, 'rgba(59,130,246,0.02)')
+  }
+
+  costTrendChart = new Chart(canvas, {
     type: 'line',
     data: {
       labels,
       datasets: [
         {
-          label: '调用次数',
-          data: sorted.map(r => r.req_count),
-          yAxisID: 'y',
-          borderColor: colors.warning,
-          backgroundColor: colors.warning + '33',
+          label: '日花费 (¥)',
+          data: costData,
+          borderColor: colors.primary,
+          backgroundColor: gradient,
           borderWidth: 2,
           fill: true,
           tension: 0.35,
-          pointRadius: 2,
-          pointHoverRadius: 5,
+          pointRadius: 3,
+          pointHoverRadius: 6,
+          pointBackgroundColor: colors.primary,
         },
         {
-          label: '成本 (CNY)',
-          data: sorted.map(r => toCny(r.est_cost_usd)),
-          yAxisID: 'y1',
-          borderColor: colors.primary,
-          backgroundColor: colors.primary + '22',
-          borderWidth: 2,
+          label: '日均线',
+          data: labels.map(() => avgCny),
+          borderColor: colors.warning,
+          borderWidth: 1.5,
+          borderDash: [6, 4],
           fill: false,
-          tension: 0.35,
-          pointRadius: 2,
-          pointHoverRadius: 5,
+          pointRadius: 0,
+          tension: 0,
         },
       ],
     },
@@ -1354,20 +1553,21 @@ function renderTrend() {
       plugins: {
         legend: {
           position: 'top',
-          labels: {
-            usePointStyle: true,
-            pointStyle: 'line',
-            padding: 12,
-            color: colors.textRegular,
-            font: { size: 11 },
-          },
+          labels: { usePointStyle: true, color: colors.textSecondary, font: { size: 11 } },
         },
         tooltip: {
+          ...chartTooltip(),
           callbacks: {
+            afterTitle: items => {
+              const idx = items[0]?.dataIndex
+              if (idx == null) return []
+              const row = sorted[idx]
+              return row ? [`请求: ${fmtNum(row.req_count)} 次`] : []
+            },
             label: ctx => {
               const v = ctx.raw as number
-              if (ctx.datasetIndex === 1) return `${ctx.dataset.label}: ¥${v.toFixed(2)}`
-              return `${ctx.dataset.label}: ${fmtNum(v)}`
+              if (ctx.datasetIndex === 0) return `花费: ¥${v.toFixed(2)}`
+              return `日均线: ¥${v.toFixed(2)}`
             },
           },
         },
@@ -1376,21 +1576,12 @@ function renderTrend() {
         x: {
           grid: { color: gridColor() },
           border: { display: false },
-          ticks: { color: colors.textSecondary, font: { size: 10 }, maxRotation: 30 },
+          ticks: { color: colors.textMuted, font: { size: 10 }, maxRotation: 30 },
         },
         y: {
-          type: 'linear',
-          position: 'left',
           grid: { color: gridColor() },
           border: { display: false },
-          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => fmtNum(v) },
-        },
-        y1: {
-          type: 'linear',
-          position: 'right',
-          grid: { drawOnChartArea: false },
-          border: { display: false },
-          ticks: { color: colors.textSecondary, font: { size: 10 }, callback: (v: any) => `¥${Number(v).toFixed(2)}` },
+          ticks: { color: colors.textMuted, font: { size: 10 }, callback: (v: string | number) => `¥${Number(v).toFixed(2)}` },
         },
       },
     },
@@ -1402,14 +1593,12 @@ function renderDist() {
   if (!canvas || !modelStatsRows.value.length) return
   distChart?.destroy()
 
-  const colors = chartTheme()
   const sorted = [...modelStatsRows.value]
     .sort((a, b) => b.req_count - a.req_count)
     .slice(0, 8)
   const labels = sorted.map(r => r.model || '未知')
   const data = sorted.map(r => r.req_count)
   const total = data.reduce((a, b) => a + b, 0)
-  const palette = CHART_PALETTE.map(c => c + 'CC')
 
   distChart = new Chart(canvas, {
     type: 'doughnut',
@@ -1417,7 +1606,7 @@ function renderDist() {
       labels,
       datasets: [{
         data,
-        backgroundColor: palette.slice(0, data.length),
+        backgroundColor: CHART_PALETTE.slice(0, data.length).map(c => c + 'CC'),
         borderColor: CHART_PALETTE.slice(0, data.length),
         borderWidth: 1,
       }],
@@ -1426,7 +1615,7 @@ function renderDist() {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      cutout: '62%',
+      cutout: '68%',
       onClick: (_evt: any, elements: any[]) => {
         if (!elements.length || !distChart) return
         const idx = elements[0].index
@@ -1436,39 +1625,146 @@ function renderDist() {
         loadAll()
       },
       plugins: {
-        legend: {
-          position: 'right',
-          labels: {
-            color: colors.textRegular,
-            font: { size: 11 },
-            padding: 10,
-            usePointStyle: true,
-            generateLabels(chart) {
-              const ds = chart.data.datasets[0]
-              return (chart.data.labels || []).map((label, i) => {
-                const value = (ds.data[i] as number) || 0
-                const pct = total ? Math.round(value / total * 100) : 0
-                return {
-                  text: `${label} ${fmtNum(value)}次 (${pct}%)`,
-                  fillStyle: (ds.backgroundColor as string[])[i],
-                  strokeStyle: (ds.borderColor as string[])[i],
-                  lineWidth: 1,
-                  hidden: false,
-                  index: i,
-                  pointStyle: 'circle',
-                }
-              })
-            },
-          },
-        },
+        legend: { display: false },
         tooltip: {
+          ...chartTooltip(),
           callbacks: {
             label: ctx => {
               const v = ctx.raw as number
-              const pct = total ? Math.round(v / total * 100) : 0
-              return `${ctx.label}: ${fmtNum(v)} 次 (${pct}%)`
+              const pctVal = total ? Math.round(v / total * 100) : 0
+              return `${ctx.label}: ${fmtNum(v)} 次 (${pctVal}%)`
             },
           },
+        },
+      },
+    },
+  })
+}
+
+function renderValueBar() {
+  const canvas = valueBarCanvas.value
+  if (!canvas || !modelStatsRows.value.length) return
+  valueBarChart?.destroy()
+
+  const colors = chartTheme()
+  const rows = [...modelStatsRows.value]
+    .map(r => ({ ...r, cpm: costPerMillionTokens(r) }))
+    .filter(r => r.cpm > 0)
+    .sort((a, b) => a.cpm - b.cpm)
+    .slice(0, 8)
+  if (!rows.length) return
+
+  const labels = rows.map(r => r.model || '未知')
+  const bgColors = rows.map((_, i) => CHART_PALETTE[i % CHART_PALETTE.length] + 'CC')
+  const borderColors = rows.map((_, i) => CHART_PALETTE[i % CHART_PALETTE.length])
+
+  valueBarChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: '每百万 Token (¥)',
+        data: rows.map(r => toCny(r.cpm)),
+        backgroundColor: bgColors,
+        borderColor: borderColors,
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          ...chartTooltip(),
+          callbacks: {
+            label: ctx => `¥${(ctx.raw as number).toFixed(2)}/M`,
+            afterLabel: ctx => {
+              const row = rows[ctx.dataIndex]
+              return row ? `${fmtNum(row.req_count)} 次请求` : ''
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: gridColor() },
+          border: { display: false },
+          ticks: { color: colors.textMuted, font: { size: 10 }, callback: (v: string | number) => `¥${Number(v).toFixed(1)}` },
+        },
+        y: {
+          grid: { display: false },
+          border: { display: false },
+          ticks: { color: colors.textRegular, font: { size: 11 } },
+        },
+      },
+    },
+  })
+}
+
+function renderHourly() {
+  const canvas = hourlyCanvas.value
+  if (!canvas) return
+  hourlyChart?.destroy()
+
+  const colors = chartTheme()
+  const buckets = hourlyBuckets.value
+  const max = Math.max(...buckets, 1)
+  const labels = buckets.map((_, i) => String(i))
+
+  hourlyChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: '请求数',
+        data: buckets,
+        backgroundColor: buckets.map(v => {
+          const intensity = v / max
+          const alpha = 0.25 + intensity * 0.75
+          return `rgba(59,130,246,${alpha.toFixed(2)})`
+        }),
+        borderColor: buckets.map(v => {
+          const intensity = v / max
+          return `rgba(59,130,246,${(0.4 + intensity * 0.6).toFixed(2)})`
+        }),
+        borderWidth: 1,
+        borderRadius: 3,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          ...chartTooltip(),
+          callbacks: {
+            title: items => {
+              const h = items[0]?.label
+              return h != null ? `${String(h).padStart(2, '0')}:00 - ${String(h).padStart(2, '0')}:59` : ''
+            },
+            label: ctx => `${ctx.raw} 次请求`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          border: { display: false },
+          ticks: {
+            color: colors.textMuted,
+            font: { size: 9 },
+            maxRotation: 0,
+            callback: (_v, i) => (i % 4 === 0 ? `${i}` : ''),
+          },
+        },
+        y: {
+          grid: { color: gridColor() },
+          border: { display: false },
+          ticks: { color: colors.textMuted, font: { size: 10 }, stepSize: 1 },
+          beginAtZero: true,
         },
       },
     },
@@ -1674,20 +1970,36 @@ function handleExport() {
 }
 
 function rerenderCharts() {
-  if (dayStatsRows.value.length) renderTrend()
+  if (dayStatsRows.value.length) renderCostTrend()
   if (modelStatsRows.value.length) {
     renderDist()
+    renderValueBar()
+  }
+  renderHourly()
+  if (detailExpanded.value) {
     renderTokenBreakdown()
     renderModelTokenRanking()
   }
 }
 
+watch(detailExpanded, async (open) => {
+  if (open) {
+    await nextTick()
+    try {
+      renderTokenBreakdown()
+      renderModelTokenRanking()
+    } catch (e) { console.error(e) }
+  }
+})
+
 watch(isDark, () => nextTick(() => rerenderCharts()))
 
 let themeObserver: MutationObserver | null = null
 onUnmounted(() => {
-  trendChart?.destroy()
+  costTrendChart?.destroy()
   distChart?.destroy()
+  valueBarChart?.destroy()
+  hourlyChart?.destroy()
   tokenBreakdownChart?.destroy()
   modelTokenRankingChart?.destroy()
   themeObserver?.disconnect()
@@ -1705,23 +2017,26 @@ if (typeof MutationObserver !== 'undefined') {
 
 <style scoped>
 .mu {
-  --mu-input:  #2BA8A2;
-  --mu-output: #27AE60;
-  --mu-cache:  #5DADE2;
-  --mu-cost:   #C7900A;
+  --mu-bg: #0F172A;
+  --mu-surface: #1E293B;
+  --mu-border: #334155;
+  --mu-text-primary: #F1F5F9;
+  --mu-text-secondary: #94A3B8;
+  --mu-text-muted: #64748B;
+  --mu-input:  #3B82F6;
+  --mu-output: #10B981;
+  --mu-cache:  #06B6D4;
+  --mu-cost:   #F59E0B;
   --mu-reason: #8B5CF6;
-  --mu-danger: #E74C3C;
-  --mu-warn:   #E0A100;
-
-  --mu-surface: var(--el-fill-color-blank);
-  --mu-border:  var(--el-border-color-light);
-  --mu-muted:   var(--el-text-color-secondary);
-  --mu-faint:   var(--el-text-color-placeholder);
-  --mu-ink:     var(--el-text-color-regular);
+  --mu-danger: #EF4444;
+  --mu-warn:   #F59E0B;
   --mu-mono: 'SFMono-Regular', ui-monospace, 'JetBrains Mono', Consolas, monospace;
 
+  background: var(--mu-bg);
   min-height: 100%; box-sizing: border-box;
   display: flex; flex-direction: column; gap: 16px;
+  padding: 4px 0 24px;
+  color: var(--mu-text-primary);
 }
 
 /* ── 页头 ── */
@@ -1730,46 +2045,147 @@ if (typeof MutationObserver !== 'undefined') {
 .mu-header__right { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
 .mu-title {
   font-size: 20px; font-weight: 700; margin: 0; letter-spacing: .2px;
-  color: var(--el-text-color-primary);
+  color: var(--mu-text-primary);
   display: inline-flex; align-items: center; gap: 10px;
 }
 .mu-title::before {
   content: ''; width: 4px; height: 18px; border-radius: 3px;
-  background: linear-gradient(180deg, var(--el-color-primary), var(--el-color-primary-dark-2, #1E8C86));
+  background: linear-gradient(180deg, var(--mu-input), #2563EB);
 }
 .mu-badge {
-  font-size: 11px; font-weight: 500; color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9); border: 1px solid var(--el-color-primary-light-7);
+  font-size: 11px; font-weight: 500; color: var(--mu-input);
+  background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.3);
   border-radius: 999px; padding: 3px 12px; white-space: nowrap;
 }
 
-/* ── 卡片通用 ── */
-.mu-filter, .mu-stat-card, .mu-chart-card, .mu-section {
+/* ── Insight 卡片 ── */
+.insight-card {
   background: var(--mu-surface);
   border: 1px solid var(--mu-border);
-  border-radius: 14px;
+  border-radius: 12px;
+  padding: 20px;
+}
+.insight-card h3 {
+  font-size: 14px;
+  color: var(--mu-text-secondary);
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+.kpi-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--mu-text-primary);
+  margin: 0;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-value--sm { font-size: 22px; }
+.kpi-unit { font-size: 16px; font-weight: 600; margin-left: 2px; }
+.kpi-sub {
+  font-size: 12px;
+  color: var(--mu-text-muted);
+  margin: 6px 0 0;
+}
+.kpi-sub--muted { color: var(--mu-text-muted); }
+.trend-up { color: #10B981; }
+.trend-down { color: #EF4444; }
+.cost-up { color: #EF4444; }
+.cost-down { color: #10B981; }
+
+/* ── KPI 行 ── */
+.mu-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+.mu-kpi-card { min-width: 0; }
+
+/* ── 两列 / 三列布局 ── */
+.mu-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.mu-three-col {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+.mu-eff-card { text-align: center; }
+.mu-eff-card h3 { margin-bottom: 16px; }
+
+/* ── 花费趋势 ── */
+.mu-cost-trend h3 { margin-bottom: 8px; }
+.mu-chart-body { position: relative; width: 100%; }
+.mu-chart-body--trend { height: 240px; }
+.mu-chart-body--value { height: 280px; }
+.mu-chart-body--hourly { height: 200px; }
+.mu-chart-body--doughnut { height: 260px; }
+.mu-chart-body--ranking { height: 320px; }
+.mu-chart-hint { font-size: 11px; color: var(--mu-text-muted); margin: -8px 0 12px; }
+
+/* ── 模型偏好 ── */
+.mu-model-pref {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 16px;
+  align-items: center;
+}
+.mu-model-pref__chart { height: 180px; position: relative; }
+.mu-model-pref__list { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.mu-model-rank-item { display: flex; align-items: flex-start; gap: 8px; }
+.mu-model-rank-item__idx { font-size: 12px; font-weight: 700; width: 16px; flex-shrink: 0; padding-top: 2px; }
+.mu-model-rank-item__body { flex: 1; min-width: 0; }
+.mu-model-rank-item__top { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.mu-model-rank-item__top .mu-model-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; color: var(--mu-text-primary);
 }
 
+/* ── 小时分布 meta ── */
+.mu-hourly-meta {
+  display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  margin-top: 12px; font-size: 12px; color: var(--mu-text-muted);
+}
+
+/* ── 工作日 vs 周末 ── */
+.mu-wd-we { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.mu-wd-we__card {
+  background: rgba(15,23,42,0.5);
+  border: 1px solid var(--mu-border);
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+}
+.mu-wd-we__label { font-size: 12px; color: var(--mu-text-secondary); display: block; margin-bottom: 8px; }
+.mu-wd-we__footer {
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 12px; color: var(--mu-text-muted);
+}
+.mu-wd-we__footer b { color: var(--mu-text-primary); font-weight: 600; }
+
 /* ── 筛选栏 ── */
+.mu-filter, .mu-section {
+  background: var(--mu-surface);
+  border: 1px solid var(--mu-border);
+  border-radius: 12px;
+}
+
+/* ── 筛选栏细节 ── */
 .mu-filter {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   padding: 10px 16px;
-  background: var(--el-bg-color);
-  border-radius: 10px;
-  margin-bottom: 16px;
-  border: 1px solid var(--el-border-color);
-  box-shadow: 0 1px 4px rgba(0,0,0,.04);
 }
-.mu-presets { display: flex; align-items: center; gap: 4px; }
+.mu-presets { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .mu-preset-btn {
   padding: 3px 10px;
   border-radius: 20px;
-  border: 1px solid var(--el-border-color);
-  background: var(--el-fill-color-light);
-  color: var(--el-text-color-regular);
+  border: 1px solid var(--mu-border);
+  background: rgba(15,23,42,0.6);
+  color: var(--mu-text-secondary);
   font-size: 12px;
   cursor: pointer;
   transition: all .15s;
@@ -1777,97 +2193,54 @@ if (typeof MutationObserver !== 'undefined') {
   line-height: 1.6;
 }
 .mu-preset-btn:hover {
-  border-color: var(--el-color-primary);
-  color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
+  border-color: var(--mu-input);
+  color: var(--mu-input);
+  background: rgba(59,130,246,0.1);
 }
 .mu-preset-btn--active {
-  border-color: var(--el-color-primary);
+  border-color: var(--mu-input);
   color: #fff;
-  background: var(--el-color-primary);
+  background: var(--mu-input);
   font-weight: 500;
 }
 .mu-filter__date { width: 195px; flex-shrink: 0; }
-.mu-filter-divider { width: 1px; height: 22px; background: var(--el-border-color); margin: 0 4px; flex-shrink: 0; }
+.mu-filter-divider { width: 1px; height: 22px; background: var(--mu-border); margin: 0 4px; flex-shrink: 0; }
 .mu-filter__chip { width: 130px; flex-shrink: 0; }
 .mu-filter__chip--key { width: 140px; }
 .mu-filter__status { width: 92px; flex-shrink: 0; }
 .mu-filter__clear { flex-shrink: 0; }
 .mu-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
-.mu-dot--ok  { background: #67c23a; }
-.mu-dot--err { background: #f56c6c; }
+.mu-dot--ok  { background: #10B981; }
+.mu-dot--err { background: #EF4444; }
 :deep(.mu-filter__date .el-range-input) { font-size: 12px; }
-:deep(.mu-filter__chip .el-input__inner),
-:deep(.mu-filter__status .el-input__inner) { font-size: 12px; }
+:deep(.mu-filter .el-input__wrapper),
+:deep(.mu-filter .el-select__wrapper) {
+  background: rgba(15,23,42,0.5);
+  box-shadow: 0 0 0 1px var(--mu-border) inset;
+}
 
-/* ── 统计卡片 ── */
-.mu-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-@media (max-width: 1100px) { .mu-stats { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 560px)  { .mu-stats { grid-template-columns: 1fr 1fr; } }
-
-.mu-stat-card {
-  position: relative; overflow: hidden;
-  padding: 18px; display: flex; align-items: flex-start; gap: 14px;
-  min-width: 0; transition: box-shadow .25s ease, transform .25s ease, border-color .25s ease;
-}
-.mu-stat-card::after {
-  content: ''; position: absolute; inset: 0 0 auto 0; height: 3px;
-  background: var(--accent, var(--el-color-primary)); opacity: .9;
-}
-.mu-stat-card:hover {
-  box-shadow: 0 8px 24px rgba(43, 168, 162, .14);
-  transform: translateY(-2px);
-  border-color: var(--el-color-primary-light-5);
-}
-.mu-stat-card__icon {
-  width: 46px; height: 46px; border-radius: 13px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-}
-.mu-stat-card__icon--blue   { background: color-mix(in srgb, var(--mu-input) 14%, transparent);  color: var(--mu-input); }
-.mu-stat-card__icon--amber  { background: color-mix(in srgb, var(--mu-warn) 16%, transparent);   color: var(--mu-warn); }
-.mu-stat-card__icon--cyan   { background: color-mix(in srgb, var(--mu-cache) 16%, transparent);  color: var(--mu-cache); }
-.mu-stat-card__icon--green  { background: color-mix(in srgb, var(--mu-output) 14%, transparent); color: var(--mu-output); }
-.mu-stat-card:nth-child(1) { --accent: var(--mu-input); }
-.mu-stat-card:nth-child(2) { --accent: var(--mu-warn); }
-.mu-stat-card:nth-child(3) { --accent: var(--mu-cache); }
-.mu-stat-card:nth-child(4) { --accent: var(--mu-output); }
-.mu-stat-card__body { min-width: 0; flex: 1; }
-.mu-stat-card__label { font-size: 12px; color: var(--mu-muted); margin: 0 0 6px; white-space: nowrap; }
-.mu-stat-card__value {
-  font-size: 25px; font-weight: 700; color: var(--el-text-color-primary);
-  margin: 0 0 6px; line-height: 1.15; letter-spacing: -.3px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.mu-stat-card__sub  { font-size: 12px; color: var(--mu-muted); margin: 0; display: flex; gap: 5px; flex-wrap: wrap; }
-.mu-stat-card__value--model { font-size: 18px; }
-.mu-stat-card__unit { font-size: 16px; font-weight: 600; margin-left: 2px; }
-
-/* ── 图表区 ── */
-.mu-charts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-@media (max-width: 1200px) { .mu-charts { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 900px) { .mu-charts { grid-template-columns: 1fr; } }
-.mu-chart-card { overflow: hidden; }
-.mu-chart-card__header, .mu-section__header {
+/* ── 明细折叠区 ── */
+.mu-detail-section { overflow: hidden; }
+.mu-detail-toggle { cursor: pointer; user-select: none; }
+.mu-detail-toggle:hover { background: rgba(59,130,246,0.04); }
+.mu-detail-block { padding: 0 16px 16px; }
+.mu-detail-block__title { font-size: 13px; font-weight: 600; color: var(--mu-text-secondary); margin-bottom: 12px; }
+.mu-detail-block__header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 16px; border-bottom: 1px solid var(--mu-border); flex-wrap: wrap; gap: 8px;
+  margin-bottom: 12px; flex-wrap: wrap; gap: 8px;
 }
-.mu-chart-card__title, .mu-section__title {
-  font-size: 14px; font-weight: 600; color: var(--el-text-color-primary);
-  display: inline-flex; align-items: center; gap: 8px;
-}
-.mu-chart-card__hint { font-size: 11px; color: var(--mu-muted); font-weight: normal; }
-.mu-chart-card__title::before, .mu-section__title::before {
-  content: ''; width: 7px; height: 7px; border-radius: 999px;
-  background: var(--el-color-primary);
-}
-.mu-chart-card__body { padding: 14px 16px; height: 228px; position: relative; }
-.mu-chart-card__body--doughnut { height: 260px; }
-.mu-chart-card__body--ranking { padding: 14px 16px; height: 320px; position: relative; }
+.mu-detail-block__header .mu-detail-block__title { margin-bottom: 0; }
 
 /* ── 区块 ── */
 .mu-section { overflow: hidden; }
-.mu-section__count { font-size: 12px; color: var(--mu-muted); }
+.mu-section__header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--mu-border); flex-wrap: wrap; gap: 8px;
+}
+.mu-section__title {
+  font-size: 14px; font-weight: 600; color: var(--mu-text-primary);
+}
+.mu-section__count { font-size: 12px; color: var(--mu-text-muted); }
 .mu-table-wrap { overflow-x: auto; }
 
 /* ── 表格细节 ── */
@@ -1875,65 +2248,68 @@ if (typeof MutationObserver !== 'undefined') {
   --el-table-border-color: var(--mu-border);
   --el-table-bg-color: var(--mu-surface);
   --el-table-tr-bg-color: var(--mu-surface);
-  --el-table-row-hover-bg-color: var(--el-color-primary-light-9);
+  --el-table-header-bg-color: #1E293B;
+  --el-table-text-color: var(--mu-text-primary);
+  --el-table-header-text-color: var(--mu-text-secondary);
+  --el-table-row-hover-bg-color: rgba(59,130,246,0.08);
   background: var(--mu-surface);
 }
 .mu-table-wrap :deep(.el-table td.el-table__cell) {
   background: var(--mu-surface);
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--mu-border);
+  color: var(--mu-text-primary);
 }
-.mu-table-wrap :deep(.el-table__row:hover > td.el-table__cell) { background: color-mix(in srgb, var(--el-color-primary) 10%, var(--mu-surface)) !important; }
+.mu-table-wrap :deep(.el-table th.el-table__cell) {
+  background: #1E293B;
+  border-bottom: 1px solid var(--mu-border);
+}
+.mu-table-wrap :deep(.el-table__row:hover > td.el-table__cell) {
+  background: rgba(59,130,246,0.08) !important;
+}
 .mu-table-wrap :deep(.el-table .el-table-fixed-column--left.is-last-column.el-table__cell),
-.mu-table-wrap :deep(.el-table__fixed) { box-shadow: 6px 0 12px -6px rgba(0, 0, 0, .12); }
+.mu-table-wrap :deep(.el-table__fixed) { box-shadow: 6px 0 12px -6px rgba(0, 0, 0, .35); }
 
 /* ── 空态 ── */
-.mu-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 48px 24px; }
-.mu-empty p { font-size: 13px; color: var(--mu-faint); margin: 0; }
+.mu-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 48px 24px; color: var(--mu-text-muted); }
+.mu-empty p { font-size: 13px; color: var(--mu-text-muted); margin: 0; }
 
 /* ── 分页 ── */
 .mu-pagination { padding: 12px 16px; border-top: 1px solid var(--mu-border); display: flex; justify-content: flex-end; }
 
-/* ── 等宽文本 ── */
-.mu-mono { font-family: var(--mu-mono); font-size: 11px; color: var(--mu-muted); }
-.mu-mono--sm { font-size: 10px; }
-
 /* ── 模型名 ── */
-.mu-model-name { font-size: 13px; font-weight: 500; color: var(--el-text-color-regular); }
-.mu-model-name--muted { color: var(--mu-muted); font-weight: 400; }
+.mu-model-name { font-size: 13px; font-weight: 500; color: var(--mu-text-primary); }
+.mu-model-name--muted { color: var(--mu-text-muted); font-weight: 400; }
 .mu-model-cell { display: flex; flex-direction: column; gap: 2px; }
 .mu-model-routed { display: flex; align-items: center; gap: 3px; }
-.mu-arrow { color: var(--mu-faint); font-size: 10px; }
-.mu-tag { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
-/* ── 模型组列换行 ── */
+.mu-arrow { color: var(--mu-text-muted); font-size: 10px; }
 .mu-col--wrap { white-space: normal !important; word-break: break-all !important; overflow: visible !important; text-overflow: clip !important; }
-.mu-tag--group { max-width: none; white-space: normal; word-break: break-all; }
-.mu-group-name { font-size: 11px; color: var(--mu-muted); word-break: break-all; line-height: 1.5; }
-.mu-dash { color: var(--mu-faint); }
+.mu-dash { color: var(--mu-text-muted); }
 
 .mu-token-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .mu-token-item {
   display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600;
   padding: 1px 7px; border-radius: 999px;
 }
-.mu-token-item--in    { color: var(--mu-input);  background: color-mix(in srgb, var(--mu-input) 12%, transparent); }
-.mu-token-item--out   { color: var(--mu-output); background: color-mix(in srgb, var(--mu-output) 12%, transparent); }
-.mu-token-item--cache { color: var(--mu-cache);  background: color-mix(in srgb, var(--mu-cache) 14%, transparent); }
-.mu-token-item--reason{ color: var(--mu-reason); background: color-mix(in srgb, var(--mu-reason) 12%, transparent); font-size: 11px; }
+.mu-token-item--in    { color: var(--mu-input);  background: rgba(59,130,246,0.12); }
+.mu-token-item--out   { color: var(--mu-output); background: rgba(16,185,129,0.12); }
+.mu-token-item--cache { color: var(--mu-cache);  background: rgba(6,182,212,0.14); }
+.mu-token-item--reason{ color: var(--mu-reason); background: rgba(139,92,246,0.12); font-size: 11px; }
 .mu-token-icon { font-size: 10px; }
 
-.mu-time { font-size: 12px; color: var(--mu-muted); white-space: nowrap; font-family: var(--mu-mono); }
-.mu-duration { font-size: 12px; color: var(--mu-ink); font-variant-numeric: tabular-nums; }
-.mu-cost { font-family: var(--mu-mono); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mu-time { font-size: 12px; color: var(--mu-text-muted); white-space: nowrap; font-family: var(--mu-mono); }
+.mu-duration { font-size: 12px; color: var(--mu-text-secondary); font-variant-numeric: tabular-nums; }
+.mu-cost { font-family: var(--mu-mono); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--mu-text-primary); }
 .mu-flags { display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; }
 .mu-pct { font-size: 10px; color: var(--mu-cache); margin-left: 4px; }
+.mu-name { font-size: 12px; color: var(--mu-text-primary); font-weight: 500; }
 
 /* ── 迷你进度条 ── */
 .mu-bar-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.mu-minibar { width: 100%; height: 4px; background: var(--el-fill-color); border-radius: 999px; overflow: hidden; }
+.mu-minibar { width: 100%; height: 4px; background: rgba(51,65,85,0.6); border-radius: 999px; overflow: hidden; }
 .mu-minibar__fill { height: 100%; border-radius: 999px; transition: width .4s ease; }
-.mu-minibar__fill--blue  { background: linear-gradient(90deg, color-mix(in srgb, var(--mu-input) 45%, transparent), var(--mu-input)); }
-.mu-minibar__fill--green { background: linear-gradient(90deg, color-mix(in srgb, var(--mu-output) 45%, transparent), var(--mu-output)); }
-.mu-minibar__fill--red   { background: linear-gradient(90deg, color-mix(in srgb, var(--mu-cost) 45%, transparent), var(--mu-cost)); }
+.mu-minibar__fill--blue  { background: linear-gradient(90deg, rgba(59,130,246,0.45), var(--mu-input)); }
+.mu-minibar__fill--green { background: linear-gradient(90deg, rgba(16,185,129,0.45), var(--mu-output)); }
+.mu-minibar__fill--red   { background: linear-gradient(90deg, rgba(245,158,11,0.45), var(--mu-cost)); }
 
 /* ── 颜色工具 ── */
 .c-blue   { color: var(--mu-input); }
@@ -1953,19 +2329,16 @@ if (typeof MutationObserver !== 'undefined') {
 .mu-info {
   display: inline-flex; align-items: center; justify-content: center;
   width: 16px; height: 16px; border-radius: 999px; flex-shrink: 0;
-  background: var(--el-fill-color); color: var(--mu-faint);
+  background: rgba(51,65,85,0.6); color: var(--mu-text-muted);
   cursor: help; transition: background .15s ease, color .15s ease, transform .15s ease;
 }
-.mu-info:hover { background: var(--el-color-primary-light-9); color: var(--el-color-primary); transform: scale(1.08); }
+.mu-info:hover { background: rgba(59,130,246,0.2); color: var(--mu-input); transform: scale(1.08); }
 .mu-info .el-icon { font-size: 11px; }
 
 /* ── UA / IP 来源格 ── */
 .mu-source { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.mu-ua { display: block; font-size: 11px; color: var(--mu-muted); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
-.mu-ip { font-family: var(--mu-mono); font-size: 10px; color: var(--mu-faint); }
-
-/* ── 用户名 ── */
-.mu-name { font-size: 12px; color: var(--el-text-color-regular); font-weight: 500; }
+.mu-ua { display: block; font-size: 11px; color: var(--mu-text-muted); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
+.mu-ip { font-family: var(--mu-mono); font-size: 10px; color: var(--mu-text-muted); }
 
 </style>
 
@@ -2076,45 +2449,34 @@ if (typeof MutationObserver !== 'undefined') {
 .mu-meta-sep { border-top: 1px solid var(--el-border-color-lighter); padding-top: 6px; margin-top: 2px; }
 .mu-meta-ua { font-family: 'SFMono-Regular', monospace; font-size: 11px; color: var(--el-text-color-regular); word-break: break-all; text-align: right; }
 
-/* ═══════════════════════════ Responsive ═══════════════════════════ */
+/* ── 响应式 ── */
+@media (max-width: 1100px) {
+  .mu-kpi-row { grid-template-columns: repeat(2, 1fr); }
+  .mu-three-col { grid-template-columns: 1fr; }
+}
+@media (max-width: 900px) {
+  .mu-two-col { grid-template-columns: 1fr; }
+  .mu-model-pref { grid-template-columns: 1fr; }
+  .mu-model-pref__chart { height: 200px; max-width: 220px; margin: 0 auto; }
+}
 @media (max-width: 768px) {
-  /* Header */
   .mu-header { flex-direction: column; align-items: flex-start; gap: 10px; }
   .mu-header__right { width: 100%; justify-content: flex-start; }
-
-  /* Filter bar */
   .mu-filter { flex-wrap: wrap; gap: 8px; }
-  .mu-presets { flex-wrap: wrap; gap: 4px; }
   .mu-filter__date { width: 100% !important; }
   .mu-filter__chip { width: 100% !important; }
   .mu-filter__chip--key { width: 100% !important; }
   .mu-filter__status { width: 100% !important; }
   .mu-filter__clear { width: 100%; }
   .mu-filter-divider { display: none; }
-
-  /* Stats grid: 2-column */
-  .mu-stats { grid-template-columns: repeat(2, 1fr); }
-
-  /* Charts: single column */
-  .mu-charts { grid-template-columns: 1fr; }
-
-  /* Tables: overflow-x auto */
+  .mu-kpi-row { grid-template-columns: repeat(2, 1fr); }
+  .kpi-value { font-size: 22px; }
   .mu-table-wrap { overflow-x: auto; }
   .mu-table-wrap :deep(.el-table) { min-width: 700px; }
-
-  /* Section header */
   .mu-section__header { flex-direction: column; align-items: flex-start; gap: 8px; }
-
-  /* Pagination */
   .mu-pagination { flex-direction: column; align-items: center; gap: 8px; }
-
-  /* Trace Drawer meta grid: single column */
   .mu-meta-grid { grid-template-columns: 1fr; }
-
-  /* Trace Drawer 全宽 */
   .mu-trace-drawer.el-drawer { width: 100% !important; }
-
-  /* Trace Drawer pre 溢出 */
   .mu-trace-drawer .mu-msg-content {
     font-size: 11px !important; padding: 8px !important;
     overflow-x: auto; -webkit-overflow-scrolling: touch;
@@ -2123,27 +2485,11 @@ if (typeof MutationObserver !== 'undefined') {
     font-size: 11px !important; overflow-x: auto; -webkit-overflow-scrolling: touch;
     white-space: pre;
   }
-  .mu-trace-drawer .mu-error-msg { font-size: 11px; }
-
-  /* Trace Drawer tabs 横滑 */
-  .mu-trace-drawer .el-tabs__nav-wrap {
-    overflow-x: auto; -webkit-overflow-scrolling: touch;
-  }
-  .mu-trace-drawer .el-tabs__nav {
-    flex-wrap: nowrap; display: inline-flex;
-  }
-
-  /* Trace timeline: allow scroll */
   .mu-timeline { overflow-x: auto; white-space: nowrap; }
   .mu-tl-node { min-width: 60px; }
-
-  /* Chart card header: stack */
-  .mu-chart-card__header { flex-direction: column; align-items: flex-start; gap: 8px; }
 }
-
 @media (max-width: 480px) {
-  .mu-stats { grid-template-columns: 1fr; }
-  .mu-stat-card__value { font-size: 18px; }
-  .mu-preset-btn { font-size: 12px; padding: 4px 10px; }
+  .mu-kpi-row { grid-template-columns: 1fr; }
+  .kpi-value { font-size: 20px; }
 }
 </style>

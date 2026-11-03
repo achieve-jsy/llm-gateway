@@ -84,6 +84,12 @@ func main() {
 		&cpmmodel.Feedback{},
 		&cpmmodel.FeedbackAttachment{},
 
+		// AI 应用聚合页：工作室主数据 / EHR 组织镜像 / 应用 / 访问日志
+		&cpmmodel.AIAppStudio{},
+		&cpmmodel.AIAppDepartment{},
+		&cpmmodel.AIApp{},
+		&cpmmodel.AIAppHubLoginLog{},
+
 		// auth/model (3 个表)
 		&authmodel.Department{},
 		&authmodel.DevUser{},

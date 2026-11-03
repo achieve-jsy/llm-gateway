@@ -378,6 +378,54 @@
 6. 生产库（只读核实）**没有任何 Kling/Vidu 渠道、没有任何 `image` 类型模型** → E1/E2 的看板与探活**在真实环境里暂时没有数据**，验收以测试库/fixture 为准。
 
 
+### Batch 2 / Batch 3 派发记录（2026-10-16 第 8 轮）
+
+**基线**：`39d531cd`（Batch 1 三队已合并并复验：`make build` 0 / `make test` 48 包 0 FAIL / lint 与基线逐项一致 / `atlas migrate validate` 0 / 漂移对拍 61→60 新增 0）。四个工作区均由该 commit 分叉。
+
+| 队伍 | 工作区 / 分支 | 范围 | agent id |
+|---|---|---|---|
+| **D1 队**（Kling 适配器） | `.worktrees/media-d1` / `feat/media-d1` | D1+D2+（Kling 侧）D5+D6 | `56ad5877` |
+| **D2 队**（Vidu 适配器） | `.worktrees/media-d2` / `feat/media-d2` | D3+D4+（Vidu 侧）D5+D6 | `cb6927dc` |
+| **E-docs 队** | `.worktrees/media-e1` / `feat/media-e1` | E4a（契约纠错）+ E4b（OpenAI 形状对齐）+ E4c | `fde29ab7` |
+| **E-obs 队** | `.worktrees/media-e2` / `feat/media-e2` | E1（看板后端）+ E1-补充（视频端点定稿）+ E2-补充（image 探针误报） | `0a24b1cb` |
+
+**为什么把 D 拆成两队**：D 的 6 项 ≈ 7–9 人日。**拆分的必要前提是接缝先建好**——见下面「适配器接缝」一节；否则两队会同时改装配代码而必然冲突。
+
+**为什么把 E 也拆**：E 的 5 项里，E2（媒体探活）**依赖 D 队的适配器存在**、E5（最终闸门）依赖全部合并；其余（E1/E1-补充/E2-补充/E4）与之无关。因此本轮先做**不依赖 D** 的四项，E2 与 E5 留到 D 合并后的下一轮。E-web（E3 前端）也留到下一轮：它需要 E-obs 先冻结看板 API 契约。
+
+#### 适配器接缝（本轮由 lead 建好，提交 `39d531cd`）
+
+派发前实测发现：`server.RegisterMediaAdapterFactory` **没有任何调用者** → 适配器注册表恒为空 → `/v1/videos` 三件套一直返回 **501**。而 Kling 与 Vidu 两队都需要「构造适配器 + 接进注册表」，若各自去改同一处装配代码必然冲突。因此先把接缝一次性建成**表驱动**：
+
+- `internal/providers/media_adapter.go`：冻结渠道无关的 `MediaAdapterParams`（Type/Name/BaseURL/Credentials/Models）与 `MediaAdapterBuilder`。**入参不含 gateway 类型**，保持分层方向 `gateway → providers`；**凭证以原始文本透传**，各渠道自行解析自己的 schema → 两队互不耦合。
+- 约定：**凭证缺失必须返回 error，不得返回占位适配器**（占位凭证会真的打到上游并产生费用）；构造期不得发网络请求。
+- `internal/providers/{kling,vidu}/media_adapter.go`：两个渠道包的骨架，各导出 `MediaProviderType` + `NewMediaAdapter`，当前返回未实现错误（明确可观测，绝不用占位凭证打上游）。
+- `internal/gateway/server/media_adapters.go`：`BuildMediaAdapters` 按 snapshot **整表重建**（沿用 `seedance_adapters.go` 的既有范式）；渠道缺席/停用/构造失败 → 不出现在新表里（旧适配器随 `Swap` 真的消失）。
+- `cmd/gateway/main.go`：在**首次 `loadProviders` 之前**注册工厂 —— 位置有硬要求，晚于首轮会让回调把注册表 Swap 成空表（表现为启动后长时间 501）。
+
+**新增渠道的固定动作**：在自己包内实现 builder + 在 `mediaAdapterBuilders` 表加一行；**不再需要改任何共享文件**。
+
+#### 本轮拍板的一个对外契约决策：视频响应对象对齐 OpenAI video 形状
+
+**背景（已核实）**：D1 选型的理由就是「对齐 OpenAI 生态、客户端 SDK 可直接用」，但当前实现是按 A10 的早期骨架写的，**不是** OpenAI video 对象的形状。权威形状取自本机 New API 源码 `dto/openai_video.go`（New API 即照 OpenAI 实现）：`progress` 是**整数 0–100**（我们写成了字符串 `"0"`），另有 `completed_at`/`expires_at`/`seconds`/`size`/`remixed_from_video_id`/`metadata` 等标准字段我们没有。
+
+**决策**：对齐 OpenAI 形状——`progress` 改整数并做归一（内部 varchar 可能是阶段名，需显式映射且**不得谎报 100**）；补 `completed_at`/`seconds`/`size`（推不出来就省略，**不编造**）；**`artifacts` 保留**并在文档里标注为本网关扩展字段（OpenAI 用 `metadata.url` + `/v1/videos/{id}/content`，我们的 `artifacts` 提供免重定向直连，前端需要它）。**现在改是最便宜的时点**：前端尚未基于旧形状开发。
+
+#### 本轮核实出的三处「契约与实现不符」（交给 E-docs 修）
+
+`tests/contract/contracts.json` 的 `media_channels` 段是 A10 在决策前写的骨架，与最终实现有出入：
+1. `internal_api.routes` 仍写 `/internal/v1/media-tasks*`（4 条），实际是 `/internal/v1/video/tasks*`（D5 决策）；其中 `GET ...?sweep=1` 的**拉取式 sweeper 根本不存在**（D6 决策为控制面 cron）。
+2. `error_codes.503` 列了 `media_pricing_unavailable` / `billing_fact_store_backpressure`，但 A2 的实现**没有 503 代码路径**（准入闸门只有 402）。
+3. `video_response_fields` 缺 OpenAI 标准字段（见上一节）。
+
+**原则**：契约文件的每一条都必须能在代码里找到对应实现；写了但代码不返回的错误码是**最坏的一种文档**。
+
+#### 本轮为 D 队提前拆掉的技术风险（已核实，已写入任务书）
+
+- **Kling 的 HS256 JWT 不需要新依赖**：`github.com/golang-jwt/jwt/v5` 已在 `vendor/modules.txt` 且仓内 5 个文件在用（CI 用 `-mod=vendor`，引入新依赖有风险）。
+- **本机就有 New API 的真实 Go 实现**可同语言对拍：`new-api/relay/channel/task/kling/adaptor.go`（387 行）与 `.../vidu/adaptor.go`。已从其中提取出设计文档遗漏的真实细节：**端点极性陷阱**（`TaskActionGenerate` 指 image2video）、**查询必须复用与提交相同的 action 段**、Kling 支持 `image_tail` 首尾帧、`cfg_scale` 固定 0.5、`model`+`model_name` 同值、多产物数组需全取、`final_unit_deduction` 用量。
+- 仍在的硬约束：**生产库没有任何 Kling/Vidu 渠道、也没有 `image` 类型模型** → 两队只能做到契约测试 + fake 回放，**真实联调需先由运维配置凭证**（Kling 的 AK/SK 可直接复用既有 `api_key` 字段，无需改数据结构）。
+
 ## 3. 批次与依赖图
 
 ```mermaid

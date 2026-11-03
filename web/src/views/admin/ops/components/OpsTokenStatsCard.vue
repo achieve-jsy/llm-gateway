@@ -106,11 +106,6 @@ watch(() => [filters.timeRange, filters.topN, viewMode.value], () => {
   fetchData()
 })
 
-watch(viewMode, () => {
-  page.value = 1
-  fetchData()
-})
-
 watch(() => props.refreshToken, () => {
   fetchData()
 })

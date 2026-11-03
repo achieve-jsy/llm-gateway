@@ -179,15 +179,16 @@ func TestOpsWS_ValidToken_Accepted_AndPushesMessage(t *testing.T) {
 			t.Fatalf("missing field %q: %s", key, msg)
 		}
 	}
-	if sample, _ := payload["sample"].(float64); sample != 180 {
-		t.Fatalf("expected sample=180, got %v", payload["sample"])
-	}
-	if qps, _ := payload["qps"].(float64); qps != 3.0 {
-		t.Fatalf("expected qps=3.0, got %v", qps)
-	}
-	if tps, _ := payload["tps"].(float64); tps != 150.0 {
-		t.Fatalf("expected tps=150.0, got %v", tps)
-	}
+		if sample, _ := payload["sample"].(float64); sample != 180 {
+			t.Fatalf("expected sample=180, got %v", payload["sample"])
+		}
+		// QPS/TPS 分母使用实际已过秒数（now.Second()+1），不固定为 60。
+		if qps, _ := payload["qps"].(float64); qps <= 0 {
+			t.Fatalf("expected qps>0, got %v", qps)
+		}
+		if tps, _ := payload["tps"].(float64); tps <= 0 {
+			t.Fatalf("expected tps>0, got %v", tps)
+		}
 }
 
 func TestOpsWS_OriginMismatch_Rejected(t *testing.T) {

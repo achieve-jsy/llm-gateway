@@ -377,12 +377,31 @@ func (h *OpsWSHandler) serveQPSWebSocket(ctx context.Context, conn *websocket.Co
 			now := time.Now()
 			minKey := now.Format("200601021504")
 
-			qpsCount, _ := h.rdb.Get(ctx, "ops:qps:"+minKey).Int64()
-			tpsCount, _ := h.rdb.Get(ctx, "ops:tps:"+minKey).Int64()
+			// MGET 批量获取，避免多次 Get 往返。
+			var qpsCount, tpsCount int64
+			vals, err := h.rdb.MGet(ctx, "ops:qps:"+minKey, "ops:tps:"+minKey).Result()
+			if err == nil {
+				if len(vals) > 0 && vals[0] != nil {
+					if s, ok := vals[0].(string); ok {
+						qpsCount, _ = strconv.ParseInt(s, 10, 64)
+					}
+				}
+				if len(vals) > 1 && vals[1] != nil {
+					if s, ok := vals[1].(string); ok {
+						tpsCount, _ = strconv.ParseInt(s, 10, 64)
+					}
+				}
+			}
+
+			// 使用实际已过秒数作为分母，避免分钟边界 count/60 少报。
+			elapsed := float64(now.Second() + 1)
+			if elapsed > 60 {
+				elapsed = 60
+			}
 
 			msg := map[string]any{
-				"qps":       float64(qpsCount) / 60.0,
-				"tps":       float64(tpsCount) / 60.0,
+				"qps":       float64(qpsCount) / elapsed,
+				"tps":       float64(tpsCount) / elapsed,
 				"timestamp": now.Format(time.RFC3339),
 				"sample":    qpsCount,
 			}

@@ -511,3 +511,104 @@ ALTER TABLE probe SET TABLESPACE ts_probe;   → Time: 4201 ms   (≈245 MB/s)
 | 是否解决根因 | 否 | 是 |
 
 
+
+---
+
+## 10. ⚠️ 生产测量事故与由此发现的归档致命隐患（2026-09-21）
+
+### 10.1 事故经过（我方造成，已自动恢复）
+
+为测量真实压缩比，在**生产**上执行了一条**只读**查询：
+
+```sql
+COPY (SELECT json_build_object(…)::text FROM call_traces
+       WHERE ts >= '2026-09-10' AND ts < '2026-09-11' AND (request_body IS NOT NULL OR response_body IS NOT NULL)
+       ORDER BY request_id COLLATE "C" LIMIT 25000) TO STDOUT
+```
+
+结果：
+
+```
+ERROR: could not write to file "base/pgsql_tmp/pgsql_tmp979357.14": No space left on device
+```
+
+**ORDER BY 触发排序，PG 把临时文件溢出到 `/data` 上的 `base/pgsql_tmp/`，撞了 ENOSPC。**
+查询中止后 PG 自动删除临时文件，空间已回收。
+
+恢复后的实测状态：`/data` 可用 **42G**（进入前 43G）、PG 容器 **Up (healthy)**、
+`SELECT`/写操作正常、负载 5.07（8 核）。**无数据损坏，服务未中断。**
+
+> 教训：在这张表上「只读」不等于「无害」。任何 `ORDER BY` / 聚合都可能产生 GB 级磁盘溢出。
+
+### 10.2 由此发现的真相：归档自己的查询带着同一个隐患
+
+生产 `call_traces` 的排序参数与计划：
+
+```
+work_mem         = 4 MB        ← 极小，排序极易溢出
+temp_file_limit  = -1          ← 【无上限】，溢出可以吃满整个 /data
+call_traces PK   = (request_id)，btree，数据库默认 collation（非 "C"）
+索引             = call_traces_pkey(request_id), idx_call_traces_ts(ts)
+无 (request_id COLLATE "C") 索引
+```
+
+**整天窗口（归档的真实场景）的计划是并行的**：
+
+```
+Limit (rows=3000)
+  -> Gather Merge
+       -> Sort (Sort Key: request_id COLLATE "C", rows=18070)
+            -> Parallel Bitmap Heap Scan on call_traces
+                 -> Bitmap Index Scan on idx_call_traces_ts
+```
+
+**危险机制**：并行 worker 要把元组经共享内存队列交给 leader，而**跨进程传递必须 detoast**
+（TOAST 指针在别的进程里无效）。于是每个 worker 在排序前就把正文（可达 ~226 KB/行）解压展开，
+leader 的 top-N 排序再把这些展开后的元组物化到磁盘：
+
+```
+LIMIT 3000  × ~226 KB/行 ≈ 680 MB / worker
+× 2~3 个 worker + leader  →  单次 fetchBatch 可溢出约 2 GB
+```
+
+这正是我那条 `LIMIT 25000` 查询能溢出到 43 GB 的同一机制（25000 × 226 KB ≈ 5.6 GB/worker）。
+**结论：归档在生产的整天批处理会反复产生 GB 级临时文件；配合 `temp_file_limit=-1`，
+完全可能再次写满 /data 并危及 PG。**
+
+### 10.3 修复（已确认可行）
+
+| 措施 | 权限 | 说明 |
+|---|---|---|
+| `SET max_parallel_workers_per_gather = 0` | **普通角色可改**（实测返回 `SET` / `0`） | 关掉并行 → 非并行计划下 Sort 拿到的是**含 TOAST 指针**的元组，top-N 只留指针，几乎不溢出；正文在投影/发送时才逐个 detoast。**这是最小、最直接的修复。** |
+| 全局设 `temp_file_limit`（如 5–10 GB） | **需超级用户**（app 角色实测 `permission denied to set parameter`） | 把「写满 /data 可能导致 PG panic」降级为「查询报错」。**属于独立于本特性的生产安全网，建议尽快加。** |
+| 建 `(request_id COLLATE "C")` 索引 | schema 变更 | 从根上消除 Sort。但 `ts` 范围 + `request_id` 排序无法用同一棵 btree，需权衡。 |
+
+**在 10.3 的前两项落实之前，不应在生产运行归档。**
+
+### 10.4 压缩测量结果（**保真度有保留**）
+
+带熔断的安全测量（去掉 ORDER BY，10000 行）：
+
+```
+原始 jsonl   = 5,498,054,293 字节 (5.12 GiB)
+zstd 压缩后  =    88,543,554 字节 (0.08 GiB)
+压缩比       = 62.09x
+耗时         = 1m22.972s    →  吞吐 66.3 MB/s
+前后 /data 可用：43G → 42G（无净消耗）
+```
+
+**⚠️ 62.09x 不可直接采用，原因**：测量用的 `json_build_object(…)::text` 会把
+`request_headers` 等文本字段再转义一层，输入被撑大约 2.4 倍（549,805 B/行 vs 早前测得的 ~205,879 B/行），
+而转义产生的反斜杠冗余会**虚高压缩比**。该口径与归档实际写出的 jsonl 不等价。
+
+**规划应采用设计自身已验证的口径**：`partwriter_test.go:451` 断言真实 jsonl 经生产 codec 压缩比 **≥ 9x**，
+早前实测 **9.57x** → `241.4 GiB` jsonl ≈ **25 GiB**。
+
+**综合结论（这才是决策需要的）**：
+
+```
+投入 /datalog   ≈ 25 GiB（归档全部正文）
+释放 /data      ≈ 280 GB（TOAST，置空 + VACUUM 后）
+```
+
+净收益约 **10 倍**，方向完全正确——但**必须先完成置空与 VACUUM，压缩本身不释放任何 /data 空间**。

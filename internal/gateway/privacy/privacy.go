@@ -51,6 +51,9 @@ type Config struct {
  Actions map[string]string
  Allow []string
  MaxInputBytes int
+ // KeyPath 指定占位符 HMAC 密钥文件；空表示每个会话临时生成。
+ // 设为固定路径可让同一凭证在不同请求/重启后得到同一占位符（上游前缀缓存友好）。
+ KeyPath string
 }
 
 // Detection contains no raw secret. Start/End are byte offsets in Detect's input.
@@ -78,7 +81,11 @@ func New(c Config)(*Protector,error) {
 
 // NewSession creates an isolated secret mapping. Retain it across turns of ONE
 // authorized conversation only. Close after its last response has finished.
-func(p *Protector) NewSession()*Session{return &Session{p:p,engine:magpie.New()}}
+func(p *Protector) NewSession()*Session{
+ engine:=magpie.New()
+ if p.config.KeyPath!=""{engine.SetKeyPath(p.config.KeyPath)}
+ return &Session{p:p,engine:engine}
+}
 
 type Session struct { mu sync.Mutex; p *Protector;engine *magpie.Engine;closed bool }
 func(s *Session) Close()error{s.mu.Lock();defer s.mu.Unlock();if !s.closed{s.engine.Close();s.closed=true};return nil}

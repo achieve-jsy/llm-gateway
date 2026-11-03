@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/example/llm-gateway/internal/gateway/errormap"
+	"github.com/example/llm-gateway/internal/gateway/privacy"
 )
 
 // StreamDialect 表示当前 SSE 响应使用的协议方言。流中途出错时，错误帧的格式
@@ -34,7 +35,25 @@ func HandleStreamResponse(c *gin.Context, stream io.ReadCloser) {
 
 // HandleStreamResponseAs 处理指定方言的流式 SSE 响应。
 func HandleStreamResponseAs(c *gin.Context, stream io.ReadCloser, dialect StreamDialect) {
+	handleStreamResponse(c, stream, dialect, nil)
+}
+
+// HandleStreamResponseAsRestoring 同 HandleStreamResponseAs，但把每个 event 先交给
+// 脱敏还原写入器（去掉占位符）。rw 为 nil 时等价于 HandleStreamResponseAs。
+// 占位符被切在两个 event 之间时允许压一帧，由 rw 跨帧拼回。
+func HandleStreamResponseAsRestoring(c *gin.Context, stream io.ReadCloser, dialect StreamDialect, rw *privacy.RestoringWriter) {
+	handleStreamResponse(c, stream, dialect, rw)
+}
+
+func handleStreamResponse(c *gin.Context, stream io.ReadCloser, dialect StreamDialect, rw *privacy.RestoringWriter) {
 	defer stream.Close()
+
+	// 写出目标：有还原写入器时走它（它再转发给 c.Writer），否则直接写。
+	var w http.ResponseWriter = c.Writer
+	if rw != nil {
+		w = rw
+		defer rw.Finish() // 放出压住的最后一帧
+	}
 
 	// 设置 SSE 响应头
 	c.Header("Content-Type", "text/event-stream")
@@ -43,7 +62,7 @@ func HandleStreamResponseAs(c *gin.Context, stream io.ReadCloser, dialect Stream
 	c.Header("X-Accel-Buffering", "no")
 
 	// 立即写出响应头（含 200 状态码），让浏览器/客户端可以立刻开始消费 SSE 流
-	c.Writer.WriteHeader(200)
+	w.WriteHeader(200)
 	c.Writer.Flush()
 
 	// 按 SSE event 边界（\n\n）切分并逐事件 flush，确保每个 token 粒度的
@@ -61,7 +80,7 @@ func HandleStreamResponseAs(c *gin.Context, stream io.ReadCloser, dialect Stream
 				if idx == -1 {
 					break
 				}
-				if _, writeErr := c.Writer.Write(pending[:idx+2]); writeErr != nil {
+				if _, writeErr := w.Write(pending[:idx+2]); writeErr != nil {
 					return
 				}
 				c.Writer.Flush()
@@ -70,8 +89,12 @@ func HandleStreamResponseAs(c *gin.Context, stream io.ReadCloser, dialect Stream
 		}
 		if readErr != nil {
 			if len(pending) > 0 {
-				c.Writer.Write(pending)
+				w.Write(pending)
 				c.Writer.Flush()
+			}
+			if rw != nil {
+				// 先把压住的事件放出去，错误帧要排在它后面（Finish 幂等）。
+				rw.Finish()
 			}
 			// 上游在流中途失败：必须显式告知客户端，不能只静默关闭连接。
 			// 否则客户端会把“流正常结束但没有任何内容”当成成功回答

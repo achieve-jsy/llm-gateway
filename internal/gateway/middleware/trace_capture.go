@@ -1,11 +1,9 @@
 package middleware
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -78,18 +76,27 @@ func TraceCapture() gin.HandlerFunc {
 			c.Set("trace_req_headers", hb)
 		}
 
-		// 读取完整请求体并恢复给 handler。
-		// sanitizeJSONRequestBody 在此同步执行：io.ReadAll（内存拷贝）+ JSON 双序列化。
-		// 对普通大小请求体（< 10KB）影响约 0.1–1ms，是可接受的。
-		// 更大的延迟优化已通过 KeyCache TTL 延长解决（key_cache.go）。
-		if body, err := io.ReadAll(c.Request.Body); err == nil && len(body) > 0 {
-			c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
-			c.Set("trace_req_body", sanitizeJSONRequestBody(body))
+		// 只读前 traceMaxBodyBytes（+1 字节用于判断是否超限），其余字节原样还给 handler。
+		// sanitizeJSONRequestBody 是内存拷贝 + JSON 双序列化，峰值约为 body 的 3-4 倍，
+		// 因此大 payload（视频/音频 base64）不再整包驻留，改为只记录字节数。
+		head, restored, truncated := peekBody(c.Request.Body, traceMaxBodyBytes+1)
+		c.Request.Body = restored
+		if truncated && int64(len(head)) > traceMaxBodyBytes {
+			size := int64(len(head))
+			if c.Request.ContentLength > 0 {
+				size = c.Request.ContentLength
+			}
+			c.Set("trace_req_body_omitted", size)
+		} else if len(head) > 0 {
+			c.Set("trace_req_body", sanitizeJSONRequestBody(head))
 		}
 
 		c.Next()
 	}
 }
+
+// traceMaxBodyBytes 是进入 trace 的请求体字节上限；超过后只记录 trace_req_body_omitted（字节数）。
+const traceMaxBodyBytes int64 = 2 << 20
 
 // maxStringLenInTrace 是每个文本字段值存入 trace 表时的字符上限（参照 LiteLLM MAX_STRING_LENGTH_PROMPT_IN_DB=2048）。
 // 超出部分保留首 35% + 尾 65%，中间插入截断标记，JSON 结构始终合法。
@@ -200,4 +207,36 @@ func formatByteSize(n int) string {
 	default:
 		return fmt.Sprintf("%d B", n)
 	}
+}
+
+// TraceLogEnabled 报告当前请求是否允许采集正文/响应。
+// 与 TraceCapture 的门控保持一致：AuthMiddleware 写入的 log_enabled=false 时不得采集，
+// 避免给"已关闭日志"的 Key 偷偷记正文。
+func TraceLogEnabled(c *gin.Context) bool {
+	v, ok := c.Get("log_enabled")
+	if !ok {
+		return true
+	}
+	enabled, ok := v.(bool)
+	return !ok || enabled
+}
+
+// SanitizeJSONRequestBody 导出给需要自行采集正文的直通路径（视频/素材）复用同一套截断策略，
+// 避免出现第二套 sanitize 实现导致正文口径不一致。
+func SanitizeJSONRequestBody(raw []byte) []byte {
+	return sanitizeJSONRequestBody(raw)
+}
+
+// CaptureTraceRequestBody 供已自行读取过 body 的 handler 补采请求正文。
+// TraceCapture 只覆盖 chat 类白名单路径；视频/素材是直通路径，body 本来就在 handler 手里，
+// 由 handler 主动登记，避免为了采集再读一次 Body。
+//
+// 门控放在这里（而不是只依赖下游 TraceWriter）是为了与 TraceCapture 一致：
+// log_enabled=false 时连 sanitize/序列化都不做。
+// 响应侧无此开销（只是登记对象引用），直接复用 SetTraceResponseObject。
+func CaptureTraceRequestBody(c *gin.Context, body []byte) {
+	if len(body) == 0 || !TraceLogEnabled(c) {
+		return
+	}
+	c.Set("trace_req_body", SanitizeJSONRequestBody(body))
 }

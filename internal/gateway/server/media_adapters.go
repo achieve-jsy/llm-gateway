@@ -40,6 +40,20 @@ func BuildMediaAdapters(entries []gwmodel.ProviderEntry) (map[string]core.MediaT
 		if entry == nil {
 			continue
 		}
+		// Enabled 必须与 chat 路径（loader/provider_loader.go 的 `if !entry.Enabled { continue }`）
+		// 保持一致：运维停用渠道时，两种链路都要停。否则会出现「chat 已停用、媒体任务仍打到
+		// 该渠道」这种按渠道而非按功能的半停用状态——渠道被停用往往正是因为凭证泄露或
+		// 费用失控，此时继续给它派发媒体任务是危险的。
+		//
+		// 现状说明：控制面产出 snapshot 的两条路径目前都硬编码 Enabled: true
+		// （provider_snapshot_service.go 与 gateway/infra/config_loader.go），且
+		// modelRepo.ListAvailable() 已按 providers.enabled = true 过滤，所以本条今天
+		// 不会命中；它是为了在 snapshot 的 Enabled 语义将来变真实时，两条链路不会静默分叉。
+		if !entry.Enabled {
+			slog.Warn("media adapter skipped: provider disabled",
+				"provider_type", builder.ProviderType, "provider", entry.Name)
+			continue
+		}
 		adapter, err := builder.Build(providers.MediaAdapterParams{
 			Type:        entry.Type,
 			Name:        entry.Name,

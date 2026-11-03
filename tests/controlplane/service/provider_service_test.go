@@ -20,15 +20,15 @@ func TestMain(m *testing.M) {
 
 // fakeProviderRepo 模拟 ProviderRepoInterface 用于 ProviderService 单测
 type fakeProviderRepo struct {
-	createFunc              func(provider *model.Provider) error
-	getByIDFunc             func(id uuid.UUID) (*model.Provider, error)
-	listFunc                func(filter repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error)
-	updateFunc              func(provider *model.Provider) error
-	updateStatusFunc        func(id uuid.UUID, enabled bool) error
-	deleteFunc              func(id uuid.UUID) error
-	existsByNameFunc        func(name string) (bool, error)
-	existsByNameExclFunc    func(name string, excludeID uuid.UUID) (bool, error)
-	updateResponseTimeFunc  func(id uuid.UUID, ms int) error
+	createFunc             func(provider *model.Provider) error
+	getByIDFunc            func(id uuid.UUID) (*model.Provider, error)
+	listFunc               func(filter repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error)
+	updateFunc             func(provider *model.Provider) error
+	updateStatusFunc       func(id uuid.UUID, enabled bool) error
+	deleteFunc             func(id uuid.UUID) error
+	existsByNameFunc       func(name string) (bool, error)
+	existsByNameExclFunc   func(name string, excludeID uuid.UUID) (bool, error)
+	updateResponseTimeFunc func(id uuid.UUID, ms int) error
 }
 
 func (f *fakeProviderRepo) Create(provider *model.Provider) error {
@@ -93,25 +93,25 @@ type fakeModelRepo struct {
 	updateEnabledByProvFunc    func(providerID uuid.UUID, enabled bool) error
 }
 
-func (f *fakeModelRepo) Create(_ *model.Model) error                        { return nil }
-func (f *fakeModelRepo) GetByID(_ uuid.UUID) (*model.Model, error)          { return nil, nil }
+func (f *fakeModelRepo) Create(_ *model.Model) error               { return nil }
+func (f *fakeModelRepo) GetByID(_ uuid.UUID) (*model.Model, error) { return nil, nil }
 func (f *fakeModelRepo) GetByIDs(_ []uuid.UUID) (map[uuid.UUID]*model.Model, error) {
 	return nil, nil
 }
 func (f *fakeModelRepo) List(_ repository.ModelListFilter, _, _ int) ([]model.Model, int64, error) {
 	return nil, 0, nil
 }
-func (f *fakeModelRepo) Update(_ *model.Model) error { return nil }
-func (f *fakeModelRepo) Delete(_ uuid.UUID) error    { return nil }
-func (f *fakeModelRepo) AutoDisableModel(_ uuid.UUID) error { return nil }
-func (f *fakeModelRepo) AutoEnableModel(_ uuid.UUID) error  { return nil }
-func (f *fakeModelRepo) UpdateEnabled(_ uuid.UUID, _ *bool) error { return nil }
-func (f *fakeModelRepo) UpdateStatus(_ uuid.UUID, _ bool, _ int) error { return nil }
-func (f *fakeModelRepo) IncrementModelFailures(_ uuid.UUID) (int, error) { return 0, nil }
-func (f *fakeModelRepo) ResetModelFailures(_ uuid.UUID) error { return nil }
+func (f *fakeModelRepo) Update(_ *model.Model) error                               { return nil }
+func (f *fakeModelRepo) Delete(_ uuid.UUID) error                                  { return nil }
+func (f *fakeModelRepo) AutoDisableModel(_ uuid.UUID) error                        { return nil }
+func (f *fakeModelRepo) AutoEnableModel(_ uuid.UUID) error                         { return nil }
+func (f *fakeModelRepo) UpdateEnabled(_ uuid.UUID, _ *bool) error                  { return nil }
+func (f *fakeModelRepo) UpdateStatus(_ uuid.UUID, _ bool, _ int) error             { return nil }
+func (f *fakeModelRepo) IncrementModelFailures(_ uuid.UUID) (int, error)           { return 0, nil }
+func (f *fakeModelRepo) ResetModelFailures(_ uuid.UUID) error                      { return nil }
 func (f *fakeModelRepo) UpdateModelCheckResult(_ uuid.UUID, _ int, _ string) error { return nil }
-func (f *fakeModelRepo) IncrementRecoverySuccesses(_ uuid.UUID) error { return nil }
-func (f *fakeModelRepo) ResetRecoverySuccesses(_ uuid.UUID) error { return nil }
+func (f *fakeModelRepo) IncrementRecoverySuccesses(_ uuid.UUID) error              { return nil }
+func (f *fakeModelRepo) ResetRecoverySuccesses(_ uuid.UUID) error                  { return nil }
 func (f *fakeModelRepo) ExistsByName(_ string, _ uuid.UUID) (bool, error) {
 	return false, nil
 }
@@ -137,9 +137,9 @@ func (f *fakeModelRepo) UpdateEnabledByProviderID(providerID uuid.UUID, enabled 
 	}
 	return nil
 }
-func (f *fakeModelRepo) BatchDelete(_ []uuid.UUID) (int64, error)          { return 0, nil }
+func (f *fakeModelRepo) BatchDelete(_ []uuid.UUID) (int64, error)                { return 0, nil }
 func (f *fakeModelRepo) BatchUpdateEnabled(_ []uuid.UUID, _ bool) (int64, error) { return 0, nil }
-func (f *fakeModelRepo) DeleteModelTagRelations(_ uuid.UUID) error         { return nil }
+func (f *fakeModelRepo) DeleteModelTagRelations(_ uuid.UUID) error               { return nil }
 func (f *fakeModelRepo) GetHealthByNames(_ []string) (map[string]repository.ModelHealthSummary, error) {
 	return nil, nil
 }

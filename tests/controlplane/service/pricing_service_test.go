@@ -21,32 +21,38 @@ type fakeModelRepoForPricingSvc struct {
 	getByIDFunc func(id uuid.UUID) (*model.Model, error)
 }
 
-func (f *fakeModelRepoForPricingSvc) Create(_ *model.Model) error                                          { return nil }
+func (f *fakeModelRepoForPricingSvc) Create(_ *model.Model) error { return nil }
 func (f *fakeModelRepoForPricingSvc) GetByID(id uuid.UUID) (*model.Model, error) {
 	if f.getByIDFunc != nil {
 		return f.getByIDFunc(id)
 	}
 	return nil, errors.New("not found")
 }
-func (f *fakeModelRepoForPricingSvc) GetByIDs(_ []uuid.UUID) (map[uuid.UUID]*model.Model, error)          { return nil, nil }
+func (f *fakeModelRepoForPricingSvc) GetByIDs(_ []uuid.UUID) (map[uuid.UUID]*model.Model, error) {
+	return nil, nil
+}
 func (f *fakeModelRepoForPricingSvc) List(_ repository.ModelListFilter, _, _ int) ([]model.Model, int64, error) {
 	return nil, 0, nil
 }
-func (f *fakeModelRepoForPricingSvc) Update(_ *model.Model) error                                          { return nil }
-func (f *fakeModelRepoForPricingSvc) Delete(_ uuid.UUID) error                                            { return nil }
-func (f *fakeModelRepoForPricingSvc) ExistsByName(_ string, _ uuid.UUID) (bool, error)                    { return false, nil }
+func (f *fakeModelRepoForPricingSvc) Update(_ *model.Model) error { return nil }
+func (f *fakeModelRepoForPricingSvc) Delete(_ uuid.UUID) error    { return nil }
+func (f *fakeModelRepoForPricingSvc) ExistsByName(_ string, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
 func (f *fakeModelRepoForPricingSvc) ExistsByNameExcluding(_ string, _ uuid.UUID, _ uuid.UUID) (bool, error) {
 	return false, nil
 }
-func (f *fakeModelRepoForPricingSvc) CountByProviderID(_ uuid.UUID) (int64, error)                        { return 0, nil }
+func (f *fakeModelRepoForPricingSvc) CountByProviderID(_ uuid.UUID) (int64, error) { return 0, nil }
 func (f *fakeModelRepoForPricingSvc) BatchCountByProviderID(_ []uuid.UUID) (map[uuid.UUID]int64, error) {
 	return nil, nil
 }
-func (f *fakeModelRepoForPricingSvc) ListAvailable() ([]model.Model, error)                                { return nil, nil }
-func (f *fakeModelRepoForPricingSvc) UpdateEnabledByProviderID(_ uuid.UUID, _ bool) error                 { return nil }
-func (f *fakeModelRepoForPricingSvc) BatchDelete(_ []uuid.UUID) (int64, error)                             { return 0, nil }
-func (f *fakeModelRepoForPricingSvc) BatchUpdateEnabled(_ []uuid.UUID, _ bool) (int64, error)             { return 0, nil }
-func (f *fakeModelRepoForPricingSvc) DeleteModelTagRelations(_ uuid.UUID) error                           { return nil }
+func (f *fakeModelRepoForPricingSvc) ListAvailable() ([]model.Model, error)               { return nil, nil }
+func (f *fakeModelRepoForPricingSvc) UpdateEnabledByProviderID(_ uuid.UUID, _ bool) error { return nil }
+func (f *fakeModelRepoForPricingSvc) BatchDelete(_ []uuid.UUID) (int64, error)            { return 0, nil }
+func (f *fakeModelRepoForPricingSvc) BatchUpdateEnabled(_ []uuid.UUID, _ bool) (int64, error) {
+	return 0, nil
+}
+func (f *fakeModelRepoForPricingSvc) DeleteModelTagRelations(_ uuid.UUID) error { return nil }
 func (f *fakeModelRepoForPricingSvc) GetHealthByNames(_ []string) (map[string]repository.ModelHealthSummary, error) {
 	return nil, nil
 }
@@ -96,10 +102,10 @@ func TestResolveModelPricing_Scenarios(t *testing.T) {
 			setupMR: func(mr *fakeModelRepoForPricingSvc) {
 				mr.getByIDFunc = func(_ uuid.UUID) (*model.Model, error) {
 					return &model.Model{
-						ID:            modelID,
-						PriceMode:     model.PriceModeManual,
-						InputPrice:    15.0,
-						OutputPrice:   25.0,
+						ID:             modelID,
+						PriceMode:      model.PriceModeManual,
+						InputPrice:     15.0,
+						OutputPrice:    25.0,
 						ReasoningPrice: floatPtr(8.0),
 						CachedPrice:    floatPtr(3.0),
 					}, nil
@@ -121,10 +127,10 @@ func TestResolveModelPricing_Scenarios(t *testing.T) {
 			setupMR: func(mr *fakeModelRepoForPricingSvc) {
 				mr.getByIDFunc = func(_ uuid.UUID) (*model.Model, error) {
 					return &model.Model{
-						ID:            modelID,
-						PriceMode:     model.PriceModeManual,
-						InputPrice:    10.0,
-						OutputPrice:   20.0,
+						ID:             modelID,
+						PriceMode:      model.PriceModeManual,
+						InputPrice:     10.0,
+						OutputPrice:    20.0,
 						ReasoningPrice: nil,
 						CachedPrice:    floatPtr(1.0),
 					}, nil
@@ -146,10 +152,10 @@ func TestResolveModelPricing_Scenarios(t *testing.T) {
 			setupMR: func(mr *fakeModelRepoForPricingSvc) {
 				mr.getByIDFunc = func(_ uuid.UUID) (*model.Model, error) {
 					return &model.Model{
-						ID:            modelID,
-						PriceMode:     model.PriceModeManual,
-						InputPrice:    10.0,
-						OutputPrice:   20.0,
+						ID:             modelID,
+						PriceMode:      model.PriceModeManual,
+						InputPrice:     10.0,
+						OutputPrice:    20.0,
 						ReasoningPrice: floatPtr(5.0),
 						CachedPrice:    nil,
 					}, nil
@@ -171,10 +177,10 @@ func TestResolveModelPricing_Scenarios(t *testing.T) {
 			setupMR: func(mr *fakeModelRepoForPricingSvc) {
 				mr.getByIDFunc = func(_ uuid.UUID) (*model.Model, error) {
 					return &model.Model{
-						ID:            modelID,
-						PriceMode:     model.PriceModeManual,
-						InputPrice:    0.0,
-						OutputPrice:   20.0,
+						ID:             modelID,
+						PriceMode:      model.PriceModeManual,
+						InputPrice:     0.0,
+						OutputPrice:    20.0,
 						ReasoningPrice: floatPtr(5.0),
 						CachedPrice:    floatPtr(1.0),
 					}, nil
@@ -196,10 +202,10 @@ func TestResolveModelPricing_Scenarios(t *testing.T) {
 			setupMR: func(mr *fakeModelRepoForPricingSvc) {
 				mr.getByIDFunc = func(_ uuid.UUID) (*model.Model, error) {
 					return &model.Model{
-						ID:            modelID,
-						PriceMode:     model.PriceModeManual,
-						InputPrice:    10.0,
-						OutputPrice:   0.0,
+						ID:             modelID,
+						PriceMode:      model.PriceModeManual,
+						InputPrice:     10.0,
+						OutputPrice:    0.0,
 						ReasoningPrice: floatPtr(5.0),
 						CachedPrice:    floatPtr(1.0),
 					}, nil

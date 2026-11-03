@@ -57,9 +57,9 @@ func (r *memSettingsRepo) GetAll() ([]model.SystemConfig, error) {
 }
 
 type fakeEnforcementPublisher struct {
-	mu        sync.Mutex
-	flags     service.BudgetEnforcementFlags
-	publishN  int
+	mu         sync.Mutex
+	flags      service.BudgetEnforcementFlags
+	publishN   int
 	accounting bool
 }
 

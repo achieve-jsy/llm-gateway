@@ -9,9 +9,9 @@ import (
 
 func TestInferModelType_Scenarios(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		modelName string
-		want     string
+		want      string
 	}{
 		{name: "chat模型", modelName: "qwen-max", want: "chat"},
 		{name: "chat模型(大写)", modelName: "GPT-4O", want: "chat"},

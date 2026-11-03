@@ -180,12 +180,12 @@ git commit -m "feat(hub): EHR 部门接口客户端"
 - Produces:
   - `type ScopeKind string`，常量 `ScopeAll ScopeKind = "all"`、`ScopeDepartment = "department"`、`ScopeStudio = "studio"`
   - `type SyncScope struct { Kind ScopeKind; ID string }`
-  - `type SyncResult struct { Scope string; Departments, Studios, Hidden int; DurationMs int64 }`
+  - `type HubSyncResult struct { Scope string; Departments, Studios, Hidden int; DurationMs int64 }`
   - `type SyncRules struct { HiddenDepartmentIDs map[string]bool; NameOverrides map[string]string }`
   - `func DefaultSyncRules() SyncRules`
   - `type DepartmentFetcher interface { FetchDepartments(ctx context.Context) ([]ehrclient.Department, error) }`
   - `func NewAIAppHubSyncService(f DepartmentFetcher, repo *repository.AIAppHubRepo, settings *repository.SettingsRepo, rules SyncRules) *AIAppHubSyncService`
-  - `func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (SyncResult, error)`
+  - `func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyncResult, error)`
 
 - [ ] **Step 1: 写失败测试**
 
@@ -238,7 +238,7 @@ Expected: FAIL（服务未定义）
 
 - [ ] **Step 3: 实现**
 
-`Sync` 流程：①`FetchDepartments` 失败直接返回，不写库；②逐条 `UpsertDepartment`；③`Type==2` 的节点构造 `AIAppStudio`：`GetStudioByDepartmentID` 查不到则 `InsertStudioIfAbsent`（`Name` 取 `NameOverrides`、`Visible = !HiddenDepartmentIDs[ID]`），查到则 `UpdateStudioEHRFields`；④内存建 `id -> node` 映射，对每个节点向上找最近的 type=2 祖先，`SetDepartmentStudio`（找不到传 nil，上溯上限 10 层）；⑤`SettingsRepo.SetMultiple` 写 `last_sync_at`（RFC3339）、`last_sync_status=success`、`last_sync_scope=all`。`SyncResult.Studios` 计数 type2 节点数，`Hidden` 计数规则命中的节点数。 测试辅助 `newAIHubTestDBWithSettings(t)` 放在 `tests/controlplane/service/helper_test.go`：用 sqlite 内存库 AutoMigrate 四张表（含 `model.SystemConfig`），返回 `(*gorm.DB, *repository.SettingsRepo)`。
+`Sync` 流程：①`FetchDepartments` 失败直接返回，不写库；②逐条 `UpsertDepartment`；③`Type==2` 的节点构造 `AIAppStudio`：`GetStudioByDepartmentID` 查不到则 `InsertStudioIfAbsent`（`Name` 取 `NameOverrides`、`Visible = !HiddenDepartmentIDs[ID]`），查到则 `UpdateStudioEHRFields`；④内存建 `id -> node` 映射，对每个节点向上找最近的 type=2 祖先，`SetDepartmentStudio`（找不到传 nil，上溯上限 10 层）；⑤`SettingsRepo.SetMultiple` 写 `last_sync_at`（RFC3339）、`last_sync_status=success`、`last_sync_scope=all`。`HubSyncResult.Studios` 计数 type2 节点数，`Hidden` 计数规则命中的节点数。 测试辅助 `newAIHubTestDBWithSettings(t)` 放在 `tests/controlplane/service/helper_test.go`：用 sqlite 内存库 AutoMigrate 四张表（含 `model.SystemConfig`），返回 `(*gorm.DB, *repository.SettingsRepo)`。
 
 - [ ] **Step 4: 运行，确认通过**
 
@@ -345,7 +345,7 @@ Expected: FAIL
 
 - [ ] **Step 3: 实现**
 
-在 `AIAppHubSyncService` 里加 `mu sync.Mutex`，`Sync` 开头 `if !s.mu.TryLock() { return SyncResult{}, ErrSyncInProgress }` + `defer s.mu.Unlock()`；随后 `ctx, cancel := context.WithTimeout(ctx, 30*time.Second)`。fetch 失败分支写 `last_sync_status=failed`、`last_sync_scope`、`last_sync_error`（截断 500 字）后返回 error，不写业务表。
+在 `AIAppHubSyncService` 里加 `mu sync.Mutex`，`Sync` 开头 `if !s.mu.TryLock() { return HubSyncResult{}, ErrSyncInProgress }` + `defer s.mu.Unlock()`；随后 `ctx, cancel := context.WithTimeout(ctx, 30*time.Second)`。fetch 失败分支写 `last_sync_status=failed`、`last_sync_scope`、`last_sync_error`（截断 500 字）后返回 error，不写业务表。
 
 - [ ] **Step 4: 运行，确认通过**
 
@@ -439,7 +439,7 @@ git commit -m "feat(hub): 同步触发接口与权限"
 
 **Interfaces:**
 - Produces:
-  - `type SyncRunner interface { Sync(ctx context.Context, scope SyncScope) (SyncResult, error) }`
+  - `type SyncRunner interface { Sync(ctx context.Context, scope SyncScope) (HubSyncResult, error) }`
   - `func StartAIAppHubSyncCron(ctx context.Context, runner SyncRunner, interval time.Duration)`
   - `cmd/control-plane/main.go` 用 `EHR_BASE_URL` / `EHR_API_TOKEN` / `EHR_ORG_ID` 构造 client；三者任一为空则跳过启动并 `slog.Warn`
 

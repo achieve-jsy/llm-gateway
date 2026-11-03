@@ -12,8 +12,8 @@ import (
 
 // fakeOrgPublisher 记录 KeyOrgSyncer 发出的事件，用于断言
 type fakeOrgPublisher struct {
-	published    []orgPublishedEvent
-	invalidated  []string
+	published   []orgPublishedEvent
+	invalidated []string
 }
 
 type orgPublishedEvent struct {

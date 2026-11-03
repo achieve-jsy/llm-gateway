@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -101,13 +102,13 @@ func (s *GroupCheckService) CheckOne(ctx context.Context, g *model.Group) *Group
 		modelType = s.getGroupModelType(g)
 	}
 
-	// 视频组不走 /v1/chat/completions：无轻量「不建视频」的组级探针，跳过且不计失败。
-	// 景汐连通+鉴权请用渠道级 ProbeSeedanceRelayConnectivity。
-	if isVideoGroupModelType(modelType) {
+	// 媒体组（video/image）**不走** /v1/chat/completions：媒体模型不实现对话补全，
+	// 打过去上游必然报错 → 看板/健康检查必然误报失败。跳过且不计失败。
+	plan, skipReason := PlanGroupProbe(modelType)
+	if plan == GroupProbeSkip {
 		cr.Success = true
-		skipMsg := "skipped: video group has no chat probe (use provider connectivity+auth; not video create)"
-		cr.Message = skipMsg
-		s.recordLog(g, true, 0, skipMsg)
+		cr.Message = skipReason
+		s.recordLog(g, true, 0, skipReason)
 		return cr
 	}
 
@@ -118,7 +119,7 @@ func (s *GroupCheckService) CheckOne(ctx context.Context, g *model.Group) *Group
 		return cr
 	}
 
-	success, elapsed, errMsg := s.probeGroup(ctx, g.Name, apiKey, modelType)
+	success, elapsed, errMsg := s.probeGroup(ctx, g.Name, apiKey, plan)
 	cr.ResponseTime = elapsed
 
 	if success {
@@ -132,10 +133,65 @@ func (s *GroupCheckService) CheckOne(ctx context.Context, g *model.Group) *Group
 	return cr
 }
 
-// isVideoGroupModelType 判断组类型是否为视频（不应打 chat/embeddings 探针）
-func isVideoGroupModelType(modelType string) bool {
-	lower := strings.ToLower(strings.TrimSpace(modelType))
-	return lower == "video" || lower == "video_generation"
+// GroupProbePlan 组级存活探针的走向（E2-补充）。
+type GroupProbePlan string
+
+const (
+	// GroupProbeChat 对话组：POST /v1/chat/completions。
+	GroupProbeChat GroupProbePlan = "chat"
+	// GroupProbeEmbedding 向量组：POST /v1/embeddings。
+	GroupProbeEmbedding GroupProbePlan = "embedding"
+	// GroupProbeRerank 重排组：POST /v1/rerank。
+	GroupProbeRerank GroupProbePlan = "rerank"
+	// GroupProbeSkip 媒体组 / 非对话组：**不发**任何组级探针（不计失败）。
+	GroupProbeSkip GroupProbePlan = "skip"
+)
+
+// 跳过原因（写入 health_check_logs.error_message 与响应 message，供运维定位）。
+//
+// ⚠️ video 那句必须与既有实现**逐字一致**：它是既有看板/API 消费方已经看到过的文案。
+const (
+	groupProbeSkipVideoMessage = "skipped: video group has no chat probe (use provider connectivity+auth; not video create)"
+	groupProbeSkipImageMessage = "skipped: image group has no chat probe (use provider connectivity+auth; not image create)"
+)
+
+// PlanGroupProbe 决定组级探针走哪个端点。
+//
+// **白名单语义（fail-safe）**：只有明确属于 chat / embedding / rerank 族的 model_type
+// 才发探针，其余一律 Skip。这样后续新增的任何非对话媒体类型（image 之后的下一类）
+// 不会再踩「拿 chat 探针打媒体组」的坑。
+//
+// 背景（A5 打开 `model_type=image` 后新暴露的路径）：
+// 原实现只跳过 video 组（`isVideoGroupModelType`），image 组会落到
+// buildProbeRequest 的 default 分支去打 `/v1/chat/completions` —— 图像模型不实现
+// 对话补全，上游必然报错 → 看板/健康检查**必然误报失败**。
+//
+// 「媒体组没有组级探针」不是缺陷而是设计：媒体链路会产生上游生成费用，组级探活
+// 只允许做**连通性 + 鉴权**（见 test_handler.go / seedance_relay_probe.go 的范式），
+// 而这需要按渠道实现（Kling/Vidu 适配器就绪后再接）。在那之前，跳过（不计失败）
+// 是唯一不与事实相悖的行为。
+//
+// model_groups.model_type 由迁移的 CHECK 约束限定在 7 值枚举内
+// （chat/image/embedding/embedding_vl/rerank/rerank_vl/video），
+// 因此 default 分支实际只在防御未知脏值时命中。
+//
+// 返回的第二个值是 skip 时给运维看的原因（非 skip 时为空串）。
+func PlanGroupProbe(modelType string) (GroupProbePlan, string) {
+	switch strings.ToLower(strings.TrimSpace(modelType)) {
+	case "chat", "completion", "responses":
+		return GroupProbeChat, ""
+	case "embedding", "embedding_vl":
+		return GroupProbeEmbedding, ""
+	case "rerank", "rerank_vl":
+		return GroupProbeRerank, ""
+	case "video", "video_generation":
+		return GroupProbeSkip, groupProbeSkipVideoMessage
+	case "image", "image_generation", "image_edit":
+		return GroupProbeSkip, groupProbeSkipImageMessage
+	default:
+		return GroupProbeSkip, "skipped: group model_type " + strconv.Quote(strings.TrimSpace(modelType)) +
+			" has no chat probe (unknown non-chat group type; use provider connectivity+auth probe)"
+	}
 }
 
 // CheckAll 并发检测所有启用的模型组
@@ -193,10 +249,14 @@ func (s *GroupCheckService) CheckOneByID(ctx context.Context, id uint) (*GroupCh
 }
 
 // probeGroupOnce 向 Gateway 发送一次非流式探针请求，验证端到端推理链路可用性。
-// 根据 modelType 构建不同格式的请求：chat/embedding/rerank。
+// 端点与请求体由 BuildGroupProbeRequest 按探针走向（chat/embedding/rerank）构建。
 // 超时 60s：全量并发后消除了排队延迟，60s 足够覆盖上游高峰时段的推理耗时。
-func (s *GroupCheckService) probeGroupOnce(ctx context.Context, groupName, apiKey, modelType string) (bool, int, string) {
-	endpoint, payload := s.buildProbeRequest(groupName, modelType)
+func (s *GroupCheckService) probeGroupOnce(ctx context.Context, groupName, apiKey string, plan GroupProbePlan) (bool, int, string) {
+	endpoint, payload := BuildGroupProbeRequest(groupName, plan)
+	if endpoint == "" {
+		// 防御：skip 走向（或未知走向）**没有**可发的探针。绝不能退化成 chat 请求。
+		return false, 0, "internal: no probe request for plan " + string(plan)
+	}
 	body, _ := json.Marshal(payload)
 
 	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -253,34 +313,42 @@ func (s *GroupCheckService) getGroupModelType(g *model.Group) string {
 	return "chat"
 }
 
-// buildProbeRequest 根据模型类型构建探针请求的端点和请求体
-func (s *GroupCheckService) buildProbeRequest(modelName, modelType string) (string, map[string]interface{}) {
-	switch modelType {
-	case "embedding", "embedding_vl":
+// BuildGroupProbeRequest 按探针走向构建探针请求的端点和请求体。
+//
+// 这是**唯一**把「组类型 → 上游端点」映射出来的地方：Chat / Embedding / Rerank 三族
+// 各有自己的端点；Skip（媒体组/未知类型）返回空端点 —— 调用方不得发请求。
+// 返回空端点时调用方必须直接跳过，**不允许**把空端点兜底成 chat（那正是本函数要
+// 消灭的缺陷：拿 chat 探针打图像/视频组）。
+func BuildGroupProbeRequest(modelName string, plan GroupProbePlan) (string, map[string]interface{}) {
+	switch plan {
+	case GroupProbeEmbedding:
 		return "/v1/embeddings", map[string]interface{}{
 			"model": modelName,
 			"input": "健康检查测试文本",
 		}
-	case "rerank", "rerank_vl":
+	case GroupProbeRerank:
 		return "/v1/rerank", map[string]interface{}{
 			"model":     modelName,
 			"query":     "健康检查查询",
 			"documents": []string{"文档1", "文档2"},
 		}
-	default: // chat 或其他类型
+	case GroupProbeChat:
 		return "/v1/chat/completions", map[string]interface{}{
 			"model":      modelName,
 			"messages":   []map[string]string{{"role": "user", "content": "健康检查"}},
 			"max_tokens": 10,
 		}
+	default:
+		// GroupProbeSkip 与任何未知走向：没有可发的探针请求。
+		return "", nil
 	}
 }
 
 // probeGroup 向 Gateway 发送探针请求，model 字段填组名。
-// 根据 modelType 选择正确的端点和请求格式（chat/embedding/rerank）。
+// 按探针走向（chat/embedding/rerank）选择正确的端点和请求格式。
 // 失败后自动重试最多 probeMaxRetries 次（含首次共 probeMaxRetries+1 次机会），
 // 全部失败才返回错误，避免偶发超时或抖动被误判为健康异常。
-func (s *GroupCheckService) probeGroup(ctx context.Context, groupName, apiKey, modelType string) (bool, int, string) {
+func (s *GroupCheckService) probeGroup(ctx context.Context, groupName, apiKey string, plan GroupProbePlan) (bool, int, string) {
 	const probeMaxRetries = 1 // 失败后最多重试次数（流式 TTFB 很快，1 次重试即可）
 
 	var (
@@ -294,7 +362,7 @@ func (s *GroupCheckService) probeGroup(ctx context.Context, groupName, apiKey, m
 			return false, lastElapsed, fmt.Sprintf("context canceled before attempt %d", attempt+1)
 		}
 
-		ok, elapsed, errMsg := s.probeGroupOnce(ctx, groupName, apiKey, modelType)
+		ok, elapsed, errMsg := s.probeGroupOnce(ctx, groupName, apiKey, plan)
 		lastElapsed = elapsed
 		lastErr = errMsg
 

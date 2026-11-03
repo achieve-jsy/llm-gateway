@@ -175,7 +175,7 @@ deploy-web-test:
       SSH_OPTS="-o StrictHostKeyChecking=no"
       echo "=== Deploying frontend to ${TEST_HOST}:${WEB_DIR} ==="
       scp ${SSH_OPTS} web-dist.tar.gz ${TEST_USER}@${TEST_HOST}:/tmp/
-      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "sudo mkdir -p ${WEB_DIR} && sudo tar -xzf /tmp/web-dist.tar.gz -C ${WEB_DIR} && rm -f /tmp/web-dist.tar.gz"
+      ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${WEB_DIR} && tar -xzf /tmp/web-dist.tar.gz -C ${WEB_DIR} && rm -f /tmp/web-dist.tar.gz"
       echo "=== Frontend deployed to test ==="
   dependencies:
     - build-web-test

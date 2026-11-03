@@ -148,3 +148,17 @@ func TestParseVideoURLContent(t *testing.T) {
 		t.Fatal("expected false for unsupported type")
 	}
 }
+
+// TestHasVideoContentAcceptsDialectAliases 方言别名（input_video / video）也必须被识别为视频，
+// 否则路由期能力过滤会被绕过。
+func TestHasVideoContentAcceptsDialectAliases(t *testing.T) {
+	for _, typ := range []string{"input_video", "video"} {
+		msgs := []Message{{Role: "user", Content: []ContentPart{{
+			Type:     typ,
+			VideoURL: &VideoURLContent{URL: "https://a/b.mp4"},
+		}}}}
+		if !HasVideoContent(msgs) {
+			t.Fatalf("type %q should be detected as video content", typ)
+		}
+	}
+}

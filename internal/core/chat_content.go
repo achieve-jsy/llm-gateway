@@ -694,7 +694,10 @@ func HasVideoContent(msgs []Message) bool {
 			continue
 		}
 		for _, part := range parts {
-			if part.Type == "video_url" {
+			// 归一化后类型统一是 video_url；这里同时接受方言别名，
+			// 防止有调用方直接构造 input_video/video 片段时逃过能力判定。
+			switch part.Type {
+			case "video_url", "input_video", "video":
 				return true
 			}
 		}

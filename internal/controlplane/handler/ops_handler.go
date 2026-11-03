@@ -937,9 +937,13 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 	id := c.Param("id")
 	rows, err := h.db.Raw(`
-		SELECT request_id, ts, key_id, user_id, model, group_name, provider,
+		SELECT request_id, ts, key_id, COALESCE(key_name, '') as key_name, user_id, model, group_name, provider,
 			status, duration_ms, first_token_ms, total_tokens, prompt_tokens, completion_tokens,
-			upstream_status, ip_address, failover_used, routed_via_group
+			upstream_status, ip_address, failover_used, routed_via_group,
+			COALESCE(stage_auth_ms, 0) as stage_auth_ms,
+			COALESCE(stage_route_ms, 0) as stage_route_ms,
+			COALESCE(stage_upstream_ms, 0) as stage_upstream_ms,
+			COALESCE(stage_ttfb_ms, 0) as stage_ttfb_ms
 		FROM call_logs
 		WHERE request_id = ? AND status >= 400 AND status < 500
 	`, id).Rows()
@@ -954,15 +958,17 @@ func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 		return
 	}
 
-	var requestID, ts, keyID, userID, modelName, groupName, provider, ipAddress string
+	var requestID, ts, keyID, keyName, userID, modelName, groupName, provider, ipAddress string
 	var status, durationMs, totalTokens, promptTokens, completionTokens int
 	var firstTokenMs *int
 	var upstreamStatus int
 	var failoverUsed, routedViaGroup bool
+	var stageAuthMs, stageRouteMs, stageUpstreamMs, stageTTFBMs int
 
-	if scanErr := rows.Scan(&requestID, &ts, &keyID, &userID, &modelName, &groupName, &provider,
+	if scanErr := rows.Scan(&requestID, &ts, &keyID, &keyName, &userID, &modelName, &groupName, &provider,
 		&status, &durationMs, &firstTokenMs, &totalTokens, &promptTokens, &completionTokens,
-		&upstreamStatus, &ipAddress, &failoverUsed, &routedViaGroup); scanErr != nil {
+		&upstreamStatus, &ipAddress, &failoverUsed, &routedViaGroup,
+		&stageAuthMs, &stageRouteMs, &stageUpstreamMs, &stageTTFBMs); scanErr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan"})
 		return
 	}
@@ -972,21 +978,28 @@ func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 		UpstreamStatusCode: upstreamStatus,
 	}
 
-	// 构建 latency_breakdown（call_logs 仅含 duration_ms / first_token_ms，其余返回 0）
+	// 构建 latency_breakdown（WP11: 从 call_logs stage 列填充真实值）
 	ttftMs := 0
 	if firstTokenMs != nil {
 		ttftMs = *firstTokenMs
 	}
+	respMs := durationMs - stageAuthMs - stageRouteMs - stageUpstreamMs
+	if respMs < 0 {
+		respMs = 0
+	}
 	latencyBreakdown := LatencyBreakdown{
-		AuthMs:     0,
-		RoutingMs:  0,
-		UpstreamMs: durationMs,
-		ResponseMs: 0,
+		AuthMs:     stageAuthMs,
+		RoutingMs:  stageRouteMs,
+		UpstreamMs: stageUpstreamMs,
+		ResponseMs: respMs,
 		TTFTMs:     ttftMs,
 	}
 
+	// WP11: is_deleted_key — key_name 为空且 key_id 不为空时标记已删除 key
+	isDeletedKey := keyName == "" && keyID != ""
+
 	c.JSON(http.StatusOK, gin.H{
-		"request_id": requestID, "ts": ts, "key_id": keyID, "user_id": userID,
+		"request_id": requestID, "ts": ts, "key_id": keyID, "key_name": keyName, "user_id": userID,
 		"model": modelName, "group_name": groupName, "provider": provider,
 		"status": status, "duration_ms": durationMs, "first_token_ms": firstTokenMs,
 		"total_tokens": totalTokens, "prompt_tokens": promptTokens, "completion_tokens": completionTokens,
@@ -994,6 +1007,7 @@ func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 		"failover_used": failoverUsed, "routed_via_group": routedViaGroup,
 		"upstream_context": upstreamCtx,
 		"latency_breakdown": latencyBreakdown,
+		"is_deleted_key": isDeletedKey,
 	})
 }
 
@@ -1002,9 +1016,13 @@ func (h *OpsHandler) GetRequestErrorDetail(c *gin.Context) {
 func (h *OpsHandler) GetUpstreamErrorDetail(c *gin.Context) {
 	id := c.Param("id")
 	rows, err := h.db.Raw(`
-		SELECT request_id, ts, key_id, user_id, model, group_name, provider,
+		SELECT request_id, ts, key_id, COALESCE(key_name, '') as key_name, user_id, model, group_name, provider,
 			status, duration_ms, first_token_ms, total_tokens, prompt_tokens, completion_tokens,
-			upstream_status, ip_address, failover_used, routed_via_group
+			upstream_status, ip_address, failover_used, routed_via_group,
+			COALESCE(stage_auth_ms, 0) as stage_auth_ms,
+			COALESCE(stage_route_ms, 0) as stage_route_ms,
+			COALESCE(stage_upstream_ms, 0) as stage_upstream_ms,
+			COALESCE(stage_ttfb_ms, 0) as stage_ttfb_ms
 		FROM call_logs
 		WHERE request_id = ? AND status >= 500
 	`, id).Rows()
@@ -1019,15 +1037,17 @@ func (h *OpsHandler) GetUpstreamErrorDetail(c *gin.Context) {
 		return
 	}
 
-	var requestID, ts, keyID, userID, modelName, groupName, provider, ipAddress string
+	var requestID, ts, keyID, keyName, userID, modelName, groupName, provider, ipAddress string
 	var status, durationMs, totalTokens, promptTokens, completionTokens int
 	var firstTokenMs *int
 	var upstreamStatus int
 	var failoverUsed, routedViaGroup bool
+	var stageAuthMs, stageRouteMs, stageUpstreamMs, stageTTFBMs int
 
-	if scanErr := rows.Scan(&requestID, &ts, &keyID, &userID, &modelName, &groupName, &provider,
+	if scanErr := rows.Scan(&requestID, &ts, &keyID, &keyName, &userID, &modelName, &groupName, &provider,
 		&status, &durationMs, &firstTokenMs, &totalTokens, &promptTokens, &completionTokens,
-		&upstreamStatus, &ipAddress, &failoverUsed, &routedViaGroup); scanErr != nil {
+		&upstreamStatus, &ipAddress, &failoverUsed, &routedViaGroup,
+		&stageAuthMs, &stageRouteMs, &stageUpstreamMs, &stageTTFBMs); scanErr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan"})
 		return
 	}
@@ -1037,21 +1057,28 @@ func (h *OpsHandler) GetUpstreamErrorDetail(c *gin.Context) {
 		UpstreamStatusCode: upstreamStatus,
 	}
 
-	// 构建 latency_breakdown
+	// 构建 latency_breakdown (WP11: stage 列真实值)
 	ttftMs := 0
 	if firstTokenMs != nil {
 		ttftMs = *firstTokenMs
 	}
+	respMs := durationMs - stageAuthMs - stageRouteMs - stageUpstreamMs
+	if respMs < 0 {
+		respMs = 0
+	}
 	latencyBreakdown := LatencyBreakdown{
-		AuthMs:     0,
-		RoutingMs:  0,
-		UpstreamMs: durationMs,
-		ResponseMs: 0,
+		AuthMs:     stageAuthMs,
+		RoutingMs:  stageRouteMs,
+		UpstreamMs: stageUpstreamMs,
+		ResponseMs: respMs,
 		TTFTMs:     ttftMs,
 	}
 
+	// WP11: is_deleted_key
+	isDeletedKey := keyName == "" && keyID != ""
+
 	c.JSON(http.StatusOK, gin.H{
-		"request_id": requestID, "ts": ts, "key_id": keyID, "user_id": userID,
+		"request_id": requestID, "ts": ts, "key_id": keyID, "key_name": keyName, "user_id": userID,
 		"model": modelName, "group_name": groupName, "provider": provider,
 		"status": status, "duration_ms": durationMs, "first_token_ms": firstTokenMs,
 		"total_tokens": totalTokens, "prompt_tokens": promptTokens, "completion_tokens": completionTokens,
@@ -1059,6 +1086,7 @@ func (h *OpsHandler) GetUpstreamErrorDetail(c *gin.Context) {
 		"failover_used": failoverUsed, "routed_via_group": routedViaGroup,
 		"upstream_context":  upstreamCtx,
 		"latency_breakdown": latencyBreakdown,
+		"is_deleted_key":    isDeletedKey,
 	})
 }
 

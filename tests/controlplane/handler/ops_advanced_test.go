@@ -18,11 +18,13 @@ func TestGetRequestErrorDetail_Success(t *testing.T) {
 	r, db, _ := setupOpsHandler(t)
 
 	require.NoError(t, db.Exec(`
-		INSERT INTO call_logs (request_id, ts, key_id, user_id, model, group_name, provider,
+		INSERT INTO call_logs (request_id, ts, key_id, key_name, user_id, model, group_name, provider,
 			status, duration_ms, first_token_ms, total_tokens, prompt_tokens, completion_tokens,
-			upstream_status, ip_address, failover_used, routed_via_group)
-		VALUES ('req-4xx-001', '2025-06-01T10:00:00Z', 'key-1', 'user-1', 'gpt-4', 'default',
-			'openai', 429, 120, 80, 500, 300, 200, 429, '10.0.0.1', 0, 1)
+			upstream_status, ip_address, failover_used, routed_via_group,
+			stage_auth_ms, stage_route_ms, stage_upstream_ms, stage_ttfb_ms)
+		VALUES ('req-4xx-001', '2025-06-01T10:00:00Z', 'key-1', 'my-key', 'user-1', 'gpt-4', 'default',
+			'openai', 429, 120, 80, 500, 300, 200, 429, '10.0.0.1', 0, 1,
+			10, 5, 50, 80)
 	`).Error)
 
 	w := doRequest(r, "GET", "/ops/request-errors/req-4xx-001")
@@ -32,10 +34,14 @@ func TestGetRequestErrorDetail_Success(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "req-4xx-001", resp["request_id"])
 	assert.Equal(t, "openai", resp["provider"])
+	assert.Equal(t, "my-key", resp["key_name"])
 
 	lb, ok := resp["latency_breakdown"].(map[string]interface{})
 	require.True(t, ok)
-	assert.Equal(t, float64(120), lb["upstream_ms"])
+	assert.Equal(t, float64(10), lb["auth_ms"])
+	assert.Equal(t, float64(5), lb["routing_ms"])
+	assert.Equal(t, float64(50), lb["upstream_ms"])
+	assert.Equal(t, float64(55), lb["response_ms"]) // 120 - 10 - 5 - 50 = 55
 	assert.Equal(t, float64(80), lb["ttft_ms"])
 
 	uc, ok := resp["upstream_context"].(map[string]interface{})

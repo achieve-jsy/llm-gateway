@@ -429,6 +429,11 @@ func respondGroupError(c *gin.Context, err error) {
 // respondError 返回统一错误响应 JSON。
 // 当 X-Error-Format: passthrough 请求头存在时，直接透传上游错误，不做归一化。
 func respondError(c *gin.Context, ue *model.UnifiedError) {
+	// Safety net: if callers did not set error_message/error_code, set them now.
+	if _, exists := c.Get("error_message"); !exists {
+		c.Set("error_message", ue.Message)
+		c.Set("error_code", ue.Code)
+	}
 	if IsPassthroughMode(c) {
 		writePassthroughError(c, ue.HTTPStatus, string(ue.Type), ue.Code, ue.Message)
 		return

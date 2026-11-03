@@ -4,6 +4,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -140,6 +141,9 @@ func AnthropicToChatRequest(anthReq *AnthropicMessagesRequest) *ChatRequest {
 	// Add system message if present
 	req.Messages = prependSystemMessage(anthReq.System, req.Messages)
 
+	// Sanitize messages for non-Anthropic providers
+	req.Messages = sanitizeMessagesForProviders(req.Messages)
+
 	return req
 }
 
@@ -212,6 +216,11 @@ func decodeContentBlocks(content any) []AnthropicContentBlock {
 			block.Content = c
 		}
 		if block.Type != "" {
+			// Skip thinking and redacted_thinking blocks — they are Anthropic-specific
+			// and should not be passed to non-Anthropic providers.
+			if block.Type == "thinking" || block.Type == "redacted_thinking" {
+				continue
+			}
 			blocks = append(blocks, block)
 		}
 	}
@@ -518,6 +527,258 @@ func prependSystemMessage(system any, msgs []Message) []Message {
 	result = append(result, Message{Role: "system", Content: systemText})
 	result = append(result, msgs...)
 	return result
+}
+
+// ──────────────────────────────────────────────
+// Message sanitization for non-Anthropic providers
+// ──────────────────────────────────────────────
+
+// sanitizeMessagesForProviders applies a series of heuristics to convert
+// Anthropic-format messages into a format suitable for non-Anthropic providers.
+// These are best-effort sanitizations; the upstream provider may still reject
+// the request if messages are fundamentally incompatible.
+func sanitizeMessagesForProviders(msgs []Message) []Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	msgs = dropThinkingBlocks(msgs)
+	msgs = sanitizeToolUseIDs(msgs)
+	msgs = flattenToolMessageContent(msgs)
+	msgs = dropOrphanedToolResults(msgs)
+	msgs = addDummyToolResults(msgs)
+	msgs = mergeConsecutiveSameRole(msgs)
+	msgs = ensureFirstMessageIsUser(msgs)
+	msgs = sanitizeEmptyContent(msgs)
+	return msgs
+}
+
+// toolUseIDPattern matches any character that is NOT a valid tool_use/tool_call ID character.
+var toolUseIDPattern = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
+
+// sanitizeToolUseIDs replaces invalid characters in ToolCall IDs with underscores.
+func sanitizeToolUseIDs(msgs []Message) []Message {
+	for i := range msgs {
+		if msgs[i].ToolCallID != "" {
+			msgs[i].ToolCallID = toolUseIDPattern.ReplaceAllString(msgs[i].ToolCallID, "_")
+		}
+		for j := range msgs[i].ToolCalls {
+			if msgs[i].ToolCalls[j].ID != "" {
+				msgs[i].ToolCalls[j].ID = toolUseIDPattern.ReplaceAllString(msgs[i].ToolCalls[j].ID, "_")
+			}
+		}
+	}
+	return msgs
+}
+
+// dropThinkingBlocks removes content blocks of type "thinking" or "redacted_thinking"
+// from messages that use structured content arrays.
+func dropThinkingBlocks(msgs []Message) []Message {
+	for i := range msgs {
+		parts, ok := msgs[i].Content.([]ContentPart)
+		if !ok {
+			continue
+		}
+		filtered := make([]ContentPart, 0, len(parts))
+		for _, p := range parts {
+			if p.Type == "thinking" || p.Type == "redacted_thinking" {
+				continue
+			}
+			filtered = append(filtered, p)
+		}
+		if len(filtered) == 0 {
+			msgs[i].Content = ""
+		} else if len(filtered) == 1 && filtered[0].Type == "text" {
+			msgs[i].Content = filtered[0].Text
+		} else {
+			msgs[i].Content = filtered
+		}
+	}
+	return msgs
+}
+
+// flattenToolMessageContent converts tool message content to a plain string.
+// Some providers (e.g., OpenAI v1) require tool content to be a string.
+func flattenToolMessageContent(msgs []Message) []Message {
+	for i := range msgs {
+		if msgs[i].Role != "tool" {
+			continue
+		}
+		switch v := msgs[i].Content.(type) {
+		case string:
+			// Already a string, nothing to do
+		case nil:
+			msgs[i].Content = ""
+		default:
+			// Attempt JSON serialization, fall back to fmt
+			if b, err := json.Marshal(v); err == nil {
+				msgs[i].Content = string(b)
+			} else {
+				msgs[i].Content = fmt.Sprintf("%v", v)
+			}
+		}
+	}
+	return msgs
+}
+
+// dropOrphanedToolResults removes tool-role messages whose ToolCallID does not
+// match any tool_call ID in any preceding assistant message.
+func dropOrphanedToolResults(msgs []Message) []Message {
+	// Collect all tool_call IDs from assistant messages.
+	validIDs := make(map[string]struct{})
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			validIDs[tc.ID] = struct{}{}
+		}
+	}
+	filtered := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			if _, found := validIDs[m.ToolCallID]; !found {
+				continue // drop orphaned tool result
+			}
+		}
+		filtered = append(filtered, m)
+	}
+	return filtered
+}
+
+// addDummyToolResults inserts a dummy tool result for each tool_call that
+// lacks a matching tool-role response, ensuring tool call/result pairing.
+func addDummyToolResults(msgs []Message) []Message {
+	// Collect tool_call IDs from assistant messages.
+	pendingIDs := make(map[string]struct{})
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			pendingIDs[tc.ID] = struct{}{}
+		}
+	}
+	if len(pendingIDs) == 0 {
+		return msgs
+	}
+	// Remove IDs that already have a matching tool result.
+	for _, m := range msgs {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			delete(pendingIDs, m.ToolCallID)
+		}
+	}
+	if len(pendingIDs) == 0 {
+		return msgs
+	}
+	// Append dummy tool results at the end.
+	for id := range pendingIDs {
+		msgs = append(msgs, Message{
+			Role:       "tool",
+			ToolCallID: id,
+			Content:    ".",
+		})
+	}
+	return msgs
+}
+
+// mergeConsecutiveSameRole merges adjacent messages with the same role
+// (user+user, assistant+assistant) into a single message.
+func mergeConsecutiveSameRole(msgs []Message) []Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	merged := make([]Message, 0, len(msgs))
+	merged = append(merged, msgs[0])
+	for i := 1; i < len(msgs); i++ {
+		last := &merged[len(merged)-1]
+		cur := msgs[i]
+		if last.Role == cur.Role && last.Role != "system" && last.Role != "tool" {
+			last.Content = mergeContent(last.Content, cur.Content)
+			last.ToolCalls = append(last.ToolCalls, cur.ToolCalls...)
+		} else {
+			merged = append(merged, cur)
+		}
+	}
+	return merged
+}
+
+// mergeContent concatenates two message content values into one.
+func mergeContent(a, b any) any {
+	if a == nil || a == "" {
+		return b
+	}
+	if b == nil || b == "" {
+		return a
+	}
+	aStr, aIsStr := a.(string)
+	bStr, bIsStr := b.(string)
+	if aIsStr && bIsStr {
+		return aStr + "\n" + bStr
+	}
+	// Convert both to []ContentPart
+	parts := asContentParts(a)
+	parts = append(parts, asContentParts(b)...)
+	return parts
+}
+
+// asContentParts converts a message content value to a slice of ContentParts.
+func asContentParts(v any) []ContentPart {
+	switch val := v.(type) {
+	case string:
+		if val == "" {
+			return nil
+		}
+		return []ContentPart{{Type: "text", Text: val}}
+	case []ContentPart:
+		return val
+	case []any:
+		parts := make([]ContentPart, 0, len(val))
+		for _, item := range val {
+			if m, ok := item.(map[string]any); ok {
+				if t, _ := m["type"].(string); t == "text" {
+					if text, _ := m["text"].(string); text != "" {
+						parts = append(parts, ContentPart{Type: "text", Text: text})
+					}
+				}
+			}
+		}
+		return parts
+	default:
+		return nil
+	}
+}
+
+// ensureFirstMessageIsUser ensures the first message (after system) has role "user".
+// If not, a placeholder user message is inserted at the start.
+func ensureFirstMessageIsUser(msgs []Message) []Message {
+	if len(msgs) == 0 {
+		return []Message{{Role: "user", Content: "."}}
+	}
+	// Skip leading system messages
+	startIdx := 0
+	for startIdx < len(msgs) && msgs[startIdx].Role == "system" {
+		startIdx++
+	}
+	if startIdx >= len(msgs) {
+		return append(msgs, Message{Role: "user", Content: "."})
+	}
+	if msgs[startIdx].Role == "user" {
+		return msgs
+	}
+	// Insert a placeholder user message before the first non-user, non-system message.
+	placeholder := Message{Role: "user", Content: "."}
+	result := make([]Message, 0, len(msgs)+1)
+	result = append(result, msgs[:startIdx]...)
+	result = append(result, placeholder)
+	result = append(result, msgs[startIdx:]...)
+	return result
+}
+
+// sanitizeEmptyContent replaces empty string content with "." for all messages.
+// Some providers reject messages with empty content.
+func sanitizeEmptyContent(msgs []Message) []Message {
+	for i := range msgs {
+		if s, ok := msgs[i].Content.(string); ok && s == "" {
+			msgs[i].Content = "."
+		} else if msgs[i].Content == nil {
+			msgs[i].Content = "."
+		}
+	}
+	return msgs
 }
 
 // ──────────────────────────────────────────────

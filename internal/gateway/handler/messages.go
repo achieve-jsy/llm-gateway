@@ -395,6 +395,11 @@ func (h *MessagesHandler) HandleCountTokens(c *gin.Context) {
 
 // respondAnthropicError sends an error in Anthropic format.
 func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, errType string, code string, message string, upstream *gatewayerrors.UpstreamInfo) {
+	// Safety net: if callers did not set error_message/error_code, set them now.
+	if _, exists := c.Get("error_message"); !exists {
+		c.Set("error_message", message)
+		c.Set("error_code", code)
+	}
 	if IsPassthroughMode(c) {
 		writePassthroughError(c, httpStatus, errType, code, message)
 		return
@@ -419,22 +424,32 @@ func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, 
 // respondAnthropicGroupError handles group dispatch errors.
 func (h *MessagesHandler) respondAnthropicGroupError(c *gin.Context, err error) {
 	if err == model.ErrGroupNotFound {
+		c.Set("error_message", err.Error())
+		c.Set("error_code", "model_group_not_found")
 		h.respondAnthropicError(c, http.StatusNotFound, "not_found_error", "model_group_not_found", err.Error(), nil)
 		return
 	}
 	if err == model.ErrNoAvailableModel {
+		c.Set("error_message", "No available model for this group")
+		c.Set("error_code", "model_unavailable")
 		h.respondAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", "model_unavailable", "No available model for this group", nil)
 		return
 	}
 	if err == model.ErrNoOtherModelAvailable {
+		c.Set("error_message", "No other model available for failover")
+		c.Set("error_code", "model_unavailable")
 		h.respondAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", "model_unavailable", "No other model available for failover", nil)
 		return
 	}
 	if ue, ok := err.(*model.UnifiedError); ok {
+		c.Set("error_message", ue.Message)
+		c.Set("error_code", ue.Code)
 		anthType := mapAnthropicErrorType(ue.Type)
 		h.respondAnthropicError(c, ue.HTTPStatus, anthType, ue.Code, ue.Message, ue.Upstream)
 		return
 	}
+	c.Set("error_message", err.Error())
+	c.Set("error_code", "internal_error")
 	h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "internal_error", err.Error(), nil)
 }
 

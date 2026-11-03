@@ -653,6 +653,8 @@ deploy-prod:
         export JWT_SECRET='${PROD_JWT_SECRET}'
         export ENCRYPTION_KEY='${PROD_ENCRYPTION_KEY}'
         export OAUTH_CLIENT_ID='${PROD_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${PROD_OAUTH_CLIENT_SECRET}'
+        # EHR 接口中心（AI 应用聚合页同步）：三个都注入才启动每日 03:00 同步，否则接口 502、调度不启动。
+        export EHR_BASE_URL='${PROD_EHR_BASE_URL:-}' EHR_API_TOKEN='${PROD_EHR_API_TOKEN:-}' EHR_ORG_ID='${PROD_EHR_ORG_ID:-}'
         export OAUTH_REDIRECT_URI='${PROD_OAUTH_REDIRECT_URI:-https://aimeter.xk-devops.com/auth/callback}'
         export FRONTEND_URL='${PROD_FRONTEND_URL:-https://aimeter.xk-devops.com}'
         export INTERNAL_AUTH_TOKEN='${PROD_INTERNAL_AUTH_TOKEN}'

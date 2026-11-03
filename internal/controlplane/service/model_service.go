@@ -543,6 +543,203 @@ func (s *ModelService) ResetOverride(modelID uuid.UUID, field string) error {
 	return nil
 }
 
+// ===================== 批量注册（多渠道）=====================
+
+// BatchCreateModelsInput 批量注册模型（多渠道）输入。
+// 字段语义与 CreateModelInput 一致，仅用 ProviderIDs 替代单个 ProviderID。
+type BatchCreateModelsInput struct {
+	Name            string          `json:"name" binding:"required,max=200"`
+	ProviderIDs     []string        `json:"provider_ids" binding:"required,min=1,dive,uuid"`
+	ModelType       string          `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	UpstreamModelID string          `json:"upstream_model_id" binding:"omitempty,max=200"`
+	Description     string          `json:"description" binding:"omitempty,max=500"`
+	ContextLength   *int            `json:"context_length" binding:"omitempty,min=0,max=10000000"`
+	MaxOutputTokens *int            `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
+	InputPrice      *float64        `json:"input_price" binding:"omitempty,min=0"`
+	OutputPrice     *float64        `json:"output_price" binding:"omitempty,min=0"`
+	CacheReadPrice  OptionalFloat64 `json:"cache_read_price"`
+	CacheWritePrice OptionalFloat64 `json:"cache_write_price"`
+	PriceMode       string          `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	Weight          *int            `json:"weight" binding:"omitempty,min=0,max=9999"`
+	VideoSupportedResolutions  []string `json:"video_supported_resolutions"`
+	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios"`
+	VideoMinDurationSeconds    *int     `json:"video_min_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoMaxDurationSeconds    *int     `json:"video_max_duration_seconds" binding:"omitempty,min=0,max=600"`
+	VideoSupportedActions      []string `json:"video_supported_actions"`
+}
+
+// BatchCreateFromCatalogInput 从 catalog 批量注册到多个渠道。
+type BatchCreateFromCatalogInput struct {
+	CatalogID   uuid.UUID `json:"catalog_id" binding:"required"`
+	ProviderIDs []string  `json:"provider_ids" binding:"required,min=1,dive,uuid"`
+	Name        string    `json:"name" binding:"required,min=1,max=200"`
+}
+
+const (
+	BatchCreateStatusCreated = "created"
+	BatchCreateStatusSkipped = "skipped"
+	BatchCreateStatusFailed  = "failed"
+)
+
+// BatchCreateResultItem 单渠道创建结果。
+type BatchCreateResultItem struct {
+	ProviderID string  `json:"provider_id"`
+	Status     string  `json:"status"`
+	ModelID    *string `json:"model_id,omitempty"`
+	Reason     string  `json:"reason,omitempty"`
+}
+
+// BatchCreateResult 批量创建汇总。
+type BatchCreateResult struct {
+	SuccessCount int                     `json:"success_count"`
+	SkipCount    int                     `json:"skip_count"`
+	FailCount    int                     `json:"fail_count"`
+	Results      []BatchCreateResultItem `json:"results"`
+}
+
+var ErrEmptyProviderIDs = errors.New("provider_ids is required")
+
+// dedupeProviderIDs 去重并保持顺序；过滤空串。
+func dedupeProviderIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func (s *ModelService) appendBatchCreateItem(res *BatchCreateResult, item BatchCreateResultItem) {
+	res.Results = append(res.Results, item)
+	switch item.Status {
+	case BatchCreateStatusCreated:
+		res.SuccessCount++
+	case BatchCreateStatusSkipped:
+		res.SkipCount++
+	default:
+		res.FailCount++
+	}
+}
+
+// BatchCreateModels 将同一模型配置注册到多个渠道；部分成功，单条失败不阻塞其余。
+func (s *ModelService) BatchCreateModels(input BatchCreateModelsInput) (*BatchCreateResult, error) {
+	providerIDs := dedupeProviderIDs(input.ProviderIDs)
+	if len(providerIDs) == 0 {
+		return nil, ErrEmptyProviderIDs
+	}
+
+	res := &BatchCreateResult{Results: make([]BatchCreateResultItem, 0, len(providerIDs))}
+	for _, pid := range providerIDs {
+		single := CreateModelInput{
+			Name:                       input.Name,
+			ProviderID:                 pid,
+			ModelType:                  input.ModelType,
+			UpstreamModelID:            input.UpstreamModelID,
+			Description:                input.Description,
+			ContextLength:              input.ContextLength,
+			MaxOutputTokens:            input.MaxOutputTokens,
+			InputPrice:                 input.InputPrice,
+			OutputPrice:                input.OutputPrice,
+			CacheReadPrice:             input.CacheReadPrice,
+			CacheWritePrice:            input.CacheWritePrice,
+			PriceMode:                  input.PriceMode,
+			Weight:                     input.Weight,
+			VideoSupportedResolutions:  input.VideoSupportedResolutions,
+			VideoSupportedAspectRatios: input.VideoSupportedAspectRatios,
+			VideoMinDurationSeconds:    input.VideoMinDurationSeconds,
+			VideoMaxDurationSeconds:    input.VideoMaxDurationSeconds,
+			VideoSupportedActions:      input.VideoSupportedActions,
+		}
+		m, err := s.CreateModel(single)
+		if err != nil {
+			if errors.Is(err, ErrModelNameExists) {
+				s.appendBatchCreateItem(res, BatchCreateResultItem{
+					ProviderID: pid,
+					Status:     BatchCreateStatusSkipped,
+					Reason:     "model already exists",
+				})
+				continue
+			}
+			s.appendBatchCreateItem(res, BatchCreateResultItem{
+				ProviderID: pid,
+				Status:     BatchCreateStatusFailed,
+				Reason:     err.Error(),
+			})
+			continue
+		}
+		idStr := m.ID.String()
+		s.appendBatchCreateItem(res, BatchCreateResultItem{
+			ProviderID: pid,
+			Status:     BatchCreateStatusCreated,
+			ModelID:    &idStr,
+		})
+	}
+	return res, nil
+}
+
+// BatchCreateModelsFromCatalog 从一条 catalog 快照批量注册到多个渠道。
+// Catalog 不存在时整请求失败（与单条 from-catalog 一致）；渠道级冲突按条 skipped/failed。
+func (s *ModelService) BatchCreateModelsFromCatalog(input BatchCreateFromCatalogInput) (*BatchCreateResult, error) {
+	providerIDs := dedupeProviderIDs(input.ProviderIDs)
+	if len(providerIDs) == 0 {
+		return nil, ErrEmptyProviderIDs
+	}
+	if s.catalogLookup == nil {
+		return nil, fmt.Errorf("catalog lookup not configured")
+	}
+	cat, err := s.catalogLookup.GetByID(input.CatalogID)
+	if err != nil {
+		return nil, fmt.Errorf("lookup catalog: %w", err)
+	}
+	if cat == nil {
+		return nil, fmt.Errorf("catalog %s not found", input.CatalogID)
+	}
+
+	res := &BatchCreateResult{Results: make([]BatchCreateResultItem, 0, len(providerIDs))}
+	for _, pidStr := range providerIDs {
+		pid, err := uuid.Parse(pidStr)
+		if err != nil {
+			s.appendBatchCreateItem(res, BatchCreateResultItem{
+				ProviderID: pidStr,
+				Status:     BatchCreateStatusFailed,
+				Reason:     "invalid provider_id",
+			})
+			continue
+		}
+		m, err := s.CreateModelFromCatalog(input.CatalogID, pid, input.Name)
+		if err != nil {
+			if errors.Is(err, ErrModelNameExists) {
+				s.appendBatchCreateItem(res, BatchCreateResultItem{
+					ProviderID: pidStr,
+					Status:     BatchCreateStatusSkipped,
+					Reason:     "model already exists",
+				})
+				continue
+			}
+			s.appendBatchCreateItem(res, BatchCreateResultItem{
+				ProviderID: pidStr,
+				Status:     BatchCreateStatusFailed,
+				Reason:     err.Error(),
+			})
+			continue
+		}
+		idStr := m.ID.String()
+		s.appendBatchCreateItem(res, BatchCreateResultItem{
+			ProviderID: pidStr,
+			Status:     BatchCreateStatusCreated,
+			ModelID:    &idStr,
+		})
+	}
+	return res, nil
+}
+
 // ===================== Catalog 绑定/解绑 =====================
 //
 // 设计要点（D1=C / D2=A）：

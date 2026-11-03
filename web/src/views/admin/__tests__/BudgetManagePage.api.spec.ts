@@ -887,6 +887,72 @@ describe('BudgetManagePage - API Integration Tests', () => {
       expect(wrapper.html()).not.toContain('高级模型 0%')
     })
 
+    it('配置 scope 的用量只在 scoped tier-usage 中返回时仍合并为非 0%', async () => {
+      mockGetBudgetList.mockResolvedValue([
+        makeBudgetItem({
+          scope_type: 'dept_daily',
+          scope_id: '377A16DD-EC42-4992-AF77-ABFC4E7FA305',
+          allocation_id: 'alloc-xlab-daily',
+          label: 'X-Lab',
+        }),
+      ])
+      mockListBudgetTierLimits.mockImplementation((allocationId: string) => {
+        if (allocationId === 'alloc-xlab-daily') {
+          return Promise.resolve([{
+            id: 'limit-e2e',
+            budget_allocation_id: 'alloc-xlab-daily',
+            model_tier_id: 'tier-e2e',
+            model_tier_name: 'Codex E2E High Tier',
+            period_type: 'monthly',
+            base_limit_usd: '1000.000000',
+            effective_limit_usd: '1000.000000',
+            enabled: true,
+          }])
+        }
+        return Promise.resolve([])
+      })
+      mockHttpGet.mockImplementation((url, config: any) => {
+        if (url === '/api/v1/budgets/tier-usage') {
+          if (config?.params?.scope_type === 'dept_daily') {
+            return Promise.resolve({ data: { data: { items: [{
+              scope_type: 'dept_daily',
+              scope_id: '377A16DD-EC42-4992-AF77-ABFC4E7FA305',
+              model_tier_id: 'tier-e2e',
+              reported_cost_usd: '250.000000',
+              accounting_cost_usd: '0.000000',
+              request_count: 1,
+            }] } } })
+          }
+          return Promise.resolve({ data: { data: { items: [] } } })
+        }
+        return Promise.resolve({ data: {} })
+      })
+
+      const { wrapper } = await mountPage('admin', {
+        scope_type: 'dept',
+        scope_id: '377A16DD-EC42-4992-AF77-ABFC4E7FA305',
+      })
+      await flushPromises()
+
+      expect(mockHttpGet).toHaveBeenCalledWith('/api/v1/budgets/tier-usage', expect.objectContaining({
+        params: expect.objectContaining({
+          scope_type: 'dept_daily',
+          scope_id: '377A16DD-EC42-4992-AF77-ABFC4E7FA305',
+        }),
+      }))
+      expect(wrapper.vm.tierBudgetItems).toHaveLength(1)
+      expect(wrapper.vm.tierBudgetItems[0]).toMatchObject({
+        model_tier_id: 'tier-e2e',
+        tier_name: 'Codex E2E High Tier',
+        amount_usd: 1000,
+        used_usd: 250,
+        used_ratio: 0.25,
+      })
+      expect(wrapper.html()).toContain('Codex E2E High Tier')
+      expect(wrapper.html()).toContain('25%')
+      expect(wrapper.html()).not.toContain('Codex E2E High Tier 0%')
+    })
+
     it('已配置等级子预算但暂无用量时仍显示配置标签', async () => {
       mockGetBudgetList.mockResolvedValue([
         makeBudgetItem({ scope_type: 'company', scope_id: 'GLOBAL', allocation_id: 'alloc-company' }),

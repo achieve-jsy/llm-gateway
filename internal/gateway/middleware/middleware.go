@@ -132,6 +132,15 @@ func RequestBodyLogger() gin.HandlerFunc {
 			return
 		}
 
+		// 跳过媒体链路（Batch 1 · B4）：图像生成/编辑的正文可能带 base64 图片数据，
+		// 图像编辑更是 multipart 二进制。按 64KB 截断只会把**半个 base64 串**打进日志
+		// （既无阅读价值，又违反「base64 不入日志」）。整条路径跳过；
+		// 排障改看 call_logs / call_traces 的用量与状态字段。
+		if isMediaBodyLogSkipPath(path) {
+			c.Next()
+			return
+		}
+
 		// 读取并重置请求体（让下游 handler 仍能读取）
 		body, err := io.ReadAll(io.LimitReader(c.Request.Body, 64*1024)) // 最多 64KB
 		if err == nil {
@@ -146,6 +155,25 @@ func RequestBodyLogger() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// mediaBodyLogSkipPaths 是 RequestBodyLogger 必须整条跳过的媒体路径（Batch 1 · B4）。
+//
+// 判据与 observability.DeriveCallType 的图像路径一致（/v1/images/*），
+// 用前缀而不是精确匹配：后续给图像链路加子路径（如 /v1/images/variations）时
+// 不必再回来改这里，也不会出现「新路径把 base64 打进日志」的窗口期。
+var mediaBodyLogSkipPaths = []string{
+	"/v1/images/",
+}
+
+// isMediaBodyLogSkipPath 报告该路径是否属于「正文可能含图片字节」的媒体链路。
+func isMediaBodyLogSkipPath(path string) bool {
+	for _, prefix := range mediaBodyLogSkipPaths {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // APIKeyAuth API Key 校验中间件（T005）

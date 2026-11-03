@@ -1,8 +1,6 @@
 package repository
 
 import (
-	"time"
-
 	"github.com/example/llm-gateway/internal/orgservice/model"
 	"gorm.io/gorm"
 )
@@ -180,28 +178,6 @@ func (r *UserOrgRepo) ListMembersByDeptID(deptID string, page, pageSize int) ([]
 		LIMIT ? OFFSET ?
 	`, deptID, pageSize, offset).Scan(&members).Error
 	return members, total, err
-}
-
-// UpdateUserDepartment 手动修改成员部门（由 admin / studio_admin 调用）
-// toDeptsID: departments.id（UUID），operatorID: 操作者 user_id
-func (r *UserOrgRepo) UpdateUserDepartment(userID, toDeptUUID, operatorID string) error {
-	now := time.Now()
-	return r.db.Exec(`
-		UPDATE users SET
-		    dept_id         = ?::uuid,
-		    dept_source     = 'manual',
-		    dept_updated_by = ?,
-		    dept_updated_at = ?
-		WHERE id::text = ?
-	`, toDeptUUID, operatorID, now, userID).Error
-}
-
-// FollowSSO 恢复跟随 SSO（将 dept_source 改回 sso）
-func (r *UserOrgRepo) FollowSSO(userID string) error {
-	return r.db.Exec(`
-		UPDATE users SET dept_source = 'sso', dept_updated_by = NULL, dept_updated_at = NULL
-		WHERE id::text = ?
-	`, userID).Error
 }
 
 // GetDeptSourceForUser 获取指定用户的 dept_source 和当前 dept_id

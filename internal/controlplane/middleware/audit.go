@@ -143,22 +143,13 @@ var auditRouteMap = map[string]routeAction{
 	"POST:/api/v1/expansion-requests/:id/decision":   {audit.ActionExpansionDecision, audit.ResourceExpansion},
 	"POST:/api/v1/expansion-requests/batch-decision": {audit.ActionExpansionDecision, audit.ResourceExpansion},
 
-	// ── Org: Studios ───────────────────────────────────────────────
-	"POST:/api/v1/org/studios":       {audit.Action("studio.create"), audit.Resource("studio")},
-	"DELETE:/api/v1/org/studios/:id": {audit.Action("studio.delete"), audit.Resource("studio")},
-
-	// ── Org: Departments ───────────────────────────────────────────
-	"PUT:/api/v1/org/departments/:id/studio":  {audit.Action("department.set_studio"), audit.Resource("department")},
-	"POST:/api/v1/org/dept-studio-map/import": {audit.Action("department.import_mapping"), audit.Resource("department")},
-
 	// ── Org: Roles ─────────────────────────────────────────────────
+	// 组织/人员数据本身只来自 EHR 同步，手工写入口已下线，故 org 段只剩角色授权与同步触发。
 	"POST:/api/v1/org/roles/grant":  {audit.Action("role.grant"), audit.Resource("role")},
 	"POST:/api/v1/org/roles/revoke": {audit.Action("role.revoke"), audit.Resource("role")},
 
-	// ── Org: Employees ─────────────────────────────────────────────
-	"POST:/api/v1/org/employees/import":               {audit.ActionEmployeeImport, audit.ResourceEmployee},
-	"PUT:/api/v1/org/users/:id/department":            {audit.Action("user.change_department"), audit.ResourceUser},
-	"PUT:/api/v1/org/users/:id/department/follow-sso": {audit.Action("user.follow_sso_department"), audit.ResourceUser},
+	// ── Org: EHR 同步（管理员手动触发，改的是全组织数据）─────────────
+	"POST:/api/v1/admin/ai-app-hub/sync": {audit.Action("org.sync"), audit.Resource("org")},
 
 	// ── Service Keys（补 2 条未手动埋点的写操作）───────────────────
 	"POST:/api/v1/service-keys/:id/groups":            {audit.Action("service_key.update_groups"), audit.ResourceServiceKey},

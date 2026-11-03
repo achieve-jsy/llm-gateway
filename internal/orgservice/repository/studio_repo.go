@@ -14,16 +14,15 @@ func NewStudioRepo(db *gorm.DB) *StudioRepo {
 	return &StudioRepo{db: db}
 }
 
-func (r *StudioRepo) Create(studio *model.Studio) error {
-	return r.db.Create(studio).Error
-}
-
+// List 只返回 visible=true 的工作室：EHR 里撤并的工作室软删（visible=false）后
+// 不该再出现在组织树/下拉框里，但行要留着给历史用量 join。
 func (r *StudioRepo) List(page, pageSize int) ([]model.Studio, int64, error) {
 	var studios []model.Studio
 	var total int64
-	r.db.Model(&model.Studio{}).Count(&total)
+	q := r.db.Model(&model.Studio{}).Where("visible = ?", true)
+	q.Count(&total)
 	offset := (page - 1) * pageSize
-	err := r.db.Offset(offset).Limit(pageSize).Order("created_at DESC").Find(&studios).Error
+	err := q.Offset(offset).Limit(pageSize).Order("created_at DESC").Find(&studios).Error
 	return studios, total, err
 }
 
@@ -46,14 +45,4 @@ func (r *StudioRepo) ExistsByIDs(ids []string) (map[string]bool, error) {
 		result[s.ID] = true
 	}
 	return result, nil
-}
-
-func (r *StudioRepo) Delete(id string) error {
-	return r.db.Delete(&model.Studio{}, "id = ?", id).Error
-}
-
-func (r *StudioRepo) HasDepartments(studioID string) (bool, error) {
-	var count int64
-	err := r.db.Model(&model.OrgDepartment{}).Where("studio_id = ?", studioID).Count(&count).Error
-	return count > 0, err
 }

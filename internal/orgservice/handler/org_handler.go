@@ -1,12 +1,10 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
-	"github.com/example/llm-gateway/internal/orgservice/model"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/example/llm-gateway/internal/orgservice/rbac/policy"
 	"github.com/example/llm-gateway/internal/orgservice/repository"
@@ -54,28 +52,6 @@ func (h *OrgHandler) ListStudios(c *gin.Context) {
 	})
 }
 
-// CreateStudio POST /api/v1/org/studios
-func (h *OrgHandler) CreateStudio(c *gin.Context) {
-	var req struct {
-		Name string `json:"name" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, errorResp("invalid_request", err.Error(), "bad_request"))
-		return
-	}
-	// ID 由数据库 gen_random_uuid() 自动生成，不需要传入
-	studio := &model.Studio{Name: req.Name}
-	if err := h.studioSvc.Create(c.Request.Context(), studio); err != nil {
-		if errors.Is(err, service.ErrStudioDuplicate) {
-			c.JSON(http.StatusUnprocessableEntity, errorResp("org.duplicate_name", err.Error(), "org.duplicate_name"))
-			return
-		}
-		c.JSON(http.StatusInternalServerError, errorResp("internal_error", err.Error(), "internal"))
-		return
-	}
-	c.JSON(http.StatusCreated, gin.H{"data": studio})
-}
-
 // GetStudio GET /api/v1/org/studios/:id
 func (h *OrgHandler) GetStudio(c *gin.Context) {
 	id := c.Param("id")
@@ -85,23 +61,6 @@ func (h *OrgHandler) GetStudio(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": studio})
-}
-
-// DeleteStudio DELETE /api/v1/org/studios/:id
-func (h *OrgHandler) DeleteStudio(c *gin.Context) {
-	id := c.Param("id")
-	if err := h.studioSvc.Delete(c.Request.Context(), id); err != nil {
-		if errors.Is(err, service.ErrStudioHasDepartments) {
-			c.JSON(http.StatusConflict, errorResp("org.studio.has_departments", err.Error(), "org.studio.has_departments"))
-			return
-		}
-		c.JSON(http.StatusInternalServerError, errorResp("internal_error", err.Error(), "internal"))
-		return
-	}
-	// 注意：DeleteStudio 要求工作室下无部门（HasDepartments 校验），
-	// 部门移出工作室时 SetDeptStudio("") 已触发 OnDeptStudioChanged 同步，
-	// 此处无需再调 OnStudioDeleted。
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 
 // SearchUsers GET /api/v1/org/users?keyword=&limit=&studio_id=

@@ -67,13 +67,16 @@ func (r *DeptRepo) ListPending(page, pageSize int) ([]model.OrgDepartment, int64
 	return depts, total, err
 }
 
-// List 查询所有部门（可选按 status 过滤）
+// List 查询部门（可选按 status 过滤）。
+// 默认排除软删（status='deleted'）：这些部门只在历史用量/日志里还该出现。
 func (r *DeptRepo) List(status string, page, pageSize int) ([]model.OrgDepartment, int64, error) {
 	var depts []model.OrgDepartment
 	var total int64
 	q := r.db.Model(&model.OrgDepartment{})
 	if status != "" {
 		q = q.Where("status = ?", status)
+	} else {
+		q = q.Where("status <> ?", model.DeptStatusDeleted)
 	}
 	q.Count(&total)
 	offset := (page - 1) * pageSize

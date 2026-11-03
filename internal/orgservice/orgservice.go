@@ -46,7 +46,7 @@ func New(db *gorm.DB, rdb *redis.Client, bootstrapAdmins string) *Container {
 	// services
 	orgSvc := service.NewOrgService(db, studioRepo, deptRepo, mappingRepo, userOrgRepo, roleRepo, bs)
 	studioSvc := service.NewStudioService(studioRepo)
-	mappingSvc := service.NewMappingService(db, mappingRepo, deptRepo, studioRepo)
+	mappingSvc := service.NewMappingService(mappingRepo)
 	roleSvc := service.NewRoleService(roleRepo, rdb)
 
 	rbacChecker := rbac.NewChecker(roleRepo, userOrgRepo)
@@ -64,14 +64,4 @@ func New(db *gorm.DB, rdb *redis.Client, bootstrapAdmins string) *Container {
 // BootstrapAdmins 从环境变量读取 BOOTSTRAP_ADMIN
 func BootstrapAdmins() string {
 	return os.Getenv("BOOTSTRAP_ADMIN")
-}
-
-// NewEmployeeImportSvc 创建员工花名册导入服务（供 router 直接调用）
-func NewEmployeeImportSvc(
-	db *gorm.DB,
-	studioRepo *repository.StudioRepo,
-	deptRepo *repository.DeptRepo,
-	mappingRepo *repository.MappingRepo,
-) *service.EmployeeImportService {
-	return service.NewEmployeeImportService(db, studioRepo, deptRepo, mappingRepo)
 }

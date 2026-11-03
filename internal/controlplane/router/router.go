@@ -887,17 +887,10 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	userOrgRepo := orgrepo.NewUserOrgRepo(db)
 	roleRepo := orgrepo.NewRoleRepo(db)
 	mappingRepo := orgrepo.NewMappingRepo(db)
-	studioRepo := orgrepo.NewStudioRepo(db)
 
 	orgH := orghandler.NewOrgHandler(orgContainer.OrgSvc, orgContainer.StudioSvc, userOrgRepo, roleRepo)
 	mappingH := orghandler.NewMappingHandler(orgContainer.MappingSvc, deptRepo)
-	orgContainer.MappingSvc.SetOrgSyncer(keyOrgSyncer)
 	roleH := orghandler.NewRoleHandler(orgContainer.RoleSvc, mappingRepo)
-	empImportSvc := orgservice.NewEmployeeImportSvc(db, studioRepo, deptRepo, mappingRepo)
-	empImportSvc.SetOrgSyncer(keyOrgSyncer)
-	empImportH := orghandler.NewEmployeeImportHandler(empImportSvc)
-	deptAssignH := orghandler.NewDeptAssignHandler(userOrgRepo, deptRepo)
-	deptAssignH.SetOrgSyncer(keyOrgSyncer)
 
 	// 模型组授权管理（注册在 adminGroup，与现有组管理路由同级）
 	entitlementHandler := handler.NewEntitlementHandler(entitlementSvc, deptLookup)
@@ -1051,18 +1044,14 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	// 管理接口（JWTAuth 已在 adminGroup 上）
 	orgGroup := adminGroup.Group("/org")
 	{
-		// ── 工作室（仅 admin 可增删，所有人可读）─────────────────────────────
+		// ── 工作室（只读：工作室由 EHR 同步维护，见 specs/2026-11-03-ehr-org-single-source-design.md）──
 		orgGroup.GET("/studios", orgH.ListStudios)
-		orgGroup.POST("/studios", guard(rbac.PermStudioCreate), orgH.CreateStudio)
 		orgGroup.GET("/studios/:id", orgH.GetStudio)
-		orgGroup.DELETE("/studios/:id", guard(rbac.PermStudioDelete), orgH.DeleteStudio)
 
-		// ── 部门与映射（admin 可改映射，所有人可读列表）──────────────────────
+		// ── 部门与映射（只读，同上）──────────────────────────────────────────
 		orgGroup.GET("/departments", mappingH.ListDepartments)
 		orgGroup.GET("/departments/unmapped", mappingH.ListUnmappedDepts)
-		orgGroup.PUT("/departments/:id/studio", guard(rbac.PermMappingEdit), mappingH.SetDeptStudio)
 		orgGroup.GET("/dept-studio-map", mappingH.ListMappings)
-		orgGroup.POST("/dept-studio-map/import", guard(rbac.PermMappingEdit), mappingH.ImportMappings)
 
 		// ── 成员（管理角色可查，部门范围由 Policy 过滤）─────────────────────
 		orgGroup.GET("/departments/:dept_id/members", guard(rbac.PermMemberView), orgH.GetDeptMembers)
@@ -1075,12 +1064,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		orgGroup.GET("/roles/me", roleH.GetMyRoles) // 当前用户 org 角色（/me 须在 /:user_id 前）
 		orgGroup.GET("/roles/:user_id", guard(rbac.PermRoleView), roleH.GetUserRoles)
 
-		// ── 员工花名册导入（仅 admin）────────────────────────────────────────
-		orgGroup.POST("/employees/import", guard(rbac.PermEmployeeImport), empImportH.Import)
-
-		// ── 成员部门归属修正（studio_admin 及以上）───────────────────────────
-		orgGroup.PUT("/users/:id/department", guard(rbac.PermDeptChange), deptAssignH.ChangeDepartment)
-		orgGroup.PUT("/users/:id/department/follow-sso", guard(rbac.PermSSORevert), deptAssignH.FollowSSO)
+		// 员工档案 / 部门归属均由 EHR 同步维护，不再提供手工写入口。
 
 		// ── 用量看板：dashboard/scoped-logs 需 Guard 注入 Actor ─────────────
 		// usageH2 复用同一 DB，仅在此处注册带 Guard 的路由

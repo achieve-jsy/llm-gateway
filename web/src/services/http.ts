@@ -26,6 +26,8 @@ export const ERROR_MESSAGES: Record<string, string> = {
   BUDGET_USAGE_UNAVAILABLE: '实时用量暂不可用，请稍后重试',
   BUDGET_PENDING_SCHEDULE_EXISTS: '该额度已有待生效变更',
   INVALID_BUDGET_PERIOD: '预算周期无效，请选择日/周/月',
+  BUDGET_ALLOCATION_NOT_FOUND: '预算记录不存在，请刷新后重试',
+  BUDGET_NEXT_PERIOD_REQUIRES_ALLOCATION: '该范围还没有预算记录，首次配置仅支持「立即生效」',
 }
 
 export type GatewayBudgetErrorCode =

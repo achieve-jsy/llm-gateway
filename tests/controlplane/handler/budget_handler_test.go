@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/example/llm-gateway/internal/controlplane/handler"
@@ -99,6 +100,31 @@ func TestMyBudgetKeepsAmountsVisibleForAuthorizedScopes(t *testing.T) {
 		require.Equal(t, false, company["visible_amounts"])
 		require.NotContains(t, company, "amount_usd")
 	})
+}
+
+func TestSetBudgetNextPeriodRequiresExistingAllocation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &myBudgetAllocationRepo{allocations: map[string]*model.BudgetAllocation{}}
+	h := handler.NewBudgetHandler(service.NewBudgetService(repo, myBudgetAlertRepo{}), rbac.NewChecker(nil, nil))
+	router := gin.New()
+	router.PUT("/api/v1/budgets", func(c *gin.Context) {
+		c.Set("user_id", "admin-a")
+		c.Set("user_role", "admin")
+		h.Set(c)
+	})
+
+	body := `{"scope_type":"member","scope_id":"member-missing","period_type":"monthly","target_limit_usd":"1000.000000","effective_mode":"next_period","reason":"schedule missing","preview_only":true}`
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/budgets", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusConflict, recorder.Code)
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	errObj, ok := response["error"].(map[string]any)
+	require.True(t, ok, "response must carry an error object: %s", recorder.Body.String())
+	require.Equal(t, "BUDGET_NEXT_PERIOD_REQUIRES_ALLOCATION", errObj["code"])
 }
 
 func requestMyBudget(t *testing.T, actor rbac.Actor) map[string]any {

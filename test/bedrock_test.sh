@@ -6,7 +6,10 @@ echo "=== 测试 AWS Bedrock Claude 模型 ID ==="
 echo ""
 
 # 从数据库获取 AWS 凭证
-CREDS=$(PGPASSWORD=CHANGE_ME_PASSWORD psql -h localhost -p 5433 -U llm_gateway -d llm_gateway_prod -t -A -c "
+# 凭证一律从环境变量注入，禁止硬编码（guardrails C1）。
+# 用法：PGPASSWORD=*** PGHOST=... PGPORT=5433 PGUSER=llm_gateway PGDATABASE=llm_gateway_prod ./bedrock_test.sh
+: "${PGPASSWORD:?请通过环境变量 PGPASSWORD 提供数据库口令}"
+CREDS=$(psql -h "${PGHOST:-localhost}" -p "${PGPORT:-5433}" -U "${PGUSER:-llm_gateway}" -d "${PGDATABASE:-llm_gateway_prod}" -t -A -c "
 SELECT encrypted_credentials
 FROM providers
 WHERE name = 'aws'

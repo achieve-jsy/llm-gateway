@@ -790,5 +790,30 @@
       "attachment_lifecycle": "上传时 feedback_id 为 NULL（孤儿）；提交反馈绑定后 feedback_id 指向该反馈；上传路径顺带删除 feedback_id IS NULL 且 created_at 早于 now()-24h 的孤儿（清理失败只记日志，不影响上传）",
       "attachment_bytes": "图片字节存 feedback_attachments.data（bytea），模型上 json:\"-\"；列表只 select 元数据列，任何 JSON 响应都不含 data 字段"
     }
+  },
+  "ai_app_hub": {
+    "base_prefix": "/api/v1",
+    "auth": "jwt Bearer <jwt>；scope=all 需 user_roles.role=admin，scope=studio/department 另允许该工作室负责人（passport）",
+    "purpose": "EHR 组织树同步：全量 / 单工作室（工作室+子树）/ 单部门（单节点）",
+    "routes": {
+      "POST /admin/ai-app-hub/sync": {
+        "handler": "AIAppHubSyncHandler.Sync",
+        "request_body": {
+          "scope": "all | department | studio",
+          "id": "scope=department 用 department_id；scope=studio 用 ai_app_studios.id"
+        },
+        "success_status": 200,
+        "success_fields": ["scope", "departments", "studios", "hidden", "deleted_studios", "duration_ms"],
+        "schedule": "控制面启动时按 AI_APP_HUB_SYNC_CRON（默认 0 3 * * *，空串=关闭）+ AI_APP_HUB_SYNC_TZ（默认 Asia/Shanghai）每天全量同步；scope=all 会把 EHR 里已撤销的 source=ehr 工作室 visible=false，manual/手工行不动",
+        "error_statuses": {
+          "400": ["invalid body", "invalid scope", "id is required"],
+          "403": ["forbidden"],
+          "404": ["scope not found"],
+          "409": ["sync in progress"],
+          "502": ["ehr unauthorized", "ehr upstream", "ehr empty result"]
+        }
+      }
+    },
+    "status_keys": ["ai_app_hub.last_sync_at", "ai_app_hub.last_sync_status", "ai_app_hub.last_sync_scope", "ai_app_hub.last_sync_error", "ai_app_hub.last_sync_deleted_studios", "ai_app_hub.last_sync_departments"]
   }
 }

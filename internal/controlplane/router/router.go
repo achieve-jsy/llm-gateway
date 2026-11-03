@@ -2,11 +2,14 @@ package router
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	aiapphub "github.com/example/llm-gateway/internal/aiapphub/ehrclient"
 	authrepo "github.com/example/llm-gateway/internal/auth/repository"
 	"github.com/example/llm-gateway/internal/budgetperiod"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
@@ -507,12 +510,34 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		panic("构造 TraceBodyService 失败: " + tbErr.Error())
 	}
 
+	// AI 应用聚合页的同步触发器（全量 / 单工作室 / 单部门）。
+	hubSyncSvc := newAIAppHubSyncService(db, settingsRepo)
+	hubSyncHandler := handler.NewAIAppHubSyncHandler(hubSyncSvc)
+	if aiAppHubEHRConfigured() {
+		// 定时同步：默认每天 03:00（AI_APP_HUB_SYNC_TZ，默认北京时间）。
+		// AI_APP_HUB_SYNC_CRON 显式设成空串 = 关掉调度（纯手动同步）。
+		sched, err := service.LoadSyncSchedule(os.LookupEnv)
+		switch {
+		case err != nil:
+			slog.Error("ai_app_hub_sync_cron_config_invalid", "error", err)
+		case sched == nil:
+			slog.Info("ai_app_hub_sync_cron_disabled")
+		default:
+			service.StartAIAppHubSyncCron(lifecycleCtx, service.SyncCronOptions{
+				Schedule: sched,
+				State:    service.NewSyncStateStore(rdb),
+				Runner:   hubSyncSvc,
+			})
+		}
+	}
+
 	// 管理接口组（JWT 认证）
 	adminGroup := r.Group("/api/v1")
 	adminGroup.Use(middleware.JWTAuth())
 	adminGroup.Use(middleware.AuditMiddleware(auditSvc, db))
 	{
 		// 渠道定义（Registry）
+		adminGroup.POST("/admin/ai-app-hub/sync", hubSyncHandler.Sync)
 		adminGroup.GET("/provider-definitions", guard(rbac.PermProviderManage), defHandler.ListDefinitions)
 		adminGroup.GET("/provider-definitions/:id", guard(rbac.PermProviderManage), defHandler.GetDefinition)
 
@@ -1151,4 +1176,42 @@ func splitScopes(s string) []string {
 		return nil
 	}
 	return strings.Fields(strings.ReplaceAll(s, ",", " "))
+}
+
+// EHR_PREFIX 有默认值（路由前缀是接口约定），但地址/凭据/组织三者必须显式配置：
+// 只要少一个就不启动同步，避免把生产组织树写进非生产库。
+const ehrPrefixDefault = "/open-apis/ehr-apic/open-apis/resource/v1"
+
+// aiAppHubEHRConfigured 三个变量齐全才认为 EHR 已配置。
+func aiAppHubEHRConfigured() bool {
+	return os.Getenv("EHR_BASE_URL") != "" && os.Getenv("EHR_API_TOKEN") != "" && os.Getenv("EHR_ORG_ID") != ""
+}
+
+// newAIAppHubSyncService 构造同步服务。EHR_API_TOKEN 缺失时不注册真实客户端，
+// 调用会返回 ErrUpstream，接口上能明确看到"没配 token"，而不是 panic。
+func newAIAppHubSyncService(db *gorm.DB, settingsRepo *repository.SettingsRepo) *service.AIAppHubSyncService {
+	repo := repository.NewAIAppHubRepo(db)
+	if !aiAppHubEHRConfigured() {
+		return service.NewAIAppHubSyncService(unconfiguredFetcher{}, repo, settingsRepo, service.DefaultSyncRules())
+	}
+	fetcher := aiapphub.New(aiapphub.Config{
+		BaseURL: os.Getenv("EHR_BASE_URL"),
+		Prefix:  envOr("EHR_PREFIX", ehrPrefixDefault),
+		Token:   os.Getenv("EHR_API_TOKEN"),
+		OrgID:   os.Getenv("EHR_ORG_ID"),
+	})
+	return service.NewAIAppHubSyncService(fetcher, repo, settingsRepo, service.DefaultSyncRules())
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+type unconfiguredFetcher struct{}
+
+func (unconfiguredFetcher) FetchDepartments(context.Context) ([]aiapphub.Department, error) {
+	return nil, fmt.Errorf("%w: EHR_BASE_URL/EHR_API_TOKEN/EHR_ORG_ID 未配置", aiapphub.ErrUpstream)
 }

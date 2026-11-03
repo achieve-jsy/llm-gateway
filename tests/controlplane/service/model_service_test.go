@@ -19,22 +19,22 @@ import (
 
 // fakeModelRepoForModelSvc 模拟 ModelRepoInterface 用于 ModelService 单测
 type fakeModelRepoForModelSvc struct {
-	createFunc             func(m *model.Model) error
-	getByIDFunc            func(id uuid.UUID) (*model.Model, error)
-	getByIDsFunc           func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error)
-	listFunc               func(filter repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error)
-	updateFunc             func(m *model.Model) error
-	deleteFunc             func(id uuid.UUID) error
-	existsByNameFunc       func(name string, providerID uuid.UUID) (bool, error)
-	existsByNameExclFunc   func(name string, providerID uuid.UUID, excludeID uuid.UUID) (bool, error)
-	countByProviderIDFunc  func(providerID uuid.UUID) (int64, error)
-	batchCountFunc         func(ids []uuid.UUID) (map[uuid.UUID]int64, error)
-	listAvailableFunc      func() ([]model.Model, error)
+	createFunc              func(m *model.Model) error
+	getByIDFunc             func(id uuid.UUID) (*model.Model, error)
+	getByIDsFunc            func(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error)
+	listFunc                func(filter repository.ModelListFilter, offset, limit int) ([]model.Model, int64, error)
+	updateFunc              func(m *model.Model) error
+	deleteFunc              func(id uuid.UUID) error
+	existsByNameFunc        func(name string, providerID uuid.UUID) (bool, error)
+	existsByNameExclFunc    func(name string, providerID uuid.UUID, excludeID uuid.UUID) (bool, error)
+	countByProviderIDFunc   func(providerID uuid.UUID) (int64, error)
+	batchCountFunc          func(ids []uuid.UUID) (map[uuid.UUID]int64, error)
+	listAvailableFunc       func() ([]model.Model, error)
 	updateEnabledByProvFunc func(providerID uuid.UUID, enabled bool) error
-	batchDeleteFunc        func(ids []uuid.UUID) (int64, error)
-	batchUpdateEnabledFunc func(ids []uuid.UUID, enabled bool) (int64, error)
-	deleteTagRelationsFunc func(modelID uuid.UUID) error
-	getHealthByNamesFunc   func(names []string) (map[string]repository.ModelHealthSummary, error)
+	batchDeleteFunc         func(ids []uuid.UUID) (int64, error)
+	batchUpdateEnabledFunc  func(ids []uuid.UUID, enabled bool) (int64, error)
+	deleteTagRelationsFunc  func(modelID uuid.UUID) error
+	getHealthByNamesFunc    func(names []string) (map[string]repository.ModelHealthSummary, error)
 }
 
 func (f *fakeModelRepoForModelSvc) Create(m *model.Model) error {
@@ -134,16 +134,18 @@ func (f *fakeModelRepoForModelSvc) GetHealthByNames(names []string) (map[string]
 	return nil, nil
 }
 func (f *fakeModelRepoForModelSvc) UpdateEnabled(id uuid.UUID, enabled *bool) error { return nil }
-func (f *fakeModelRepoForModelSvc) UpdateStatus(id uuid.UUID, enabled bool, status int) error { return nil }
-func (f *fakeModelRepoForModelSvc) AutoDisableModel(id uuid.UUID) error { return nil }
-func (f *fakeModelRepoForModelSvc) AutoEnableModel(id uuid.UUID) error { return nil }
+func (f *fakeModelRepoForModelSvc) UpdateStatus(id uuid.UUID, enabled bool, status int) error {
+	return nil
+}
+func (f *fakeModelRepoForModelSvc) AutoDisableModel(id uuid.UUID) error              { return nil }
+func (f *fakeModelRepoForModelSvc) AutoEnableModel(id uuid.UUID) error               { return nil }
 func (f *fakeModelRepoForModelSvc) IncrementModelFailures(id uuid.UUID) (int, error) { return 0, nil }
-func (f *fakeModelRepoForModelSvc) ResetModelFailures(id uuid.UUID) error { return nil }
+func (f *fakeModelRepoForModelSvc) ResetModelFailures(id uuid.UUID) error            { return nil }
 func (f *fakeModelRepoForModelSvc) UpdateModelCheckResult(id uuid.UUID, responseTime int, checkError string) error {
 	return nil
 }
 func (f *fakeModelRepoForModelSvc) IncrementRecoverySuccesses(id uuid.UUID) error { return nil }
-func (f *fakeModelRepoForModelSvc) ResetRecoverySuccesses(id uuid.UUID) error { return nil }
+func (f *fakeModelRepoForModelSvc) ResetRecoverySuccesses(id uuid.UUID) error     { return nil }
 
 // fakeProviderRepoForModelSvc 模拟 ProviderRepoInterface 用于 ModelService 单测
 type fakeProviderRepoForModelSvc struct {
@@ -160,10 +162,10 @@ func (f *fakeProviderRepoForModelSvc) GetByID(id uuid.UUID) (*model.Provider, er
 func (f *fakeProviderRepoForModelSvc) List(_ repository.ProviderListFilter, _, _ int) ([]model.Provider, int64, error) {
 	return nil, 0, nil
 }
-func (f *fakeProviderRepoForModelSvc) Update(_ *model.Provider) error          { return nil }
-func (f *fakeProviderRepoForModelSvc) UpdateStatus(_ uuid.UUID, _ bool) error  { return nil }
-func (f *fakeProviderRepoForModelSvc) Delete(_ uuid.UUID) error                { return nil }
-func (f *fakeProviderRepoForModelSvc) ExistsByName(_ string) (bool, error)     { return false, nil }
+func (f *fakeProviderRepoForModelSvc) Update(_ *model.Provider) error         { return nil }
+func (f *fakeProviderRepoForModelSvc) UpdateStatus(_ uuid.UUID, _ bool) error { return nil }
+func (f *fakeProviderRepoForModelSvc) Delete(_ uuid.UUID) error               { return nil }
+func (f *fakeProviderRepoForModelSvc) ExistsByName(_ string) (bool, error)    { return false, nil }
 func (f *fakeProviderRepoForModelSvc) ExistsByNameExcluding(_ string, _ uuid.UUID) (bool, error) {
 	return false, nil
 }
@@ -525,8 +527,8 @@ func TestCreateModel_PriceModeValidation(t *testing.T) {
 					return &model.Provider{ID: providerID, Enabled: true}, nil
 				}
 			},
-			wantErr:    false,
-			wantMode:   "manual",
+			wantErr:  false,
+			wantMode: "manual",
 		},
 		{
 			name:        "创建manual模式缺input_price",
@@ -645,9 +647,9 @@ func TestUpdateModel_PriceModeSwitch(t *testing.T) {
 				ID: modelID, Name: "test", ProviderID: providerID,
 				PriceMode: "catalog", InputPrice: 0, OutputPrice: 0,
 			},
-			input:   service.UpdateModelInput{PriceMode: strPtr("manual")},
-			setupMR: func(mr *fakeModelRepoForModelSvc) {},
-			setupPR: func(pr *fakeProviderRepoForModelSvc) {},
+			input:      service.UpdateModelInput{PriceMode: strPtr("manual")},
+			setupMR:    func(mr *fakeModelRepoForModelSvc) {},
+			setupPR:    func(pr *fakeProviderRepoForModelSvc) {},
 			wantErr:    true,
 			wantErrMsg: "manual mode requires input_price > 0",
 		},
@@ -661,8 +663,8 @@ func TestUpdateModel_PriceModeSwitch(t *testing.T) {
 			input: service.UpdateModelInput{
 				PriceMode: strPtr("manual"), InputPrice: floatPtr(1.5), OutputPrice: floatPtr(3.0),
 			},
-			setupMR: func(mr *fakeModelRepoForModelSvc) {},
-			setupPR: func(pr *fakeProviderRepoForModelSvc) {},
+			setupMR:  func(mr *fakeModelRepoForModelSvc) {},
+			setupPR:  func(pr *fakeProviderRepoForModelSvc) {},
 			wantErr:  false,
 			wantMode: "manual",
 		},
@@ -674,9 +676,9 @@ func TestUpdateModel_PriceModeSwitch(t *testing.T) {
 				PriceMode: "manual", InputPrice: 1.0, OutputPrice: 2.0,
 				ReasoningPrice: floatPtr(5.0), CachedPrice: floatPtr(2.5),
 			},
-			input:   service.UpdateModelInput{PriceMode: strPtr("catalog")},
-			setupMR: func(mr *fakeModelRepoForModelSvc) {},
-			setupPR: func(pr *fakeProviderRepoForModelSvc) {},
+			input:    service.UpdateModelInput{PriceMode: strPtr("catalog")},
+			setupMR:  func(mr *fakeModelRepoForModelSvc) {},
+			setupPR:  func(pr *fakeProviderRepoForModelSvc) {},
 			wantErr:  false,
 			wantMode: "catalog",
 			wantCheck: func(t *testing.T, result *model.Model) {
@@ -691,9 +693,9 @@ func TestUpdateModel_PriceModeSwitch(t *testing.T) {
 				ID: modelID, Name: "test", ProviderID: providerID,
 				PriceMode: "manual", InputPrice: 1.0, OutputPrice: 2.0,
 			},
-			input:   service.UpdateModelInput{Name: "new-name"},
-			setupMR: func(mr *fakeModelRepoForModelSvc) {},
-			setupPR: func(pr *fakeProviderRepoForModelSvc) {},
+			input:    service.UpdateModelInput{Name: "new-name"},
+			setupMR:  func(mr *fakeModelRepoForModelSvc) {},
+			setupPR:  func(pr *fakeProviderRepoForModelSvc) {},
 			wantErr:  false,
 			wantMode: "manual",
 		},

@@ -18,11 +18,11 @@ import (
 
 // stubEntitlementGroupRepo 模拟 EntitlementGroupRepo 接口
 type stubEntitlementGroupRepo struct {
-	groups       map[uint]*model.Group
-	namesByMode  map[string][]string
-	namesByIDs   map[uint]string
-	updateErr    error
-	findByIDErr  error
+	groups      map[uint]*model.Group
+	namesByMode map[string][]string
+	namesByIDs  map[uint]string
+	updateErr   error
+	findByIDErr error
 }
 
 func newStubEntitlementGroupRepo() *stubEntitlementGroupRepo {
@@ -74,13 +74,13 @@ func (f *stubEntitlementGroupRepo) addGroup(id uint, name, openMode string) {
 
 // stubEntitlementEntitlementRepo 模拟 EntitlementEntitlementRepo 接口
 type stubEntitlementEntitlementRepo struct {
-	rows           map[uuid.UUID]*model.GroupEntitlement
-	controlledIDs  []uint
-	controlledErr  error
-	keyIDs         []uuid.UUID
-	keyIDsErr      error
-	createErr      error
-	findOneErr     map[string]error
+	rows          map[uuid.UUID]*model.GroupEntitlement
+	controlledIDs []uint
+	controlledErr error
+	keyIDs        []uuid.UUID
+	keyIDsErr     error
+	createErr     error
+	findOneErr    map[string]error
 }
 
 func newStubEntitlementEntitlementRepo() *stubEntitlementEntitlementRepo {

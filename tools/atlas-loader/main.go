@@ -86,7 +86,13 @@ func main() {
 		&cpmmodel.Feedback{},
 		&cpmmodel.FeedbackAttachment{},
 
-		// auth/model (2 个表)
+		// AI 应用聚合页：工作室主数据 / EHR 组织镜像 / 应用 / 访问日志
+		&cpmmodel.AIAppStudio{},
+		&cpmmodel.AIAppDepartment{},
+		&cpmmodel.AIApp{},
+		&cpmmodel.AIAppHubLoginLog{},
+
+		// auth/model (2 个表)：departments 由 orgmodel.OrgDepartment 声明，这里不能再注册 authmodel.Department
 		&authmodel.DevUser{},
 		&authmodel.User{},
 

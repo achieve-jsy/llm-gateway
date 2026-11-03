@@ -62,7 +62,7 @@ func (f *batchFakeModelRepo) ListAvailable() ([]model.Model, error) { return nil
 func (f *batchFakeModelRepo) UpdateEnabledByProviderID(providerID uuid.UUID, enabled bool) error {
 	return nil
 }
-func (f *batchFakeModelRepo) BatchDelete(ids []uuid.UUID) (int64, error)              { return 0, nil }
+func (f *batchFakeModelRepo) BatchDelete(ids []uuid.UUID) (int64, error) { return 0, nil }
 func (f *batchFakeModelRepo) BatchUpdateEnabled(ids []uuid.UUID, enabled bool) (int64, error) {
 	return 0, nil
 }
@@ -74,15 +74,15 @@ func (f *batchFakeModelRepo) UpdateEnabled(id uuid.UUID, enabled *bool) error { 
 func (f *batchFakeModelRepo) UpdateStatus(id uuid.UUID, enabled bool, status int) error {
 	return nil
 }
-func (f *batchFakeModelRepo) AutoDisableModel(id uuid.UUID) error                 { return nil }
-func (f *batchFakeModelRepo) AutoEnableModel(id uuid.UUID) error                  { return nil }
-func (f *batchFakeModelRepo) IncrementModelFailures(id uuid.UUID) (int, error)    { return 0, nil }
-func (f *batchFakeModelRepo) ResetModelFailures(id uuid.UUID) error               { return nil }
+func (f *batchFakeModelRepo) AutoDisableModel(id uuid.UUID) error              { return nil }
+func (f *batchFakeModelRepo) AutoEnableModel(id uuid.UUID) error               { return nil }
+func (f *batchFakeModelRepo) IncrementModelFailures(id uuid.UUID) (int, error) { return 0, nil }
+func (f *batchFakeModelRepo) ResetModelFailures(id uuid.UUID) error            { return nil }
 func (f *batchFakeModelRepo) UpdateModelCheckResult(id uuid.UUID, responseTime int, checkError string) error {
 	return nil
 }
 func (f *batchFakeModelRepo) IncrementRecoverySuccesses(id uuid.UUID) error { return nil }
-func (f *batchFakeModelRepo) ResetRecoverySuccesses(id uuid.UUID) error    { return nil }
+func (f *batchFakeModelRepo) ResetRecoverySuccesses(id uuid.UUID) error     { return nil }
 
 type batchFakeProviderRepo struct {
 	providers map[uuid.UUID]*model.Provider
@@ -99,10 +99,10 @@ func (f *batchFakeProviderRepo) GetByID(id uuid.UUID) (*model.Provider, error) {
 func (f *batchFakeProviderRepo) List(filter repository.ProviderListFilter, offset, limit int) ([]model.Provider, int64, error) {
 	return nil, 0, nil
 }
-func (f *batchFakeProviderRepo) Update(provider *model.Provider) error              { return nil }
-func (f *batchFakeProviderRepo) UpdateStatus(id uuid.UUID, enabled bool) error      { return nil }
-func (f *batchFakeProviderRepo) Delete(id uuid.UUID) error                          { return nil }
-func (f *batchFakeProviderRepo) ExistsByName(name string) (bool, error)            { return false, nil }
+func (f *batchFakeProviderRepo) Update(provider *model.Provider) error         { return nil }
+func (f *batchFakeProviderRepo) UpdateStatus(id uuid.UUID, enabled bool) error { return nil }
+func (f *batchFakeProviderRepo) Delete(id uuid.UUID) error                     { return nil }
+func (f *batchFakeProviderRepo) ExistsByName(name string) (bool, error)        { return false, nil }
 func (f *batchFakeProviderRepo) ExistsByNameExcluding(name string, excludeID uuid.UUID) (bool, error) {
 	return false, nil
 }
@@ -205,13 +205,13 @@ func TestBatchCreateModelsFromCatalog_PartialSuccess(t *testing.T) {
 	svc := service.NewModelService(modelRepo, providerRepo, nil)
 	svc.SetCatalogLookup(&batchFakeCatalogLookup{byID: map[uuid.UUID]*model.ModelCatalog{
 		catID: {
-			ID:                   catID,
-			SourceModelID:        "gpt-4o",
-			DisplayName:          "GPT-4o",
-			Mode:                 "chat",
-			ContextLength:        128000,
-			MaxOutputTokens:      4096,
-			InputPricePerMillion: 2.5,
+			ID:                    catID,
+			SourceModelID:         "gpt-4o",
+			DisplayName:           "GPT-4o",
+			Mode:                  "chat",
+			ContextLength:         128000,
+			MaxOutputTokens:       4096,
+			InputPricePerMillion:  2.5,
 			OutputPricePerMillion: 10,
 		},
 	}})

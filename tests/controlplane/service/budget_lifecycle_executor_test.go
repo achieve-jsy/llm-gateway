@@ -447,11 +447,11 @@ func TestBudgetLifecyclePeriodTransitions(t *testing.T) {
 				schedules: map[uuid.UUID]*model.BudgetLimitSchedule{
 					scheduleID: {
 						ID: scheduleID, BudgetAllocationID: allocationID,
-						DimensionType: budgetdomain.DimensionTotal,
-						PeriodType:    tt.periodType,
+						DimensionType:  budgetdomain.DimensionTotal,
+						PeriodType:     tt.periodType,
 						TargetLimitUSD: mustAmount(t, "100"),
-						EffectiveAt: tt.effective,
-						Status:      budgetdomain.SchedulePending,
+						EffectiveAt:    tt.effective,
+						Status:         budgetdomain.SchedulePending,
 					},
 				},
 				overrides: map[uuid.UUID]*model.BudgetTemporaryOverride{},

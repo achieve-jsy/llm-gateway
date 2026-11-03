@@ -32,7 +32,7 @@
 | **`go build ./...` 在 main 上就是红的（既有破损，非本方案引入）** | `test/bedrock_model_id_check.go:98:23: undefined: bedrock.NewListFoundationModelsPaginator`；该目录是根目录 `test/`（非 `tests/`）的临时调试代码，由提交 `241896ac revert: remove non-release changes from main` 遗留 | ✅ **验收关口改为 `make build`**（团队与 CI 的真实关口：CI 只 `go build ./cmd/gateway ./cmd/control-plane`）。**任何队都不要用 `go build ./...` 作为闸门**，也不要顺手改 `test/`（超出本方案范围） |
 | **`make test` 在 main 上也是红的（既有破损，非本方案引入）** | `tests/controlplane/handler` **整包编译失败**：`model_tier_handler_test.go:336,369: *fakeGroupBudgetTierService does not implement handler.GroupBudgetTierServiceInterface (missing method ListEnabledGroupsWithModels)`。接口侧在 `internal/controlplane/handler/model_tier_handler.go:33-40` 已为只读端点 `model-tier-hierarchy` 增加该方法，但测试 fake 未同步 → 该包编译失败。**已在干净的 `media-a1` 工作区（零改动）复现，证明与安全清理无关** | ✅ **已修**：分支 `fix/baseline-tests-build`（基于 `origin/main`）给 fake 补齐 `ListEnabledGroupsWithModels()`（3 行，测试侧，`nil, nil` 足够——用它的两个用例只测 `SetBudgetTier*`）。不修则**所有批次的 `make test` 闸门形同虚设** |
 | ⚠️ 门禁口径（合并基线修复前） | 上述两项都是 **`origin/main` 既有破损** | 合并 `fix/baseline-tests-build` 之前，各队的单测验收请**按包**跑自己相关的包（如 `go test ./tests/gateway/observability/ -count=1`），**不要**以整仓 `go test ./tests/...` 的红色结论判断自己的改动；合并之后整仓闸门才有效 |
-| **⚠️ 安全问题（既有）→ 已开独立修复分支 `fix/remove-leaked-debug-creds`** | 初查仅 `test/bedrock_model_id_check.go`，**全仓扫描后范围扩大**：生产库口令在 `config/prod.yaml:13`、`config/dev.yaml:14`、`.env`、`.env.example`、`.opencode/skills/*`、`.cursor/skills/*`、集成测试注释里共 **8 个文件**；Redis 口令 6 处；`JWT_SECRET` 与固定 `ENCRYPTION_KEY` 另在 skill 文档中。`.env` **被 `.gitignore` 声明忽略却仍被追踪**（历史遗留）。口令自 **2026-05-22** 起入仓，**48 个提交**含该口令、42 个含该密钥 | ✅ **已修复 HEAD**（5 个提交：删除调试文件、config 清空改环境变量注入、`.env` 取消追踪、skill 文档改 `${PROD_*}` 引用、集成测试去掉口令兜底），复扫零残留，`go build ./...` 因此恢复绿。🔴 **仍需人工完成**：① **轮换生产库口令**（已验证有效，必须换）；② 确认生产是否曾用该固定 `ENCRYPTION_KEY`（生产走 CI 变量 `PROD_ENCRYPTION_KEY`，`config/*.yaml` 均无该键，**推断未受影响**）；③ **历史清理**（48 个提交）需评估 `git filter-repo`/BFG，属改写共享历史，**另行决策** |
+| **⚠️ 安全问题（既有）→ 已开独立修复分支 `fix/remove-leaked-debug-creds`** | 初查仅 `test/bedrock_model_id_check.go`，**全仓扫描后范围扩大**：生产库口令在 `config/prod.yaml:13`、`config/dev.yaml:14`、`.env`、`.env.example`、`.opencode/skills/*`、`.cursor/skills/*`、集成测试注释里共 **8 个文件**；Redis 口令 6 处；`JWT_SECRET` 与固定 `ENCRYPTION_KEY` 另在 skill 文档中。`.env` **被 `.gitignore` 声明忽略却仍被追踪**（历史遗留）。口令自 **2026-05-22** 起入仓，**48 个提交**含该口令、42 个含该密钥 | ✅ **已修复 HEAD**（5 个提交：删除调试文件、config 清空改环境变量注入、`.env` 取消追踪、skill 文档改 `${PROD_*}` 引用、集成测试去掉口令兜底），复扫零残留，`go build ./...` 因此恢复绿。**本轮复核**：该分支 `make build`=0，但 `make test` 仍有 **2 个 FAIL**（`tests/controlplane/handler` 整包编译失败——就是 main 上那个既有的 fake 缺 `ListEnabledGroupsWithModels` 问题）→ **合并前需先并入 `fix/baseline-tests-build`**。🔴 **仍需人工完成**：① **轮换生产库口令**（已验证有效，必须换）；② 确认生产是否曾用该固定 `ENCRYPTION_KEY`（生产走 CI 变量 `PROD_ENCRYPTION_KEY`，`config/*.yaml` 均无该键，**推断未受影响**）；③ **历史清理**（48 个提交）需评估 `git filter-repo`/BFG，属改写共享历史，**另行决策** |
 | **CI 用 `-mod=vendor`** | `.gitlab-ci.yml:99,196,479` 均为 `go build -mod=vendor`；仓库有 `vendor/` 目录 | **尽量不要引入新依赖**；若必须引入，需 `go mod vendor` 并提交 `vendor/` 变更 |
 | 基线已验证绿 | 本 worktree 上 `make build` 退出码 0；`go build ./cmd/... ./internal/...` 退出码 0 | 可放心作为所有验收的对照基线 |
 | **生产库已只读核实（192.0.2.10:5433/llm_gateway_prod，PG 18.4）** | `video_tasks` **112 行**（2026-07-10 → 2026-10-15，仍在写入）、`video_task_events` 327 行；**无任何视图/物化视图**引用 `video_tasks`；仅 1 个外键 `fk_video_task_events_task`（`ON DELETE CASCADE`）；生产迁移 **58 条，最高版本 `20261012122318` = `origin/main` 最新版本**；生产**没有** `media_tasks`/图像相关表，`call_logs` **没有** `call_type` 列 | ✅ **决策 D 的改名迁移安全性已验证**：① 无仓库外**数据库内**消费方（无视图依赖）；② 外键随 `ALTER TABLE ... RENAME` 自动跟随，安全；③ 存量 112 行必须保留 → 只能 `RENAME`，绝不能建新表+搬数据；④ 新迁移时间戳晚于生产最高版本，排序正确；⑤ 本地 WIP 迁移（含 `call_type`）均**未**上生产 |
@@ -352,6 +352,29 @@
 4. 两家上游都声明 `credentialless: true`（产物直跳）→ Phase 1 的 `content` 端点用 **302 直跳**，D 队**不需要**做转存/代理。
 5. 契约测试一律放 `tests/providers/{kling,vidu}/`（Q3），**禁止** `internal/**/*_test.go`。
 6. 闸门同 Batch 1：`make build`（**不用** `go build ./...`）、`make test`（基线 47 包 0 FAIL）、**lint 零新增**（基线 total 125 / staticcheck 9 / ineffassign 12 / gosimple 4）、无迁移则不需要 atlas 检查。
+
+
+### Batch 3 派发任务书（E 队 · 治理收口）
+
+**基线**：Batch 2 最终 HEAD。**前置**：Batch 1（图像链路 + 任务平台）与 Batch 2（Kling/Vidu 适配器）均已合并——E 队只做**可观测性/探活/前端/文档/闸门**，不再新增业务链路。
+
+| 项 | 落点 | 关键约束 |
+|---|---|---|
+| **E1** 看板与告警 | 控制面 ops 统计 API + `web/` | 任务状态分布 / 成功率 / P50–P99 时长 / 成本；`usage_missing` 与「无价拒绝」计数告警。**因采用方案 D（单表）→ 看板不需要 union，只需加 `kind` 维度过滤**（这是 D 方案相对原「新建表」方案省下来的工作量） |
+| **E2** 探活（**不真出图/出视频**） | 沿用 `internal/controlplane/service/test_handler.go` 的 **connectivity + auth only** 范式 | 硬要求：探活**不得产生上游生成费用**——必须用抓请求/打桩断言证明只做了连通性与鉴权探测 |
+| **E2-补充** 🔴 | `internal/controlplane/service/group_check_service.go` | **A5 打开 `model_type=image` 后新暴露的路径**：`isVideoGroupModelType`（`:106,135-139`）**只跳过 video 组** → **image 组会落到 `buildProbeRequest`（`:270 default`）去发 `/v1/chat/completions`**，上游必然报错 → **看板/健康检查必然误报失败**。必须让 image（及后续同类非 chat 媒体类型）**同样跳过组级 chat 探针**，改用 E2 的媒体探活范式 |
+| **E3** 前端 | `web/src`（渠道与模型配置页） | 复用既有 `VideoSupported*` 元数据；**新增媒体单价的展示与编辑**（复用既有 `PerSecond*`/`PerImage`/`PerRequest` 字段族，**不要新造价格字段**）；前端校验必须与后端 binding 一致；`npx vite build` 必须通过 |
+| **E4** 对外文档与契约 | `docs/media-api.md` + `docs/README.md` | 覆盖模型组、错误码、示例。**核心校验**：`docs/media-api.md` 里冻结的错误码（尤其 402 `media_pricing_missing`）必须与 `tests/contract/contracts.json` **逐字一致**。⚠️ **不要**把对齐目标指向 `docs/seedance-api.md`：该文件只存在于**主工作区的未跟踪状态**（被主工作区的 `AGENTS.md:135` 引用），`origin/main` 上并不存在 → 对齐 `docs/configuration.md` 一类既有对外文档的写法即可。注：`docs/README.md` 与 `AGENTS.md` 的索引行**已在 Batch 0 的 E4 前置提交里加好**，本项只需核对内容一致性 |
+| **E5** 合并闸门 | —— | `make build`、`make test`、`make lint`、`make swagger`、`atlas migrate validate` 全绿；按 Q3 确认**无** `internal/**/*_test.go`；全部命令输出留证 |
+
+**E 队必须知道的既有事实（前序批次已核实）**：
+
+1. **`make lint`（全仓）在本仓库不可用**：`test/bedrock_model_id_check.go` 是 main 上的既有死代码（`undefined: bedrock.NewListFoundationModelsPaginator`），会硬失败。安全修复分支 `fix/remove-leaked-debug-creds` 删掉了它，但**该分支尚未合并** → 在合并前请用**限定范围**的口径：`golangci-lint run ./cmd/... ./internal/... ./tests/...`，并与基线对拍（**total 125 / staticcheck 9 / ineffassign 12 / gosimple 4**）。⚠️ **陷阱**：`unused` 与 `errcheck` 两边都恰好被默认 `max-issues-per-linter: 50` 截断，**按文件/行号比对没有意义**，只能比这几个未被截断的 linter。
+2. **集成测试在本机不可作为闸门**：`go test ./tests/... -tags=integration` 需要**运行中的控制面**（约 40 个 `TestOps*` 会 `dial tcp 127.0.0.1:8081: connection refused`）与 `E2E_DATABASE_URL`（`TestMultiRoleApprovalE2E`）；另有 `keyactivity` 的跨整点时间依赖 flaky 用例（同一份代码隔离重跑是 ok 的）。E5 请**如实记录**哪些跑了、哪些因环境前置跑不了，**不要**用「全绿」含糊带过。
+3. **`web/` 不 embed 进 Go**：前端构建产物 `web/dist` 由宿主机 nginx 托管；`make build` 不含前端。E3 的验收命令是 `cd web && npx vite build`（另可 `npx tsc --noEmit`）。
+4. **闸门命令别用 `go build ./...`**（见第 1 条的既有死代码），团队与 CI 的真实关口是 `make build`。
+5. **迁移**：E 队**不应新增迁移**（表结构在 Batch 1 已定稿）；若确需加（如看板要索引），必须走 `atlas-db-migration` skill，且注意 `call_logs` 是 10,331,055 行 / 13 GB 的写最热表——**加索引要 `CREATE INDEX CONCURRENTLY` + `-- atlas:txmode none`**（参考 `20260821120000_add_call_logs_dashboard_indexes.sql`）。
+6. 生产库（只读核实）**没有任何 Kling/Vidu 渠道、没有任何 `image` 类型模型** → E1/E2 的看板与探活**在真实环境里暂时没有数据**，验收以测试库/fixture 为准。
 
 
 ## 3. 批次与依赖图

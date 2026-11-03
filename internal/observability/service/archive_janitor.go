@@ -101,7 +101,7 @@ func (j *ArchiveJanitor) RunCycle(ctx context.Context) error {
 	return j.run(ctx)
 }
 
-// run 执行：补归档 → 巡检 → 逐 dt 置空（门闸全过）→ 保留期删除 → 未过闸天审计。
+// run 执行：补归档 → 巡检 → 逐 dt 置空（门闸全过）→ 保留期删除 → 未过闸天审计 → 清理暂存残留。
 func (j *ArchiveJanitor) run(ctx context.Context) error {
 	now := time.Now().In(j.loc)
 	cutoff := now.Add(-time.Duration(j.cfg.hotWindowDays) * 24 * time.Hour)
@@ -129,6 +129,18 @@ func (j *ArchiveJanitor) run(ctx context.Context) error {
 
 	// Phase E：把「PG 仍有 archive_status=1 行但 manifest 未 verified」的危险天显式报出来。
 	j.reportUngatedDays(ctx, cutoff, cleaned)
+
+	// Phase F：清理崩溃残留的 .spool/.tmp 暂存。
+	// 此前 CleanupStaging 只有测试调用方，生产零接线——一次进程崩溃留下的未压缩暂存
+	// 最多可达一个 chunk（默认 256 MiB）且永不回收，会持续吃掉 /datalog。
+	// 按 staging_retention_hours（默认 336h）保留，避免误删正在写入的块。
+	if j.store != nil {
+		if res, cerr := j.store.CleanupStaging(ctx, time.Duration(j.cfg.stagingRetentionH)*time.Hour); cerr != nil {
+			slog.Warn("archive: janitor cleanup staging failed", "error", cerr)
+		} else if res.Removed > 0 {
+			slog.Info("archive: janitor cleaned staging leftovers", "removed", res.Removed, "bytes", res.Bytes)
+		}
+	}
 
 	slog.Info("archive: janitor cycle done", "cleaned_days", len(cleaned))
 	return nil

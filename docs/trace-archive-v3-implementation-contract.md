@@ -23,7 +23,7 @@
 
 ## 1. 数据库 schema（主线交付，其他人只读引用）
 
-### 1.1 `call_traces` 新增列（迁移 20260921120000）
+### 1.1 `call_traces` 新增列（迁移 `20260921064216_add_trace_archive.sql`）
 
 ```sql
 ALTER TABLE call_traces
@@ -38,7 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_call_traces_archstatus_ts
     ON call_traces (archive_status, ts) WHERE archive_status = 1;
 ```
 
-### 1.2 `trace_archive_manifests`（迁移 20260921120000，**v3 新增冻结集与巡检列**）
+### 1.2 `trace_archive_manifests`（同上迁移，**v3 新增冻结集与巡检列**）
 
 | 列 | 类型 | 用途 |
 |---|---|---|

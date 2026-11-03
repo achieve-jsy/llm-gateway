@@ -77,6 +77,9 @@ type janitorConfig struct {
 	inspectPerCycle             int
 	diskWatermarkPct            int
 	retentionDays               int
+	// stagingRetentionH 崩溃残留 .spool/.tmp 的保留小时数（Phase F 消费）。
+	// 此前该配置项无任何生产调用方，导致崩溃残留最多一个 chunk（默认 256 MiB）永不回收。
+	stagingRetentionH int
 }
 
 // loadJanitorConfig 把控制面注入的 Config.Archive 转成清理侧配置，并对 0 值兜底。
@@ -97,6 +100,7 @@ func loadJanitorConfig(cfg cpconfig.ArchiveConfig) janitorConfig {
 		inspectPerCycle:             cfg.InspectPerCycle,
 		diskWatermarkPct:            cfg.DiskWatermarkPercent,
 		retentionDays:               cfg.RetentionDays,
+		stagingRetentionH:           cfg.StagingRetentionHours,
 	}
 	if jc.tz == "" {
 		jc.tz = janitorFallbackTZ
@@ -124,6 +128,9 @@ func loadJanitorConfig(cfg cpconfig.ArchiveConfig) janitorConfig {
 	}
 	if jc.diskWatermarkPct <= 0 {
 		jc.diskWatermarkPct = 80
+	}
+	if jc.stagingRetentionH <= 0 {
+		jc.stagingRetentionH = 336
 	}
 	return jc
 }

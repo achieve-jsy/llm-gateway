@@ -1,7 +1,34 @@
 <template>
   <div class="layout-sidebar">
-    <!-- 侧边栏：已登录时始终显示（/403 等兜底页也保留菜单） -->
-    <aside v-if="authStore.isLoggedIn" class="sidebar" :class="{ 'sidebar--collapsed': isCollapsed }">
+    <!-- 移动端顶部导航 -->
+    <div v-if="authStore.isLoggedIn && isMobile" class="mobile-top-bar">
+      <button class="mobile-hamburger" @click="drawerVisible = true">
+        <el-icon :size="22"><Expand /></el-icon>
+      </button>
+      <div class="mobile-top-bar-title">{{ siteTitle }}</div>
+      <div class="mobile-top-bar-actions">
+        <AnnouncementBanner ref="bannerRef" />
+        <NotificationBell ref="notificationBellRef" />
+        <span class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
+          {{ isDark ? '☀️' : '🌙' }}
+        </span>
+        <el-dropdown trigger="click" @command="handleUserCommand">
+          <el-icon class="user-icon" size="22"><User /></el-icon>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
+    </div>
+
+    <!-- 桌面端侧边栏（>=768px 显示） -->
+    <aside
+      v-if="authStore.isLoggedIn && !isMobile"
+      class="sidebar"
+      :class="{ 'sidebar--collapsed': isCollapsed }"
+    >
       <div class="sidebar-header">
         <img :src="sidebarLogoSrc" class="sidebar-logo" alt="logo" />
         <span v-show="!isCollapsed" class="sidebar-title">{{ siteTitle }}</span>
@@ -37,7 +64,6 @@
         <template v-if="authStore.isManager">
           <el-divider class="menu-divider" />
           <div class="menu-group-label">组织</div>
-          <!-- 组织架构：admin 看全树，studio/dept admin 看自己管辖范围 -->
           <el-menu-item index="/admin/org">
             <el-icon><OfficeBuilding /></el-icon>
             <template #title>
@@ -49,7 +75,6 @@
             <el-icon><Histogram /></el-icon>
             <template #title>用量看板</template>
           </el-menu-item>
-          <!-- 角色管理仅 admin 可见 -->
           <el-menu-item v-if="authStore.isAdmin" index="/admin/org/roles">
             <el-icon><UserFilled /></el-icon>
             <template #title>角色管理</template>
@@ -108,19 +133,127 @@
       </el-menu>
     </aside>
 
+    <!-- 移动端抽屉菜单 -->
+    <el-drawer
+      v-if="authStore.isLoggedIn"
+      v-model="drawerVisible"
+      :size="'75%'"
+      direction="ltr"
+      :with-header="false"
+      class="mobile-drawer"
+    >
+      <div class="mobile-drawer-header">
+        <img :src="sidebarLogoSrc" class="sidebar-logo" alt="logo" />
+        <span class="sidebar-title">{{ siteTitle }}</span>
+      </div>
+      <el-menu
+        class="sidebar-menu"
+        :default-active="activeMenu"
+        @select="handleMobileMenuSelect"
+      >
+        <el-menu-item index="/access/unified-entry">
+          <el-icon><Connection /></el-icon>
+          <template #title>首页</template>
+        </el-menu-item>
+
+        <el-divider class="menu-divider" />
+
+        <div class="menu-group-label">员工</div>
+        <el-menu-item index="/keys">
+          <el-icon><Key /></el-icon>
+          <template #title>我的 Key</template>
+        </el-menu-item>
+        <el-menu-item index="/my/usage">
+          <el-icon><DataLine /></el-icon>
+          <template #title>我的用量</template>
+        </el-menu-item>
+        <el-menu-item index="/admin/group-health-monitor">
+          <el-icon><Histogram /></el-icon>
+          <template #title>模型组健康</template>
+        </el-menu-item>
+
+        <template v-if="authStore.isManager">
+          <el-divider class="menu-divider" />
+          <div class="menu-group-label">组织</div>
+          <el-menu-item index="/admin/org">
+            <el-icon><OfficeBuilding /></el-icon>
+            <template #title>组织架构</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/usage/dashboard">
+            <el-icon><Histogram /></el-icon>
+            <template #title>用量看板</template>
+          </el-menu-item>
+          <el-menu-item v-if="authStore.isAdmin" index="/admin/org/roles">
+            <el-icon><UserFilled /></el-icon>
+            <template #title>角色管理</template>
+          </el-menu-item>
+        </template>
+
+        <template v-if="authStore.isAdmin">
+          <el-divider class="menu-divider" />
+          <div class="menu-group-label">管理</div>
+          <el-menu-item index="/admin/providers">
+            <el-icon><Operation /></el-icon>
+            <template #title>渠道管理</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/models">
+            <el-icon><Cpu /></el-icon>
+            <template #title>模型管理</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/groups">
+            <el-icon><Collection /></el-icon>
+            <template #title>模型组</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/tags">
+            <el-icon><PriceTag /></el-icon>
+            <template #title>标签管理</template>
+          </el-menu-item>
+
+          <el-divider class="menu-divider" />
+
+          <div class="menu-group-label">运维</div>
+          <el-menu-item index="/admin/usage-cost">
+            <el-icon><Histogram /></el-icon>
+            <template #title>用量与成本</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/health-monitor">
+            <el-icon><Monitor /></el-icon>
+            <template #title>模型健康监控</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/catalog-sync">
+            <el-icon><Refresh /></el-icon>
+            <template #title>Catalog 同步</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/chat-playground">
+            <el-icon><ChatDotRound /></el-icon>
+            <template #title>对话测试</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/settings">
+            <el-icon><Setting /></el-icon>
+            <template #title>系统设置</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/announcements">
+            <el-icon><Bell /></el-icon>
+            <template #title>公告管理</template>
+          </el-menu-item>
+        </template>
+      </el-menu>
+    </el-drawer>
+
     <!-- 主内容区 -->
-    <div class="main-content">
-      <!-- 顶部工具栏 -->
-      <div v-if="authStore.isLoggedIn" class="top-bar">        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
+    <div class="main-content" :class="{ 'main-content--mobile': isMobile }">
+      <!-- 顶部工具栏（桌面端） -->
+      <div v-if="authStore.isLoggedIn && !isMobile" class="top-bar">
+        <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? '展开菜单' : '收起菜单'">
           <el-icon :size="18"><Fold v-if="!isCollapsed" /><Expand v-else /></el-icon>
         </button>
         <div class="top-bar-spacer"></div>
-        <AnnouncementBanner v-if="authStore.isLoggedIn" ref="bannerRef" />
-        <NotificationBell v-if="authStore.isLoggedIn" ref="notificationBellRef" />
+        <AnnouncementBanner ref="bannerRef" />
+        <NotificationBell ref="notificationBellRef" />
         <span class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
           {{ isDark ? '☀️' : '🌙' }}
         </span>
-        <el-dropdown v-if="authStore.isLoggedIn" trigger="click" @command="handleUserCommand">
+        <el-dropdown trigger="click" @command="handleUserCommand">
           <div class="user-info">
             <el-icon class="user-icon" size="22"><User /></el-icon>
             <span class="user-name">{{ authStore.userName }}</span>
@@ -135,7 +268,7 @@
         <el-icon v-else class="user-icon" size="24"><User /></el-icon>
       </div>
 
-      <!-- 部门状态警告 Banner（刷新后依然可见，直到用户手动关闭） -->
+      <!-- 部门状态警告 Banner -->
       <transition name="dept-banner">
         <div
           v-if="authStore.isLoggedIn && showDeptBanner && deptBannerInfo"
@@ -169,6 +302,7 @@
 import { useRoute, useRouter } from 'vue-router'
 import { onMounted, computed, ref, watch } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
+import { useIsMobile } from './composables/useIsMobile'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
 import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close } from '@element-plus/icons-vue'
@@ -181,10 +315,12 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
+const { isMobile } = useIsMobile()
 
 const isCollapsed = ref(localStorage.getItem('sidebar-collapsed') === 'true')
 const activeMenu = ref(route.path)
 const showPopup = ref(false)
+const drawerVisible = ref(false)
 
 watch(() => route.path, (newPath) => {
   activeMenu.value = newPath
@@ -242,6 +378,11 @@ function handleMenuSelect(index: string) {
   if (index && index !== route.path) {
     router.push(index)
   }
+}
+
+function handleMobileMenuSelect(index: string) {
+  drawerVisible.value = false
+  router.push(index)
 }
 
 function toggleCollapse() {
@@ -360,6 +501,87 @@ function onPopupAllRead() {
   background: var(--el-color-primary-light-8);
   color: var(--el-color-primary);
   vertical-align: middle;
+}
+
+/* ═══ 移动端布局 ═══ */
+@media (max-width: 767px) {
+  .layout-sidebar {
+    padding-top: 52px !important;
+  }
+}
+
+.mobile-top-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  background: var(--el-bg-color);
+  border-bottom: 1px solid var(--el-border-color-light);
+  gap: 8px;
+}
+
+.mobile-hamburger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--el-text-color-primary);
+  flex-shrink: 0;
+}
+
+.mobile-hamburger:active {
+  background: var(--el-fill-color);
+}
+
+.mobile-top-bar-title {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1E8C86;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-top-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 移动端抽屉菜单 */
+.mobile-drawer .el-drawer__body {
+  padding: 0;
+}
+
+.mobile-drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--el-border-color-light);
+}
+
+/* 主内容区移动端适配 */
+.main-content--mobile {
+  margin-left: 0 !important;
+  width: 100% !important;
+}
+
+.main-content--mobile .page-container {
+  padding: 12px !important;
 }
 
 

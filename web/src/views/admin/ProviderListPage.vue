@@ -44,7 +44,7 @@
     </div>
 
     <!-- 渠道列表表格 -->
-    <el-table :data="providers" border stripe>
+    <el-table :data="providers" border stripe max-height="calc(100vh - 240px)" style="width:100%">
       <el-table-column label="名称" min-width="140">
         <template #default="{ row }">
           <el-tooltip v-if="row.remark" :content="row.remark" placement="top">
@@ -498,6 +498,14 @@ onMounted(() => {
   }
 }
 
+/* ═══ 移动端适配 ═══ */
+@media (max-width: 767px) {
+  .toolbar-field, .toolbar-field-sm { width: 100%; }
+  .header-actions { flex-wrap: wrap; gap: 6px; }
+  .header-actions :deep(.el-button) { font-size: 12px; padding: 6px 12px; }
+  .provider-page :deep(.el-table__body-wrapper) { overflow-x: auto; }
+}
+</style>
 
 .cred-tags {
   display: flex;

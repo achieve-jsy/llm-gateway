@@ -90,7 +90,7 @@
     </div>
 
     <!-- 模型列表表格 -->
-    <el-table :data="filteredModels" border stripe @selection-change="handleSelectionChange">
+    <el-table :data="filteredModels" border stripe @selection-change="handleSelectionChange" max-height="calc(100vh - 240px)" style="width:100%">
       <el-table-column type="selection" width="45" />
       <el-table-column prop="name" label="上游模型ID" min-width="180" show-overflow-tooltip />
 
@@ -710,5 +710,15 @@ onMounted(() => {
     width: 100%;
     justify-content: flex-start;
   }
+}
+
+/* ═══ 移动端适配 ═══ */
+@media (max-width: 767px) {
+  .toolbar-field { width: 100%; }
+  .toolbar-field-lg { width: 100%; }
+  .toolbar-field-xs { width: 100%; }
+  .header-actions { flex-wrap: wrap; gap: 6px; }
+  .header-actions :deep(.el-button) { white-space: normal; font-size: 12px; padding: 6px 10px; }
+  .model-page :deep(.el-table__body-wrapper) { overflow-x: auto; }
 }
 </style>

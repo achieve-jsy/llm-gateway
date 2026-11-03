@@ -564,7 +564,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import {
   Refresh, Download, Search, Histogram, Money, DataLine, Coin,
   MagicStick, Top, Bottom, Finished, List, InfoFilled,
@@ -1063,6 +1063,22 @@ watch(distMetric, () => { if (statsRows.value.length) renderDist() })
 // init
 loadMyKeys()
 loadAll()
+
+// ── Chart resize ──
+let resizeObserver: ResizeObserver | null = null
+onMounted(() => {
+  resizeObserver = new ResizeObserver(() => {
+    trendChart?.resize()
+    distChart?.resize()
+  })
+  if (trendCanvas.value) resizeObserver.observe(trendCanvas.value.parentElement!)
+  if (distCanvas.value) resizeObserver.observe(distCanvas.value.parentElement!)
+})
+onUnmounted(() => {
+  resizeObserver?.disconnect()
+  trendChart?.destroy()
+  distChart?.destroy()
+})
 </script>
 
 <style scoped>
@@ -1314,6 +1330,32 @@ loadAll()
 
 /* ── 用户名 ── */
 .mu-name { font-size: 12px; color: var(--el-text-color-regular); font-weight: 500; }
+
+/* ═══ 移动端适配 ═══ */
+@media (max-width: 767px) {
+  .mu-filter { flex-direction: column; align-items: stretch; padding: 10px 12px; }
+  .mu-filter__date { width: 100%; }
+  .mu-filter__chip { width: 100%; }
+  .mu-filter__chip--key { width: 100%; }
+  .mu-filter__status { width: 100%; }
+  .mu-presets { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+  .mu-preset-btn { font-size: 11px; padding: 2px 8px; white-space: nowrap; }
+  .mu-filter-divider { display: none; }
+  .mu-stats { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .mu-stat-card { padding: 14px; }
+  .mu-stat-card__value { font-size: 20px; }
+  .mu-charts { grid-template-columns: 1fr; }
+  .mu-chart-card__body { height: 180px; }
+  .mu-header { flex-direction: column; align-items: flex-start; }
+  .mu-header__right { width: 100%; justify-content: flex-end; }
+  .mu-table-wrap :deep(.el-table__body-wrapper) { overflow-x: auto; }
+  .mu-trace-meta { flex-wrap: wrap; }
+  .mu-meta-grid { grid-template-columns: 1fr; }
+  .mu-timeline { padding: 12px; }
+  .mu-tl-node { min-width: 56px; }
+  .mu-tl-label { font-size: 10px; }
+  .mu-tl-ms { font-size: 10px; }
+}
 
 </style>
 

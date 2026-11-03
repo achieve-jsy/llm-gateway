@@ -689,6 +689,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { useOrgStore } from '@/stores/org'
 import { useRoute } from 'vue-router'
+import { useIsMobile } from '@/composables/useIsMobile'
 import http from '@/services/http'
 
 Chart.register(...registerables)
@@ -696,6 +697,7 @@ Chart.register(...registerables)
 const authStore = useAuthStore()
 const orgStore  = useOrgStore()
 const route     = useRoute()
+const isMobile  = useIsMobile()
 
 const TABLE_HEADER = {
   background: 'var(--el-fill-color-light)',
@@ -910,6 +912,7 @@ const trendLoading = ref(false)
 const trendData    = ref<any[]>([])
 const trendCanvasRef = ref<HTMLCanvasElement | null>(null)
 let trendChartInst: Chart | null = null
+let trendChartObserver: ResizeObserver | null = null
 
 const trendMetric = ref<'overview' | 'cost' | 'calls' | 'tokens'>('overview')
 const trendMetrics = [
@@ -1050,6 +1053,7 @@ const modelsLoading = ref(false)
 const modelsData    = ref<any[]>([])
 const modelCanvasRef = ref<HTMLCanvasElement | null>(null)
 let modelChartInst: Chart | null = null
+let modelChartObserver: ResizeObserver | null = null
 
 const MODEL_COLORS = [
   '#409eff', '#67c23a', '#e6a23c', '#f56c6c',
@@ -1401,6 +1405,8 @@ onMounted(() => {
 onUnmounted(() => {
   trendChartInst?.destroy()
   modelChartInst?.destroy()
+  trendChartObserver?.disconnect()
+  modelChartObserver?.disconnect()
 })
 </script>
 

@@ -176,4 +176,16 @@ async function handleDevLogin() {
   max-height: 0;
   opacity: 0;
 }
+
+/* ═══ 移动端适配 ═══ */
+@media (max-width: 767px) {
+  .login-card {
+    width: 92%;
+    padding: 36px 20px 32px;
+  }
+
+  .login-logo h1 {
+    font-size: 22px;
+  }
+}
 </style>

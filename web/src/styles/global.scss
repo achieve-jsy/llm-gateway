@@ -648,6 +648,39 @@ html.dark ::-webkit-scrollbar-thumb {
   }
 }
 
+/* ===================== 移动端全局适配 ===================== */
+@media (max-width: 767px) {
+  /* 调整主体间距 */
+  body {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* 较小字号适配窄屏 */
+  .el-table .cell {
+    font-size: 12px;
+  }
+
+  /* 表单：移动端 label 置于上方 */
+  .el-form--inline .el-form-item {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    margin-right: 0;
+  }
+
+  /* 对话框移动端接近全屏 */
+  .el-dialog {
+    width: 92% !important;
+    max-width: 92% !important;
+    margin-top: 5vh !important;
+  }
+
+  /* 按钮组间距适配 */
+  .el-button + .el-button {
+    margin-left: 6px;
+  }
+}
+
 /* ===================== Markdown 通用样式 ===================== */
 .md-content {
   font-size: 15px;

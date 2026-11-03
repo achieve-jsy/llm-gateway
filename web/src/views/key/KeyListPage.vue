@@ -7,7 +7,7 @@
       </div>
     </div>
 
-    <el-table v-loading="loading" :data="keys" border stripe :default-sort="{ prop: 'createdAt', order: 'descending' }">
+    <el-table v-loading="loading" :data="keys" border stripe :default-sort="{ prop: 'createdAt', order: 'descending' }" max-height="calc(100vh - 280px)" style="width:100%">
       <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
 
       <el-table-column label="API 密钥" min-width="180">
@@ -47,7 +47,7 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="状态" width="110" align="center">
+      <el-table-column label="状态" width="110" align="center" class-name="hide-sm">
         <template #default="{ row }">
           <el-switch
             v-model="row.enabled"
@@ -60,7 +60,7 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="日志记录" width="110" align="center">
+      <el-table-column label="日志记录" width="110" align="center" class-name="hide-sm">
         <template #header>
           <span>日志记录
             <el-tooltip content="关闭后该 Key 的请求不写入调用日志，但耗时和 Token 仍会计算" placement="top">
@@ -82,18 +82,18 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="创建时间" width="170" sortable>
+      <el-table-column label="创建时间" width="170" sortable class-name="hide-sm">
         <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
       </el-table-column>
 
-      <el-table-column label="活跃时间" width="170">
+      <el-table-column label="活跃时间" width="170" class-name="hide-sm">
         <template #default="{ row }">{{ formatDate(row.lastUsedAt) }}</template>
       </el-table-column>
 
-      <el-table-column label="操作" width="340" fixed="right" align="center">
+      <el-table-column label="操作" width="280" align="center">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="handleUseKey(row)">使用密钥</el-button>
-          <el-button size="small" text type="primary" @click="handleOpenCodeConfig(row)">配置 OpenCode</el-button>
+          <el-button size="small" text type="primary" @click="handleOpenCodeConfig(row)">配置</el-button>
           <el-button size="small" text type="warning" @click="handleReset(row)">重置</el-button>
           <el-button size="small" text type="danger" @click="handleDelete(row)">删除</el-button>
         </template>
@@ -482,5 +482,10 @@ onMounted(() => {
 @media (max-width: 900px) {
   .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
   .header-actions { width: 100%; justify-content: flex-start; }
+}
+
+/* ═══ 移动端适配 ═══ */
+@media (max-width: 767px) {
+  .hide-sm { display: none !important; }
 }
 </style>

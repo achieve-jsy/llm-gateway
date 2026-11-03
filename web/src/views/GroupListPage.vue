@@ -31,7 +31,7 @@
     </template>
 
     <template v-else>
-      <el-table :data="groups" border stripe>
+      <el-table :data="groups" border stripe max-height="calc(100vh - 240px)" style="width:100%">
         <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
         <el-table-column label="策略" width="120" align="center">
           <template #default="{ row }">

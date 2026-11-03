@@ -1,59 +1,57 @@
-import http from '@/services/http'
-import type {
-  Group,
-  GroupListItem,
-  GroupModel,
-  CreateGroupRequest,
-  UpdateGroupRequest,
-  AddModelToGroupRequest,
-  ModelOption,
-} from '@/types/group'
-import type { ApiResponse, PaginatedResponse } from '@/types/api'
-
-export interface FailoverDefaults {
-  max_switches: number
-  same_model_retries: number
-  failover_cooldown_seconds: number
-}
+import http from '@/lib/http'
+import type { Group, GroupPayload, GroupModel } from '@/types/group'
+import type { Model } from '@/types/model'
+import type { ApiResponse } from '@/types/api'
 
 export const groupsApi = {
-  createGroup(data: CreateGroupRequest) {
-    return http.post<ApiResponse<Group>>('/api/v1/groups', data)
+  async createGroup(payload: GroupPayload): Promise<Group> {
+    const r = await http.post<ApiResponse<Group>>('/api/v1/groups', payload)
+    return r.data.data
   },
 
-  listGroups(params: { search?: string; page?: number; page_size?: number }) {
-    return http.get<PaginatedResponse<GroupListItem>>('/api/v1/groups', { params })
+  async listGroups(opts?: { page?: number; pageSize?: number; name?: string }): Promise<{ data: Group[]; total: number }> {
+    const params: Record<string, any> = {}
+    if (opts?.page) params.page = opts.page
+    if (opts?.pageSize) params.page_size = opts.pageSize
+    if (opts?.name) params.search = opts.name  // 后端用 search 参数
+    const r = await http.get<{ data: Group[]; page: number; page_size: number; total: number }>('/api/v1/groups', { params })
+    return { data: r.data.data, total: r.data.total ?? (r.data.data?.length ?? 0) }
   },
 
-  getGroup(id: number) {
-    return http.get<ApiResponse<Group>>(`/api/v1/groups/${id}`)
+  async getGroup(id: number): Promise<Group> {
+    const r = await http.get<ApiResponse<Group>>(`/api/v1/groups/${id}`)
+    return r.data.data
   },
 
-  updateGroup(id: number, data: UpdateGroupRequest) {
-    return http.put<ApiResponse<Group>>(`/api/v1/groups/${id}`, data)
+  async updateGroup(id: number, payload: GroupPayload): Promise<Group> {
+    const r = await http.put<ApiResponse<Group>>(`/api/v1/groups/${id}`, payload)
+    return r.data.data
   },
 
-  deleteGroup(id: number) {
-    return http.delete(`/api/v1/groups/${id}`)
+  async deleteGroup(id: number): Promise<void> {
+    await http.delete(`/api/v1/groups/${id}`)
   },
 
-  addModelsToGroup(id: number, data: AddModelToGroupRequest) {
-    return http.post(`/api/v1/groups/${id}/models`, data)
+  async addModelsToGroup(groupId: number, modelIds: string[]): Promise<void> {
+    await http.post(`/api/v1/groups/${groupId}/models`, { model_ids: modelIds })
   },
 
-  listGroupModels(id: number) {
-    return http.get<ApiResponse<GroupModel[]>>(`/api/v1/groups/${id}/models`)
+  async listGroupModels(groupId: number): Promise<GroupModel[]> {
+    const r = await http.get<ApiResponse<GroupModel[]>>(`/api/v1/groups/${groupId}/models`)
+    return r.data.data
   },
 
-  removeModelFromGroup(groupId: number, modelId: number) {
-    return http.delete(`/api/v1/groups/${groupId}/models/${modelId}`)
+  async removeModelFromGroup(groupId: number, modelId: string): Promise<void> {
+    await http.delete(`/api/v1/groups/${groupId}/models/${modelId}`)
   },
 
-  listAllModels(params?: { page_size?: number }) {
-    return http.get<ApiResponse<ModelOption[]>>('/api/v1/models', { params })
+  async listAllModels(): Promise<Model[]> {
+    const r = await http.get<ApiResponse<Model[]>>('/api/v1/models')
+    return r.data.data
   },
 
-  getGroupDefaults() {
-    return http.get<ApiResponse<FailoverDefaults>>('/api/v1/groups/defaults')
+  async getGroupDefaults(): Promise<{ max_switches: number; same_model_retries: number; failover_cooldown_seconds: number }> {
+    const r = await http.get<ApiResponse<{ max_switches: number; same_model_retries: number; failover_cooldown_seconds: number }>>('/api/v1/groups/defaults')
+    return r.data.data
   },
 }

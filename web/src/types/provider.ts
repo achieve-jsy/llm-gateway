@@ -1,4 +1,4 @@
-/** 凭证字段 Schema 定义 */
+/** 凭证字段 Schema */
 export interface CredentialFieldSchema {
   type: string
   required: boolean
@@ -8,10 +8,8 @@ export interface CredentialFieldSchema {
   default?: string
 }
 
-/** 凭证 Schema（字段名 → 字段定义） */
 export type CredentialSchema = Record<string, CredentialFieldSchema>
 
-/** 厂商差异化配置 */
 export interface VendorOptions {
   url_pattern?: string
   auth_header?: string
@@ -25,7 +23,6 @@ export interface VendorOptions {
   extra_headers?: Record<string, string>
 }
 
-/** 渠道定义（Provider Registry 条目） */
 export interface ProviderDefinition {
   id: string
   display_name: string
@@ -41,7 +38,6 @@ export interface ProviderDefinition {
   enabled: boolean
 }
 
-/** 渠道/供应商信息 */
 export interface Provider {
   id: string
   name: string
@@ -67,14 +63,12 @@ export interface Provider {
   updated_at: string
 }
 
-/** 渠道状态枚举 */
 export const ProviderStatus = {
   ENABLED: 1,
   MANUALLY_DISABLED: 2,
   AUTO_DISABLED: 3,
 } as const
 
-/** 创建/编辑渠道的请求体 */
 export interface ProviderPayload {
   name: string
   definition_id: string

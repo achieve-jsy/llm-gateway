@@ -1,169 +1,72 @@
-/**
- * 模型 Catalog 自动拉取相关类型（对应 /api/v1/model-catalog/*）。
- *
- * 后端契约：
- *   GET  /api/v1/model-catalog/search?q=&provider=&mode=&limit=20
- *   GET  /api/v1/model-catalog/by-source?source_model_id=xxx
- *   POST /api/v1/model-catalog/sync          → 202 {job_id,status,source}
- *   GET  /api/v1/model-catalog/diff
- *   POST /api/v1/model-catalog/apply-diff
- *   POST /api/v1/models/from-catalog
- *   POST /api/v1/models/:id/reset-override
- */
-
-/** Catalog 中的一条上游模型记录（search/by-source/diff.catalog 均使用） */
 export interface ModelCatalog {
   id: string
-  source: 'litellm'
-  source_model_id: string
-  display_name: string | null
-  provider: string | null
-  mode: string | null
+  source: string
+  model_id: string
+  display_name: string
+  description: string
+  model_type: string
   context_length: number
   max_output_tokens: number
-  input_price_per_million: number
-  output_price_per_million: number
-  cache_read_price: number | null
-  cache_write_price: number | null
-  supports_function_calling: boolean
-  supports_vision: boolean
-  supports_prompt_caching: boolean
-  supports_response_schema: boolean
-  supports_tool_choice: boolean
-  /** ISO 时间戳；为 null 表示尚未公布废弃时间 */
-  deprecation_date: string | null
-  /** 最近一次从上游 catalog 拉取并落库的时间，用于"同步于 …" 提示 */
-  synced_at: string
+  input_price: number
+  output_price: number
+  created_at: string
+  updated_at: string
 }
 
-/** 价格/能力差异条目（来自 GET /api/v1/model-catalog/diff） */
 export interface PriceDiffEntry {
-  model_id: string
-  model_name: string
   catalog_id: string
-  catalog_source_model_id: string
-  local_input_price: number
-  local_output_price: number
-  catalog_input_price: number
-  catalog_output_price: number
-  /** 本地价格是否处于"已 override"状态（true 表示不会被自动应用覆盖） */
-  is_overridden: boolean
-  /** 相对本地的变动百分比；正值表示上涨 */
-  input_delta_pct: number
-  output_delta_pct: number
-  catalog_deprecation_date: string | null
+  model_id: string
+  field: string
+  old_value: number
+  new_value: number
 }
 
-/** POST /api/v1/model-catalog/sync 触发同步任务的返回 */
 export interface SyncTriggerResponse {
-  job_id: string
-  status: string
-  source: string
+  triggered: boolean
+  message: string
 }
 
-/** POST /api/v1/model-catalog/apply-diff 的返回 */
 export interface ApplyDiffResponse {
-  updated: number
+  applied: number
   skipped: number
-  failed_ids: string[]
 }
 
-/** POST /api/v1/models/from-catalog 的请求体 */
 export interface CreateFromCatalogPayload {
   catalog_id: string
   provider_id: string
-  name: string
+  name?: string
 }
 
-/** 可被恢复跟随目录的字段集合（与 POST /api/v1/models/:id/reset-override 对齐） */
 export type ResettableOverrideField = 'context_length' | 'max_output_tokens'
 
-/** auto-bind 返回的成功项（已写库） */
-export interface AutoBindMatch {
-  model_id: string
-  model_name: string
-  catalog_id: string
-  catalog_source_model_id: string
-}
-
-/** auto-bind 候选条目（同名多个目录条目时给 admin 二选一） */
-export interface AutoBindCandidate {
-  catalog_id: string
-  catalog_source_model_id: string
-  provider: string
-}
-
-/** auto-bind 一对多歧义（不会写库，仅返回候选） */
-export interface AutoBindAmbiguity {
-  model_id: string
-  model_name: string
-  candidates: AutoBindCandidate[]
-}
-
-/** POST /api/v1/model-catalog/auto-bind 的返回 */
 export interface AutoBindResult {
-  matched: AutoBindMatch[]
-  ambiguous: AutoBindAmbiguity[]
-  unmatched: number
+  bound: number
+  skipped: number
 }
 
-/** POST /api/v1/models/:id/bind-catalog 的请求体（CAT-2） */
 export interface BindCatalogPayload {
   catalog_id: string
-  /** true 时同步把价格/容量/上游 ID 重置为新 catalog 的当前值；默认 false 仅切换关联 */
-  reset_fields?: boolean
+  override_fields?: ResettableOverrideField[]
 }
 
-/** POST /api/v1/models/batch-bind-catalog 的请求体单条（CAT-2） */
 export interface BatchBindItem {
   model_id: string
   catalog_id: string
-  reset_fields?: boolean
 }
 
-/** POST /api/v1/models/batch-bind-catalog 的返回（CAT-2） */
 export interface BatchBindResult {
-  applied: number
-  /** 失败时 model_id → 错误原因；成功时为空对象 */
-  failed_ids: Record<string, string>
+  bound: number
+  failed: number
 }
 
-/**
- * GET /api/v1/model-catalog/sync-status 返回的目录同步任务状态。
- *
- * 前端在用户点「手动刷新」后会轮询这个端点：
- *   - running=true  → 继续轮询，UI 显示 loading
- *   - running=false → 根据 last_error 走成功 / 失败分支：
- *       - 有 last_error    → 红色提示，展示 last_error
- *       - 否则             → 成功提示，告诉用户「已同步 N 条（来源 X）」
- *   - 时间字段缺省（从未跑过）以 null 出现，前端按 null 隐藏显示
- */
-export interface CatalogSyncStatus {
-  running: boolean
-  last_started_at?: string | null
-  last_finished_at?: string | null
-  last_duration_ms: number
-  /** "remote"（拉远程成功） / "bundled"（远程失败回退到内置） / ""（从未跑过 or 彻底失败） */
-  last_source: string
-  last_count: number
-  /** 最近一次失败的错误消息；成功为空字符串。前端用它区分成功 / 失败 toast */
-  last_error: string
-  catalog_total: number
-}
-
-/**
- * GET /api/v1/model-catalog/binding-stats 返回的目录绑定状态。
- *
- * CatalogSyncPage 用这四个数字做"空 diff"语义判定：
- *   - catalog_total  === 0  → 目录是空的（同步没生效或未触发），引导去同步
- *   - model_total    === 0  → 还没注册本地模型，引导去模型管理
- *   - unbound_count  > 0    → 有未绑定的本地模型，引导点「智能绑定」
- *   - bound_count    > 0
- *     且 diff 为空           → 已绑定模型与目录完全一致，正常的"无差异"
- */
 export interface CatalogBindingStats {
-  catalog_total: number
-  model_total: number
-  bound_count: number
-  unbound_count: number
+  total: number
+  bound: number
+  unbound: number
+}
+
+export interface CatalogSyncStatus {
+  last_sync_at: string
+  status: string
+  message: string
 }

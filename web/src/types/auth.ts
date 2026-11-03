@@ -1,19 +1,15 @@
 export interface User {
   id: string
-  name: string
+  username: string
   email: string
-  departmentId: string
-  departmentName: string
+  display_name: string
+  avatar_url: string
+  role: string
 }
 
 export interface LoginResponse {
-  accessToken: string
-  refreshToken: string
+  access_token: string
+  refresh_token: string
+  expires_in: number
   user: User
-  role: 'employee' | 'admin'
-}
-
-export interface RefreshResponse {
-  accessToken: string
-  refreshToken: string
 }

@@ -1,109 +1,47 @@
-export interface ApiKey {
-  id: string
+export interface BoundGroup {
+  id: number
   name: string
-  maskedKey: string
-  keyHint: string
   enabled: boolean
-  accessAllGroups?: boolean
-  createdAt: string
-  lastUsedAt?: string
-  expiresAt?: string
-  boundGroups?: BoundGroupInfo[]
 }
 
-export interface BoundGroupInfo {
-  id: number
-  name: string
-}
-
-export interface AvailableGroup {
-  id: number
-  name: string
-  description: string
-  strategy: string
-}
-
-export interface RawKeyItem {
+export interface ApiKey {
   id: string
   name: string
   masked_key: string
   key_hint: string
   enabled: boolean
-  access_all_groups?: boolean
+  access_all_groups: boolean
+  bound_groups: BoundGroup[]
   created_at: string
   updated_at: string
   last_used_at?: string
-  expires_at?: string
-  bound_groups?: RawBoundGroup[]
 }
 
-export interface RawBoundGroup {
-  id: number
+export interface CreateKeyPayload {
   name: string
+  access_all_groups?: boolean
+  group_ids?: number[]
 }
 
-export function mapKeysResponse(response: ListKeysResponse): ApiKey[] {
-  return response.data.items.map((item) => ({
-    id: item.id,
-    name: item.name,
-    maskedKey: item.masked_key,
-    keyHint: item.key_hint,
-    enabled: item.enabled,
-    accessAllGroups: item.access_all_groups || false,
-    createdAt: item.created_at,
-    lastUsedAt: item.last_used_at,
-    expiresAt: item.expires_at,
-    boundGroups: (item.bound_groups || []).map((g) => ({ id: g.id, name: g.name })),
-  }))
-}
-
-export interface CreateKeyResponse {
-  id: string
-  name: string
-  key: string
-  keyHint: string
-}
-
-// Wrapped response from control-plane
+// 后端真实响应: { data: { items, page, page_size, total } }
 export interface ListKeysResponse {
-  code: number
-  message: string
   data: {
-    items: RawKeyItem[]
-    total: number
+    items: ApiKey[]
     page: number
     page_size: number
+    total: number
   }
-  request_id?: string
 }
 
+// 创建 key 响应: { data: { id, name, key, key_hint, ... } }
 export interface CreateKeyWrappedResponse {
-  code: number
-  message: string
   data: {
     id: string
     name: string
-    key: string
+    key: string          // plain key，仅创建时返回
     key_hint: string
     enabled: boolean
     created_at: string
     updated_at: string
-    bound_groups?: RawBoundGroup[]
-  }
-  request_id?: string
-}
-
-export function mapCreateKeyResponse(response: CreateKeyWrappedResponse): CreateKeyResponse {
-  return {
-    id: response.data.id,
-    name: response.data.name,
-    key: response.data.key,
-    keyHint: response.data.key_hint,
-  }
-}
-
-export interface AvailableGroupsResponse {
-  data: {
-    groups: AvailableGroup[]
   }
 }

@@ -1,40 +1,32 @@
-export interface SyncModelItem {
+export interface SyncResultModel {
   id: string
   owned_by: string
 }
 
 export interface SyncResult {
-  added: SyncModelItem[]
-  existing: SyncModelItem[]
-  removed: SyncModelItem[]
+  added: SyncResultModel[]
+  existing: SyncResultModel[]
+  removed: SyncResultModel[]
   total_upstream: number
   total_local: number
   unsupported: boolean
 }
 
 export interface ConfirmSyncPayload {
-  models_to_add: string[]
-  disable_removed?: boolean
+  model_ids: string[]
 }
 
 export interface ConfirmSyncResult {
-  registered: number
-  skipped: number
-  disabled: number
-}
-
-export interface ModelAvailabilityItem {
-  name: string
-  available: boolean
-  skipped: boolean
-  response_time: number
-  error?: string
+  synced: number
 }
 
 export interface CheckModelsPayload {
-  model_names: string[]
+  model_ids?: string[]
 }
 
 export interface CheckModelsResult {
-  models: ModelAvailabilityItem[]
+  total: number
+  success: number
+  failed: number
+  results: Array<{ model_id: string; success: boolean; error?: string }>
 }

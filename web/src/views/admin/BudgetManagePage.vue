@@ -189,12 +189,12 @@
           </span>
       </div>
 
-        <!-- 风险工作室 -->
-        <div class="kpi" :class="{ 'kpi-danger': riskItems.length > 0 }">
-          <span class="kpi-label">风险工作室</span>
-          <strong :class="{ danger: riskItems.length > 0 }">{{ riskItems.length }}</strong>
-          <span class="kpi-note" :style="{ color: riskItems.length > 0 ? 'var(--el-color-warning)' : undefined }">
-            {{ riskItems.length > 0 ? '需要关注' : '暂无风险' }}
+        <!-- 等级预算风险 -->
+        <div class="kpi" :class="{ 'kpi-danger': tierBudgetRiskCount > 0 }">
+          <span class="kpi-label">等级预算风险</span>
+          <strong :class="{ danger: tierBudgetRiskCount > 0 }">{{ tierBudgetRiskCount }}</strong>
+          <span class="kpi-note" :style="{ color: tierBudgetRiskCount > 0 ? 'var(--el-color-warning)' : undefined }">
+            {{ tierBudgetRiskSummary }}
           </span>
     </div>
 
@@ -305,12 +305,14 @@
         <!-- admin 视图：工作室维度表格 -->
         <el-table
           v-if="overviewView === 'company'"
+          ref="tableRef"
+          @selection-change="selectedRows = $event"
           v-loading="loading"
           :data="tableItems"
           stripe
           size="small"
-          :empty-text="'暂无工作室预算数据'"
         >
+          <el-table-column type="selection" width="44" />
           <el-table-column label="工作室" min-width="180">
             <template #default="{ row }">
               <div class="scope-cell">
@@ -359,13 +361,64 @@
               <span v-else class="muted">无限额</span>
             </template>
           </el-table-column>
+          <!-- 等级预算 -->
+          <el-table-column label="等级预算" min-width="140">
+            <template #default="{ row }">
+              <div class="tier-budget-cell">
+                <template v-if="tierBudgetByScope.has(row.scope_id)">
+                  <div
+                    v-for="t in tierBudgetByScope.get(row.scope_id)!"
+                    :key="t.tier_name"
+                    class="tier-budget-tag"
+                  >
+                    <span class="tier-name">{{ t.tier_name }}</span>
+                    <span :class="budgetColorLevel(t.used_ratio || 0)">{{ Math.round((t.used_ratio || 0) * 100) }}%</span>
+                  </div>
+                </template>
+                <span v-else class="muted">未配置</span>
+              </div>
+            </template>
+          </el-table-column>
+          <!-- 状态 -->
+          <el-table-column label="状态" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag :type="budgetColorLevel(row.used_ratio || 0)" size="small">
+                {{ statusText(row.used_ratio || 0) }}
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="152" align="center">
             <template #default="{ row }">
               <el-button size="small" type="primary" plain @click="openStudioDrawer(row)">查看部门</el-button>
               <el-button size="small" @click="openBudgetDrawer({ scope_type: 'studio', scope_id: row.scope_id, label: row.label })">配置</el-button>
             </template>
           </el-table-column>
+          <template #empty>
+            <div class="empty-guide">
+              <div class="empty-guide-icon">📋</div>
+              <div class="empty-guide-text">
+                <strong>暂无工作室预算数据</strong>
+                <span>先设置公司预算，再选择工作室进行单项或批量分配。</span>
+              </div>
+              <el-button size="small" type="primary" @click="openCompanyBudgetDialog()">设置公司预算</el-button>
+            </div>
+          </template>
         </el-table>
+
+        <!-- 批量选择栏 -->
+        <div v-if="overviewView === 'company' && tableItems.length > 0" class="batch-bar">
+          <div class="batch-bar-left">
+            <span class="batch-bar-selected">已选择 {{ selectedRows.length }} 项</span>
+            <span class="batch-bar-divider" />
+            <span class="batch-bar-unallocated">当前未下发余量 {{ formatUSD(companyUnallocated, { compact: true }) }}</span>
+          </div>
+          <div class="batch-bar-right">
+            <el-button size="small" plain :disabled="selectedRows.length === 0">固定额度</el-button>
+            <el-button size="small" plain :disabled="selectedRows.length === 0">按比例增减</el-button>
+            <el-button size="small" plain :disabled="selectedRows.length === 0">等级子预算</el-button>
+            <el-button v-if="selectedRows.length > 0" size="small" text @click="selectedRows = []; tableRef?.clearSelection?.()">取消选择</el-button>
+          </div>
+        </div>
 
         <!-- studio_admin 视图：按部门分组，每行含日常 + 服务池 -->
         <el-table
@@ -374,9 +427,9 @@
           :data="studioDeptRowsFiltered"
           stripe
           size="small"
-          :empty-text="'暂无部门预算数据'"
           :row-class-name="deptRowClassName"
         >
+          <el-table-column type="selection" width="44" />
           <!-- 部门名 + 整体状态 -->
           <el-table-column label="部门" min-width="160">
             <template #default="{ row }">
@@ -452,6 +505,15 @@
               <el-button size="small" @click="openBudgetDrawer({ scope_type: 'dept', scope_id: row.deptId, label: row.label })">配置</el-button>
             </template>
           </el-table-column>
+          <template #empty>
+            <div class="empty-guide">
+              <div class="empty-guide-icon">📋</div>
+              <div class="empty-guide-text">
+                <strong>暂无部门预算数据</strong>
+                <span>先配置工作室预算，再为各部门分配额度。</span>
+              </div>
+            </div>
+          </template>
         </el-table>
       </div>
 
@@ -1109,12 +1171,27 @@ interface EnrichedMember extends BudgetItem {
   riskLevel: 'success' | 'warning' | 'danger'
 }
 
+// ─── 等级预算类型 ────────────────────────────────────────────────────────────────
+interface TierBudgetItem {
+  scope_id: string
+  scope_type: string
+  tier_name: string
+  amount_usd: number
+  used_usd: number
+  used_ratio: number
+  label: string
+}
+
 const router = useRouter()
 const auth = useAuthStore()
 const loading = ref(false)
 const items = ref<BudgetItem[]>([])
 const contextItems = ref<BudgetContextItem[]>([])
 const memberUsage7d = ref<Map<string, number>>(new Map())
+const tierBudgetItems = ref<TierBudgetItem[]>([])
+// 表格选中状态
+const tableRef = ref<any>(null)
+const selectedRows = ref<BudgetItem[]>([])
 
 // ─── 角色辅助 ─────────────────────────────────────────────────────────────────
 const isDeptAdmin = computed(() => auth.effectiveRole === 'dept_admin')
@@ -1299,6 +1376,44 @@ const companyUnallocated = computed(() => {
 const companyAllocRatio = computed(() => {
   if (!companyPoolItem.value || companyPoolItem.value.amount_usd <= 0) return 0
   return Math.min(companyAllocated.value / companyPoolItem.value.amount_usd, 1)
+})
+
+// 等级预算风险数量（按 scope_id 去重，统计有风险的工作室数量）
+const tierBudgetRiskCount = computed(() => {
+  if (overviewView.value !== 'company') return 0
+  const riskScopes = new Set<string>()
+  for (const item of tierBudgetItems.value) {
+    if ((item.used_ratio || 0) >= 0.8) {
+      riskScopes.add(item.scope_id)
+    }
+  }
+  return riskScopes.size
+})
+
+// 等级预算风险详情文本
+const tierBudgetRiskSummary = computed(() => {
+  if (tierBudgetRiskCount.value === 0) return '暂无风险'
+  let warning = 0, danger = 0
+  for (const item of tierBudgetItems.value) {
+    const r = item.used_ratio || 0
+    if (r >= 1) danger++
+    else if (r >= 0.8) warning++
+  }
+  const parts: string[] = []
+  if (danger > 0) parts.push(`${danger} 个已超额`)
+  if (warning > 0) parts.push(`${warning} 个预警`)
+  return parts.join(' · ')
+})
+
+// 按 scope_id 聚合的等级预算数据（用于表格"等级预算"列）
+const tierBudgetByScope = computed(() => {
+  const map = new Map<string, TierBudgetItem[]>()
+  for (const item of tierBudgetItems.value) {
+    const key = item.scope_id
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(item)
+  }
+  return map
 })
 
 // dept_admin 专属 KPI
@@ -1516,12 +1631,18 @@ const scopeBreakdown = computed(() => {
 async function load() {
   loading.value = true
   try {
-    const [budgetItems, contexts] = await Promise.all([
+    const [budgetItems, contexts, tierData] = await Promise.all([
       getBudgetList(undefined, undefined, overviewView.value),
       getBudgetContext().catch(() => []),
+      // 尝试获取等级预算数据
+      http.get<any>('/api/v1/budgets/tier-limits').then(r => {
+        const data = r?.data?.data?.items ?? r?.data?.items ?? r?.data ?? []
+        return Array.isArray(data) ? data : []
+      }).catch(() => []),
     ])
     items.value = budgetItems
     contextItems.value = contexts
+    tierBudgetItems.value = (tierData as TierBudgetItem[])
 
     // 仅 dept_admin：并行拉取所有管辖部门的近7天成员用量（来自 call_logs，数据可靠）
     if (isDeptAdmin.value && managedDeptIds.value.length > 0) {
@@ -2885,5 +3006,95 @@ onMounted(load)
 .drawer-member-limits {
   font-size: 11px;
   color: var(--el-text-color-placeholder);
+}
+
+/* ── 等级预算列 ──────────────────────────────────────────────────────────── */
+.tier-budget-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tier-budget-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.tier-budget-tag .tier-name {
+  color: var(--el-text-color-secondary);
+  min-width: 28px;
+}
+.tier-budget-tag .danger {
+  color: var(--el-color-danger);
+  font-weight: 600;
+}
+.tier-budget-tag .warning {
+  color: var(--el-color-warning);
+  font-weight: 600;
+}
+.tier-budget-tag .success {
+  color: var(--el-color-success);
+  font-weight: 600;
+}
+
+/* ── 批量选择栏 ──────────────────────────────────────────────────────────── */
+.batch-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  border-top: 1px solid var(--el-border-color-light);
+  background: var(--el-fill-color-blank);
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.batch-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+.batch-bar-selected {
+  font-weight: 600;
+  color: var(--el-color-primary);
+}
+.batch-bar-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--el-border-color-light);
+}
+.batch-bar-unallocated {
+  font-size: 12px;
+}
+.batch-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── 空状态引导 ──────────────────────────────────────────────────────────── */
+.empty-guide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 20px;
+  text-align: center;
+}
+.empty-guide-icon {
+  font-size: 32px;
+  line-height: 1;
+}
+.empty-guide-text strong {
+  display: block;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+  margin-bottom: 4px;
+}
+.empty-guide-text span {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>

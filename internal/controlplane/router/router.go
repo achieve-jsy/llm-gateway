@@ -215,16 +215,19 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	)
 	budgetRiskHandler := handler.NewBudgetRiskHandler(budgetRiskSvc, orgContainer.RBAC)
 	notificationRepo := repository.NewNotificationRepo(db)
+	notificationChannelRepo := repository.NewNotificationChannelRepo(db)
+	notificationChannelSvc := service.NewNotificationChannelService(notificationChannelRepo)
 	// v0.8: 审计日志（仅管理面写操作落库）
 	auditRepo := repository.NewAuditLogRepo(db)
 	auditSvc := service.NewAuditLogService(auditRepo)
 	// 解耦的通知分发：MultiNotifier = 站内信 + 邮件
 	// 调用方只管构造 model.Notification，内部按已配置通道分发。
+	// 每个 Notifier 外挂 GatedNotifier，由 notification_channel_rules 表控制逐类型开关。
 	emailNotifier := service.NewEmailNotifier(settingsRepo)
 	emailNotifier.SetAuditRecorder(auditSvc)
 	sharedNotifier := service.NewMultiNotifier(
-		service.NewDBNotifier(notificationRepo),
-		emailNotifier,
+		service.NewGatedNotifier(service.NewDBNotifier(notificationRepo), "inapp", notificationChannelSvc),
+		service.NewGatedNotifier(emailNotifier, "email", notificationChannelSvc),
 	)
 	budgetAlertSvc.SetNotifier(sharedNotifier)
 	expansionRepo := repository.NewExpansionRepo(db)
@@ -333,7 +336,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	modelStatusLogHandler := handler.NewModelStatusLogHandler(modelStatusLogRepo)
 
 	keyHandler := handler.NewKeyHandler(keySvc)
-	settingsHandler := handler.NewSettingsHandler(settingsSvc)
+	settingsHandler := handler.NewSettingsHandler(settingsSvc, notificationChannelSvc)
 	opencodeConfigHandler := handler.NewOpencodeConfigHandler(rdb, settingsSvc)
 
 	// 模型 Catalog（D1: LiteLLM 单源；D3: bundled fallback；D4: 启动异步首刷 + 24h cron + 手动）
@@ -711,6 +714,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.POST("/settings/test-email", settingsHandler.TestEmail)
 		adminGroup.POST("/settings/export", settingsHandler.ExportSettings)
 		adminGroup.POST("/settings/import", settingsHandler.ImportSettings)
+		adminGroup.GET("/settings/notification-channels", settingsHandler.GetNotificationChannelRules)
+		adminGroup.PUT("/settings/notification-channels", settingsHandler.UpdateNotificationChannelRules)
 
 		// 公告管理
 		adminGroup.GET("/announcements", announcementHandler.List)

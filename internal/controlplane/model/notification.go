@@ -62,3 +62,17 @@ const (
 	NotificationLevelWarning  = "warning"
 	NotificationLevelCritical = "critical"
 )
+
+// NotificationChannelRule 通知渠道规则：控制某种通知类型是否允许通过某条渠道发送。
+type NotificationChannelRule struct {
+	NotificationType string `gorm:"primaryKey;column:notification_type;type:varchar(32)" json:"notification_type"`
+	Channel          string `gorm:"primaryKey;column:channel;type:varchar(16)" json:"channel"` // "inapp" | "email"
+	Enabled          bool   `gorm:"column:enabled;not null;default:true" json:"enabled"`
+}
+
+func (NotificationChannelRule) TableName() string { return "notification_channel_rules" }
+
+// ValidNotificationChannel 判断 channel 是否为合法值。
+func ValidNotificationChannel(ch string) bool {
+	return ch == "inapp" || ch == "email"
+}

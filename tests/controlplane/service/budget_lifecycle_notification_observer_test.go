@@ -242,7 +242,7 @@ func TestLifecycleOutboxCrashAfterInboxInsertDoesNotDuplicateNotification(t *tes
 	}).Error)
 	observer := service.NewBudgetLifecycleNotificationObserver(
 		db, repository.NewExpansionRepo(db), &lifecycleOwnerStub{},
-		service.NewUnifiedNotifier(nil, nil, db, repo, nil, nil, nil),
+		service.NewUnifiedNotifier(nil, nil, db, repo, nil, nil, nil, nil, nil),
 	)
 	require.NoError(t, observer.RetryPending(context.Background(), 10))
 	var count int64

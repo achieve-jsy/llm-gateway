@@ -10,6 +10,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/example/llm-gateway/internal/controlplane/audit"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/notification"
@@ -28,17 +29,20 @@ type NotificationManager interface {
 
 // notificationManager 实现
 type notificationManager struct {
-	configRepo    *repository.NotificationConfigRepo
-	settingsRepo  SettingsRepository
-	webhookSender *WebhookSender
-	emailSender   *notification.EmailSender
-	logger        *slog.Logger
+	configRepo         *repository.NotificationConfigRepo
+	settingsRepo       SettingsRepository
+	legacyWebhookSender *WebhookSender
+	emailSender        *notification.EmailSender
+	logger             *slog.Logger
 
 	// 统一通知入口（Phase 2 起启用）新增依赖，全部 nil-safe：
-	rulesGate ChannelGate                  // notification_channel_rules 门控
-	db        *gorm.DB                     // notification_deliveries 去重
-	inappRepo *repository.NotificationRepo // notifications 站内信写入
-	email     *EmailNotifier               // per-user 邮件回退路径
+	rulesGate         ChannelGate                          // notification_channel_rules 门控
+	db                *gorm.DB                             // notification_deliveries 去重
+	inappRepo         *repository.NotificationRepo         // notifications 站内信写入
+	email             *EmailNotifier                       // per-user 邮件回退路径
+	auditRecorder     audit.Recorder                       // webhook 告警发送审计
+	webhookTargetRepo *repository.NotificationWebhookTargetRepo // webhook 端点子表（fan-out）
+	webhookSender     webhookSenderIface                   // 可注入 sender（测试用 fake；nil 时按 url/secret 构造）
 }
 
 // NewNotificationManager 创建通知管理器
@@ -53,11 +57,11 @@ func NewNotificationManager(
 		logger = slog.Default()
 	}
 	return &notificationManager{
-		configRepo:    configRepo,
-		settingsRepo:  settingsRepo,
-		webhookSender: webhookSender,
-		emailSender:   emailSender,
-		logger:        logger,
+		configRepo:         configRepo,
+		settingsRepo:       settingsRepo,
+		legacyWebhookSender: webhookSender,
+		emailSender:        emailSender,
+		logger:             logger,
 	}
 }
 
@@ -164,7 +168,16 @@ func (m *notificationManager) sendToChannel(ctx context.Context, cfg model.Notif
 	}
 }
 
-// sendWebhook 发送 webhook
+// webhookDest 一次 webhook 投递目标。id 为 uuid.Nil 表示 legacy 回退目标（config 行 URL，无独立去重维度）。
+type webhookDest struct {
+	id     uuid.UUID
+	name   string
+	url    string
+	secret string
+}
+
+// sendWebhook 发送 webhook（legacy cfg 版，供 Send/SendTo/sendFallbackChannel 使用）。
+// 该路径没有独立端点维度，按配置行 URL（或全局设置回退）投递单条。
 func (m *notificationManager) sendWebhook(ctx context.Context, cfg model.NotificationChannelConfig, subject, body string) error {
 	// 优先用配置中的 URL，否则用全局 URL
 	webhookURL := ""
@@ -185,15 +198,82 @@ func (m *notificationManager) sendWebhook(ctx context.Context, cfg model.Notific
 		webhookSecret = *cfg.WebhookSecret
 	}
 
-	// 使用 WebhookSender 发送。飞书 text 类型要求 content.text 为字符串，
-	// 故用 SendText 拼装（subject + body），而非发送 {title, content} 对象。
-	sender := NewWebhookSender(webhookURL, webhookSecret)
-	if err := sender.SendText(ctx, subject+"\n\n"+body); err != nil {
-		return fmt.Errorf("send webhook: %w", err)
-	}
+	dest := webhookDest{url: webhookURL, secret: webhookSecret}
+	sendErr := m.sendToWebhookSender(ctx, dest, subject, body)
+	m.recordWebhookAudit(cfg, sendErr == nil, errorString(sendErr), "", uuid.Nil)
+	return sendErr
+}
 
-	m.logger.Info("notification_manager: webhook sent", "type", cfg.NotificationType)
-	return nil
+// sendWebhookToDest 发往单个端点，带 per-target 去重（key = n.DedupeKey + "#" + dest.id）。
+// legacy dest（id=Nil）用裸 key，保持与历史 webhook 去重记录兼容。
+func (m *notificationManager) sendWebhookToDest(ctx context.Context, cfg model.NotificationChannelConfig, n *model.Notification, dest webhookDest, subject, body string) error {
+	key := n.DedupeKey
+	if dest.id != uuid.Nil {
+		key += "#" + dest.id.String()
+	}
+	if key != "" {
+		shouldSend, persisted, err := acquireDelivery(ctx, m.db, key, "webhook", n)
+		if err != nil {
+			return err
+		}
+		if !shouldSend {
+			return nil
+		}
+		sendErr := m.sendToWebhookSender(ctx, dest, subject, body)
+		m.recordWebhookAudit(cfg, sendErr == nil, errorString(sendErr), dest.name, dest.id)
+		return settleDelivery(ctx, m.db, persisted, sendErr)
+	}
+	sendErr := m.sendToWebhookSender(ctx, dest, subject, body)
+	m.recordWebhookAudit(cfg, sendErr == nil, errorString(sendErr), dest.name, dest.id)
+	return sendErr
+}
+
+// sendToWebhookSender 用可注入 sender（或按 url/secret 构造）发送。飞书 text 类型要求
+// content.text 为字符串，故用 SendText 拼装（subject + body），而非发送 {title, content} 对象。
+func (m *notificationManager) sendToWebhookSender(ctx context.Context, dest webhookDest, subject, body string) error {
+	sender := m.webhookSender
+	if sender == nil {
+		sender = NewWebhookSender(dest.url, dest.secret)
+	}
+	return sender.SendText(ctx, subject+"\n\n"+body)
+}
+
+// errorString 把 error 转成审计详情字符串（nil → ""）。
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// recordWebhookAudit 记录 webhook 告警发送审计（成功/失败），与邮件告警审计保持一致。
+// 不记录 webhook URL——其中包含 hook 凭据，写入审计日志会泄漏到管理员可见的详情里。
+func (m *notificationManager) recordWebhookAudit(cfg model.NotificationChannelConfig, success bool, errMsg string, targetName string, targetID uuid.UUID) {
+	if m.auditRecorder == nil {
+		return
+	}
+	status := 200
+	if !success {
+		status = 500
+	}
+	details := map[string]any{
+		"notification_type": cfg.NotificationType,
+		"success":           success,
+		"error":             errMsg,
+	}
+	if targetName != "" {
+		details["target_name"] = targetName
+	}
+	if targetID != uuid.Nil {
+		details["target_id"] = targetID.String()
+	}
+	m.auditRecorder.Record(audit.Input{
+		Action:       audit.ActionWebhookAlert,
+		ResourceType: audit.ResourceWebhook,
+		ResourceName: "Webhook 告警",
+		StatusCode:   status,
+		Details:      details,
+	})
 }
 
 // sendEmail 发送邮件
@@ -272,7 +352,7 @@ func (m *notificationManager) Notify(ctx context.Context, n *model.Notification)
 	return firstErr
 }
 
-// NewUnifiedNotifier 创建统一通知分发器。configRepo/inappRepo/email/rulesGate 均可为 nil（nil-safe）。
+// NewUnifiedNotifier 创建统一通知分发器。除 db 外其余依赖均可为 nil（nil-safe）。
 func NewUnifiedNotifier(
 	configRepo *repository.NotificationConfigRepo,
 	settingsRepo SettingsRepository,
@@ -281,18 +361,22 @@ func NewUnifiedNotifier(
 	email *EmailNotifier,
 	rulesGate ChannelGate,
 	logger *slog.Logger,
+	auditRecorder audit.Recorder,
+	webhookTargetRepo *repository.NotificationWebhookTargetRepo,
 ) Notifier {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &notificationManager{
-		configRepo:   configRepo,
-		settingsRepo: settingsRepo,
-		db:           db,
-		inappRepo:    inappRepo,
-		email:        email,
-		rulesGate:    rulesGate,
-		logger:       logger,
+		configRepo:        configRepo,
+		settingsRepo:      settingsRepo,
+		db:                db,
+		inappRepo:         inappRepo,
+		email:             email,
+		rulesGate:         rulesGate,
+		logger:            logger,
+		auditRecorder:     auditRecorder,
+		webhookTargetRepo: webhookTargetRepo,
 	}
 }
 
@@ -395,7 +479,9 @@ func (m *notificationManager) sendEmailFromConfig(ctx context.Context, n *model.
 	return sender.SendTextWithSubject(ctx, subject, body)
 }
 
-// dispatchWebhook 飞书 webhook：仅当存在启用的 webhook 配置且 URL 非空时投递，带去重。
+// dispatchWebhook 飞书 webhook：仅当存在启用的 webhook 配置时投递，fan-out 到该类型下所有
+// 启用端点（webhookTargetRepo）。无端点时回退 config 行 URL（legacy 单飞书配置）。
+// 每个端点独立去重，失败端点单独重试，不阻断其余端点。
 func (m *notificationManager) dispatchWebhook(ctx context.Context, n *model.Notification) error {
 	if m.configRepo == nil {
 		return nil
@@ -407,25 +493,61 @@ func (m *notificationManager) dispatchWebhook(ctx context.Context, n *model.Noti
 		}
 		return fmt.Errorf("load webhook config: %w", err)
 	}
-	if !cfg.Enabled || cfg.WebhookURL == nil || *cfg.WebhookURL == "" {
+	if !cfg.Enabled {
 		return nil
 	}
 	subject, body, err := m.renderNotificationTemplates(*cfg, n)
 	if err != nil {
 		return fmt.Errorf("render webhook template: %w", err)
 	}
-	if n.DedupeKey != "" {
-		shouldSend, persisted, err := acquireDelivery(ctx, m.db, n.DedupeKey, "webhook", n)
-		if err != nil {
-			return err
-		}
-		if !shouldSend {
-			return nil
-		}
-		sendErr := m.sendWebhook(ctx, *cfg, subject, body)
-		return settleDelivery(ctx, m.db, persisted, sendErr)
+	dests, err := m.resolveWebhookDestinations(*cfg)
+	if err != nil {
+		return err
 	}
-	return m.sendWebhook(ctx, *cfg, subject, body)
+	if len(dests) == 0 {
+		return nil
+	}
+	var firstErr error
+	for _, dest := range dests {
+		if err := m.sendWebhookToDest(ctx, *cfg, n, dest, subject, body); err != nil && firstErr == nil {
+			m.logger.Warn("notification_manager: webhook send failed",
+				"type", n.Type, "target", dest.name, "error", err)
+			firstErr = err
+		}
+	}
+	if firstErr == nil {
+		m.logger.Info("notification_manager: webhook sent", "type", n.Type, "targets", len(dests))
+	}
+	return firstErr
+}
+
+// resolveWebhookDestinations 解析 fan-out 目标：优先端点子表的启用端点；否则回退 config 行 URL。
+func (m *notificationManager) resolveWebhookDestinations(cfg model.NotificationChannelConfig) ([]webhookDest, error) {
+	if m.webhookTargetRepo != nil {
+		targets, err := m.webhookTargetRepo.ListEnabledByType(cfg.NotificationType)
+		if err != nil {
+			return nil, fmt.Errorf("load webhook targets: %w", err)
+		}
+		if len(targets) > 0 {
+			dests := make([]webhookDest, 0, len(targets))
+			for _, t := range targets {
+				secret := ""
+				if t.Secret != nil {
+					secret = *t.Secret
+				}
+				dests = append(dests, webhookDest{id: t.ID, name: t.Name, url: t.URL, secret: secret})
+			}
+			return dests, nil
+		}
+	}
+	if cfg.WebhookURL == nil || *cfg.WebhookURL == "" {
+		return nil, nil
+	}
+	secret := ""
+	if cfg.WebhookSecret != nil {
+		secret = *cfg.WebhookSecret
+	}
+	return []webhookDest{{url: *cfg.WebhookURL, secret: secret}}, nil
 }
 
 // emailGlobalEnabled 读取全局邮件总开关。

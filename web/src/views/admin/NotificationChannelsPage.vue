@@ -112,24 +112,48 @@
           </el-form-item>
         </template>
 
-        <!-- Webhook：启用开关 -->
+        <!-- Webhook：启用开关 + 端点列表管理器 -->
         <el-form-item v-if="editChannel === 'webhook'" label="启用">
           <el-switch v-model="editForm.enabled" />
         </el-form-item>
 
-        <template v-if="editChannel === 'webhook'">
-          <el-form-item label="Webhook URL">
-            <el-input v-model="editForm.webhook_url" placeholder="https://..." />
-          </el-form-item>
-          <el-form-item label="Secret">
-            <el-input
-              v-model="editForm.webhook_secret"
-              type="password"
-              show-password
-              placeholder="可选，用于签名验证"
-            />
-          </el-form-item>
-        </template>
+        <el-form-item v-if="editChannel === 'webhook'" label="Webhook 端点">
+          <div class="target-list">
+            <div v-if="editTargets.length === 0" class="target-empty">
+              暂无端点。该类型的告警将发送到所有启用的端点，请先添加。
+            </div>
+            <div v-for="t in editTargets" :key="t._key" class="target-row">
+              <div class="target-row-main">
+                <el-input v-model="t.name" placeholder="名称(可选)" size="small" class="target-name" />
+                <el-input v-model="t.url" placeholder="https://..." size="small" class="target-url" />
+              </div>
+              <div class="target-row-actions">
+                <el-input
+                  v-model="t.secret"
+                  type="password"
+                  show-password
+                  size="small"
+                  :placeholder="t.id && t.hasSecret ? '已设置，留空保持不变' : 'Secret(可选)'"
+                  class="target-secret"
+                />
+                <el-switch v-model="t.enabled" size="small" />
+                <el-button
+                  v-if="t.id"
+                  link
+                  type="primary"
+                  size="small"
+                  :loading="testingTargetKey === t._key"
+                  @click="testTarget(t)"
+                >
+                  测试
+                </el-button>
+                <el-button link type="danger" size="small" @click="removeTarget(t._key)">删除</el-button>
+              </div>
+            </div>
+            <el-button size="small" @click="addTarget">添加端点</el-button>
+            <div class="template-hint">一条告警发送到该类型下所有启用的端点（fan-out），各端点独立重试；模板为所有端点共享。</div>
+          </div>
+        </el-form-item>
 
         <template v-if="editChannel === 'email'">
           <el-form-item label="收件人">
@@ -172,11 +196,17 @@ import {
   listNotificationConfigs,
   updateNotificationConfig,
   testNotificationConfig,
+  listWebhookTargets,
+  createWebhookTarget,
+  updateWebhookTarget,
+  deleteWebhookTarget,
+  testWebhookTarget,
 } from '@/services/control-plane'
 import type {
   NotificationChannelRule,
   NotificationConfigMetadata,
   NotificationChannelConfig,
+  NotificationWebhookTarget,
 } from '@/types/settings'
 
 const settingsStore = useSettingsStore()
@@ -195,11 +225,26 @@ const testingInDialog = ref(false)
 const metadata = ref<NotificationConfigMetadata | null>(null)
 const rules = ref<NotificationChannelRule[]>([])
 const configs = ref<NotificationChannelConfig[]>([])
+const webhookTargets = ref<NotificationWebhookTarget[]>([])
 
 const dialogVisible = ref(false)
 const dialogTitle = ref('')
 const editForm = ref<Partial<NotificationChannelConfig>>({})
 const editChannel = ref('')
+
+// Webhook 端点列表管理器（仅 webhook 对话框使用）
+interface EditableTarget {
+  _key: string
+  id: string // 空 = 新增行
+  name: string
+  url: string
+  secret: string // 用户新输入的 secret（不回显明文）
+  hasSecret: boolean // 后端已存在非空 secret
+  enabled: boolean
+}
+const editTargets = ref<EditableTarget[]>([])
+const removedTargetIds = ref<string[]>([])
+let targetKeySeq = 0
 
 const emailEnabled = computed(() => settingsStore.systemSettings.email_enabled)
 
@@ -208,14 +253,16 @@ const typeRows = computed(() => metadata.value?.types ?? [])
 async function refresh() {
   loading.value = true
   try {
-    const [metaRes, ruleRes, configRes] = await Promise.all([
+    const [metaRes, ruleRes, configRes, targetsRes] = await Promise.all([
       getNotificationConfigMetadata(),
       getNotificationChannelRules(),
       listNotificationConfigs(),
+      listWebhookTargets(),
     ])
     metadata.value = metaRes
     rules.value = ruleRes
     configs.value = configRes
+    webhookTargets.value = targetsRes
   } catch {
     ElMessage.error('加载通知渠道设置失败')
   } finally {
@@ -237,12 +284,17 @@ function stateLabel(state: ChannelState): string {
   return '未配置'
 }
 
-// webhook 状态：有 config 行且 enabled 且 URL 非空 → 生效中；有行但关闭/无 URL → 已关闭；无行 → 未配置。
+// webhook 状态聚合：config 行 enabled &&（有任一 enabled 端点 || 无端点但有 legacy URL）→ 生效中。
+// 与后端 resolveWebhookDestinations 语义一致：有端点时只看端点（不回退 legacy URL）；无端点时回退 config 行 URL。
 function webhookActive(notifType: string): ChannelState {
   const c = configs.value.find(x => x.notification_type === notifType && x.channel === 'webhook')
   if (!c) return 'unset'
-  if (c.enabled && !!c.webhook_url) return 'on'
-  return 'off'
+  if (!c.enabled) return 'off'
+  const targets = webhookTargets.value.filter(t => t.notification_type === notifType)
+  if (targets.length === 0) {
+    return c.webhook_url ? 'on' : 'off'
+  }
+  return targets.some(t => t.enabled) ? 'on' : 'off'
 }
 
 // email 状态：全局总开关关闭 → off；rules 关闭 → off；config 行 enabled 决定 on/off；无行 → 未配置。
@@ -290,17 +342,29 @@ async function toggleRuleInDialog(enabled: boolean) {
 function openEdit(notifType: string, channel: string) {
   const config = configs.value.find(x => x.notification_type === notifType && x.channel === channel)
   editForm.value = config
-    ? { ...config }
+    ? { ...config, webhook_url: undefined, webhook_secret: undefined }
     : {
         notification_type: notifType,
         channel,
         enabled: true,
-        webhook_url: '',
-        webhook_secret: '',
         subject_template: '',
         body_template: '',
       }
   editChannel.value = channel
+  removedTargetIds.value = []
+  editTargets.value = channel === 'webhook'
+    ? webhookTargets.value
+        .filter(t => t.notification_type === notifType)
+        .map(t => ({
+          _key: `k${++targetKeySeq}`,
+          id: t.id,
+          name: t.name,
+          url: t.url,
+          secret: '',
+          hasSecret: !!t.secret,
+          enabled: t.enabled,
+        }))
+    : []
   const t = metadata.value?.types.find(x => x.name === notifType)
   dialogTitle.value = `${t?.displayName ?? notifType} - ${channel === 'webhook' ? 'Webhook' : '邮件'}`
   dialogVisible.value = true
@@ -315,14 +379,89 @@ const saveConfig = async () => {
   }
   saving.value = true
   try {
-    await updateNotificationConfig(type, channel, editForm.value)
+    if (channel === 'webhook') {
+      // 先校验全部新增端点 URL，避免先写 config 后失败产生半保存状态
+      for (const t of editTargets.value) {
+        if (!t.id && !t.url) {
+          ElMessage.error('新增端点必须填写 URL')
+          return
+        }
+      }
+      // config 行：仅 enabled + 模板（URL/secret 已迁移到端点列表，legacy URL 不在此维护）
+      await updateNotificationConfig(type, 'webhook', {
+        enabled: editForm.value.enabled ?? true,
+        subject_template: editForm.value.subject_template ?? '',
+        body_template: editForm.value.body_template ?? '',
+      })
+      for (const t of editTargets.value) {
+        if (!t.id) {
+          await createWebhookTarget(type, {
+            name: t.name,
+            url: t.url,
+            secret: t.secret || null,
+            enabled: t.enabled,
+            sort_order: 0,
+          })
+        } else {
+          const body: Record<string, unknown> = { name: t.name, enabled: t.enabled }
+          if (t.url) body.url = t.url
+          // secret 仅用户显式输入新值时携带；留空 = 保持不变（不回显明文）
+          if (t.secret !== '') body.secret = t.secret
+          await updateWebhookTarget(type, t.id, body)
+        }
+      }
+      for (const id of removedTargetIds.value) {
+        await deleteWebhookTarget(type, id)
+      }
+    } else {
+      await updateNotificationConfig(type, channel, editForm.value)
+    }
     ElMessage.success('保存成功')
     dialogVisible.value = false
     await refresh()
-  } catch {
-    ElMessage.error('保存失败')
+  } catch (error: any) {
+    ElMessage.error('保存失败: ' + (error?.message || '未知错误'))
   } finally {
     saving.value = false
+  }
+}
+
+function addTarget() {
+  editTargets.value.push({
+    _key: `k${++targetKeySeq}`,
+    id: '',
+    name: '',
+    url: '',
+    secret: '',
+    hasSecret: false,
+    enabled: true,
+  })
+}
+
+function removeTarget(key: string) {
+  const idx = editTargets.value.findIndex(t => t._key === key)
+  if (idx < 0) return
+  const [row] = editTargets.value.splice(idx, 1)
+  if (row.id) removedTargetIds.value.push(row.id)
+}
+
+const testingTargetKey = ref('')
+
+async function testTarget(t: EditableTarget) {
+  const type = editForm.value.notification_type
+  if (!type || !t.id) return
+  testingTargetKey.value = t._key
+  try {
+    const result = await testWebhookTarget(type, t.id)
+    if (result.success) {
+      ElMessage.success(result.message || '测试发送成功')
+    } else {
+      ElMessage.warning(result.message || '测试发送失败')
+    }
+  } catch (error: any) {
+    ElMessage.error('测试发送失败: ' + (error?.message || '未知错误'))
+  } finally {
+    testingTargetKey.value = ''
   }
 }
 
@@ -500,6 +639,52 @@ onMounted(async () => {
   margin-top: 4px;
   font-size: 12px;
   color: #909399;
+}
+
+/* Webhook 端点列表管理器 */
+.target-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.target-empty {
+  font-size: 13px;
+  color: #909399;
+  padding: 8px 0;
+}
+
+.target-row {
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.target-row-main {
+  display: flex;
+  gap: 8px;
+}
+
+.target-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.target-name {
+  flex: 0 0 140px;
+}
+
+.target-url {
+  flex: 1;
+}
+
+.target-secret {
+  flex: 1;
 }
 
 @media (max-width: 768px) {

@@ -697,7 +697,7 @@ export async function resetKey(id: string): Promise<CreateKeyWrappedResponse> {
 
 // ===================== 系统设置 =====================
 
-import type { SystemSettings, SettingsResponse, PublicSettingsResponse, NotificationChannelRule, NotificationConfigMetadata, NotificationChannelConfig, NotificationConfigListResponse, NotificationConfigResponse } from '@/types/settings'
+import type { SystemSettings, SettingsResponse, PublicSettingsResponse, NotificationChannelRule, NotificationConfigMetadata, NotificationChannelConfig, NotificationConfigListResponse, NotificationConfigResponse, NotificationWebhookTarget, NotificationWebhookTargetListResponse, NotificationWebhookTargetResponse } from '@/types/settings'
 
 export async function getPublicSettings(): Promise<PublicSettingsResponse> {
   const response = await http.get<PublicSettingsResponse>('/api/v1/settings/public')
@@ -1645,4 +1645,48 @@ export async function updateNotificationConfig(type: string, channel: string, co
 export async function testNotificationConfig(type: string, channel: string): Promise<{ success: boolean; message: string }> {
   const response = await http.post<ApiResponse<{ success: boolean; message: string }>>(`/api/v1/notification-configs/${type}/${channel}/test`)
   return response.data.data
+}
+
+// ─── Webhook 端点（多 webhook fan-out）───────────────────────────────────────
+
+/** 获取所有 Webhook 端点（按类型过滤由调用方处理） */
+export async function listWebhookTargets(): Promise<NotificationWebhookTarget[]> {
+  const response = await http.get<NotificationWebhookTargetListResponse>('/api/v1/notification-configs/webhook-targets')
+  return response.data.data ?? []
+}
+
+/** 创建 Webhook 端点 */
+export async function createWebhookTarget(
+  type: string,
+  body: { name?: string; url: string; secret?: string | null; enabled?: boolean; sort_order?: number },
+): Promise<NotificationWebhookTarget> {
+  const response = await http.post<NotificationWebhookTargetResponse>(`/api/v1/notification-configs/${type}/webhook/targets`, body)
+  return response.data.data
+}
+
+/** 更新 Webhook 端点（secret 仅显式携带时更新：null 不变，'' 清空） */
+export async function updateWebhookTarget(
+  type: string,
+  id: string,
+  body: { name?: string; url?: string; secret?: string | null; enabled?: boolean; sort_order?: number },
+): Promise<NotificationWebhookTarget> {
+  const response = await http.put<NotificationWebhookTargetResponse>(`/api/v1/notification-configs/${type}/webhook/targets/${id}`, body)
+  return response.data.data
+}
+
+/** 测试单个 Webhook 端点 */
+export async function testWebhookTarget(
+  type: string,
+  targetId: string,
+): Promise<{ success: boolean; message: string }> {
+  const response = await http.post<ApiResponse<{ success: boolean; message: string }>>(
+    `/api/v1/notification-configs/${type}/webhook/test`,
+    { target_id: targetId },
+  )
+  return response.data.data
+}
+
+/** 删除 Webhook 端点 */
+export async function deleteWebhookTarget(type: string, id: string): Promise<void> {
+  await http.delete(`/api/v1/notification-configs/${type}/webhook/targets/${id}`)
 }

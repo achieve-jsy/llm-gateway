@@ -111,3 +111,30 @@ export interface NotificationConfigResponse {
   message: string
   data: NotificationChannelConfig
 }
+
+// Webhook 端点（多 webhook fan-out：同类型下多个端点，一条告警发往所有启用端点）
+export interface NotificationWebhookTarget {
+  id: string
+  notification_type: string
+  name: string
+  url: string
+  secret?: string | null
+  enabled: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+// Webhook 端点列表响应
+export interface NotificationWebhookTargetListResponse {
+  code: number
+  message: string
+  data: NotificationWebhookTarget[]
+}
+
+// Webhook 端点单个响应
+export interface NotificationWebhookTargetResponse {
+  code: number
+  message: string
+  data: NotificationWebhookTarget
+}

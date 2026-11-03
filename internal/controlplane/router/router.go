@@ -217,7 +217,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	notificationChannelRepo := repository.NewNotificationChannelRepo(db)
 	notificationChannelSvc := service.NewNotificationChannelService(notificationChannelRepo)
 	notificationConfigRepo := repository.NewNotificationConfigRepo(db)
-	notificationConfigHandler := handler.NewNotificationConfigHandler(notificationConfigRepo, settingsRepo)
+	webhookTargetRepo := repository.NewNotificationWebhookTargetRepo(db)
+	notificationConfigHandler := handler.NewNotificationConfigHandler(notificationConfigRepo, webhookTargetRepo, settingsRepo)
 	// v0.8: 审计日志（仅管理面写操作落库）
 	auditRepo := repository.NewAuditLogRepo(db)
 	auditSvc := service.NewAuditLogService(auditRepo)
@@ -234,6 +235,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		emailNotifier,
 		notificationChannelSvc,
 		slog.Default(),
+		auditSvc,
+		webhookTargetRepo,
 	)
 	// 请求线程内的消费者注入"入队"版 notifier：Notify 只写 notification_outbox（~1ms），
 	// 由下方 worker 周期消费并真实投递，避免同步等待飞书 HTTP / SMTP 拖慢响应。
@@ -731,10 +734,14 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 
 		// 通知配置管理（新增）
 		adminGroup.GET("/notification-configs/metadata", notificationConfigHandler.GetMetadata)
+		adminGroup.GET("/notification-configs/webhook-targets", notificationConfigHandler.ListWebhookTargets)
 		adminGroup.GET("/notification-configs", notificationConfigHandler.ListAll)
 		adminGroup.GET("/notification-configs/:type/:channel", notificationConfigHandler.Get)
 		adminGroup.PUT("/notification-configs/:type/:channel", notificationConfigHandler.Update)
 		adminGroup.POST("/notification-configs/:type/:channel/test", notificationConfigHandler.Test)
+		adminGroup.POST("/notification-configs/:type/webhook/targets", notificationConfigHandler.CreateWebhookTarget)
+		adminGroup.PUT("/notification-configs/:type/webhook/targets/:id", notificationConfigHandler.UpdateWebhookTarget)
+		adminGroup.DELETE("/notification-configs/:type/webhook/targets/:id", notificationConfigHandler.DeleteWebhookTarget)
 
 		// 公告管理
 		adminGroup.GET("/announcements", announcementHandler.List)

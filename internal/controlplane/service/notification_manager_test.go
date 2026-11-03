@@ -386,11 +386,11 @@ func TestSendFallback_NoGlobalConfig(t *testing.T) {
 	// 不设置任何全局配置
 
 	mgr := &notificationManager{
-		configRepo:    nil,
-		settingsRepo:  settingsRepo,
-		webhookSender: nil,
-		emailSender:   nil,
-		logger:        slog.Default(),
+		configRepo:         nil,
+		settingsRepo:       settingsRepo,
+		legacyWebhookSender: nil,
+		emailSender:        nil,
+		logger:             slog.Default(),
 	}
 
 	ctx := context.Background()

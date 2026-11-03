@@ -100,8 +100,8 @@ flowchart TB
   subgraph CP[control-plane]
     MT[(media_tasks<br/>media_task_events)]
     PSN[provider snapshot → Redis]
-    API["internal/v1/media-tasks<br/>create/get/update"]
-    SWEEP[超时 sweeper]
+    API["internal/v1/video/tasks<br/>create/get/update"]
+    SWEEP["超时 sweeper<br/>（控制面 cron）"]
   end
 
   A1 --> R --> IH --> GD --> MR --> ADP1
@@ -388,7 +388,7 @@ sequenceDiagram
   A->>U: 翻译后的厂商请求（含鉴权）
   U-->>A: vendor task id
   A-->>G: vendorTaskID
-  G->>CP: internal/v1/media-tasks (含 api_key_id/user_id, request_body, private_data)
+  G->>CP: internal/v1/video/tasks (含 api_key_id/user_id, request_body, private_data)
 
   Note over G,CP: 写失败必须返回 5xx（禁止 fire-and-forget）
   G-->>C: {id, object:"video", status:"queued", model:"kling-pro"}
@@ -541,14 +541,19 @@ gpt-image 复用既有 OpenAI provider，只需要新增 `model_type=image` 的�
 
 ### 7.4 内部 API（控制面）
 
-沿用 `internal/gateway/infra/video_task_client.go` 的范式，新增 `/internal/v1/media-tasks`：
+沿用 `internal/gateway/infra/video_task_client.go` 的范式扩展内部 API。
+
+> **勘误（Batch 3 · E4，决策 D5/D6）**：落地路径**不是**新造的 `/internal/v1/media-tasks`，而是**沿用既有 `/internal/v1/video/tasks*`**（只扩 payload）。原因：control-plane 与 gateway 是两个进程、可能分批部署，改路径会引入滚动窗口不兼容；路径名与数据库表名（`media_tasks`）解耦。另外「拉取式 sweeper」端点**不存在**——超时清扫落在控制面 **cron**（`internal/controlplane/service/media_task_sweeper.go`，配置 `media_task.sweep_interval_seconds` / `sweep_batch`）。以下为**实际**路由（`internal/controlplane/router/router.go:903-909`）：
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| POST | `/internal/v1/media-tasks` | 创建（**同步返回错误**，网关必须感知失败） |
-| GET | `/internal/v1/media-tasks/:id` | 查询（含归属字段） |
-| PATCH | `/internal/v1/media-tasks/:id` | CAS 更新状态/进度/用量 |
-| GET | `/internal/v1/media-tasks?sweep=1` | sweeper 用：拉取超时非终态任务 |
+| POST | `/internal/v1/video/tasks` | 创建；201 新建 / 200 幂等命中（**同步返回错误**，网关必须感知失败） |
+| PATCH | `/internal/v1/video/tasks/:id` | CAS 更新状态/进度/用量/成本/产物 |
+| PATCH | `/internal/v1/video/tasks/:id/status` | 仅更新状态（兼容旧调用方） |
+| GET | `/internal/v1/video/tasks/:id` | 按 task_id 读单条全量（含归属字段、`finished_at`、`usage`） |
+| GET | `/internal/v1/video/tasks/:id/provider-type` | 取 `provider_type` / `model` / `provider_name`（旧调用方） |
+
+网关侧客户端常量：`internal/gateway/infra/video_task_client.go:202` 的 `videoTaskInternalPath = "/internal/v1/video/tasks"`。
 
 ---
 

@@ -87,7 +87,12 @@ func TestMediaTaskRetrieve_CompletedBillsExactlyOnce(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	resp := decodeJSON(t, rec)
 	require.Equal(t, "completed", resp["status"])
-	require.Equal(t, "100", resp["progress"])
+	// progress 对齐 OpenAI video 对象：**整数** 0-100（E4b），不再是字符串。
+	require.EqualValues(t, 100, resp["progress"])
+	// completed_at 来自 media_tasks.finished_at（控制面首次进入终态时写入）。
+	require.NotZero(t, resp["completed_at"])
+	// seconds 取自上游实际用量 duration（8s），退化口径才是请求参数。
+	require.Equal(t, "8", resp["seconds"])
 
 	// 记账只发生一次，且成本按「实际时长 × 每秒单价」（8s × 0.1 = 0.8 USD = 800000 微美元）。
 	require.Equal(t, 2, rig.store.updateCount(), "先 CAS 到 in_progress（兼容单步语义），再写终态")

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -46,11 +47,67 @@ const (
 	maxMediaTaskBodyBytes = 64 * 1024
 	// mediaTaskObjectValue 对外 object 字段（OpenAI 形状）。
 	mediaTaskObjectValue = "video"
-	// mediaProgressZero 刚受理时的进度展示值。
+	// mediaProgressZero 刚受理时写入 media_tasks.progress 的**存储层**值（varchar 列，
+	// 见 infra.MediaCreateRequest.Progress 注释：「0-100」或阶段名）。
+	// 注意这是存储层表示，与对外响应里的 progress（整数）不是同一个东西。
 	mediaProgressZero = "0"
 	// mediaStoredStatusExpired 是控制面的存储层状态；对外必须归一为 failed（不记账）。
 	mediaStoredStatusExpired = "expired"
 )
+
+// 对外 progress 的展示档位（E4b 定稿）。
+//
+// 为什么需要这张表：对外 progress 对齐 OpenAI video 对象，是 **0-100 的整数**
+// （New API 的权威形状 dto/openai_video.go: `Progress int` + SetProgressStr 把上游字符串
+// 转成整数）；而 media_tasks.progress 是 varchar，上游可能给百分比数字、也可能只给阶段名
+// （Kling 只有 submitted/processing/succeed/failed，不报百分比）。
+//
+// 取值原则（绝不谎报）：
+//   - 能解析成数字 → 用数字（clamp 到 0-100）；
+//   - 阶段名 → 下面这张**显式**映射表；
+//   - 解析不出/未知 → 0（明确的下界，而不是 100 或 99）；
+//   - 状态已是 completed → 强制 100（与 status 自洽，避免出现「completed + progress 0」）。
+//
+// 这套数字是**展示约定**，不是实测百分比：网关只知道粗粒度阶段（进度只有上游知道，
+// 而上游的百分比口径各不相同）。因此文档与前端都不应把它当作精确进度。
+const (
+	// mediaProgressUnknown 未知（空值 / 无法解析 / 失败终态）：取区间下界。
+	mediaProgressUnknown = 0
+	// mediaProgressQueueing 已进入上游队列、尚未开始生成。
+	mediaProgressQueueing = 10
+	// mediaProgressRunning 上游已开始生成但未回报百分比：取「进行中」的中位展示值。
+	mediaProgressRunning = 50
+	// mediaProgressDone 已完成。
+	mediaProgressDone = 100
+)
+
+// mediaProgressStageValues 是「存储层阶段名 → 对外整数进度」的显式映射表。
+//
+// 词表与 mapStoredStatus 的归一表**刻意同源**：状态词能认出来的，进度也一定认得出
+// （新增状态词时必须同时补这张表，否则会静默退化为 0）。
+// 映射为 0 的失败类词不是「进度归零」的意思，而是「失败时刻的实际进度不可知，
+// 取下界」——配合 status=failed 一起读才是完整语义。
+var mediaProgressStageValues = map[string]int{
+	// 已受理、上游尚未开始
+	"queued": mediaProgressUnknown, "submitted": mediaProgressUnknown,
+	"created": mediaProgressUnknown, "pending": mediaProgressUnknown,
+	"not_start": mediaProgressUnknown, "waiting": mediaProgressUnknown,
+	// 上游排队中（已进入上游，但还没开始算）
+	"queueing": mediaProgressQueueing,
+	// 生成中
+	"in_progress": mediaProgressRunning, "processing": mediaProgressRunning,
+	"running": mediaProgressRunning, "started": mediaProgressRunning,
+	"generating": mediaProgressRunning,
+	// 终态成功
+	"completed": mediaProgressDone, "succeed": mediaProgressDone,
+	"succeeded": mediaProgressDone, "success": mediaProgressDone,
+	"finished": mediaProgressDone, "done": mediaProgressDone,
+	// 终态失败（进度不可知 → 下界）
+	"failed": mediaProgressUnknown, "failure": mediaProgressUnknown,
+	"error": mediaProgressUnknown, "expired": mediaProgressUnknown,
+	"cancelled": mediaProgressUnknown, "canceled": mediaProgressUnknown,
+	"rejected": mediaProgressUnknown,
+}
 
 // 对外错误码（冻结在 docs/media-api.md §6 与 tests/contract/contracts.json 的
 // media_channels.error_codes；**不得新造 code**，前端与对接方按 code 分支）。
@@ -151,17 +208,43 @@ func generateMediaTaskID() (string, error) {
 // 对外响应/错误形状
 // ─────────────────────────────────────────────────────────────────────────────
 
-// mediaTaskResponse 是 /v1/videos 的响应（OpenAI 形状）。
+// mediaTaskResponse 是 /v1/videos 的响应（OpenAI video 对象形状，E4b 对齐）。
+//
+// 形状依据：D1 决策选型理由就是「对齐 OpenAI 生态，客户端 SDK 可直接用」，权威形状取自
+// New API 的 dto/openai_video.go（它就是照着 OpenAI 实现的）：
+//
+//	id / object / model / status / progress(int) / created_at / completed_at /
+//	expires_at / seconds / size / error
+//
+// 本结构**刻意不实现**的三个字段（OpenAI 有、本网关无对应语义，宁可不发也不编造）：
+//   - task_id：OpenAI 侧是待废弃的旧 id 别名，本网关对外 id 只有一个（id）；
+//   - remixed_from_video_id：本网关没有 remix 能力；
+//   - metadata：当前没有任何需要下发的自定义元数据。
+//
 // 字段集合冻结在 tests/contract/contracts.json 的 media_channels.video_response_fields。
 type mediaTaskResponse struct {
-	ID        string                  `json:"id"`
-	Object    string                  `json:"object"`
-	Status    string                  `json:"status"`
-	Model     string                  `json:"model"`
-	CreatedAt int64                   `json:"created_at"`
-	Progress  string                  `json:"progress,omitempty"`
-	Error     *mediaTaskResponseError `json:"error,omitempty"`
-	Artifacts []core.MediaArtifact    `json:"artifacts,omitempty"`
+	ID        string `json:"id"`
+	Object    string `json:"object"`
+	Status    string `json:"status"`
+	Model     string `json:"model"`
+	CreatedAt int64  `json:"created_at"`
+	// CompletedAt 完成时间（Unix 秒）；非终态省略。取自 media_tasks.finished_at
+	// （控制面在**首次**进入终态时写入，见 internal/controlplane/repository/video_task_repo.go）。
+	CompletedAt int64 `json:"completed_at,omitempty"`
+	// Progress 是 0-100 的**整数**（OpenAI 形状；不是字符串，也没有 omitempty——
+	// SDK 按必填字段读）。归一规则见 mediaProgressStageValues。
+	Progress int `json:"progress"`
+	// Seconds 时长（秒的十进制字符串，OpenAI 形状如 "5"）。
+	// 优先取上游实际用量，退化取请求参数 duration；都取不到则省略（不编造）。
+	Seconds string `json:"seconds,omitempty"`
+	// Size 产物尺寸（如 "1280x720"）。只在请求参数里**字面**给出了 WxH 时回填，
+	// 不做 "720p" → "1280x720" 的推导（见 mediaResponseSize 注释）。
+	Size  string                  `json:"size,omitempty"`
+	Error *mediaTaskResponseError `json:"error,omitempty"`
+	// Artifacts 是本网关的**扩展字段**（OpenAI video 对象没有它）：
+	// 免重定向的直连产物地址；标准取产物方式仍是 GET /v1/videos/{id}/content。
+	// 保留它是刻意决策——前端需要直接播放/下载，不必为每个产物再发一次请求换 302。
+	Artifacts []core.MediaArtifact `json:"artifacts,omitempty"`
 }
 
 // mediaTaskResponseError 是任务级业务失败（200 响应体里的字段，与 HTTP 错误信封区分）。
@@ -398,7 +481,7 @@ func (h *MediaTaskHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusOK, h.buildResponse(upd.Task))
 			return
 		}
-		c.JSON(http.StatusOK, h.newlyCreatedResponse(taskID, model, initialStatus))
+		c.JSON(http.StatusOK, h.newlyCreatedResponse(taskID, model, initialStatus, submitParams))
 		return
 	}
 
@@ -421,17 +504,27 @@ func (h *MediaTaskHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusOK, h.buildResponse(res.Task))
 		return
 	}
-	c.JSON(http.StatusOK, h.newlyCreatedResponse(taskID, model, initialStatus))
+	c.JSON(http.StatusOK, h.newlyCreatedResponse(taskID, model, initialStatus, submitParams))
 }
 
-func (h *MediaTaskHandler) newlyCreatedResponse(taskID, model string, status core.MediaStatus) mediaTaskResponse {
+// newlyCreatedResponse 在控制面没回传任务行时构造创建响应（幂等预占等场景）。
+//
+// params 是本次请求的归一参数集（submit_params）：用它回填 seconds / size——
+// 这两项来自**调用方自己的请求**，不依赖控制面是否回传 private_data
+// （控制面内部 API 不返回 private_data，见 mediaRequestParams 注释）。
+func (h *MediaTaskHandler) newlyCreatedResponse(
+	taskID, model string, status core.MediaStatus, params map[string]any,
+) mediaTaskResponse {
 	return mediaTaskResponse{
 		ID:        taskID,
 		Object:    mediaTaskObjectValue,
 		Status:    string(status),
 		Model:     model,
 		CreatedAt: h.now().Unix(),
-		Progress:  mediaProgressZero,
+		// 刚受理：整数 0（对外进度，不是存储层的 mediaProgressZero 字符串）。
+		Progress: mediaProgressUnknown,
+		Seconds:  mediaResponseSeconds(params, nil),
+		Size:     mediaResponseSize(params),
 	}
 }
 
@@ -950,24 +1043,32 @@ func (h *MediaTaskHandler) setCallLogContext(c *gin.Context, task *infra.MediaTa
 	}
 }
 
-// buildResponse 把存储行转成对外响应。
+// buildResponse 把存储行转成对外响应（OpenAI video 对象形状）。
 func (h *MediaTaskHandler) buildResponse(task *infra.MediaTask) mediaTaskResponse {
 	resp := mediaTaskResponse{Object: mediaTaskObjectValue}
 	if task == nil {
 		return resp
 	}
 	mapped := mapStoredStatus(task.Status)
+	private, _ := parseMediaPrivateData(task.PrivateData.String())
+	payload, _ := parseMediaStatusPayload(task.ResponseBody)
+
 	resp.ID = task.TaskID
 	resp.Status = string(mapped)
 	resp.Model = task.Model
-	resp.Progress = task.Progress
+	resp.Progress = mediaProgressValue(task.Progress, mapped)
 	if !task.CreatedAt.IsZero() {
 		resp.CreatedAt = task.CreatedAt.Unix()
 	}
-	payload, _ := parseMediaStatusPayload(task.ResponseBody)
+	if task.FinishedAt != nil && !task.FinishedAt.IsZero() {
+		resp.CompletedAt = task.FinishedAt.Unix()
+	}
 	if len(payload.Artifacts) > 0 {
 		resp.Artifacts = payload.Artifacts
 	}
+	params := mediaRequestParams(private, task)
+	resp.Seconds = mediaResponseSeconds(params, task)
+	resp.Size = mediaResponseSize(params)
 	reason := strings.TrimSpace(task.ErrorMessage)
 	if reason == "" {
 		reason = strings.TrimSpace(payload.FailReason)
@@ -976,6 +1077,180 @@ func (h *MediaTaskHandler) buildResponse(task *infra.MediaTask) mediaTaskRespons
 		resp.Error = &mediaTaskResponseError{Message: reason, Code: mediaErrUpstream}
 	}
 	return resp
+}
+
+// mediaRequestParams 取「本次创建时的归一参数集」（冻结 7 键），用于回填 seconds / size。
+//
+// 取数顺序（都可缺省，缺省即省略字段）：
+//
+//  1. private_data.submit_params —— 网关在创建时写入的归一副本。**注意**：控制面把
+//     private_data 标了 json:"-"，任何 HTTP 出口都不序列化它（internal/controlplane/model/video_task.go），
+//     所以经控制面往返拿到的任务里这个字段是空的；保留这一路是为了兼容测试夹具与
+//     将来控制面开放该字段。
+//  2. media_tasks.request_body —— **生产环境的实际来源**：内部 API 会返回它
+//     （json:"request_body,omitempty"），内容是网关自己持久化的原始请求体。
+//     它可能被截断（truncateVideoTaskBody，见 video_handler.go）：解析失败则当作取不到，
+//     绝不猜测字段。
+func mediaRequestParams(private mediaTaskPrivateData, task *infra.MediaTask) map[string]any {
+	if len(private.SubmitParams) > 0 {
+		return private.SubmitParams
+	}
+	if task == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(task.RequestBody)
+	if raw == "" {
+		return nil
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		return nil
+	}
+	return mediaSubmitParams(body)
+}
+
+// mediaProgressValue 把存储层的 media_tasks.progress（varchar：百分比字符串**或**阶段名）
+// 归一为对外 progress（0-100 整数）。
+//
+// 规则与理由（E4b 定稿；对接方与前端按此读）：
+//
+//  1. 能解析成数字（含上游偶发的 "45%"、前后空白、小数）→ 用该数字，clamp 到 [0,100]，
+//     小数**向下取整**（宁可低估，也不把 99.4% 说成 100%）；
+//  2. 阶段名 → mediaProgressStageValues 的显式映射（0 / 10 / 50 / 100 四档）；
+//  3. 空值或认不出的词 → 0（明确的下界；绝不填 100，也绝不外推）；
+//  4. 归一后的状态是 completed → 强制 100：完成了就是 100%，否则会出现
+//     「status=completed + progress=0」这种自相矛盾的响应（上游不报百分比的渠道很常见）。
+//
+// 已知局限（如实标注）：网关**不保证** progress 单调不减——存储层只保留最后一次上报值，
+// 若某渠道先报百分比数字、后又只报阶段名（或者反过来），对外可能回退（如 80 → 50）。
+// 现有渠道的词表是稳定的（Vidu 报百分比、Kling 报阶段名），因此该情形未观察到；
+// 若未来出现，应由适配器统一上报口径，而不是在响应层造假收敛。
+func mediaProgressValue(raw string, mapped core.MediaStatus) int {
+	if mapped == core.MediaStatusCompleted {
+		return mediaProgressDone
+	}
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return mediaProgressUnknown
+	}
+	// 上游偶发百分比形态（New API 的 SetProgressStr 也做同样的 TrimSuffix 处理）。
+	if number, ok := parseMediaProgressNumber(strings.TrimSuffix(value, "%")); ok {
+		return clampMediaProgress(number)
+	}
+	if mappedValue, ok := mediaProgressStageValues[strings.ToLower(value)]; ok {
+		return mappedValue
+	}
+	return mediaProgressUnknown
+}
+
+// parseMediaProgressNumber 解析进度数字；第二返回值为 false 表示「不是数字」。
+func parseMediaProgressNumber(raw string) (int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	// NaN / ±Inf 会污染 int 转换（NaN 在部分平台上转出非确定值），一律当作认不出。
+	if math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, false
+	}
+	return int(parsed), true
+}
+
+func clampMediaProgress(value int) int {
+	if value < 0 {
+		return mediaProgressUnknown
+	}
+	if value > mediaProgressDone {
+		return mediaProgressDone
+	}
+	return value
+}
+
+// mediaResponseSeconds 取任务时长（OpenAI video 对象的 seconds，字符串秒）。
+//
+// 取数顺序：上游实际用量 → 请求参数 duration。**取不到就省略，绝不编造**
+// （「没有时长」比「时长猜错」对账/展示的伤害都更小）。
+func mediaResponseSeconds(params map[string]any, task *infra.MediaTask) string {
+	if seconds := mediaUsageSeconds(task); seconds > 0 {
+		return formatMediaSeconds(seconds)
+	}
+	if seconds := mapFloat(params, "duration"); seconds > 0 {
+		return formatMediaSeconds(seconds)
+	}
+	return ""
+}
+
+// mediaUsageSeconds 从 media_tasks.usage（jsonb 文本）里读实际时长。
+//
+// usage 的形状见 mediaTaskUsagePayload：{vendor:{...}, cost_input:{...}}。
+// vendor 是上游原始用量（Kling 的 duration、Vidu 的 duration/output_seconds…），
+// cost_input.output_seconds 是 C8 记账时按实际用量或请求参数归一出来的时长。
+func mediaUsageSeconds(task *infra.MediaTask) float64 {
+	if task == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(task.Usage.String())
+	if raw == "" || raw == "null" {
+		return 0
+	}
+	var usage map[string]any
+	if err := json.Unmarshal([]byte(raw), &usage); err != nil {
+		return 0
+	}
+	if vendor, ok := usage["vendor"].(map[string]any); ok {
+		if seconds := firstPositiveFloat(vendor,
+			"duration", "output_seconds", "duration_seconds", "video_duration"); seconds > 0 {
+			return seconds
+		}
+	}
+	if costInput, ok := usage["cost_input"].(map[string]any); ok {
+		if seconds := firstPositiveFloat(costInput, "output_seconds"); seconds > 0 {
+			return seconds
+		}
+	}
+	return 0
+}
+
+// formatMediaSeconds 把秒数写成 OpenAI 形状的十进制字符串（整秒不带小数点：8 → "8"）。
+func formatMediaSeconds(seconds float64) string {
+	if seconds <= 0 {
+		return ""
+	}
+	if seconds == math.Trunc(seconds) {
+		return strconv.FormatInt(int64(seconds), 10)
+	}
+	return strconv.FormatFloat(seconds, 'f', -1, 64)
+}
+
+// mediaResponseSize 取产物尺寸（OpenAI video 对象的 size，形如 "1280x720"）。
+//
+// 只认**请求参数里字面给出的 WxH**（`size`，其次 `resolution`）：视频创建接口本身没有
+// size 字段，客户端可以用它表达精确尺寸（同时网关会用它推导 aspect_ratio）。
+//
+// 刻意**不做** "720p" → "1280x720" 的推导：短边 720 对应的另一边取决于宽高比、渠道
+// 与 mode（Kling std/pro 的输出档位不同），推导值可能与真实产物不符——而 size 是用来
+// 描述产物的，「推导错」比「不填」更糟（调用方会拿它去校验/展示）。取不到就省略。
+func mediaResponseSize(params map[string]any) string {
+	for _, key := range []string{"size", "resolution"} {
+		width, height, ok := parseSizePair(mapString(params, key))
+		if ok {
+			return strconv.Itoa(width) + "x" + strconv.Itoa(height)
+		}
+	}
+	return ""
+}
+
+// mapString 从「已 JSON 往返」的 submit_params 里安全取字符串。
+func mapString(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	value, _ := m[key].(string)
+	return strings.TrimSpace(value)
 }
 
 // mediaArtifactURL 取产物地址：优先 video_url 列（终态写入），
@@ -1470,7 +1745,8 @@ func mediaTaskKind(raw map[string]json.RawMessage) core.MediaKind {
 //
 // 为什么以数量为准而不是以请求里的 action 为准：数量是唯一能同时对上
 // Vidu 四个上游端点与 Kling 两个端点的客观事实；请求里的 action 只做**一致性校验**
-// （不一致时 400 validation_error，见 Create），避免用户参数被静默吃掉。
+// （不一致时 400 invalid_request_error，见 Create——对外只有这一个 400 code，
+// 本仓库不存在 `validation_error` 的代码路径），避免用户参数被静默吃掉。
 func mediaTaskAction(images []string) core.MediaAction {
 	switch len(images) {
 	case 0:

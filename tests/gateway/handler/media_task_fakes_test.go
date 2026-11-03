@@ -214,11 +214,29 @@ func (s *fakeMediaStore) UpdateMediaTask(_ context.Context, taskID string, req i
 	if req.PollFailures != nil {
 		task.PollFailures = *req.PollFailures
 	}
+	// 镜像控制面的 finished_at 语义（internal/controlplane/repository/video_task_repo.go：
+	// 「首次进入任一终态 → finished_at」）。网关侧 completed_at（OpenAI video 形状）
+	// 就是从这里读的，fake 不实现这一条会让 completed_at 永远测不出来。
+	if req.Status != "" && mediaFakeTerminalStatus(req.Status) && task.FinishedAt == nil {
+		finishedAt := time.Now().UTC()
+		task.FinishedAt = &finishedAt
+	}
 	task.UpdatedAt = time.Now().UTC()
 	if s.updateNoTask {
 		return &infra.MediaUpdateResult{Updated: true, Task: nil}, nil
 	}
 	return &infra.MediaUpdateResult{Updated: true, Task: cloneTask(task)}, nil
+}
+
+// mediaFakeTerminalStatus 等价于控制面 model.IsMediaTaskTerminalStatus
+// （completed | failed | expired，internal/controlplane/model/video_task.go）。
+func mediaFakeTerminalStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "expired":
+		return true
+	default:
+		return false
+	}
 }
 
 // cloneTask 返回深拷贝，避免 handler 与 fake 共享同一指针掩盖「未写库却生效」的错误。

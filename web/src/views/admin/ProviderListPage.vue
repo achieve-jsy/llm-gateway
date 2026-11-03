@@ -103,34 +103,6 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="优先级" width="90" align="center">
-        <template #default="{ row }">
-          <el-input-number
-            v-model="row.priority"
-            :min="0"
-            :max="9999"
-            size="small"
-            controls-position="right"
-            style="width: 70px"
-            @change="handleInlineUpdate(row)"
-          />
-        </template>
-      </el-table-column>
-
-      <el-table-column label="权重" width="90" align="center">
-        <template #default="{ row }">
-          <el-input-number
-            v-model="row.weight"
-            :min="0"
-            :max="9999"
-            size="small"
-            controls-position="right"
-            style="width: 70px"
-            @change="handleInlineUpdate(row)"
-          />
-        </template>
-      </el-table-column>
-
       <el-table-column label="模型数" width="80" align="center">
         <template #default="{ row }">
           {{ row.model_count ?? 0 }}
@@ -414,22 +386,6 @@ function onSyncSaved() {
   loadProviders()
 }
 
-
-/** 行内编辑优先级/权重 */
-async function handleInlineUpdate(row: Provider) {
-  try {
-    await updateProvider(row.id, {
-      name: row.name,
-      definition_id: row.definition_id,
-      endpoint: row.endpoint,
-      credentials: '',
-      priority: row.priority,
-      weight: row.weight
-    })
-  } catch {
-    loadProviders()
-  }
-}
 
 /** 删除渠道 */
 async function handleDelete(row: Provider) {

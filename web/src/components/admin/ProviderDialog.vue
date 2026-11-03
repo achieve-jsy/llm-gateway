@@ -207,16 +207,6 @@
           label-width="100px"
           label-position="left"
         >
-          <el-form-item label="优先级">
-            <el-input-number v-model="formData.priority" :min="0" :max="9999" />
-            <span class="form-hint inline">数值越大优先级越高</span>
-          </el-form-item>
-
-          <el-form-item label="权重">
-            <el-input-number v-model="formData.weight" :min="0" :max="9999" />
-            <span class="form-hint inline">负载均衡权重</span>
-          </el-form-item>
-
           <!-- AWS Bedrock: Region 设置 -->
           <el-form-item v-if="selectedDef?.id === 'bedrock'" label="Region">
             <el-input v-model="formData.region" placeholder="us-east-1" />
@@ -237,14 +227,6 @@
           <el-form-item v-if="selectedDef?.id === 'azure-openai'" label="API Version">
             <el-input v-model="formData.api_version" placeholder="已废弃，请改用 Azure OpenAI (azure)" />
             <div class="form-hint">该渠道类型已废弃，请改用 definition「Azure OpenAI」(azure) + /openai/v1</div>
-          </el-form-item>
-
-          <el-form-item label="超时(秒)">
-            <el-input-number v-model="formData.timeout" :min="1" :max="300" />
-          </el-form-item>
-
-          <el-form-item label="最大重试">
-            <el-input-number v-model="formData.max_retries" :min="0" :max="10" />
           </el-form-item>
 
           <el-form-item label="测试模型">
@@ -400,10 +382,6 @@ interface FormData {
   definition_id: string
   endpoint: string
   credentials_map: Record<string, string>
-  priority: number
-  weight: number
-  timeout: number
-  max_retries: number
   test_model: string
   tags: string[]       // 多标签，提交时用逗号拼接存入 tag 字段
   remark: string
@@ -418,10 +396,6 @@ const formData = ref<FormData>({
   definition_id: '',
   endpoint: '',
   credentials_map: {},
-  priority: 0,
-  weight: 1,
-  timeout: 30,
-  max_retries: 2,
   test_model: '',
   tags: [],
   remark: '',
@@ -471,10 +445,6 @@ watch(
         definition_id: val.definition_id || val.type,
         endpoint: val.endpoint,
         credentials_map: {},
-        priority: val.priority || 0,
-        weight: val.weight || 1,
-        timeout: val.timeout || 30,
-        max_retries: val.max_retries || 2,
         test_model: val.test_model || '',
         tags: val.tag ? val.tag.split(',').map(t => t.trim()).filter(Boolean) : [],
         remark: val.remark || '',
@@ -549,10 +519,6 @@ watch(
         definition_id: '',
         endpoint: '',
         credentials_map: {},
-        priority: 0,
-        weight: 1,
-        timeout: 30,
-        max_retries: 2,
         test_model: '',
         tags: [],
         remark: '',
@@ -732,10 +698,6 @@ async function handleSubmit() {
       definition_id: formData.value.definition_id,
       endpoint: endpoint,
       credentials: hasCredentials ? credentialsJson : '',
-      priority: formData.value.priority,
-      weight: formData.value.weight,
-      timeout: formData.value.timeout,
-      max_retries: formData.value.max_retries,
       test_model: formData.value.test_model || undefined,
       tag: formData.value.tags.join(','),  // 空数组时传 '' 让后端清空标签
       remark: formData.value.remark || undefined

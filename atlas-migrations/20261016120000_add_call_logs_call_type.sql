@@ -1,0 +1,49 @@
+-- atlas-migrations/20261016120000_add_call_logs_call_type.sql
+-- Feature: call_logs 新增 call_type（端点归一化后的操作类型），A4 的落库尾巴。
+--
+-- 背景：视频/素材调用此前只能靠 `model` 字符串后缀区分操作
+--   （`组名:CreateTask` / `组名:GetTask` / `seedance-task:GetTask` / `seedance-asset:{Action}`），
+-- 看板与统计只能靠 `model LIKE '%:CreateTask'` 这类**命名约定**匹配：约定一变就静默漏统计
+-- （docs/video-integration-comparison.md §6）。A4 已在 `internal/gateway/observability/call_type.go`
+-- 交付纯函数 `DeriveCallType(method, path)`，但**明确未做 DB 变更**；本迁移是该函数的落库侧。
+--
+-- 取值：见 `call_type.go` 常量区（chat / messages / messages.count_tokens / responses / embeddings /
+-- rerank / models / model_info / image.generations / image.edits / video.create / video.submit /
+-- video.get / video.content / video.asset / video.asset.{Action}）。
+-- 未登记端点写**空串**（DeriveCallType 的既有语义是"不猜测"），不写 `unknown` 之类的兜底值；
+-- 因此本列**可空 + 无默认值**：NULL = 迁移前未回填的历史行，'' = 已采集但不识别端点，
+-- 二者语义不同，读侧不得把 NULL 当成 ''。
+--
+-- 纯观测列，不参与路由/计费/配额，可空无默认值 → 滚动/蓝绿发布期旧代码写入不受影响
+-- （Expand-Contract：只加不减，D2）。列宽 varchar(64) 与 `call_type.go` 的 `maxCallTypeLen = 64`
+-- 严格对齐：素材 Action 直接取自 URL 路径段，超长会让**整行** call_logs INSERT 失败（连带丢失调用明细）。
+--
+-- 为什么用 `ADD COLUMN IF NOT EXISTS`（对齐 20260910125402_add_call_logs_quota_rejection_fields.sql 等既有写法）：
+-- 本迁移是纯新增、无数据回填，没有任何"列已存在就必须报错"的正当理由；而信息不可得（无法核对
+-- 目标库是否已有该列）时应选可重放的一侧，避免无谓阻断 CI 的 migrate stage。
+--
+-- ⚠️ 该写法的代价（务必知悉，不要以为它兜住了正确性）：
+-- `IF NOT EXISTS` 在"同名但**类型不同**"的历史列面前会**静默跳过**，既不报错也不纠正；
+-- 因此列类型/列宽的正确性**不是**由这条语句保证的，而是由
+--   ① 与 `cd tools/atlas-loader && go run main.go` 导出的期望 schema 逐列比对
+--      （GORM 侧 `internal/observability/model/call_log.go` 的 `CallType` 声明为 varchar(64)），
+--   ② 干净库上全量 apply 后 `\d call_logs` 实测列类型
+-- 两者共同保证。凡改动列宽（例如放宽 `maxCallTypeLen`）必须同时改这里与 GORM 声明，并重跑比对。
+--
+-- 数据回填**不放在本文件**（见 20261016120100_backfill_call_logs_call_type.sql）：DDL 是瞬时的
+-- （PG 11+ 加可空无默认值列不重写表），必须尽量早提交成功以解除"应用已写 call_type、库还没列"的
+-- 窗口；回填是全表扫描 + 写少量行，慢且可重试，两者放同一个事务里会让 DML 的失败/超时连带回滚 DDL。
+--
+-- 索引：**本次不加**。理由：① 回填的过滤条件是 inbound_endpoint / model，不是 call_type，
+-- 索引对回填无益；② 当前**没有任何读侧**按 call_type 查询（本批次的看板/前端筛选仍按既有
+-- inbound_endpoint/model 约定），为无人查询的列在 call_logs 这个写最热的表上加索引，
+-- 只会给每次调用写入加一份写放大；③ 列基数低（约 16 个取值）且极度倾斜，等真有
+-- `WHERE call_type IN (...) AND ts >= ...` 的查询时再单独新增
+-- `CREATE INDEX CONCURRENTLY (call_type, ts)`（必须 `-- atlas:txmode none`，参考
+-- 20260821120000_add_call_logs_dashboard_indexes.sql）比现在猜一个索引更省事。
+--
+-- 回滚（本项目部署流程不使用 Atlas 的 down 机制；生产优先用新迁移修复，见 D1/D2）：
+-- 手动执行 ALTER TABLE "call_logs" DROP COLUMN IF EXISTS "call_type";
+-- 再按需删除 atlas_schema_revisions 中 version='20261016120000' 的记录。
+
+ALTER TABLE "call_logs" ADD COLUMN IF NOT EXISTS "call_type" character varying(64);

@@ -359,6 +359,10 @@ func buildSubmitPlan(req *core.MediaSubmitRequest) (*submitPlan, error) {
 	if model == "" {
 		model = defaultModel
 	}
+	// 参考生视频只能用基础 viduq2（New API 的硬编码）：先归一模型名，再按**真正要发出去的**
+	// 模型名取约束档，避免「约束按一个名字算、报文发另一个名字」。归一不改家族
+	// （viduq2-pro 与 viduq2 同族），所以这一步对约束矩阵没有语义影响，只是让推导链更直白。
+	model = normalizeReferenceModel(action, model)
 	profile := profileForModel(model)
 
 	// ③ vidu2.0 系列不支持纯文生：无图提前 400（任务书硬约束）。
@@ -371,8 +375,6 @@ func buildSubmitPlan(req *core.MediaSubmitRequest) (*submitPlan, error) {
 	if action == upstreamActionText2Video && strings.TrimSpace(prompt) == "" {
 		return nil, core.NewInvalidRequestError("vidu: 纯文生（text_to_video）必须提供 prompt", nil)
 	}
-
-	model = normalizeReferenceModel(action, model)
 
 	// ④ duration（按模型家族收紧，越界提前 400）。
 	duration, err := resolveDuration(params, profile, model)

@@ -62,6 +62,10 @@
             <el-icon><Histogram /></el-icon>
             <template #title>用量看板</template>
           </el-menu-item>
+          <el-menu-item index="/admin/usage/analytics">
+            <el-icon><TrendCharts /></el-icon>
+            <template #title>AI 分析</template>
+          </el-menu-item>
           <el-menu-item index="/admin/budget">
             <el-icon><Wallet /></el-icon>
             <template #title>预算管理</template>

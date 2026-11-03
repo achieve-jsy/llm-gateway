@@ -229,6 +229,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/admin/usage/UsageDashboardPage.vue'),
     meta: { title: '用量看板', requiresManager: true }
   },
+  // ─── AI 分析看板（独立窗口，承载完整可视化套件）───────────────────────────
+  {
+    path: '/admin/usage/analytics',
+    name: 'AiAnalytics',
+    component: () => import('@/views/admin/usage/AiAnalyticsPage.vue'),
+    meta: { title: 'AI 分析', requiresManager: true }
+  },
   // ─── 权限不足兜底页（不加 public，已登录用户需保留侧边栏）───────────────────
   {
     path: '/403',

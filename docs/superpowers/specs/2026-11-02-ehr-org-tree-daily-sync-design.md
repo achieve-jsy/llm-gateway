@@ -79,7 +79,7 @@
 
 - 锁 key `ai_app_hub:sync:leader`，value 为 `hostname:pid`，TTL 10 分钟（覆盖最坏重试窗口，见 §5.4）。
 - 释锁用 Lua 比较 value 后删除（避免删掉别人的锁），写法照抄 `scheduled_report_service.go`。
-- Redis 未配置（`rdb == nil`，如本地单测）→ 不加锁直接跑并 `slog.Warn`；`SetNX` 报错 → 本轮跳过（宁可漏跑一次也不并发写）。
+- `State` 为 nil（控制面不会发生，仅作防御）→ 不启动调度并 `slog.Warn`；`SetNX` 报错 → 本轮跳过（宁可漏跑一次也不并发写）。
 
 ### 5.4 失败与重试
 

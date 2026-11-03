@@ -174,21 +174,75 @@ go test -count=1 ./internal/archive/... ./internal/observability/... ./tests/arc
 
 | # | 问题 | 证据 |
 |---|---|---|
-| **D1** | **main 的迁移目录与 GORM model 严重漂移**：`channel_monitors`（5 张表）、`quota_rpm`、`model_status_logs` 等模型**没有任何迁移文件**。用 `atlas migrate diff`（dir→desired）会一次性生成 18 KB 含 15 条 `DROP INDEX` 与大量 `ALTER COLUMN TYPE` 的无关变更 | 我在纯净 main worktree 复现；正因如此本特性的迁移改用 `atlas schema diff`（main model schema → 本分支 model schema）语义求差，**只含本特性增量** |
+| **D1** | **main 的迁移目录与 GORM model 漂移**：`channel_monitors`（5 张表）、`quota_rpm` 等模型无迁移文件。根因见 §6.1——这是**有意删除已应用迁移**的后果，不是疏忽 | 我在纯净 main worktree 复现 18 KB 伪 DDL；正因如此本特性的迁移改用 `atlas schema diff`（main model schema → 本分支 model schema）语义求差，**只含本特性增量** |
 | **D2** | **`tools/atlas-loader` 输出非确定性**：同一 worktree 连续两次 `go run main.go` 差 12 行（GORM 约束顺序随 map 迭代变化），会让 `atlas migrate diff` 产生伪 DDL | 实测两次输出 `diff` |
 | **D3** | `test/bedrock_model_id_check.go:98` 编译失败（`bedrock.NewListFoundationModelsPaginator` 未定义） | `go build ./...` |
 | **D4** | `internal/controlplane/repository` 的 `TestListHistoryPaged_respectsPageSize` 失败（GORM sqlite dialect 无法生成 `gen_random_uuid()`） | `go test`，在 HEAD 复现一致 |
 | **D5** | `tests/` 下 4 个包 `go vet` 失败（`fakeScheduler` 缺 `UpdateSticky` 等接口漂移） | 在 HEAD 临时 worktree 复跑，输出逐字相同 |
-| **D6** | 生产库 `atlas_schema_revisions` 表**不存在** → 迁移从未通过 Atlas 应用（或 baseline 未标记）。直接跑 `migrate-prod` 会尝试从 baseline 重放全部迁移 | 需先查明并按 `scripts/atlas-baseline.sh` 标记 |
-| **D7** | `.gitlab-ci.yml` 的 `migrate-prod` 缺 `--exec-order non-linear`（`migrate-test` 有） | 本次迁移时间戳已 > main 最大值，线性有序，**未修改 CI** |
+| ~~D6~~ | ~~生产库 `atlas_schema_revisions` 不存在~~ → **判断有误，已推翻** | **无阻断**：见下方修正，生产 revisions 正常（55 条、0 错误） |
+| ~~D7~~ | ~~`migrate-prod` 缺 `--exec-order non-linear`~~ → **已纠正** | prod 严格线性有序属**有意设计**，**不应改 CI**，见下方修正 |
 
-> D7 说明：v3 §6.1 曾建议给 prod 补 `--exec-order non-linear`。我**没有改**——因为加它会让迁移乱序变成静默通过，掩盖 D1/D2 这类真问题；正确做法是保证时间戳有序（本次已保证）。
+### 6.1 生产迁移状态核查（D6/D7/D1 的修正，仅有只读查询，未写生产）
+
+**D6 我原来的判断是错的，必须更正。** 我此前只查了 `public` 里有没有名为
+`atlas_schema_revisions` 的**表**，而 CI 用的参数是 `--revisions-schema atlas_schema_revisions`
+——它是一个**同名 schema**。生产实际状态：
+
+```
+schema:  atlas_schema_revisions   ← 存在
+table:   atlas_schema_revisions.atlas_schema_revisions
+已应用:  55 条，error 全为空，无失败记录
+```
+
+**结论：生产 Atlas 迁移机制完全正常工作，不存在部署阻断。** 原判断中"迁移从未通过 Atlas 应用"
+与"直接跑 migrate-prod 会从 baseline 重放"两句均不成立。
+
+**逐版本比对（生产 55 条 vs 仓库 54 个文件）**
+
+| 类别 | 数量 | 明细 |
+|---|---|---|
+| main 的迁移 | 53 | **全部已应用** —— 无一条待应用 |
+| 本次新增 | 1 | `20260921064216_add_trace_archive.sql` —— **唯一待应用** |
+| 生产独有的孤儿版本 | 2 | `20260630120000`、`20260703110000`（仓库已无文件） |
+
+```
+生产 max = 20260916095738
+本分支 max = 20260921064216   →  严格大于，线性有序
+atlas migrate validate --dir file://atlas-migrations  →  exit=0
+```
+
+**D7 纠正**：`.gitlab-ci.yml` 的 `migrate-prod` 缺 `--exec-order non-linear`（`migrate-test` 有）
+**不是疏漏，而是有意设计**。仓库历史给出了原因——提交 `43395327`（2026-07-06）：
+
+```
+fix(migrations): 删除乱序的 atlas 迁移文件避免生产部署失败
+删除: 20260630100000_ehr_sync_tables.sql
+      20260630120000_add_call_logs_key_type.sql
+      20260703110000_create_channel_monitor_tables.sql
+```
+
+团队对"乱序迁移"的处置方式是**删掉文件**，而不是放宽 prod 的执行顺序。因此：
+
+- prod 保持严格线性有序是刻意选择，**不应修改 CI**
+- 本分支迁移的时间戳已刻意保证 > 生产 max，符合该约定
+
+**孤儿版本被容忍的实证**：删除发生在 2026-07-06，而生产在那之后**成功应用了 5 次迁移**
+（2026-08-21、08-31、09-07、09-11、09-17）。这说明 **Atlas 容忍「已应用但文件已不存在」的版本**，
+本次应用不会因这 2 个孤儿而失败。
+
+**D1 根因也随之解释**：`channel_monitors`（5 张表）、`quota_rpm` 之所以"有 model 无迁移"，
+正是上述删除动作的直接后果——那条迁移当初已应用到生产，随后文件被删。
+所以「迁移目录与 model 漂移」不是疏漏，而是这个仓库迁移策略的固有代价；
+它也再次印证：本特性用 `atlas schema diff` 而非 `atlas migrate diff` 生成迁移是必要的。
+
 
 ---
 
 ## 7. 上线前置清单
 
-1. **迁移**：先查明生产 `atlas_schema_revisions` 缺失原因（D6）→ 必要时 `./scripts/atlas-baseline.sh prod` → 再应用 `20260921064216_add_trace_archive.sql`。该迁移在 5.29M 行的 `call_traces` 上使用 PG 11+ **快速默认值**，不触发表重写。
+1. **迁移**：**无前置阻断**（D6 已推翻，见 §6.1）——生产 revisions 正常，唯一待应用的就是
+   `20260921064216_add_trace_archive.sql`，且时间戳严格大于生产 max。直接走 CI 的 `migrate-prod` 即可。
+   该迁移在 5,315,983 行的 `call_traces` 上使用 PG 11+ **快速默认值**，不触发表重写。
 2. **开关**：`archive.write.enabled=false`、`archive.read.enabled=true` 上线，验证 writer no-op 后再开写。
 3. **磁盘**：`/datalog` 需合账（归档 + leakscan 189 GB + 保留期），`archive.retention_days` 建议 180 而非 365（v3 §7.2）。
 4. **/data 时间窗**：`VACUUM call_traces` 是止涨的关键动作，优先于 `pg_repack`（后者需约 532 GiB，当前不可行 —— v3 §6.3）。

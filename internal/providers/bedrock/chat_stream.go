@@ -276,7 +276,7 @@ func (s *streamConverter) formatChunk(delta map[string]any, finishReason any, us
 	}
 	if usage != nil {
 		u := map[string]any{
-			"prompt_tokens":     int(awssdk.ToInt32(usage.InputTokens)),
+			"prompt_tokens":     bedrockPromptTokens(usage),
 			"completion_tokens": int(awssdk.ToInt32(usage.OutputTokens)),
 			"total_tokens":      int(awssdk.ToInt32(usage.TotalTokens)),
 		}

@@ -1063,7 +1063,7 @@ func convertConverseOutput(model string, out *bedrockruntime.ConverseOutput) *co
 
 	if out.Usage != nil {
 		resp.Usage = core.Usage{
-			PromptTokens:     int(awssdk.ToInt32(out.Usage.InputTokens)),
+			PromptTokens:     bedrockPromptTokens(out.Usage),
 			CompletionTokens: int(awssdk.ToInt32(out.Usage.OutputTokens)),
 			TotalTokens:      int(awssdk.ToInt32(out.Usage.TotalTokens)),
 		}
@@ -1113,6 +1113,24 @@ func mapStopReason(sr brtypes.StopReason, hasToolCalls bool) string {
 	default:
 		return string(sr)
 	}
+}
+
+// bedrockPromptTokens 计算 OpenAI 语义下的 prompt_tokens。
+//
+// Bedrock 的 InputTokens 只统计未命中缓存的输入：缓存命中时（部分 xAI 模型甚至
+// 把全部输入都报成缓存读）它会返回 0，而 TokenUsage.TotalTokens 已经含了缓存部分。
+// 直接透传 InputTokens 会得到 prompt_tokens + completion_tokens ≠ total_tokens，
+// 既违反 OpenAI 协议，也让按 prompt_tokens 计费/统计的下游漏算缓存命中量。
+// 所以这里把 cache 读写加回去。
+func bedrockPromptTokens(u *brtypes.TokenUsage) int {
+	n := int(awssdk.ToInt32(u.InputTokens))
+	if u.CacheReadInputTokens != nil {
+		n += int(*u.CacheReadInputTokens)
+	}
+	if u.CacheWriteInputTokens != nil {
+		n += int(*u.CacheWriteInputTokens)
+	}
+	return n
 }
 
 func bedrockUsageExtras(u *brtypes.TokenUsage) map[string]any {

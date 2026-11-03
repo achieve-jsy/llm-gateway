@@ -219,6 +219,57 @@ func TestProbeChatCompletion_NonKimiModel_NoTemperature(t *testing.T) {
 	assert.Nil(t, receivedTemp, "gpt-4 不应注入 temperature")
 }
 
+// TestProbeChatCompletion_KimiK3Alias_RetryDropsEnableThinking 复现真实故障：
+// 模型以别名（不匹配 FixedTemperatureForModel 硬编码名）配置，上游 kimi-k3
+// 既拒绝缺失 temperature，也拒绝 enable_thinking+temperature 组合。
+// 首次探测带 enable_thinking:false 被拒；error-based retry 必须同时去掉
+// enable_thinking 并注入 temperature，否则重试仍被拒 → 模型被自动禁用。
+func TestProbeChatCompletion_KimiK3Alias_RetryDropsEnableThinking(t *testing.T) {
+	var lastEnableThinking interface{}
+	var lastTemp interface{}
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		lastEnableThinking = body["enable_thinking"]
+		lastTemp = body["temperature"]
+		// 上游规则：enable_thinking 存在即拒绝；temperature 缺失或非 0.6 也拒绝。
+		if body["enable_thinking"] != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": map[string]interface{}{
+					"message": "invalid temperature: only 0.6 is allowed for this model",
+					"type":    "InvalidParameter",
+				},
+			})
+			return
+		}
+		if body["temperature"] != 0.6 {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": map[string]interface{}{
+					"message": "invalid temperature: only 0.6 is allowed for this model",
+					"type":    "InvalidParameter",
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"choices": []interface{}{}})
+	}))
+	defer srv.Close()
+
+	// 别名不匹配 FixedTemperatureForModel → 首次请求带 enable_thinking:false、无 temperature
+	success, skipped, _, errMsg := probeChatCompletion(context.Background(), srv.URL, "my-kimi-alias", "test-key")
+	assert.True(t, success, "error-based retry 应去掉 enable_thinking 并注入 temperature 后成功")
+	assert.False(t, skipped)
+	assert.Empty(t, errMsg)
+	assert.Equal(t, 2, callCount, "应该发了两次请求（首次失败 + 重试成功）")
+	assert.Nil(t, lastEnableThinking, "重试请求不应再带 enable_thinking")
+	assert.Equal(t, 0.6, lastTemp, "重试请求应注入 temperature=0.6")
+}
+
 func TestProbeModelForward_KimiK3_EndToEnd(t *testing.T) {
 	srv := newKimiK3Server(t)
 	defer srv.Close()

@@ -110,10 +110,13 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 
 	// 某些模型要求固定 temperature（如 kimi-k3 要求 0.6），
 	// 探测请求未带 temperature 时会被拒绝，提取要求值后重试。
+	// 重试时同时移除 enable_thinking：固定 temperature 模型（kimi-k3）
+	// 会拒绝 enable_thinking+temperature 组合，返回同样误导性的 400。
 	if strings.Contains(lower, "invalid temperature") && strings.Contains(lower, "only") {
 		if tempVal := ExtractRequiredTemperature(lower); tempVal != nil {
 			retryReq := cloneProbeRequest(baseReq)
 			retryReq["temperature"] = *tempVal
+			delete(retryReq, "enable_thinking")
 			ok, t, retryErr := doProbeRequest(ctx, chatEndpoint, apiKey, retryReq, false)
 			if ok {
 				return true, false, t, ""

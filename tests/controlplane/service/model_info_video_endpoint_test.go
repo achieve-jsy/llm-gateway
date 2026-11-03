@@ -42,12 +42,10 @@ const (
 func videoGroupFixture(t *testing.T, groupName string, providerTypes []string) (service.GroupModelInfo, error) {
 	t.Helper()
 	groupID := uint(9)
-	ids := make([]uuid.UUID, 0, len(providerTypes))
 	g := model.Group{ID: groupID, Name: groupName, Enabled: true}
 	models := map[uuid.UUID]*model.Model{}
 	for i, pt := range providerTypes {
 		id := uuid.New()
-		ids = append(ids, id)
 		g.Models = append(g.Models, model.GroupModel{GroupID: groupID, ModelID: id})
 		models[id] = &model.Model{
 			ID:        id,

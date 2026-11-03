@@ -172,6 +172,41 @@ refactor(scheduler): 重构路由表结构
 
 **禁止**直接 `git push origin main`。
 
+### P4: 多 worktree 下禁止用 `git stash` 做「基线对拍」
+
+🔴 **`git stash` 是仓库级共享的，不是 worktree 级的。** 本仓库同时存在多个
+worktree（`.worktrees/*`）与**大量历史 stash**（`git stash list` 长期有 10+ 条，
+来自不同分支、不同人）。工作区**干净**时执行 `git stash push` 不会新建条目，
+随后的 `git stash pop` 会**弹出别人的 WIP**，把无关分支的改动混进你的工作区，
+甚至复活已删除的文件、制造冲突。这个错误一旦发生，很容易在不知情的情况下
+把它一起提交。
+
+**真实案例**：一次「对照基线跑 lint」的操作就是这样弹出了
+`stash@{0}: WIP on codex/from-main`，污染了 `tools/usage-report/client/usage_client.go`
+并复活了两个已删除的测试文件。所幸 stash 条目在冲突时会保留，未造成不可逆损失。
+
+**正确做法**（对照基线跑 lint / 测试时）：
+
+```bash
+# ✅ 用独立 worktree 或独立 clone 对照基线，不要动当前工作区
+git worktree add /tmp/base-check <baseline-commit>
+cd /tmp/base-check && golangci-lint run ./...
+git worktree remove /tmp/base-check
+
+# ✅ 或者只把基线文件导出到临时目录（不触碰工作区）
+git archive <baseline-commit> | tar -x -C /tmp/base-check
+```
+
+如果确实非用 stash 不可：
+1. 先 `git stash list` 记录当前条目数与 `stash@{0}` 的哈希；
+2. 只 `git stash push` **你自己的、已确认存在的改动**（`git status` 非空）；
+3. `pop` 之后**立刻比对** `stash@{0}` 哈希与条目数是否变化；
+4. 发现弹错 → `git reset --hard HEAD` 复原工作区，**不要** `git stash drop`
+   （那会真正丢掉别人的工作）。
+
+**绝不要**为了让工作区变干净而 `git checkout <基线> -- .` —— 它会覆盖所有已跟踪
+文件，配合 stash 使用极易造成上述事故。
+
 ## 安全铁律
 
 ### S1: 内部 API 必须鉴权

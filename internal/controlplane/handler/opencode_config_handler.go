@@ -33,6 +33,17 @@ var discoveryPluginJS []byte
 //go:embed assets/opencode-models-discovery.version
 var discoveryPluginVersionRaw string
 
+// discoveryPluginV2JS / discoveryPluginV2VersionRaw 是同一插件的 OpenCode 2.x 版本。
+// 2.x 换掉了整套插件契约（V1 插件在 2.x 里不会被加载），所以单独打一份：
+// 启动时向网关 /v1/models 动态发现模型并注入 provider，无需重跑安装脚本。
+// 源码 tools/opencode-models-discovery/src/v2/index.ts，由同一条 build:bundle 生成。
+//
+//go:embed assets/opencode-models-discovery-v2.js
+var discoveryPluginV2JS []byte
+
+//go:embed assets/opencode-models-discovery-v2.version
+var discoveryPluginV2VersionRaw string
+
 var windowsTmpl = template.Must(template.New("win").Parse(windowsTmplRaw))
 var macTmpl = template.Must(template.New("mac").Parse(macTmplRaw))
 
@@ -207,20 +218,30 @@ func (h *OpencodeConfigHandler) GetScript(c *gin.Context) {
 // GetPlugin GET /api/v1/opencode-config/plugin
 // 返回二开后的 opencode-models-discovery 插件单文件 bundle（纯 JS，无需 JWT）。
 // 配置脚本会下载它到 ~/.config/opencode/plugin/ 供 opencode 本地加载。
+// `?ver=v2` 返回 OpenCode 2.x 版本（V1/V2 插件契约不兼容，不能混用）。
 func (h *OpencodeConfigHandler) GetPlugin(c *gin.Context) {
+	body, version := discoveryPluginJS, discoveryPluginVersionRaw
+	if strings.EqualFold(c.Query("ver"), "v2") {
+		body, version = discoveryPluginV2JS, discoveryPluginV2VersionRaw
+	}
 	c.Header("Content-Type", "application/javascript; charset=utf-8")
 	c.Header("Cache-Control", "no-store")
-	c.Header("X-Plugin-Version", strings.TrimSpace(discoveryPluginVersionRaw))
+	c.Header("X-Plugin-Version", strings.TrimSpace(version))
 	c.Status(http.StatusOK)
-	_, _ = c.Writer.Write(discoveryPluginJS)
+	_, _ = c.Writer.Write(body)
 }
 
 // GetPluginVersion GET /api/v1/opencode-config/plugin/version
 // 返回当前内嵌插件 bundle 的版本号（纯文本，无需 JWT），供插件自更新比对。
+// `?ver=v2` 返回 OpenCode 2.x 插件版本。
 func (h *OpencodeConfigHandler) GetPluginVersion(c *gin.Context) {
+	version := discoveryPluginVersionRaw
+	if strings.EqualFold(c.Query("ver"), "v2") {
+		version = discoveryPluginV2VersionRaw
+	}
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.Header("Cache-Control", "no-store")
-	c.String(http.StatusOK, strings.TrimSpace(discoveryPluginVersionRaw))
+	c.String(http.StatusOK, strings.TrimSpace(version))
 }
 
 // Callback POST /api/v1/opencode-config/callback  (无需 JWT，token 即凭证)
@@ -317,6 +338,11 @@ PLUGIN_DIR="$HOME/.config/opencode/plugins"
 PLUGIN_FILE="$PLUGIN_DIR/opencode-models-discovery.js"
 # 旧版脚本曾下到单数目录，清理掉以免重复加载或加载到旧副本。
 LEGACY_PLUGIN_FILE="$HOME/.config/opencode/plugin/opencode-models-discovery.js"
+# V2 插件与 V1 契约不兼容，文件名区分开，装哪版就清掉另一版。
+PLUGIN_V2_FILE="$PLUGIN_DIR/opencode-models-discovery-v2.js"
+LEGACY_PLUGIN_V2_FILE="$HOME/.config/opencode/plugin/opencode-models-discovery-v2.js"
+# V2 插件从同目录的 sidecar 读网关地址/key（插件执行时 opencode.json 还没进注册表）。
+PLUGIN_SIDECAR="$PLUGIN_DIR/opencode-models-discovery.json"
 DISCOVERY_PLUGIN="opencode-models-discovery"
 # BASE_URL 形如 https://host/v1；去掉尾斜杠后拼 /models、/model/info。
 API_BASE="${BASE_URL%/}"
@@ -410,12 +436,46 @@ step "阶段 2/4  下载模型发现插件..."
 
 PLUGIN_INSTALLED=0
 if [ "$MODE" = "v2" ]; then
-  # V1 插件实现不会在 V2 里运行，装上去只会刷加载失败日志；顺手清掉旧副本。
-  rm -f "$PLUGIN_FILE" "$LEGACY_PLUGIN_FILE" 2>/dev/null || true
-  info "V2 模式：跳过插件安装（V1 插件在 OpenCode 2 不运行）"
+  # V2 用另一套插件契约：下发 V2 插件 + sidecar，让它启动时自己发现模型。
+  # V1 插件在 2.x 里不会被加载，顺手清掉免得留垃圾。
+  rm -f "$PLUGIN_FILE" "$LEGACY_PLUGIN_FILE" "$LEGACY_PLUGIN_V2_FILE" 2>/dev/null || true
+  if mkdir -p "$PLUGIN_DIR" 2>/dev/null && \
+     curl -fsSL "$PLUGIN_URL?ver=v2" -o "$PLUGIN_V2_FILE.tmp" 2>/dev/null && [ -s "$PLUGIN_V2_FILE.tmp" ]; then
+    mv "$PLUGIN_V2_FILE.tmp" "$PLUGIN_V2_FILE"
+    # sidecar 走环境变量 + 独立 heredoc：不再把 key/供应商名拼进代码，避免引号把 JSON 打坏。
+    if OC_SIDECAR_PROVIDER_ID="$PROVIDER_ID" \
+       OC_SIDECAR_PROVIDER_NAME="$SUPPLIER_NAME" \
+       OC_SIDECAR_BASE_URL="$BASE_URL" \
+       OC_SIDECAR_API_KEY="$API_KEY" \
+       python3 - "$PLUGIN_SIDECAR" <<'PY' 2>/dev/null
+import json, os, sys
+
+payload = {
+    "providerID": os.environ["OC_SIDECAR_PROVIDER_ID"],
+    "providerName": os.environ["OC_SIDECAR_PROVIDER_NAME"],
+    "baseURL": os.environ["OC_SIDECAR_BASE_URL"],
+    "apiKey": os.environ["OC_SIDECAR_API_KEY"],
+}
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+PY
+    then
+      PLUGIN_INSTALLED=1
+      info "V2 插件已下载: ${PLUGIN_V2_FILE}（启动时自动发现模型）"
+    else
+      rm -f "$PLUGIN_V2_FILE" "$PLUGIN_SIDECAR" 2>/dev/null || true
+      PLUGIN_INSTALLED=0
+      warn "V2 插件安装失败（配置里的静态模型清单仍可用），可稍后重试"
+    fi
+  else
+    rm -f "$PLUGIN_V2_FILE.tmp" 2>/dev/null || true
+    PLUGIN_INSTALLED=0
+    warn "V2 插件下载失败（不影响配置写入），可稍后重试"
+  fi
 else
   # 清理旧的单数目录副本，避免重复加载或加载旧版本。
-  rm -f "$LEGACY_PLUGIN_FILE" 2>/dev/null || true
+  rm -f "$LEGACY_PLUGIN_FILE" "$PLUGIN_V2_FILE" "$LEGACY_PLUGIN_V2_FILE" "$PLUGIN_SIDECAR" 2>/dev/null || true
   if mkdir -p "$PLUGIN_DIR" 2>/dev/null && \
      curl -fsSL "$PLUGIN_URL" -o "$PLUGIN_FILE.tmp" 2>/dev/null && [ -s "$PLUGIN_FILE.tmp" ]; then
     mv "$PLUGIN_FILE.tmp" "$PLUGIN_FILE"
@@ -747,7 +807,11 @@ info "Provider：${PROVIDER_ID}（已写入）"
 
 if [ "$MODE" = "v2" ]; then
   info "模型：${MODEL_COUNT} 个（安装时快照，已带上图像输入/工具调用/上下文上限）"
-  warn "V2 模式不安装发现插件（V1 插件在 OpenCode 2 不运行）；网关后台新增模型后请重新执行本脚本"
+  if [ "$PLUGIN_INSTALLED" = "1" ]; then
+    info "插件：V2 版已安装（每次启动自动发现，网关后台新增模型无需重跑本脚本）"
+  else
+    warn "插件：V2 版未安装，当前只有安装时快照；网关后台新增模型需重新执行本脚本"
+  fi
 else
   if [ "$PLUGIN_INSTALLED" = "1" ]; then
     info "插件：已下载到 ${PLUGIN_FILE}（每次启动按 key 动态发现并富化模型能力）"

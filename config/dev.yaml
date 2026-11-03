@@ -41,6 +41,18 @@ frontend:
 gateway:
   url: "http://127.0.0.1:8080"
 
+# 可逆脱敏（docs/redaction.md）。默认 off：网关行为与未接入时完全一致。
+# mode: off | detect（只统计不改写）| mask（改写+还原；Protect 失败即终止请求且不 failover）
+privacy:
+  mode: "off"
+  rules_only: true          # 只走规则，不下载本地模型；false 才启用模型检测
+  max_input_bytes: 8388608  # 单次文本上限；超限在 mask 模式下直接拒绝（fail-closed）
+  cache_dir: ""             # 本地模型缓存目录，rules_only=true 时无意义
+  key_path: ""              # 占位符 HMAC 密钥文件；留空则每请求换占位符，上游前缀缓存会失效
+  # actions:                # key 是命中 Kind（大写下划线）→ mask | warn | block，缺省 mask
+  #   PRIVATE_KEY: block    # 打码并拦下整条请求
+  #   GITLAB_TOKEN: block
+
 # 模型等级额度在开发环境也保持与生产一致的记账和拦截语义，避免页面显示额度但请求未被限制。
 budget_tier:
   master_enabled: true

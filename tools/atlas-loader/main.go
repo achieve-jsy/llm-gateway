@@ -11,8 +11,10 @@ import (
 	authmodel "github.com/example/llm-gateway/internal/auth/model"
 	"github.com/example/llm-gateway/internal/controlplane/keyactivity"
 	cpmmodel "github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	corequota "github.com/example/llm-gateway/internal/core/quota"
 	obsrvmodel "github.com/example/llm-gateway/internal/observability/model"
+	orgmodel "github.com/example/llm-gateway/internal/orgservice/model"
 )
 
 func main() {
@@ -84,10 +86,21 @@ func main() {
 		&cpmmodel.Feedback{},
 		&cpmmodel.FeedbackAttachment{},
 
-		// auth/model (3 个表)
-		&authmodel.Department{},
+		// auth/model (2 个表)
 		&authmodel.DevUser{},
 		&authmodel.User{},
+
+		// orgservice/model：组织架构与 RBAC（studios / departments / dept_studio_map / user_roles）
+		// departments 由 OrgDepartment 声明（含 status/studio_id/owner_id），
+		// auth/model 里的同名 Department 只是子集，重复注册会让 Atlas 看到两张不同的表。
+		&orgmodel.Studio{},
+		&orgmodel.OrgDepartment{},
+		&orgmodel.DeptStudioMap{},
+		&orgmodel.UserRole{},
+		&orgmodel.OrgMigrationLog{},
+
+		// 凭证加密的 KEK/DEK（原先只靠运行时建表，迁移里没有）
+		&crypto.EncryptionKey{},
 
 		// observability/model (3 个表)
 		&obsrvmodel.CallLog{},

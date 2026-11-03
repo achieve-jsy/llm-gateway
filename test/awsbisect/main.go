@@ -413,7 +413,11 @@ func main() {
 	}
 
 	for _, c := range cases {
-		req := core.AnthropicToChatRequest(&a)
+		req, err := core.AnthropicToChatRequest(&a)
+		if err != nil {
+			fmt.Printf("[%s] 转换失败: %v\n", c.name, err)
+			continue
+		}
 		req.Model = modelID
 		if c.apply != nil {
 			c.apply(req)

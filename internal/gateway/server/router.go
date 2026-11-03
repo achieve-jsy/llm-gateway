@@ -22,6 +22,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/provider"
 	"github.com/example/llm-gateway/internal/gateway/quota"
+	"github.com/example/llm-gateway/internal/gateway/redact"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/protocol"
 	"github.com/example/llm-gateway/internal/providers"
@@ -51,6 +52,7 @@ func Setup(
 	nameCache *cache.GroupNameCache,
 	collectorOpt *gwobs.Collector,
 	traceWriterOpt *gwobs.TraceWriter,
+	redactEngine *redact.Engine,
 	bindClient *binding.Client,
 	rdb redisClient,
 	tierHolder *budget.SnapshotHolder,
@@ -58,7 +60,7 @@ func Setup(
 	onSeedanceReloadReady ...func(reload func(entries []gwmodel.ProviderEntry)),
 ) *gin.Engine {
 	return setup(nil, routerGetter, routerCache, state, authClient, jwtManager, controlPlaneURL, internalToken,
-		sch, nameCache, collectorOpt, traceWriterOpt, bindClient, rdb, tierHolder, protocolPolicy, onSeedanceReloadReady...)
+		sch, nameCache, collectorOpt, traceWriterOpt, redactEngine, bindClient, rdb, tierHolder, protocolPolicy, onSeedanceReloadReady...)
 }
 
 func SetupWithBudgetAlertDispatcher(
@@ -73,6 +75,7 @@ func SetupWithBudgetAlertDispatcher(
 	nameCache *cache.GroupNameCache,
 	collectorOpt *gwobs.Collector,
 	traceWriterOpt *gwobs.TraceWriter,
+	redactEngine *redact.Engine,
 	bindClient *binding.Client,
 	rdb redisClient,
 	tierHolder *budget.SnapshotHolder,
@@ -80,7 +83,7 @@ func SetupWithBudgetAlertDispatcher(
 	onSeedanceReloadReady ...func(reload func(entries []gwmodel.ProviderEntry)),
 ) *gin.Engine {
 	return setup(alertDispatcher, routerGetter, routerCache, state, authClient, jwtManager, controlPlaneURL, internalToken,
-		sch, nameCache, collectorOpt, traceWriterOpt, bindClient, rdb, tierHolder, protocolPolicy, onSeedanceReloadReady...)
+		sch, nameCache, collectorOpt, traceWriterOpt, redactEngine, bindClient, rdb, tierHolder, protocolPolicy, onSeedanceReloadReady...)
 }
 
 func setup(
@@ -95,6 +98,7 @@ func setup(
 	nameCache *cache.GroupNameCache,
 	collectorOpt *gwobs.Collector,
 	traceWriterOpt *gwobs.TraceWriter,
+	redactEngine *redact.Engine,
 	bindClient *binding.Client,
 	rdb redisClient,
 	tierHolder *budget.SnapshotHolder,
@@ -187,6 +191,14 @@ func setup(
 		chatHandler.SetProtocolPolicy(protocolPolicy)
 	}
 
+	// 脱敏注入：引擎全局共享（并发安全），每个请求由 handler 内部 NewSession() + defer Close()。
+	// nil / off 时 handler 内部是 no-op。
+	// 只挂 chat / messages / responses / embeddings / rerank 五条纯文本链路；passthrough / batch 未覆盖。
+	chatHandler.SetRedactor(redactEngine)
+	messagesHandler.SetRedactor(redactEngine)
+	embeddingsHandler.SetRedactor(redactEngine)
+	rerankHandler.SetRedactor(redactEngine)
+
 	// Convert *providers.Router to interface carefully to avoid the nil-interface trap.
 	// A nil *providers.Router assigned to a non-nil interface value would cause panics
 	// inside methods that check `router != nil` on the interface.
@@ -213,6 +225,7 @@ func setup(
 	rerankHandler.SetBudgetDeps(budgetDeps)
 	messagesHandler.SetBudgetDeps(budgetDeps)
 	responsesHandler.SetBudgetDeps(budgetDeps)
+	responsesHandler.SetRedactor(redactEngine)
 	var tierBudgetGate *budget.Gate
 	if tierHolder != nil && rdb != nil {
 		admissionConfig := budget.AdmissionConfig{}

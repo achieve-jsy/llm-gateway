@@ -41,6 +41,7 @@ func (m *capturingVideoProvider) CreateTask(ctx context.Context, req json.RawMes
 	*m.capturedBody = req
 	return m.mockVideoProvider.CreateTask(ctx, req)
 }
+
 // mockAssetProvider implements video.AssetProvider for testing
 type mockAssetProvider struct {
 	doActionResp json.RawMessage

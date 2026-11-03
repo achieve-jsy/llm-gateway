@@ -20,7 +20,9 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
+	"github.com/example/llm-gateway/internal/gateway/privacy"
 	"github.com/example/llm-gateway/internal/gateway/quota"
+	"github.com/example/llm-gateway/internal/gateway/redact"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/protocol"
 	"github.com/gin-gonic/gin"
@@ -38,6 +40,9 @@ type MessagesHandler struct {
 	requestQuota   *quota.QuotaMiddleware
 	quotaGate      *quota.ModelQuotaGate // v0.15: 模型层配额检查
 	protocolPolicy *protocol.Policy      // relaykit 协议转换策略
+	// redactor 是进程内共享的脱敏引擎（并发安全）。nil 或 off 时所有方法 no-op。
+	// 每个请求在 HandleMessages 内 NewSession()，defer Close()，绝不复用。
+	redactor *redact.Engine
 }
 
 // NewMessagesHandler creates a MessagesHandler.
@@ -71,6 +76,11 @@ func (h *MessagesHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
 // SetProtocolPolicy 注入 relaykit 协议策略。
 func (h *MessagesHandler) SetProtocolPolicy(p *protocol.Policy) {
 	h.protocolPolicy = p
+}
+
+// SetRedactor 注入脱敏引擎（router setup 时调用一次；nil 表示不脱敏）。
+func (h *MessagesHandler) SetRedactor(engine *redact.Engine) {
+	h.redactor = engine
 }
 
 // Handle processes POST /v1/messages requests.
@@ -113,6 +123,39 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 	}
 
 	c.Set("model", anthReq.Model)
+
+	// 隐私脱敏：整个请求只做一次，且在转成 ChatRequest、进 failover 循环之前——
+	// failover 复用同一个 req，放进循环会把占位符再套一层；而转换之后 tool_use
+	// 等结构已经被打散，只有 Anthropic 原始结构才能精确命中 system 与 text part。
+	// engine 为 nil 或 off 时不创建 session（所有方法本就 no-op）。
+	var session *redact.Session
+	if h.redactor != nil && h.redactor.Mode() != redact.ModeOff {
+		session = h.redactor.NewSession()
+		defer session.Close() // 每个请求一个 session，绝不复用
+		protectTraceBody(c, session)
+
+		if perr := session.ProtectAnthropic(c.Request.Context(), &anthReq); perr != nil {
+			// fail-closed：mask 模式下保护失败绝不能把原文发给上游，也不能 failover
+			// （换渠道只是把同一份原文重发一遍）。detect 模式只统计不改写，转发原文
+			// 不构成泄漏，因此只告警放行，避免检测失败拖垮线上流量。
+			if h.redactor.Enabled() {
+				// 只记错误种类，不记正文：失败路径上的报文可能含敏感片段。
+				slog.Error("privacy: protect messages request failed, request aborted (fail-closed)",
+					"request_id", c.GetString("request_id"),
+					"model", anthReq.Model,
+					"error", perr.Error(),
+				)
+				h.respondAnthropicError(c, http.StatusInternalServerError, "api_error", "redaction_failed",
+					"request redaction failed", nil)
+				return
+			}
+			slog.Warn("privacy: detect messages request failed, forwarding unchanged",
+				"request_id", c.GetString("request_id"),
+				"model", anthReq.Model,
+				"error", perr.Error(),
+			)
+		}
+	}
 
 	// Convert Anthropic request to internal ChatRequest
 	req, convErr := core.AnthropicToChatRequest(&anthReq)
@@ -179,12 +222,12 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 
 	if anthReq.Stream {
 		c.Set("stream", true)
-		h.handleStream(c, baseCtx, req, originalModel)
+		h.handleStream(c, baseCtx, req, originalModel, session)
 		return
 	}
 
 	c.Set("stream", false)
-	h.handleNonStream(c, baseCtx, req, originalModel)
+	h.handleNonStream(c, baseCtx, req, originalModel, session)
 }
 
 // estimateAnthropicPromptChars 估算 Anthropic 请求的 prompt 字符数（system + messages）。
@@ -230,7 +273,7 @@ func (h *MessagesHandler) streamTimeout(originalModel string) time.Duration {
 }
 
 // handleNonStream processes a non-streaming request.
-func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string) {
+func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string, session *redact.Session) {
 	timeout := h.nonStreamTimeout(originalModel)
 	var lastErr error
 
@@ -247,6 +290,9 @@ func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Contex
 			if anthResp.ID == "" {
 				anthResp.ID = generateAnthropicID(c)
 			}
+			// 写回客户端之前先还原占位符；放在 c.Set("resp_object") 之前，
+			// 保证落库/追踪记录的是还原后的原文，而不是占位符。
+			session.RestoreAnthropic(anthResp)
 			c.Set("stream", false)
 			c.Set("resp_object", anthResp)
 			c.JSON(http.StatusOK, anthResp)
@@ -344,7 +390,7 @@ func estimatePromptTokens(msgs []core.Message) int {
 }
 
 // handleStream processes a streaming request.
-func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string) {
+func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string, session *redact.Session) {
 	timeout := h.streamTimeout(originalModel)
 
 	openStream := func(r *core.ChatRequest) (io.ReadCloser, context.CancelFunc, error) {
@@ -372,7 +418,14 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 				originalModel,
 				estimatePromptTokens(req.Messages),
 			)
-			HandleStreamResponseAs(c, anthStream, DialectAnthropic)
+			// 流式还原交给写出层：逐 event 还原占位符（被切开的一帧允许压一帧）。
+			// 只有 mask 模式才包还原写入器：detect 模式没有映射可还原，包上只是
+			// 白白多一层 event 缓冲；off 模式 session 为 nil，rw 保持 nil 透传。
+			var rw *privacy.RestoringWriter
+			if h.redactor != nil && h.redactor.Enabled() {
+				rw = session.RestoringWriter(c.Writer)
+			}
+			HandleStreamResponseAsRestoring(c, anthStream, DialectAnthropic, rw)
 			return
 		}
 		lastErr = err
@@ -571,7 +624,7 @@ func (h *MessagesHandler) handleMessagesRK(c *gin.Context, rawBody []byte) {
 	// 原生旁路：目标渠道能直接吃 Anthropic 原生 body 时零转换直发，
 	// 响应原样回传；只有 ErrNativeNotSupported 才降级到下方 relaykit 转换路径。
 	// 位置必须在 PrepareAuthorizedGates 之后，否则会绕过调度/预算/配额。
-	if native, ok := h.orchestrator.(NativeChatOrchestratorInterface); ok {
+	if native, ok := h.orchestrator.(NativeChatOrchestratorInterface); ok && !nativeRelayBlockedByRedaction(h.redactor) {
 		if header.Stream {
 			c.Set("stream", true)
 			stream, nativeErr := native.ChatNativeStream(baseCtx, req, rawBody, core.NativeRelayClaude)
@@ -713,6 +766,34 @@ func (h *MessagesHandler) handleMessagesRKShadow(c *gin.Context, rawBody []byte)
 
 	c.Set("model", anthReq.Model)
 
+	// 隐私脱敏：与 legacy 路径同一处、同一时机。shadow 模式的客户端拿的仍是
+	// legacy 输出，脱敏必须照样生效，不能因为跑了影子对比就漏掉。
+	var session *redact.Session
+	if h.redactor != nil && h.redactor.Mode() != redact.ModeOff {
+		session = h.redactor.NewSession()
+		defer session.Close() // 每个请求一个 session，绝不复用
+		protectTraceBody(c, session)
+
+		if perr := session.ProtectAnthropic(c.Request.Context(), &anthReq); perr != nil {
+			if h.redactor.Enabled() {
+				slog.Error("privacy: protect messages request failed, request aborted (fail-closed)",
+					"request_id", c.GetString("request_id"),
+					"model", anthReq.Model,
+					"error", perr.Error(),
+				)
+				h.respondAnthropicError(c, http.StatusInternalServerError, "api_error", "redaction_failed",
+					"request redaction failed", nil)
+				return
+			}
+			slog.Warn("privacy: detect messages request failed, forwarding unchanged",
+				"request_id", c.GetString("request_id"),
+				"model", anthReq.Model,
+				"error", perr.Error(),
+			)
+		}
+	}
+
+	// Convert Anthropic request to internal ChatRequest
 	req, convErr := core.AnthropicToChatRequest(&anthReq)
 	if convErr != nil {
 		h.respondAnthropicConversionError(c, convErr)
@@ -769,12 +850,12 @@ func (h *MessagesHandler) handleMessagesRKShadow(c *gin.Context, rawBody []byte)
 
 	if anthReq.Stream {
 		c.Set("stream", true)
-		h.handleStream(c, baseCtx, req, originalModel)
+		h.handleStream(c, baseCtx, req, originalModel, session)
 		return
 	}
 
 	c.Set("stream", false)
-	h.handleNonStream(c, baseCtx, req, originalModel)
+	h.handleNonStream(c, baseCtx, req, originalModel, session)
 }
 
 // handleMessagesRKNonStream 处理 relaykit 路径的非流式请求。

@@ -29,6 +29,24 @@ type Config struct {
 	Observability ObservabilityConfig
 	TraceBody     TraceBodyConfig
 	Protocol      ProtocolConfig
+	Privacy       PrivacyConfig
+}
+
+// PrivacyConfig 可逆脱敏配置（见 docs/redaction.md）。
+//
+// Mode 决定网关行为：
+//   - off    ：完全关闭（默认）
+//   - detect ：只统计命中，不改写请求，因此不存在还原
+//   - mask   ：改写请求 + 还原响应；Protect 报错即终止请求且不 failover
+type PrivacyConfig struct {
+	Mode          string            `mapstructure:"mode"`
+	RulesOnly     bool              `mapstructure:"rules_only"`
+	Actions       map[string]string `mapstructure:"actions"` // 规则类型 → mask|warn|block，默认 mask
+	MaxInputBytes int               `mapstructure:"max_input_bytes"`
+	CacheDir      string            `mapstructure:"cache_dir"`
+	// KeyPath 是占位符 HMAC 密钥文件。留空时每个会话临时生成密钥：同一凭证在不同
+	// 请求里得到不同占位符，会让上游前缀缓存失效；生产建议指向固定路径。
+	KeyPath string `mapstructure:"key_path"`
 }
 
 // ServerConfig 服务配置
@@ -124,6 +142,14 @@ func Load() *Config {
 	v.SetDefault("trace_body.flush_interval", "1m")
 	v.SetDefault("trace_body.roll_interval", "1h")
 	v.SetDefault("trace_body.disk_watermark_percent", 90)
+	// 脱敏默认关闭：未显式开启时网关行为与开启前完全一致（fail-open 到旧行为，
+	// 而不是带着一个半开的状态跑）。rules_only 默认 true：纯规则不下载本地模型，
+	// 保证开启 mask 不会因为拉模型失败而让网关起不来。
+	v.SetDefault("privacy.mode", "off")
+	v.SetDefault("privacy.rules_only", true)
+	v.SetDefault("privacy.max_input_bytes", 8388608)
+	v.SetDefault("privacy.cache_dir", "")
+	v.SetDefault("privacy.key_path", "")
 	v.SetDefault("otlp.endpoint", "localhost:4317")
 	v.SetDefault("otlp.enabled", false)
 	v.SetDefault("provider.internal_token", "")
@@ -215,6 +241,14 @@ func Load() *Config {
 			}
 			return tb
 		}(),
+		Privacy: PrivacyConfig{
+			Mode:          v.GetString("privacy.mode"),
+			RulesOnly:     v.GetBool("privacy.rules_only"),
+			Actions:       v.GetStringMapString("privacy.actions"),
+			MaxInputBytes: v.GetInt("privacy.max_input_bytes"),
+			CacheDir:      v.GetString("privacy.cache_dir"),
+			KeyPath:       v.GetString("privacy.key_path"),
+		},
 		OTLP: OTLPConfig{
 			Endpoint: v.GetString("otlp.endpoint"),
 			Enabled:  v.GetBool("otlp.enabled"),

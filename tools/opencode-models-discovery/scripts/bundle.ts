@@ -44,3 +44,23 @@ await Bun.write(versionPath, version + '\n')
 
 console.log(`bundled v${version} -> ${jsPath} (${(code.length / 1024).toFixed(1)} KB)`)
 console.log(`version asset -> ${versionPath}`)
+
+// 3) V2 插件：OpenCode 2.x 换了整套插件契约，V1 bundle 在 2.x 里不会被加载，
+//    所以单独打一份 V2 版本，由配置脚本按检测到的版本二选一下发。
+const v2Result = await Bun.build({
+  entrypoints: [join(pluginRoot, 'src', 'v2', 'index.ts')],
+  target: 'node',
+  format: 'esm',
+})
+if (!v2Result.success) {
+  for (const log of v2Result.logs) console.error(log)
+  throw new Error('bun build (v2) 失败')
+}
+const v2Code = await v2Result.outputs[0].text()
+const v2JsPath = join(assetsDir, 'opencode-models-discovery-v2.js')
+const v2VersionPath = join(assetsDir, 'opencode-models-discovery-v2.version')
+await Bun.write(v2JsPath, v2Code)
+await Bun.write(v2VersionPath, version + '\n')
+
+console.log(`bundled v2 v${version} -> ${v2JsPath} (${(v2Code.length / 1024).toFixed(1)} KB)`)
+console.log(`version asset -> ${v2VersionPath}`)

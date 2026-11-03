@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/example/llm-gateway/internal/core"
@@ -11,6 +12,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/quota"
+	"github.com/example/llm-gateway/internal/gateway/redact"
 	"github.com/gin-gonic/gin"
 )
 
@@ -27,6 +29,9 @@ type EmbeddingsHandler struct {
 	budgetGate    *budget.Gate
 	requestQuota  *quota.QuotaMiddleware
 	quotaGate     *quota.ModelQuotaGate // v0.15: 模型层配额检查
+	// redactor 是进程内共享的脱敏引擎（并发安全）。nil 或 off 时所有方法 no-op。
+	// 每个请求在 Handle 内 NewSession()，defer Close()，绝不跨请求复用。
+	redactor *redact.Engine
 }
 
 // NewEmbeddingsHandler creates a new EmbeddingsHandler.
@@ -50,6 +55,11 @@ func (h *EmbeddingsHandler) SetRequestQuotaGate(gate *quota.QuotaMiddleware) {
 // SetModelQuotaGate 注入模型配额检查器（router setup 时调用一次）
 func (h *EmbeddingsHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
 	h.quotaGate = gate
+}
+
+// SetRedactor 注入脱敏引擎（router setup 时调用一次；nil 表示不脱敏）。
+func (h *EmbeddingsHandler) SetRedactor(engine *redact.Engine) {
+	h.redactor = engine
 }
 
 // NewEmbeddingsHandlerWithGroup creates a new EmbeddingsHandler with group dispatch.
@@ -167,6 +177,35 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		}
 	}
 
+	// 隐私脱敏：请求侧只处理纯文本形态，放在转发上游前的最后一步。
+	// 没有 failover 循环，天然只脱敏一次。
+	// embeddings 响应只有向量、没有文本，因此不需要还原。
+	// engine 为 nil 或 off 时不创建 session（所有方法本就 no-op）。
+	var session *redact.Session
+	if h.redactor != nil && h.redactor.Mode() != redact.ModeOff {
+		session = h.redactor.NewSession()
+		defer session.Close() // 每个请求一个 session，绝不复用
+		protectTraceBody(c, session)
+
+		protected, perr := protectEmbeddingInput(c.Request.Context(), session, req.Input)
+		if perr != nil {
+			// fail-closed：保护失败绝不能把原文发给上游。只记错误种类，不记正文。
+			slog.Error("privacy: protect embeddings input failed, request aborted (fail-closed)",
+				"request_id", c.GetString("request_id"),
+				"model", req.Model,
+				"error", perr.Error(),
+			)
+			respondError(c, &model.UnifiedError{
+				Type:       model.ErrorTypeInternal,
+				Code:       "redaction_failed",
+				Message:    "privacy protection failed; request not forwarded",
+				HTTPStatus: http.StatusInternalServerError,
+			})
+			return
+		}
+		req.Input = protected
+	}
+
 	// 调用上游（不做 failover，失败直接返回错误）
 	resp, err := h.orchestrator.Embeddings(orchestrator.WithGinContext(c.Request.Context(), c), &req)
 	if err != nil {
@@ -188,6 +227,47 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 	c.Set("resp_object", resp)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// protectEmbeddingInput 只脱敏纯文本形态的 input：
+//   - string：整体脱敏
+//   - []string：逐项脱敏
+//   - []any：仅字符串元素脱敏，其余（float64 数字、嵌套数组、多模态对象）原样保留
+//   - []int / [][]int 等强类型 token 数组：原样返回（token 不是文本，脱敏会破坏语义）
+//
+// 返回新值而非就地改写，非文本形态逐字节不变。
+func protectEmbeddingInput(ctx context.Context, session *redact.Session, input any) (any, error) {
+	switch v := input.(type) {
+	case string:
+		return session.ProtectText(ctx, v)
+	case []string:
+		out := make([]string, len(v))
+		for i, s := range v {
+			t, err := session.ProtectText(ctx, s)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = t
+		}
+		return out, nil
+	case []any:
+		out := make([]any, len(v))
+		copy(out, v)
+		for i, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				continue // 数字 / 嵌套数组 / 多模态对象：一律不动
+			}
+			t, err := session.ProtectText(ctx, s)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = t
+		}
+		return out, nil
+	default:
+		return input, nil
+	}
 }
 
 // isMultimodalEmbeddingInput 检查 input 是否包含图片/音频对象。

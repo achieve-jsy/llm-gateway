@@ -17,7 +17,9 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
+	"github.com/example/llm-gateway/internal/gateway/privacy"
 	"github.com/example/llm-gateway/internal/gateway/quota"
+	"github.com/example/llm-gateway/internal/gateway/redact"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/protocol"
 	"github.com/gin-gonic/gin"
@@ -71,6 +73,10 @@ type ChatHandler struct {
 	// nil 或非 active 一律走原有转换路径：Chat 是流量最大的入口，
 	// 默认行为必须与改动前完全一致。
 	protocolPolicy *protocol.Policy
+
+	// redactor 是进程内共享的脱敏引擎（并发安全）。nil 或 off 时所有方法 no-op。
+	// 每个请求在 Handle 内 NewSession()，defer Close()，绝不跨请求复用。
+	redactor *redact.Engine
 }
 
 // defaultMaxInlineMediaBytes 内联媒体请求体默认上限（10MiB）。
@@ -91,6 +97,22 @@ func NewChatHandlerWithGroup(orch ChatOrchestratorInterface, gd *orchestrator.Gr
 // SetMaxInlineMediaBytes 覆盖内联媒体请求体上限（<=0 表示不限制）。
 func (h *ChatHandler) SetMaxInlineMediaBytes(n int64) {
 	h.maxInlineMediaBytes = n
+}
+
+// SetRedactor 注入脱敏引擎（router setup 时调用一次；nil 表示不脱敏）。
+func (h *ChatHandler) SetRedactor(engine *redact.Engine) {
+	h.redactor = engine
+}
+
+// nativeRelayBlockedByRedaction 报告脱敏是否要求禁用原生旁路。
+//
+// 原生旁路发的是客户端**原始 body**，脱敏改的是**解析后的 ChatRequest** ——
+// 两者不可能同时成立：走原生等于把未脱敏的原文直发上游，比走转换路径更糟
+// （转换路径的脱敏是生效的）。所以脱敏一旦开启就强制走转换路径，宁可多一次转换。
+//
+// Gemini 入站没有 redactor（整条链路尚未接入脱敏），不在此 guard 覆盖范围。
+func nativeRelayBlockedByRedaction(engine *redact.Engine) bool {
+	return engine != nil && engine.Mode() != redact.ModeOff
 }
 
 // SetBudgetDeps 注入预算依赖（router setup 时调用一次）
@@ -153,7 +175,7 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 	// 与 /v1/messages、/v1/responses 保持一致：只有显式 active 才走原生旁路。
 	// 不门控的话上线即全量改变语义——客户端未知字段会被透传给上游（以前被
 	// ChatRequest 结构体丢弃），上游 4xx 也不再由老路径容错。
-	if hasNative && !h.nativeRelayEnabled(c) {
+	if hasNative && (!h.nativeRelayEnabled(c) || nativeRelayBlockedByRedaction(h.redactor)) {
 		hasNative = false
 	}
 	if hasNative && c.Request.Body != nil {
@@ -260,6 +282,37 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 		}
 	}
 
+	// 隐私脱敏：整个请求只做一次。必须放在 failover 循环之外——failover 复用
+	// 同一个 req，放进循环会把占位符再套一层。放在组调度之后，是为了让复杂度
+	// 评分/粘性路由仍然看到原文。
+	// engine 为 nil 或 off 时不创建 session（所有方法本就 no-op）。
+	var session *redact.Session
+	if h.redactor != nil && h.redactor.Mode() != redact.ModeOff {
+		session = h.redactor.NewSession()
+		defer session.Close() // 每个请求一个 session，绝不复用
+		protectTraceBody(c, session)
+
+		if perr := session.ProtectChat(c.Request.Context(), &req); perr != nil {
+			// fail-closed：保护失败绝不能把原文发给上游，也不能 failover——
+			// 换渠道只是把同一份原文重发一遍。这里直接终止请求。
+			// 专用错误码 redaction_failed（与 /v1/messages 对齐），让客户端能区分
+			// 「隐私保护失败」和上游/网关故障；500 且不触发 failover。
+			// 只记错误种类，不记正文：失败路径上的报文可能含敏感片段。
+			slog.Error("privacy: protect chat request failed, request aborted (fail-closed)",
+				"request_id", c.GetString("request_id"),
+				"model", req.Model,
+				"error", perr.Error(),
+			)
+			respondError(c, &model.UnifiedError{
+				Type:       model.ErrorTypeInternal,
+				Code:       "redaction_failed",
+				Message:    "privacy protection failed; request not forwarded",
+				HTTPStatus: http.StatusInternalServerError,
+			})
+			return
+		}
+	}
+
 	// 将 Gin context 注入请求 context，供 orchestrator 写回 provider/token 信息。
 	// baseCtx 不设超时，由各 handle 函数按轮次独立创建超时子 context。
 	baseCtx := orchestrator.WithGinContext(c.Request.Context(), c)
@@ -298,11 +351,11 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 	}
 
 	if req.Stream {
-		h.handleStream(c, baseCtx, &req, originalModel)
+		h.handleStream(c, baseCtx, &req, originalModel, session)
 		return
 	}
 
-	h.handleNonStream(c, baseCtx, &req, originalModel)
+	h.handleNonStream(c, baseCtx, &req, originalModel, session)
 }
 
 // nonStreamTimeout 返回当前请求适用的非流式超时：优先使用组级配置，否则使用系统默认值。
@@ -326,7 +379,7 @@ func (h *ChatHandler) streamTimeout(originalModel string) time.Duration {
 // 每轮上游调用都从 baseCtx 派生独立超时 context（完整预算），确保 failover
 // 轮次不受前一轮超时消耗的影响。failover 轮次由 triedIDs 自然收束：
 // 每轮失败的模型加入排除列表，全部模型试过后 HandleFailover 返回错误。
-func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string) {
+func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string, session *redact.Session) {
 	timeout := h.nonStreamTimeout(originalModel)
 	var lastErr error
 
@@ -339,6 +392,10 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, r
 			if lastErr != nil {
 				c.Set("error_message", "") // failover 成功，清除前轮错误
 			}
+			// 写响应前先还原占位符。resp 是 orchestrator 放进 gin ctx
+			// "resp_object" 的同一个指针，就地还原意味着落库内容和客户端
+			// 看到的一致（都是还原后的原文），不会把占位符写进库。
+			session.RestoreChat(resp)
 			c.JSON(http.StatusOK, resp)
 			return
 		}
@@ -424,7 +481,7 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, r
 //
 // 流式场景下，若 primary 建立连接失败才可 failover；一旦流已建立则不中途切换。
 // 多轮 failover 逻辑与 handleNonStream 一致。
-func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string) {
+func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string, session *redact.Session) {
 	timeout := h.streamTimeout(originalModel)
 
 	// openStream 封装"建立一次流"的逻辑：派生超时 ctx，连接失败时立即 cancel。
@@ -448,7 +505,14 @@ func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req 
 			if lastErr != nil {
 				c.Set("error_message", "")
 			}
-			HandleStreamResponse(c, &cancelOnClose{ReadCloser: stream, cancel: cancel})
+			// 流式还原交给写出层：逐 event 还原占位符（被切开的一帧允许压一帧）。
+			// 只有 mask 模式才包写入器：detect 模式没有任何映射要还原，包上只会
+			// 白白重写一遍 event 字节。session 为 nil 时保持原样透传。
+			var rw *privacy.RestoringWriter
+			if session != nil && h.redactor.Enabled() {
+				rw = session.RestoringWriter(c.Writer)
+			}
+			HandleStreamResponseAsRestoring(c, &cancelOnClose{ReadCloser: stream, cancel: cancel}, DialectOpenAI, rw)
 			return
 		}
 		lastErr = err

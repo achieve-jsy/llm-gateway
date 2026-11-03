@@ -381,6 +381,9 @@ deploy-app-test:
         export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
         export DEV_LOGIN_ENABLED='${TEST_DEV_LOGIN_ENABLED:-false}'
         export DEV_LOGIN_PROD_ALLOWED='${TEST_DEV_LOGIN_PROD_ALLOWED:-false}'
+        # 可逆脱敏：测试环境先跑 detect（只记 privacy_hits，不改写、不需 key_path）。
+        # 上 mask 需先配 PRIVACY_KEY_PATH（多副本共享同一份密钥文件），见 docs/redaction.md 5.3。
+        export PRIVACY_MODE='detect'
         bash deploy-blue-green.sh
       "
   environment:

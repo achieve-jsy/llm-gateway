@@ -20,6 +20,9 @@ services:
       REDIS_DB: ${REDIS_DB:-3}
       INTERNAL_TOKEN: ${INTERNAL_AUTH_TOKEN:?INTERNAL_AUTH_TOKEN required}
       AUTH_INTERNAL_TOKEN: ${INTERNAL_AUTH_TOKEN}
+      # 可逆脱敏（docs/redaction.md）：off 不启用 / detect 只观测 / mask 改写并还原。
+      # mask 还要 PRIVACY_KEY_PATH 指向多副本共享的密钥文件，否则占位符逐请求变化、前缀缓存全失效。
+      PRIVACY_MODE: ${PRIVACY_MODE:-off}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL required}
       CONTROL_PLANE_URL: http://127.0.0.1:8081
       AUTH_URL: http://127.0.0.1:8081

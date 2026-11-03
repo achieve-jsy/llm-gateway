@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	dbConnStr      = "postgres://llm_gateway:CHANGE_ME_PASSWORD@192.0.2.10:5433/llm_gateway_prod?sslmode=disable"
-	encryptionKey  = "12345678901234567890123456789012"
+	dbConnStr     = "postgres://llm_gateway:CHANGE_ME_PASSWORD@192.0.2.10:5433/llm_gateway_prod?sslmode=disable"
+	encryptionKey = "12345678901234567890123456789012"
 )
 
 type AWSCredentials struct {
@@ -95,17 +95,15 @@ func testModelID(ctx context.Context, client *bedrockruntime.Client, modelID str
 
 func listAvailableModels(ctx context.Context, client *bedrock.Client) ([]string, error) {
 	var modelIDs []string
-	paginator := bedrock.NewListFoundationModelsPaginator(client, &bedrock.ListFoundationModelsInput{})
-
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for _, model := range page.ModelSummaries {
-			if model.ModelId != nil && strings.Contains(*model.ModelId, "claude") {
-				modelIDs = append(modelIDs, *model.ModelId)
-			}
+	// 当前 vendor 的 bedrock SDK 没有 NewListFoundationModelsPaginator（且该 API 不分页），
+	// 直接单次调用即可。
+	page, err := client.ListFoundationModels(ctx, &bedrock.ListFoundationModelsInput{})
+	if err != nil {
+		return nil, err
+	}
+	for _, model := range page.ModelSummaries {
+		if model.ModelId != nil && strings.Contains(*model.ModelId, "claude") {
+			modelIDs = append(modelIDs, *model.ModelId)
 		}
 	}
 	return modelIDs, nil
@@ -130,7 +128,7 @@ func main() {
 	}
 	defer rows.Close()
 
-	fmt.Println("=== Testing Claude Sonnet 4.6 Model IDs on AWS Bedrock ===\n")
+	fmt.Print("=== Testing Claude Sonnet 4.6 Model IDs on AWS Bedrock ===\n\n")
 
 	for rows.Next() {
 		var id, name, encryptedCreds string

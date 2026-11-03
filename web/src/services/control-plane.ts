@@ -697,7 +697,7 @@ export async function resetKey(id: string): Promise<CreateKeyWrappedResponse> {
 
 // ===================== 系统设置 =====================
 
-import type { SystemSettings, SettingsResponse, PublicSettingsResponse } from '@/types/settings'
+import type { SystemSettings, SettingsResponse, PublicSettingsResponse, NotificationChannelRule, NotificationChannelMetadata, NotificationChannelMetadataResponse } from '@/types/settings'
 
 export async function getPublicSettings(): Promise<PublicSettingsResponse> {
   const response = await http.get<PublicSettingsResponse>('/api/v1/settings/public')
@@ -735,6 +735,20 @@ export async function exportSettings(): Promise<Record<string, string>> {
 
 export async function importSettings(settings: Record<string, string>): Promise<void> {
   await http.post('/api/v1/settings/import', settings)
+}
+
+export async function getNotificationChannelRules(): Promise<NotificationChannelRule[]> {
+  const response = await http.get<{ code: number; data: NotificationChannelRule[] }>('/api/v1/settings/notification-channels')
+  return response.data.data ?? []
+}
+
+export async function updateNotificationChannelRules(rules: NotificationChannelRule[]): Promise<void> {
+  await http.put('/api/v1/settings/notification-channels', rules)
+}
+
+export async function getNotificationChannelMetadata(): Promise<NotificationChannelMetadata> {
+  const response = await http.get<NotificationChannelMetadataResponse>('/api/v1/settings/notification-channels/metadata')
+  return response.data.data
 }
 
 // ===================== OpenCode 配置 =====================

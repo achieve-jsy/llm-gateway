@@ -236,6 +236,28 @@ func (m *MultiNotifier) Notify(ctx context.Context, n *model.Notification) error
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GatedNotifier：按通知类型 × 渠道控制是否放行
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GatedNotifier 在调用内层 Notifier 之前先查 ChannelGate，如未启用则静默跳过。
+type GatedNotifier struct {
+	inner   Notifier
+	channel string
+	gate    ChannelGate
+}
+
+func NewGatedNotifier(inner Notifier, channel string, gate ChannelGate) *GatedNotifier {
+	return &GatedNotifier{inner: inner, channel: channel, gate: gate}
+}
+
+func (g *GatedNotifier) Notify(ctx context.Context, n *model.Notification) error {
+	if g.gate != nil && !g.gate.IsEnabled(ctx, n.Type, g.channel) {
+		return nil
+	}
+	return g.inner.Notify(ctx, n)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 适配器：供 keyactivity.Scanner 使用（保持其原有 Notifier 签名）
 // ─────────────────────────────────────────────────────────────────────────────
 

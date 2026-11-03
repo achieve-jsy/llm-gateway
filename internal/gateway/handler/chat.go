@@ -115,9 +115,17 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 		// 而不是只得到笼统的 request_body_invalid。
 		var partErr *core.ContentPartError
 		if errors.As(err, &partErr) {
-			param := fmt.Sprintf("content[%d].type", partErr.Index)
+			// Index 未知（-1）时不拼 content[-1]，退化成不带下标的定位。
+			param := "content.type"
+			if partErr.Index >= 0 {
+				param = fmt.Sprintf("content[%d].type", partErr.Index)
+			}
 			if partErr.Field != "" {
-				param = fmt.Sprintf("content[%d].%s", partErr.Index, partErr.Field)
+				if partErr.Index >= 0 {
+					param = fmt.Sprintf("content[%d].%s", partErr.Index, partErr.Field)
+				} else {
+					param = fmt.Sprintf("content.%s", partErr.Field)
+				}
 			}
 			gatewayerrors.WriteError(c, "unsupported_content_part",
 				gatewayerrors.WithMessage(err.Error()),

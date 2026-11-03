@@ -288,6 +288,14 @@ func cloneProbeRequest(src map[string]interface{}) map[string]interface{} {
 }
 
 func doProbeRequest(ctx context.Context, endpoint, apiKey string, payload map[string]interface{}, streamMode bool) (bool, int, string) {
+	return doProbeRequestWithHeaders(ctx, endpoint,
+		map[string]string{"Authorization": "Bearer " + apiKey}, payload, streamMode)
+}
+
+// doProbeRequestWithHeaders 是 doProbeRequest 的可定制鉴权头版本。
+// Anthropic（x-api-key + anthropic-version）与 Gemini（x-goog-api-key）都不认
+// Bearer，探测器必须模拟 adapter 实际发出去的 header，否则会把正常渠道判成故障。
+func doProbeRequestWithHeaders(ctx context.Context, endpoint string, headers map[string]string, payload map[string]interface{}, streamMode bool) (bool, int, string) {
 	body, _ := json.Marshal(payload)
 	client := &http.Client{
 		Timeout: 120 * time.Second,
@@ -298,7 +306,9 @@ func doProbeRequest(ctx context.Context, endpoint, apiKey string, payload map[st
 	start := time.Now()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := client.Do(req)
 	elapsed := int(time.Since(start).Milliseconds())
@@ -390,4 +400,37 @@ func ExtractRequiredTemperature(lower string) *float64 {
 		return nil
 	}
 	return &val
+}
+
+// ─── 原生协议探针：Anthropic / Gemini ─────────────────────────────────────
+//
+// 这两类渠道不吃 /chat/completions，通用探针只会拿到 404，
+// 进而在「连续 N 次失败」后被自动禁用 —— 即使渠道本身完全正常。
+// 探针必须按各家原生协议发最小请求，并模拟 adapter 真正使用的鉴权头。
+
+// ProbeAnthropicMessages 用最小 /messages 请求探测 Anthropic 原生渠道。
+func ProbeAnthropicMessages(ctx context.Context, endpoint, apiKey, model string) (bool, int, string) {
+	url := strings.TrimRight(endpoint, "/") + "/messages"
+	payload := map[string]interface{}{
+		"model":      model,
+		"max_tokens": 16,
+		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+	}
+	return doProbeRequestWithHeaders(ctx, url, map[string]string{
+		"x-api-key":         apiKey,
+		"anthropic-version": "2023-06-01",
+	}, payload, false)
+}
+
+// ProbeGeminiGenerate 用最小 generateContent 请求探测 Gemini 原生渠道。
+func ProbeGeminiGenerate(ctx context.Context, endpoint, apiKey, model string) (bool, int, string) {
+	url := strings.TrimRight(endpoint, "/") + "/models/" + model + ":generateContent"
+	payload := map[string]interface{}{
+		"contents": []map[string]interface{}{
+			{"role": "user", "parts": []map[string]string{{"text": "hi"}}},
+		},
+	}
+	return doProbeRequestWithHeaders(ctx, url, map[string]string{
+		"x-goog-api-key": apiKey,
+	}, payload, false)
 }

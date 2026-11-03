@@ -1036,6 +1036,10 @@ func isNonOpenAICompatible(definitionID string) bool {
 	switch definitionID {
 	case "bedrock", "seedance-relay", "seedance-volcengine", "azure", "vertex":
 		return true
+	// Anthropic / Gemini 有各自的原生协议：通用探针打 /chat/completions 只会拿到 404，
+	// 导致正常渠道被「连续失败」自动禁用，原生旁路渠道因此永远活不过探测周期。
+	case "anthropic", "gemini":
+		return true
 	}
 	return false
 }
@@ -1054,6 +1058,10 @@ func (s *HealthCheckService) checkNonOpenAIProvider(ctx context.Context, provide
 		return s.checkAzureProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
 	case "vertex":
 		return s.checkVertexProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
+	case "anthropic":
+		return s.checkNativeProtocolProvider(ctx, provider, credJSON, maxFailures, cr, "anthropic", ProbeAnthropicMessages)
+	case "gemini":
+		return s.checkNativeProtocolProvider(ctx, provider, credJSON, maxFailures, cr, "gemini", ProbeGeminiGenerate)
 	default:
 		cr.Success = true // 未知类型跳过，不计失败
 		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, 0, "skipped: unsupported provider type for auto-check")
@@ -2153,4 +2161,40 @@ func extractErrMsg(body []byte) string {
 		return resp.Error.Message
 	}
 	return truncateStr(string(body), 150)
+}
+
+// checkNativeProtocolProvider 对原生协议渠道（anthropic / gemini）做模型前向探测。
+//
+// 通用探针走 /chat/completions，这两类渠道必然 404，会被误判成「连续失败」后自动禁用。
+// 探针按各家原生协议发最小请求，成功/失败仍走统一的 handleProviderFailure 计数，
+// 因此只有真实故障才会触发禁用。
+func (s *HealthCheckService) checkNativeProtocolProvider(
+	ctx context.Context, provider *model.Provider, credJSON string, maxFailures int, cr *CheckResult,
+	protocol string,
+	probe func(ctx context.Context, endpoint, apiKey, model string) (bool, int, string),
+) *CheckResult {
+	apiKey := extractAPIKey(credJSON)
+	testModel := strings.TrimSpace(provider.TestModel)
+	if testModel == "" {
+		// 没配 test_model 时无法构造原生请求，跳过且不计失败（与 azure 分支语义一致）。
+		cr.Success = true
+		msg := "skipped: " + protocol + " forward requires test_model"
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, 0, msg)
+		return cr
+	}
+
+	ok, elapsed, msg := probe(ctx, provider.Endpoint, apiKey, testModel)
+	cr.ResponseTime = elapsed
+	if !ok {
+		cr.Error = msg
+		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, elapsed, msg)
+		s.handleProviderFailure(provider, maxFailures, cr)
+		return cr
+	}
+
+	cr.Success = true
+	cr.Message = msg
+	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, elapsed, msg)
+	s.finalizeProviderSuccess(provider, cr)
+	return cr
 }

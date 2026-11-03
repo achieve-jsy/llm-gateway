@@ -57,10 +57,11 @@
             </template>
           </el-table-column>
 
-          <el-table-column v-if="effectiveShowUser" prop="user_name" :label="userLabel ?? '用户'" min-width="100" show-overflow-tooltip>
+          <el-table-column v-if="effectiveShowUser" prop="user_name" :label="userLabel ?? '主体'" min-width="100" show-overflow-tooltip>
             <template #default="{ row }">
-              <span v-if="row.key_type !== 'service' && row.user_name" class="urt-name">{{ row.user_name }}</span>
-              <span v-else class="urt-dash">—</span>
+              <el-tag v-if="subjectType(row) === 'service'" size="small" effect="plain" class="urt-subject urt-subject--service">程序</el-tag>
+              <el-tag v-else-if="subjectType(row) === 'unowned'" size="small" effect="plain" class="urt-subject urt-subject--unowned">未关联</el-tag>
+              <span v-else class="urt-name">{{ row.user_name }}</span>
             </template>
           </el-table-column>
 
@@ -196,11 +197,12 @@
           </template>
         </el-table-column>
 
-        <!-- 用户 -->
-        <el-table-column v-if="effectiveShowUser" prop="user_name" :label="userLabel ?? '用户'" min-width="90" :fixed="effectiveShowKey ? 'left' : false">
+        <!-- 主体（成员 / 程序 / 未关联） -->
+        <el-table-column v-if="effectiveShowUser" prop="user_name" :label="userLabel ?? '主体'" min-width="90" :fixed="effectiveShowKey ? 'left' : false">
           <template #default="{ row }">
-            <span v-if="row.key_type !== 'service' && row.user_name" class="urt-name">{{ row.user_name }}</span>
-            <span v-else class="urt-dash">—</span>
+            <el-tag v-if="subjectType(row) === 'service'" size="small" effect="plain" class="urt-subject urt-subject--service">程序</el-tag>
+            <el-tag v-else-if="subjectType(row) === 'unowned'" size="small" effect="plain" class="urt-subject urt-subject--unowned">未关联</el-tag>
+            <span v-else class="urt-name">{{ row.user_name }}</span>
           </template>
         </el-table-column>
 
@@ -754,6 +756,14 @@ function resolveKey(row: LogRow): string {
   return row.key_name || maskKey(row.key_id)
 }
 
+// ── 主体三态 ──
+// service → 程序；personal 无用户名 → 未关联；否则 → 成员
+function subjectType(row: LogRow): 'service' | 'unowned' | 'member' {
+  if (row.key_type === 'service') return 'service'
+  if (!row.user_name) return 'unowned'
+  return 'member'
+}
+
 // ── 路由模型显示条件 ──
 // 只要 routed_model 有值就显示，不因名称相同或 via_group 标志而隐藏
 function showRoutedModel(row: LogRow): boolean {
@@ -855,6 +865,9 @@ const reasoningType = (effort?: string) => {
 /* ── 名称 / 占位 ── */
 .urt-name     { font-size: 12px; color: var(--el-text-color-regular); font-weight: 500; }
 .urt-dash     { color: var(--urt-faint); }
+.urt-subject  { font-weight: 500; }
+.urt-subject--service { color: #7c3aed; background: rgba(139,92,246,0.12); border-color: rgba(139,92,246,0.32); }
+.urt-subject--unowned { color: #b45309; background: rgba(230,162,60,0.12); border-color: rgba(230,162,60,0.32); }
 .urt-mono     { font-family: var(--urt-mono); font-size: 12px; color: var(--urt-muted); }
 .urt-mono--sm { font-size: 10px; }
 .urt-provider { font-size: 12px; color: var(--urt-muted); }

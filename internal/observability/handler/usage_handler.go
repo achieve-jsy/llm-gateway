@@ -27,6 +27,10 @@ type DashboardSummary struct {
 	SuccessRate      float64 `json:"success_rate"`
 	PrevCostEstimate float64 `json:"prev_cost_estimate"`
 	PrevCallCount    int64   `json:"prev_call_count"`
+	// dept 范围下程序调用（Service Key）的独立聚合，用于「成员 + 程序」对账展示。
+	ServiceCostEstimate float64 `json:"service_cost_estimate"`
+	ServiceCallCount    int64   `json:"service_call_count"`
+	ServiceTotalTokens  int64   `json:"service_total_tokens"`
 }
 
 // DashboardBreakdownItem 排行列表行
@@ -539,6 +543,12 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 	baseArgs := []interface{}{startStr, endStr}
 	queryArgs := append(baseArgs, args...)
 
+	// dept 范围：成员排行排除程序调用（Service Key），程序调用单独聚合回填到 summary。
+	rawWhere := whereClause
+	if scope == "dept" {
+		rawWhere = whereClause + " AND (" + obsmodel.WhereExcludeServiceKeyLogsCL + ")"
+	}
+
 	rawSQL := `
 		SELECT ` + groupExpr + ` AS group_id,
 		       ` + nameExpr + ` AS group_name,
@@ -553,7 +563,7 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		LEFT JOIN studios s ON s.id = dsm.studio_id
 		LEFT JOIN users u ON u.id::text = cl.user_id
 		WHERE cl.ts::date BETWEEN ?::date AND ?::date
-		` + whereClause + `
+		` + rawWhere + `
 		GROUP BY ` + groupExpr + `, ` + nameExpr + `
 		ORDER BY cost_est DESC
 	`
@@ -572,6 +582,37 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		summary.ErrorCount += r.ErrorCount
 		// 不累加 r.UserCount，下面单独查全局去重人数
 	}
+
+	// dept 范围：程序调用（Service Key）单独聚合，并回填总量，使「成员 + 程序」可对账。
+	// 复用同一 whereClause（含部门/模型/状态/端点/工作室安全过滤），仅追加 service 条件。
+	if scope == "dept" {
+		var svcRow struct {
+			Cost   float64 `gorm:"column:cost"`
+			Calls  int64   `gorm:"column:calls"`
+			Tokens int64   `gorm:"column:tokens"`
+			Errors int64   `gorm:"column:errors"`
+		}
+		svcSQL := `
+			SELECT COALESCE(SUM(cl.est_cost_usd), 0) AS cost,
+			       COUNT(*) AS calls,
+			       COALESCE(SUM(cl.prompt_tokens + cl.completion_tokens + cl.reasoning_tokens), 0) AS tokens,
+			       COUNT(*) FILTER (WHERE cl.status != 200) AS errors
+			FROM call_logs cl
+			WHERE cl.ts::date BETWEEN ?::date AND ?::date
+				` + whereClause + `
+				AND (` + obsmodel.WhereServiceKeyLogsCL + `)
+		`
+		if err := db.Raw(svcSQL, queryArgs...).Scan(&svcRow).Error; err == nil {
+			summary.ServiceCostEstimate = svcRow.Cost
+			summary.ServiceCallCount = svcRow.Calls
+			summary.ServiceTotalTokens = svcRow.Tokens
+			summary.CostEstimate += svcRow.Cost
+			summary.CallCount += svcRow.Calls
+			summary.TotalTokens += svcRow.Tokens
+			summary.ErrorCount += svcRow.Errors
+		}
+	}
+
 	// 全局去重：用相同的 Actor 过滤条件查当期内活跃的唯一用户数
 	var userCountRow struct {
 		Count int `gorm:"column:cnt"`

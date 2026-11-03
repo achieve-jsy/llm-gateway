@@ -72,6 +72,11 @@ func (integrationProtocolScheduler) GetGroupConfig(string) *gwscheduler.GroupRou
 }
 func (integrationProtocolScheduler) NotifyFailure(string)              {}
 func (integrationProtocolScheduler) SetCooldown(string, time.Duration) {}
+func (integrationProtocolScheduler) PersistSticky(context.Context, string, string, *gwscheduler.RouteDecision) {
+}
+func (integrationProtocolScheduler) UpdateSticky(context.Context, string, string, string, string) bool {
+	return false
+}
 
 func TestModelTierBudgetIntegration_RealHandlersEnforceGateOrderForSixProtocols(t *testing.T) {
 	gin.SetMode(gin.TestMode)

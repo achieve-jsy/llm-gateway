@@ -35,6 +35,20 @@
       </div>
     </div>
 
+    <!-- 程序调用摘要条（dept 范围，独立于成员排行） -->
+    <div v-if="showServiceStrip" class="ud-service-strip">
+      <div class="ud-service-strip__icon"><el-icon><Connection /></el-icon></div>
+      <div class="ud-service-strip__body">
+        <div class="ud-service-strip__title">程序调用（Service Key）</div>
+        <div class="ud-service-strip__meta">
+          {{ fmtCost(serviceSummary!.cost_estimate) }} · {{ fmtNum(serviceSummary!.call_count) }} 次 · {{ fmtTokens(serviceSummary!.total_tokens) }}
+        </div>
+      </div>
+      <el-button link type="primary" size="small" class="ud-service-strip__action" @click="$emit('viewServiceCalls')">
+        查看全部 <el-icon><ArrowRight /></el-icon>
+      </el-button>
+    </div>
+
     <div class="ud-table-wrap" v-loading="loading">
       <table class="ud-rank-table">
         <thead>
@@ -92,7 +106,7 @@
               <span
                 :class="['ud-row-name', { drillable: canDrill || isEnhancedUserView, 'ud-row-name--detail': isEnhancedUserView }]"
                 @click="isEnhancedUserView ? $emit('userClick', row) : (canDrill && $emit('drillDown', row))"
-              >{{ row.name || row.id || '(未归属)' }}</span>
+              >{{ row.name || row.id || '未关联用户' }}</span>
               <el-icon v-if="isEnhancedUserView" class="ud-detail-hint"><View /></el-icon>
             </td>
             <td>
@@ -188,7 +202,7 @@ export default { components: { SortIndicator } }
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Search, ArrowRight, User, View } from '@element-plus/icons-vue'
+import { Search, ArrowRight, User, View, Connection } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
 import type { UserRankRow } from '@/types/dashboard-enhanced'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
@@ -212,6 +226,7 @@ const props = defineProps<{
   rankPage: number
   rankSearch: string
   enhancedUserMap?: Record<string, UserRankRow>
+  serviceSummary?: { cost_estimate: number; call_count: number; total_tokens: number } | null
 }>()
 
 const emit = defineEmits<{
@@ -223,6 +238,7 @@ const emit = defineEmits<{
   'update:rankPage': [value: number]
   'update:rankSearch': [value: string]
   userClick: [row: any]
+  viewServiceCalls: []
 }>()
 
 const settingsStore = useSettingsStore()
@@ -293,6 +309,19 @@ function pctClass(v: number | undefined | null, isCost = true): string {
 const isEnhancedUserView = computed(() =>
   props.currentScope === 'dept' && props.enhancedUserMap && Object.keys(props.enhancedUserMap).length > 0
 )
+
+const showServiceStrip = computed(() =>
+  props.currentScope === 'dept' &&
+  props.serviceSummary != null &&
+  ((props.serviceSummary.cost_estimate || 0) > 0 || (props.serviceSummary.call_count || 0) > 0)
+)
+
+function fmtTokens(n?: number | null): string {
+  if (!n) return '0'
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
+  return String(n)
+}
 </script>
 
 <style scoped>
@@ -371,6 +400,19 @@ const isEnhancedUserView = computed(() =>
 .ud-bar-fill--cost { background: linear-gradient(90deg, #67c23a, #95d475); }
 .ud-bar-pct  { font-size: 12px; color: var(--ud-muted); white-space: nowrap; min-width: 36px; }
 .ud-empty    { padding: 32px; text-align: center; color: var(--ud-faint); }
+
+/* ── 程序调用摘要条 ── */
+.ud-service-strip {
+  display: flex; align-items: center; gap: 10px;
+  margin: 8px 14px 0; padding: 8px 12px;
+  border-radius: 8px; border: 1px solid rgba(139,92,246,0.25);
+  border-left: 3px solid #8B5CF6; background: rgba(139,92,246,0.05);
+}
+.ud-service-strip__icon { color: #8B5CF6; display: flex; }
+.ud-service-strip__body { flex: 1; min-width: 0; }
+.ud-service-strip__title { font-size: 13px; font-weight: 600; color: var(--el-text-color-primary); }
+.ud-service-strip__meta { font-size: 12px; color: var(--ud-muted); margin-top: 2px; }
+.ud-service-strip__action { flex-shrink: 0; }
 
 /* ── 面包屑 ── */
 .ud-user-scope-banner {

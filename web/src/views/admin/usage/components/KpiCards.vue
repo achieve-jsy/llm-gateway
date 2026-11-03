@@ -33,6 +33,19 @@
             </div>
           </div>
         </template>
+        <!-- 成员 / 程序 成本构成（dept 范围，用于对账） -->
+        <template v-if="hasServiceSplit">
+          <div class="ud-kpi__split">
+            <div class="ud-kpi__split-bar">
+              <div class="ud-kpi__split-fill ud-kpi__split-fill--member" :style="{ width: memberPct + '%' }" />
+              <div class="ud-kpi__split-fill ud-kpi__split-fill--service" :style="{ width: servicePct + '%' }" />
+            </div>
+            <div class="ud-kpi__split-legend">
+              <span class="ud-kpi__split-item"><i class="ud-kpi__dot ud-kpi__dot--member" />成员 {{ fmtCost(memberCost) }} · {{ memberPct }}%</span>
+              <span class="ud-kpi__split-item"><i class="ud-kpi__dot ud-kpi__dot--service" />程序 {{ fmtCost(serviceCost) }} · {{ servicePct }}%</span>
+            </div>
+          </div>
+        </template>
       </div>
     </div>
     <!-- 总调用 -->
@@ -145,6 +158,23 @@ const successRateDisplay = computed(() => {
   if (rate == null || Number.isNaN(rate)) return '—'
   return `${rate.toFixed(1)}%`
 })
+
+// ── 成员 / 程序 成本构成（dept 范围，用于对账）──
+const serviceCost = computed(() => props.summary?.service_cost_estimate ?? 0)
+const memberCost = computed(() =>
+  Math.max((props.summary?.cost_estimate ?? 0) - serviceCost.value, 0),
+)
+const hasServiceSplit = computed(() =>
+  props.currentScope === 'dept' &&
+  (serviceCost.value > 0 || (props.summary?.service_call_count ?? 0) > 0),
+)
+const splitTotal = computed(() => props.summary?.cost_estimate ?? 0)
+const memberPct = computed(() =>
+  splitTotal.value > 0 ? Math.round((memberCost.value / splitTotal.value) * 100) : 0,
+)
+const servicePct = computed(() =>
+  splitTotal.value > 0 ? Math.round((serviceCost.value / splitTotal.value) * 100) : 0,
+)
 
 const settingsStore = useSettingsStore()
 
@@ -279,6 +309,24 @@ function changeClass(pct: number | null, costMode = false): string {
 .ud-kpi__budget-fill {
   height: 100%; border-radius: 3px; transition: width .4s ease;
 }
+
+/* 成员 / 程序 成本构成 */
+.ud-kpi__split { margin-top: 8px; }
+.ud-kpi__split-bar {
+  display: flex; height: 6px; border-radius: 3px;
+  background: var(--el-fill-color); overflow: hidden;
+}
+.ud-kpi__split-fill { height: 100%; transition: width .4s ease; }
+.ud-kpi__split-fill--member  { background: #409eff; }
+.ud-kpi__split-fill--service { background: #8B5CF6; }
+.ud-kpi__split-legend {
+  display: flex; gap: 12px; margin-top: 6px;
+  font-size: 11px; color: var(--ud-muted); flex-wrap: wrap;
+}
+.ud-kpi__split-item { display: inline-flex; align-items: center; gap: 4px; }
+.ud-kpi__dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.ud-kpi__dot--member  { background: #409eff; }
+.ud-kpi__dot--service { background: #8B5CF6; }
 .ud-kpi__budget--ok     .ud-kpi__budget-fill { background: linear-gradient(90deg, #67c23a, #95d475); }
 .ud-kpi__budget--warn   .ud-kpi__budget-fill { background: linear-gradient(90deg, #e6a23c, #f0bb6e); }
 .ud-kpi__budget--danger .ud-kpi__budget-fill { background: linear-gradient(90deg, #f56c6c, #f89898); }

@@ -14,8 +14,10 @@ func TestVideoTaskScopedQueriesIsolateByUserAndOrgScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	// 表名随 C1（决策 D）由 video_tasks/video_task_events 改为 media_tasks/media_task_events，
+	// GORM 的 INSERT 会写全部列（含 C1 delta 14 列），因此这里的裸 DDL 必须同步补齐。
 	for _, stmt := range []string{
-		`CREATE TABLE video_tasks (
+		`CREATE TABLE media_tasks (
 			task_id TEXT PRIMARY KEY,
 			api_key_id TEXT NOT NULL,
 			api_key_name TEXT,
@@ -31,9 +33,24 @@ func TestVideoTaskScopedQueriesIsolateByUserAndOrgScope(t *testing.T) {
 			response_body TEXT,
 			error_message TEXT,
 			created_at DATETIME,
-			updated_at DATETIME
+			updated_at DATETIME,
+			kind TEXT,
+			action TEXT,
+			vendor_task_id TEXT,
+			progress TEXT,
+			usage TEXT,
+			cost_micro_usd INTEGER,
+			billed_at DATETIME,
+			started_at DATETIME,
+			finished_at DATETIME,
+			poll_failures INTEGER,
+			idempotency_key TEXT,
+			private_data TEXT,
+			dept_id TEXT,
+			studio_id TEXT
 		)`,
-		`CREATE TABLE video_task_events (
+		`CREATE UNIQUE INDEX uniq_media_tasks_idem ON media_tasks (api_key_id, idempotency_key)`,
+		`CREATE TABLE media_task_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			task_id TEXT NOT NULL,
 			event_type TEXT NOT NULL,

@@ -466,7 +466,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	r.GET("/api/v1/public/channel-monitors", channelMonitorUserHandler.ListPublic)
 	r.GET("/api/v1/public/channel-monitors/:id/status", channelMonitorUserHandler.GetStatus)
 
-	// 视频任务服务（admin + internal 共用）
+	// 媒体任务服务（admin + internal 共用；表已由 video_tasks 改名为 media_tasks）
 	videoTaskRepo := repository.NewVideoTaskRepo(db)
 	videoTaskSvc := service.NewVideoTaskService(videoTaskRepo)
 	videoTaskHandler := handler.NewVideoTaskHandler(videoTaskSvc)
@@ -888,9 +888,14 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	// 内部端点（供 gateway 调用）：均为机器间调用（verify-key / budget.evaluate-alert / video/tasks），
 	// 属请求级流量而非管理面人工操作，不写审计——审计表只记录管理面写操作，避免被内部高频调用刷爆。
 	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
+	// 路径保持既有 `/internal/v1/video/tasks...` **不变**（父 agent 决策）：control-plane 与
+	// gateway 是两个进程、可能分批部署，改路径会引入滚动窗口不兼容；路径名与数据库表名解耦。
 	internalGroup.POST("/video/tasks", videoTaskHandler.InternalCreate)
 	internalGroup.PATCH("/video/tasks/:id", videoTaskHandler.InternalUpdate)
 	internalGroup.PATCH("/video/tasks/:id/status", videoTaskHandler.InternalUpdateStatus)
+	// C3 新增：网关侧 retrieve 需要按 task_id 取单条全量（既有 provider-type 端点信息不足）。
+	// 与上面既有的 `/:id/provider-type` 静态子路径共存，不顶替、不改变其语义。
+	internalGroup.GET("/video/tasks/:id", videoTaskHandler.InternalGet)
 	internalGroup.GET("/video/tasks/:id/provider-type", videoTaskHandler.InternalGetProviderType)
 	// v0.7: 扩容审批路由
 	expansionHandler := handler.NewExpansionHandler(expansionSvc, orgContainer.RBAC, expansionUserRepo)

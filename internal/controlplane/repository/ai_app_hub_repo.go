@@ -98,6 +98,24 @@ func (r *AIAppHubRepo) UpsertDepartment(ctx context.Context, d *model.AIAppDepar
 		Create(d).Error
 }
 
+// UserIdentity 本地账号与 EHR 的对应关系：工号 + passport（users.sub）。
+type UserIdentity struct {
+	EmployeeID string
+	Passport   string
+}
+
+// ListUserIdentities 取本地全部账号的工号与 passport。
+//
+// 人员同步靠它反查档案：EHR 没授权"列全部人员"的路由，工号/passport 是仅有的两个可反查键。
+func (r *AIAppHubRepo) ListUserIdentities(ctx context.Context) ([]UserIdentity, error) {
+	var rows []UserIdentity
+	err := r.db.WithContext(ctx).Table("users").
+		Select("coalesce(employee_id, '') AS employee_id, coalesce(sub, '') AS passport").
+		Where("coalesce(employee_id, '') <> '' OR coalesce(sub, '') <> ''").
+		Scan(&rows).Error
+	return rows, err
+}
+
 // UpsertEmployees 按 (org_id, employee_id) 幂等写入人员档案，返回写入行数。
 //
 // 查不到档案的 id（离职/失效）不会出现在入参里，所以这里不做删除；

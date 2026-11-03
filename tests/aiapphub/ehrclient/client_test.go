@@ -101,6 +101,34 @@ func TestFetchEmployeesChunksAndRepeatsIDs(t *testing.T) {
 	require.Equal(t, int64(1127664000000), got[0].JoinDate)
 }
 
+func TestFetchEmployeesByGroupENumberUsesGroupKey(t *testing.T) {
+	var calls [][]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/open-apis/ehr-apic/open-apis/resource/v1/employees/batch", r.URL.Path)
+		calls = append(calls, r.URL.Query()["groupENumbers"])
+		io.WriteString(w, employeeJSON)
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv.URL).FetchEmployeesByGroupENumber(context.Background(), []string{"BF00014", "BF00001"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, []string{"BF00014", "BF00001"}, calls[0], "按工号查要用 groupENumbers 参数")
+}
+
+func TestFetchEmployeesByPassportUsesPassportKey(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Query()["passports"]
+		io.WriteString(w, employeeJSON)
+	}))
+	defer srv.Close()
+
+	_, err := newTestClient(srv.URL).FetchEmployeesByPassport(context.Background(), []string{"zhoutian"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"zhoutian"}, got)
+}
+
 func TestFetchEmployeesToleratesEmptyChunks(t *testing.T) {
 	// 离职/失效的 id 查不到档案，返回空 items；这不是错误，不能中断整轮同步。
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

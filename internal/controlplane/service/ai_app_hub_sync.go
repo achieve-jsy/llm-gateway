@@ -106,6 +106,15 @@ type EmployeeFetcher interface {
 	FetchEmployees(ctx context.Context, employeeIDs []string) ([]ehrclient.Employee, error)
 }
 
+// RosterFetcher 全量同步才用的第三段能力：按工号/passport 反查档案。
+//
+// 作用是把"系统里已有的每一个人"补齐成完整档案——部门节点上只有负责人和各类 BP，
+// 普通员工一个都没有；而工号（users.employee_id）足够把这些人全部反查出来。
+type RosterFetcher interface {
+	FetchEmployeesByGroupENumber(ctx context.Context, numbers []string) ([]ehrclient.Employee, error)
+	FetchEmployeesByPassport(ctx context.Context, passports []string) ([]ehrclient.Employee, error)
+}
+
 const (
 	// rootParentID EHR 用全零 uuid 表示根节点。
 	rootParentID = "00000000-0000-0000-0000-000000000000"
@@ -180,33 +189,9 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		}
 	}
 
-	// 人员档案：EHR 没有"列全部人员"的授权路由，只能从部门节点的 9 类岗位上捡
-	// employeeId 再批量回查（见 ehrclient.Department.EmployeeIDs）。
+	// 人员档案：EHR 没授权"列全部人员"的路由，只能靠已知标识批量反查。
 	// 失败只告警：组织树已经写完了，不值得为辅助数据整轮回滚。
-	//
-	// ponytail: 人员请求共用同步的 30s 超时。当前 100 个节点只捡出 ~41 个 id（5 个请求），
-	// 上游一旦开放全量花名册（数百人 → 数十个请求），需要单独放宽这段的超时。
-	var employees int
-	if ef, ok := s.fetcher.(EmployeeFetcher); ok {
-		ids := make([]string, 0, len(targets))
-		for id := range targets {
-			if it, ok := byID[id]; ok {
-				ids = append(ids, it.EmployeeIDs()...)
-			}
-		}
-		emps, ferr := ef.FetchEmployees(ctx, ids)
-		switch {
-		case ferr != nil:
-			slog.Warn("ai_app_hub_employees_fetch_failed", "error", ferr, "candidate_ids", len(ids))
-		default:
-			n, uerr := s.repo.UpsertEmployees(ctx, toEmployeeModels(emps))
-			if uerr != nil {
-				slog.Warn("ai_app_hub_employees_upsert_failed", "error", uerr)
-			} else {
-				employees = n
-			}
-		}
-	}
+	employees := s.syncEmployees(ctx, scope, byID, targets)
 
 	var studioIDs map[string]uuid.UUID
 	var studios, hidden int
@@ -528,6 +513,103 @@ func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string,
 }
 
 // truncateRunes 按字符截断：按字节切中文会在 Postgres 产生非法 UTF-8 而整条写入失败。
+// syncEmployees 拉两段人员档案并落库，返回写入行数。
+//
+// 第一段：部门节点上 9 类岗位的 employeeId（负责人/主管/各 BP），能拿到没有本地账号的人。
+// 第二段（仅全量同步）：拿本地账号的工号/passport 反查，覆盖部门节点根本点不到的普通员工。
+//
+// 每段各自容错：一段失败不影响另一段，也不影响组织树。
+func (s *AIAppHubSyncService) syncEmployees(ctx context.Context, scope SyncScope, byID map[string]ehrclient.Department, targets map[string]bool) int {
+	ef, ok := s.fetcher.(EmployeeFetcher)
+	if !ok {
+		return 0
+	}
+
+	ids := make([]string, 0, len(targets))
+	for id := range targets {
+		if it, ok := byID[id]; ok {
+			ids = append(ids, it.EmployeeIDs()...)
+		}
+	}
+	emps, err := ef.FetchEmployees(ctx, ids)
+	if err != nil {
+		slog.Warn("ai_app_hub_employees_fetch_failed", "error", err, "candidate_ids", len(ids))
+		emps = nil
+	}
+
+	if scope.Kind == ScopeAll {
+		if rf, ok := s.fetcher.(RosterFetcher); ok {
+			emps = append(emps, s.fetchRoster(ctx, rf)...)
+		}
+	}
+
+	n, err := s.repo.UpsertEmployees(ctx, toEmployeeModels(dedupeEmployees(emps)))
+	if err != nil {
+		slog.Warn("ai_app_hub_employees_upsert_failed", "error", err)
+		return 0
+	}
+	return n
+}
+
+// fetchRoster 按本地账号反查档案：有工号就用工号，没有才用 passport，避免同一批人查两遍。
+func (s *AIAppHubSyncService) fetchRoster(ctx context.Context, rf RosterFetcher) []ehrclient.Employee {
+	identities, err := s.repo.ListUserIdentities(ctx)
+	if err != nil {
+		slog.Warn("ai_app_hub_employees_identities_failed", "error", err)
+		return nil
+	}
+	numbers := make([]string, 0, len(identities))
+	passports := make([]string, 0, 16)
+	for _, id := range identities {
+		switch {
+		case id.EmployeeID != "":
+			numbers = append(numbers, id.EmployeeID)
+		case id.Passport != "":
+			passports = append(passports, id.Passport)
+		}
+	}
+
+	// ponytail: 这批请求和部门同步共用 30s 超时。实测 600 个工号 = 60 次请求约 8 秒，
+	// 组织树 1 秒，够用；真到几千人（几百次请求）时要给人员单独一个更长超时。
+	out := make([]ehrclient.Employee, 0, len(identities))
+	if len(numbers) > 0 {
+		got, err := rf.FetchEmployeesByGroupENumber(ctx, numbers)
+		if err != nil {
+			slog.Warn("ai_app_hub_employees_roster_failed", "key", "groupENumbers", "count", len(numbers), "error", err)
+		}
+		out = append(out, got...)
+	}
+	if len(passports) > 0 {
+		got, err := rf.FetchEmployeesByPassport(ctx, passports)
+		if err != nil {
+			slog.Warn("ai_app_hub_employees_roster_failed", "key", "passports", "count", len(passports), "error", err)
+		}
+		out = append(out, got...)
+	}
+	return out
+}
+
+// dedupeEmployees 同一个人可能有多条任职记录（一人多岗），保留 isDefault 那条。
+// 不这么做的话，按 employee_id upsert 时最后一条会随机覆盖，部门/岗位字段会漂。
+func dedupeEmployees(emps []ehrclient.Employee) []ehrclient.Employee {
+	if len(emps) < 2 {
+		return emps
+	}
+	idx := make(map[string]int, len(emps))
+	out := make([]ehrclient.Employee, 0, len(emps))
+	for _, e := range emps {
+		if i, ok := idx[e.EmployeeID]; ok {
+			if e.IsDefault && !out[i].IsDefault {
+				out[i] = e
+			}
+			continue
+		}
+		idx[e.EmployeeID] = len(out)
+		out = append(out, e)
+	}
+	return out
+}
+
 // toEmployeeModels 把上游档案映射成落库行。时间戳按毫秒原样转字符串，
 // 与线上 ehr_employees 的 varchar 列一致。
 func toEmployeeModels(emps []ehrclient.Employee) []model.EHREmployee {

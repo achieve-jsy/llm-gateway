@@ -19,6 +19,13 @@ type employeeFetcher struct {
 	employees []ehrclient.Employee
 	empErr    error
 	askedIDs  []string
+
+	// 全量同步的第二段：按工号/passport 反查
+	roster         []ehrclient.Employee
+	rosterErr      error
+	askedNumbers   []string
+	askedPassports []string
+	passportEmps   []ehrclient.Employee
 }
 
 func (f *employeeFetcher) FetchDepartments(context.Context) ([]ehrclient.Department, error) {
@@ -28,6 +35,16 @@ func (f *employeeFetcher) FetchDepartments(context.Context) ([]ehrclient.Departm
 func (f *employeeFetcher) FetchEmployees(_ context.Context, ids []string) ([]ehrclient.Employee, error) {
 	f.askedIDs = ids
 	return f.employees, f.empErr
+}
+
+func (f *employeeFetcher) FetchEmployeesByGroupENumber(_ context.Context, numbers []string) ([]ehrclient.Employee, error) {
+	f.askedNumbers = numbers
+	return f.roster, f.rosterErr
+}
+
+func (f *employeeFetcher) FetchEmployeesByPassport(_ context.Context, passports []string) ([]ehrclient.Employee, error) {
+	f.askedPassports = passports
+	return f.passportEmps, nil
 }
 
 func deptWithPeople() []ehrclient.Department {
@@ -82,6 +99,75 @@ func TestSyncWritesEmployeeProfiles(t *testing.T) {
 	require.NoError(t, db.Find(&rows).Error)
 	require.Len(t, rows, 1, "按 (org_id, employee_id) 幂等")
 	require.Equal(t, "技术研究工作室", rows[0].DepartmentName)
+}
+
+// 全量同步必须按本地账号的工号反查——部门节点上点不到的普通员工只能这样补齐。
+func TestSyncAllBackfillsRosterByIdentity(t *testing.T) {
+	db, settings := newAIHubTestDBWithSettings(t)
+	repo := repository.NewAIAppHubRepo(db)
+	require.NoError(t, db.Exec("INSERT INTO users (sub, employee_id, name) VALUES ('zhoutian','BF00014','周甜'), ('olduser','','legacy')").Error)
+
+	fetcher := &employeeFetcher{
+		items:        deptWithPeople(),
+		roster:       []ehrclient.Employee{{OrgID: "org", EmployeeID: "emp-zhoutian", PersonName: "周甜", GroupENumber: "BF00014", Location: "广州", PersonStatus: 1}},
+		passportEmps: []ehrclient.Employee{{OrgID: "org", EmployeeID: "emp-legacy", PersonName: "老账号", Passport: "olduser"}},
+	}
+	svc := service.NewAIAppHubSyncService(fetcher, repo, settings, service.DefaultSyncRules())
+
+	got, err := svc.Sync(context.Background(), service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+	require.Equal(t, []string{"BF00014"}, fetcher.askedNumbers, "有工号的账号按工号查")
+	require.Equal(t, []string{"olduser"}, fetcher.askedPassports, "没工号的才用 passport 查")
+	require.Equal(t, 2, got.Employees)
+
+	var rows []model.EHREmployee
+	require.NoError(t, db.Find(&rows).Error)
+	require.Len(t, rows, 2)
+	byName := map[string]model.EHREmployee{}
+	for _, r := range rows {
+		byName[r.PersonName] = r
+	}
+	require.Equal(t, "广州", byName["周甜"].Location, "工号反查到的人要落库")
+	require.Equal(t, "BF00014", byName["周甜"].GroupENumber)
+	require.Equal(t, "olduser", byName["老账号"].Passport, "没工号的走 passport 反查")
+}
+
+// 单部门/单工作室同步不该顺手把全公司的人都拉一遍。
+func TestSyncDepartmentScopeSkipsRoster(t *testing.T) {
+	db, settings := newAIHubTestDBWithSettings(t)
+	repo := repository.NewAIAppHubRepo(db)
+	require.NoError(t, db.Exec("INSERT INTO users (sub, employee_id, name) VALUES ('zhoutian','BF00014','周甜')").Error)
+
+	fetcher := &employeeFetcher{items: deptWithPeople()}
+	svc := service.NewAIAppHubSyncService(fetcher, repo, settings, service.DefaultSyncRules())
+
+	_, err := svc.Sync(context.Background(), service.SyncScope{Kind: service.ScopeDepartment, ID: xlabDeptID})
+	require.NoError(t, err)
+	require.Empty(t, fetcher.askedNumbers, "非全量同步不查花名册")
+	require.Empty(t, fetcher.askedPassports)
+}
+
+// 一人多岗：只能留 isDefault 那条，否则 upsert 后部门/岗位字段会随机漂。
+func TestSyncPrefersDefaultAppointment(t *testing.T) {
+	db, settings := newAIHubTestDBWithSettings(t)
+	repo := repository.NewAIAppHubRepo(db)
+
+	fetcher := &employeeFetcher{
+		items: deptWithPeople(),
+		employees: []ehrclient.Employee{
+			{OrgID: "org", EmployeeID: "emp-he", PersonName: "何治国", DepartmentName: "兼职部门"},
+			{OrgID: "org", EmployeeID: "emp-he", PersonName: "何治国", DepartmentName: "经管办", IsDefault: true},
+		},
+	}
+	svc := service.NewAIAppHubSyncService(fetcher, repo, settings, service.DefaultSyncRules())
+
+	_, err := svc.Sync(context.Background(), service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+
+	var rows []model.EHREmployee
+	require.NoError(t, db.Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.Equal(t, "经管办", rows[0].DepartmentName, "保留 isDefault 的主岗")
 }
 
 func TestSyncKeepsDepartmentsWhenEmployeeFetchFails(t *testing.T) {

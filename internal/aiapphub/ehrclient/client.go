@@ -149,7 +149,25 @@ const employeeBatchSize = 10
 // 所以调用方必须先拿到 id（见 Department.EmployeeIDs）。
 // 某一块返回空是正常现象——离职或失效的 id 查不到，不当成错误。
 func (c *Client) FetchEmployees(ctx context.Context, employeeIDs []string) ([]Employee, error) {
-	ids := nonEmptyUnique(employeeIDs)
+	return c.fetchEmployeesByKey(ctx, "employeeIds", employeeIDs)
+}
+
+// FetchEmployeesByGroupENumber 按工号（BF00014 这种）批量查档案。
+//
+// 工号就是本地 users.employee_id，所以这条能把"系统里已有的每一个人"反查成完整档案——
+// 在没有枚举路由的前提下，这是覆盖全量的唯一办法。
+func (c *Client) FetchEmployeesByGroupENumber(ctx context.Context, numbers []string) ([]Employee, error) {
+	return c.fetchEmployeesByKey(ctx, "groupENumbers", numbers)
+}
+
+// FetchEmployeesByPassport 按 EHR 账号（本地 users.sub）批量查档案。
+func (c *Client) FetchEmployeesByPassport(ctx context.Context, passports []string) ([]Employee, error) {
+	return c.fetchEmployeesByKey(ctx, "passports", passports)
+}
+
+// fetchEmployeesByKey 唯一的批量查询实现：key 只能是 employeeIds / groupENumbers / passports。
+func (c *Client) fetchEmployeesByKey(ctx context.Context, key string, values []string) ([]Employee, error) {
+	ids := nonEmptyUnique(values)
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -161,7 +179,7 @@ func (c *Client) FetchEmployees(ctx context.Context, employeeIDs []string) ([]Em
 		}
 		q := url.Values{"orgId": {c.cfg.OrgID}}
 		for _, id := range ids[start:end] {
-			q.Add("employeeIds", id) // 必须重复同名参数，逗号分隔上游不认
+			q.Add(key, id) // 必须重复同名参数，逗号分隔上游不认
 		}
 		var payload struct {
 			Items []Employee `json:"items"`

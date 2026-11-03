@@ -241,7 +241,7 @@ func TestMediaTaskDashboardRouteContract(t *testing.T) {
 
 	// caliber：口径必须逐字可见。
 	caliber := data["caliber"].(map[string]any)
-	requireKeys(t, caliber, "success_rate_formula", "completed_definition", "expired_handling",
+	requireKeys(t, caliber, "success_rate_formula", "completed_definition", "active_definition", "expired_handling",
 		"duration_basis", "duration_statuses", "percentile_method", "cost_unit",
 		"legacy_kind_note", "completed_without_cost_definition", "window_note")
 	require.Equal(t, "completed / (completed + failed + expired)", caliber["success_rate_formula"])

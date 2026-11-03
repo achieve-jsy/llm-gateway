@@ -431,7 +431,7 @@ func TestMediaTaskDashboardService_CaliberIsExplicit(t *testing.T) {
 	if caliber.SuccessRateFormula != "completed / (completed + failed + expired)" {
 		t.Errorf("成功率公式必须逐字冻结：%q", caliber.SuccessRateFormula)
 	}
-	if caliber.ExpiredHandling == "" || caliber.DurationBasis == "" || caliber.CostUnit == "" ||
+	if caliber.ActiveDefinition == "" || caliber.ExpiredHandling == "" || caliber.DurationBasis == "" || caliber.CostUnit == "" ||
 		caliber.PercentileMethod == "" || caliber.CompletedWithoutCostDefinition == "" {
 		t.Errorf("口径自述不得留空：%+v", caliber)
 	}

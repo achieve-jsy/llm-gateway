@@ -2,6 +2,7 @@ package service
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
@@ -144,6 +145,7 @@ type MediaPricingRejectionAnomaly struct {
 type MediaTaskDashboardCaliber struct {
 	SuccessRateFormula             string   `json:"success_rate_formula"`
 	CompletedDefinition            string   `json:"completed_definition"`
+	ActiveDefinition               string   `json:"active_definition"`
 	ExpiredHandling                string   `json:"expired_handling"`
 	DurationBasis                  string   `json:"duration_basis"`
 	DurationStatuses               []string `json:"duration_statuses"`
@@ -154,13 +156,28 @@ type MediaTaskDashboardCaliber struct {
 	WindowNote                     string   `json:"window_note"`
 }
 
+// mediaTaskDashboardActiveStatuses 未结束任务（成功率的**分母排除项**）。
+//
+// ⚠️ 与 repository.MediaTaskActiveStatuses() 是**两个不同用途的列表**，不要合并：
+// 那个是 C7 超时 sweeper 的扫描范围，只含新词表（queued/in_progress）；把 legacy
+// submitted/running 塞进去会让 sweeper 开始清扫存量 Seedance 行（回归事故）。
+// 本列表含 legacy 词，只服务看板口径，并作为 active_definition 的唯一来源。
+var mediaTaskDashboardActiveStatuses = []string{
+	model.MediaTaskStatusQueued,
+	model.MediaTaskStatusInProgress,
+	model.MediaTaskLegacyStatusSubmitted,
+	model.MediaTaskLegacyStatusRunning,
+}
+
 // MediaTaskDashboardCaliberText 返回当前生效的口径自述。
 func MediaTaskDashboardCaliberText() MediaTaskDashboardCaliber {
 	return MediaTaskDashboardCaliber{
 		SuccessRateFormula:  "completed / (completed + failed + expired)",
 		CompletedDefinition: "completed = status ∈ {completed, succeeded}; succeeded 是 legacy Seedance 词表中 completed 的等价词",
-		ExpiredHandling:     "expired 单独计数，绝不并入 failed：对外（网关 /v1/videos）把 expired 归一为 failed 是为了 OpenAI 兼容，运维必须能区分「超时被 sweeper 清扫」与「上游失败」",
-		DurationBasis:       "started_at → finished_at（上游处理耗时；不含排队等待，因为排队时长由队列/背压解释，是另一个信号）",
+		ActiveDefinition: "active = status ∈ {" + strings.Join(mediaTaskDashboardActiveStatuses, ", ") +
+			"}（未结束任务，**不计入成功率分母**；含 legacy 词表，与新链路词表并存）",
+		ExpiredHandling: "expired 单独计数，绝不并入 failed：对外（网关 /v1/videos）把 expired 归一为 failed 是为了 OpenAI 兼容，运维必须能区分「超时被 sweeper 清扫」与「上游失败」",
+		DurationBasis:   "started_at → finished_at（上游处理耗时；不含排队等待，因为排队时长由队列/背压解释，是另一个信号）",
 		DurationStatuses: []string{
 			model.MediaTaskStatusCompleted,
 			model.MediaTaskLegacyStatusSucceeded,

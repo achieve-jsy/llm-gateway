@@ -80,24 +80,14 @@ func NewMediaTaskStatsRepo(db *gorm.DB) *MediaTaskStatsRepo {
 
 // ── 词表（看板口径；**刻意不复用 sweeper 的列表**）──────────────────────────────
 
-// mediaTaskDashboardActiveStatuses 未结束任务（成功率的**分母排除项**）。
+// mediaTaskDashboardTerminalStatuses 已结束任务（success/failed/expired 的并集来源）。
+//
+// completed 为 succeeded 的 legacy 等价词；failed 两套词表同形；expired 为新链路专有。
 //
 // ⚠️ 与 repository.MediaTaskActiveStatuses() 是**两个不同用途的列表**，不要合并：
 // 那个是 C7 超时 sweeper 的扫描范围，只含新词表（queued/in_progress）——
 // 若把 legacy submitted/running 塞进去，sweeper 会开始清扫存量 Seedance 行（回归事故）。
-// 本列表只用于看板归组，含 legacy 词，保证「成功率分母排除未结束任务」覆盖两套词表。
-func mediaTaskDashboardActiveStatuses() []string {
-	return []string{
-		model.MediaTaskStatusQueued,
-		model.MediaTaskStatusInProgress,
-		model.MediaTaskLegacyStatusSubmitted,
-		model.MediaTaskLegacyStatusRunning,
-	}
-}
-
-// mediaTaskDashboardTerminalStatuses 已结束任务（success/failed/expired 的并集来源）。
-//
-// completed 为 succeeded 的 legacy 等价词；failed 两套词表同形；expired 为新链路专有。
+// 本函数只服务看板，含 legacy 词，保证「终态」覆盖两套词表。
 func mediaTaskDashboardTerminalStatuses() []string {
 	return []string{
 		model.MediaTaskStatusCompleted,

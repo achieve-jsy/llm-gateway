@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
@@ -76,6 +75,7 @@ func (o *BudgetLifecycleNotificationObserver) RetryPending(ctx context.Context, 
 			UserID: row.UserID, Type: row.Type, Level: row.Level, Title: row.Title,
 			Content: row.Content, RefType: row.RefType, RefID: row.RefID,
 			Source: "outbox", DedupeKey: row.DedupeKey,
+			TemplateData: row.TemplateData,
 		}
 		if err := o.notifier.Notify(ctx, notification); err != nil {
 			_ = o.db.WithContext(ctx).Model(&model.NotificationOutbox{}).Where("id = ? AND lease_owner = ?", row.ID, o.leaseOwner).
@@ -121,11 +121,9 @@ func (o *BudgetLifecycleNotificationObserver) OnOverrideExpired(
 	recipients = append(recipients, owners...)
 	return o.notifyRecipients(ctx, "override-expired:"+item.ID.String(), recipients, &model.Notification{
 		Type: model.NotificationTypeExpansionRestored, Level: model.NotificationLevelInfo,
-		Title: "临时扩容已到期", Content: fmt.Sprintf(
-			"临时额度已于 %s 到期，当前额度恢复为届时生效的长期基础额度。",
-			item.ExpiredAt.Format(time.RFC3339),
-		),
+		Title: "临时扩容已到期",
 		RefType: "budget_override", RefID: item.ID.String(),
+		TemplateData: map[string]interface{}{"ExpireTime": item.ExpiredAt.Format(time.RFC3339)},
 	})
 }
 
@@ -161,18 +159,19 @@ func (o *BudgetLifecycleNotificationObserver) notifySchedule(
 	}
 	recipients = append(recipients, owners...)
 	title := "预算计划已生效"
-	content := fmt.Sprintf("%s预算计划已于 %s 生效。", schedule.PeriodType, at.Format(time.RFC3339))
 	level := model.NotificationLevelInfo
+	data := map[string]interface{}{
+		"PeriodType": schedule.PeriodType,
+		"AppliedAt":  at.Format(time.RFC3339),
+	}
 	if notificationType == model.NotificationTypeBudgetScheduleFailed {
 		title, level = "预算计划生效失败", model.NotificationLevelCritical
-		content = fmt.Sprintf(
-			"%s预算计划于 %s 生效失败：%s。请进入预算管理重新配置。",
-			schedule.PeriodType, at.Format(time.RFC3339), failureReason,
-		)
+		data["Reason"] = failureReason
 	}
 	return o.notifyRecipients(ctx, "schedule:"+notificationType+":"+scheduleID.String(), recipients, &model.Notification{
-		Type: notificationType, Level: level, Title: title, Content: content,
+		Type: notificationType, Level: level, Title: title,
 		RefType: "budget_schedule", RefID: scheduleID.String(),
+		TemplateData: data,
 	})
 }
 
@@ -201,7 +200,8 @@ func (o *BudgetLifecycleNotificationObserver) notifyRecipients(
 			ID: uuid.New(), DedupeKey: key, UserID: recipient, Type: notification.Type,
 			Level: notification.Level, Title: notification.Title, Content: notification.Content,
 			RefType: notification.RefType, RefID: notification.RefID,
-			Status: "pending", NextAttempt: time.Now().UTC(),
+			TemplateData: notification.TemplateData,
+			Status:       "pending", NextAttempt: time.Now().UTC(),
 		}
 		if err := o.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "dedupe_key"}}, DoNothing: true}).Create(outbox).Error; err != nil {
 			return err

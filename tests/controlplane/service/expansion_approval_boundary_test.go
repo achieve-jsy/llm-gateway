@@ -90,7 +90,7 @@ func newExpansionApprovalFixture(t *testing.T) (*gorm.DB, *service.ExpansionServ
 		)`,
 		`CREATE TABLE notification_outbox (
 			id text primary key, dedupe_key text unique, user_id text, type text, level text, title text, content text,
-			ref_type text, ref_id text, status text, attempts integer, next_attempt datetime, last_error text,
+			ref_type text, ref_id text, template_data text, status text, attempts integer, next_attempt datetime, last_error text,
 			locked_at datetime, lease_owner text, lease_expires_at integer, delivered_at datetime, created_at datetime, updated_at datetime
 		)`,
 	} {

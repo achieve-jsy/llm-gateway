@@ -67,6 +67,7 @@ func newLifecycleObserverFixture(t *testing.T) (*service.BudgetLifecycleNotifica
 		id TEXT PRIMARY KEY, dedupe_key TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL,
 		type TEXT NOT NULL, level TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL,
 		ref_type TEXT NOT NULL DEFAULT '', ref_id TEXT NOT NULL DEFAULT '',
+		template_data TEXT,
 		status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
 		next_attempt DATETIME NOT NULL, last_error TEXT NOT NULL DEFAULT '',
 		locked_at DATETIME, lease_owner TEXT NOT NULL DEFAULT '', lease_expires_at INTEGER NOT NULL DEFAULT 0,

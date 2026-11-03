@@ -67,6 +67,28 @@
 
 ---
 
+### 0.3 上线前核实（生产库只读，2026-10-16）
+
+**迁移清单（会真正在 prod 上执行的就是这 5 条）**：`atlas migrate status` 实测 → `Migration Status: PENDING`，`Current Version: 20261012122318`，`Executed Files: 58`，`Pending Files: 5`：
+
+| # | 迁移 | 内容 | 代价评估 |
+|---|---|---|---|
+| 1 | `20261016100000_add_model_catalog_media_prices.sql` (A1) | `model_catalog` 加 5 个 `numeric(18,8) NULL` | **极轻**：PG 11+ 加可空无默认列是纯元数据操作 |
+| 2 | `20261016101000_add_model_type_image.sql` (A5) | `model_groups` 重建 `chk_model_groups_model_type`（7 值） | **轻**：`model_groups` 是小表（生产 100+ 行），全表校验很快 |
+| 3 | `20261016110000_add_model_catalog_media_extended_prices.sql` (A1) | `model_catalog` 再加 7 个 `numeric(18,8) NULL` | **极轻**（同上） |
+| 4 | `20261016120000_add_call_logs_call_type.sql` (A11) | `call_logs` 加 `call_type varchar(64)` | **极轻**（可空无默认） |
+| 5 | `20261016120100_backfill_call_logs_call_type.sql` (A11) | 回填历史媒体行的 `call_type` | 🔴 **重**，见下 |
+
+**第 5 条的实测代价（这是整个上线唯一的风险点）**：
+- `call_logs` 是**写最热、最大**的表：**10,331,055 行 / 13 GB**（`reltuples` 估算 9,771,441，精确 `count(*)` 10,331,055）。
+- 回填的**真实目标只有 2,699 行**（`ts >= '2026-07-10'` 且命中端点/模型谓词），但谓词里的 `inbound_endpoint` **没有任何索引**（`call_logs` 上 10 个索引全是 `*_ts`/`key_*`/`model_ts` 系）→ **必须全表顺序扫描 13 GB**。
+- **父 agent 实测**：单独跑那条计数 SELECT 就花了 **33.9 秒**（`real 0m33.909s`）；`UPDATE` 还要额外写 2,699 行 + WAL，耗时会更高。
+- **用时间下界救不了**：`call_logs` 跨度 2026-06-04 → 2026-10-16，而 `ts >= '2026-07-10'`（媒体时代起点，取自 `video_tasks.created_at` 下界）仍有 **9,703,362 行 = 全表的 94%**，索引范围扫描省不了多少。
+
+**给运维的执行建议**：① 4 条 DDL 可随时上；② **第 5 条 DML 放到低峰窗口执行**（单条 UPDATE 在一个事务里跑 ~40–90s，期间它对 `call_logs` 持有行锁；网关的埋点是经 Redis spool 回放的，短暂阻塞不会丢数据，但长事务会影响 autovacuum）；③ 可选优化（**本次未做**，因为 A11 的迁移已提交、可能已在 test 环境 apply，改动会引发 `checksum mismatch`）：把 `/v1/images/*`、`/v1/videos` 两个端点谓词**从回填里删掉**——这两个端点是 **Batch 1 才引入的新端点，部署前不可能有任何历史行**（CI 的 migrate stage 先于 deploy），属于纯废扫描面；且部署后写入的行由 A11 的采集侧 `DeriveCallType` **直接带上 `call_type`**，本来也不依赖回填。
+
+**另一项只读核实（影响 Batch 2/3）**：生产库**没有任何 Kling / Vidu 渠道**（43 个 provider = 空 23 / openai-compatible 12 / vertex 4 / bailian 2 / azure 1 / seedance-relay 1），也**没有任何 `image` 类型模型** → Kling/Vidu 适配器只能做契约测试 + fake/回放，真实联调需先由运维配置这两家渠道的凭证（Kling 的 AK/SK 可直接复用既有 `api_key`+`access_key`+`secret_key` schema，无需改数据结构）。
+
 ## 1. 团队编制
 
 五支队伍，按「**不共享文件**」原则切分；同一批次内并行，跨批次串行。

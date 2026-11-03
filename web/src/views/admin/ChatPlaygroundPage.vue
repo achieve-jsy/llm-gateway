@@ -8,7 +8,7 @@ import type { GroupListItem, GroupModel } from '@/types/group'
 import type { Model } from '@/types/model'
 
 // ─── 类型 ──────────────────────────────────────────────────────────────────
-type PlaygroundMode = 'session' | 'apikey'
+type PlaygroundMode = 'model' | 'group' | 'apikey'
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -24,7 +24,7 @@ interface GatewayModelInfo {
 }
 
 // ─── 状态 ──────────────────────────────────────────────────────────────────
-const mode = ref<PlaygroundMode>('session')
+const mode = ref<PlaygroundMode>('model')
 const models = ref<Model[]>([])
 const gatewayModelIds = ref<string[]>([])
 const loadingModels = ref(false)
@@ -67,7 +67,7 @@ const effectiveApiBase = computed(() => config.apiBase || '/v1')
 
 // 选中模型的上下文窗口提示
 const modelHint = computed(() => {
-  if (mode.value === 'apikey') return ''
+  if (mode.value !== 'model') return ''
   const meta = currentModelMeta.value
   if (!meta) return ''
   const parts: string[] = []
@@ -80,30 +80,10 @@ const selectedGroup = computed(() => groups.value.find(g => g.id === selectedGro
 
 // 模型选项：
 // - API Key 模式：来自网关 /v1/models（该 Key 有权限的模型）
-// - 会话模式：未选模型组时展示全部已注册模型；选了模型组后展示组名 + 组内成员模型
+// - 模型模式：全部已注册模型；模型组模式走独立的组下拉，不经过此列表
 const modelOptions = computed(() => {
   if (mode.value === 'apikey') {
     return gatewayModelIds.value.map(id => ({ id: '', name: id, upstream_model_id: id, model_type: 'chat', enabled: true } as Model))
-  }
-  if (selectedGroupId.value !== '') {
-    const members = groupModels.value[selectedGroupId.value] || []
-    const groupAsModel = {
-      id: `group:${selectedGroup.value?.id ?? ''}`,
-      name: selectedGroup.value?.name || '',
-      upstream_model_id: selectedGroup.value?.name || '',
-      model_type: 'chat',
-      enabled: true,
-    } as Model
-    return [
-      groupAsModel,
-      ...members.map(m => ({
-        id: m.model_id,
-        name: m.model_name,
-        upstream_model_id: m.model_name,
-        model_type: 'chat',
-        enabled: true,
-      } as Model)),
-    ]
   }
   return models.value
 })
@@ -161,6 +141,9 @@ async function onGroupChange() {
   config.model = ''
   if (selectedGroupId.value === '') return
   const gid = selectedGroupId.value
+  // 选组后直接用组名作为发送的 model（gateway 按组调度）
+  config.model = selectedGroup.value?.name || ''
+  // 懒加载组内成员（仅用于展示该组包含哪些模型）
   if (!groupModels.value[gid]) {
     try {
       const res = await groupsApi.listGroupModels(gid)
@@ -225,9 +208,10 @@ async function loadGatewayModels() {
 async function loadModels() {
   if (mode.value === 'apikey') {
     await loadGatewayModels()
-  } else {
+  } else if (mode.value === 'model') {
     await loadAdminModels()
   }
+  // 模型组模式不需要模型列表（走组下拉）
 }
 
 watch(mode, () => {
@@ -247,7 +231,8 @@ onMounted(() => {
 // ─── 主动获取鉴权 token ───────────────────────────────────────────────────
 function getAuthToken(): string {
   if (mode.value === 'apikey') return config.apiKey
-  return localStorage.getItem('access_token') || ''
+  // 模型 / 模型组模式：优先用可选密钥覆盖，否则用会话令牌
+  return config.apiKey || localStorage.getItem('access_token') || ''
 }
 
 // ─── 滚动到底部 ──────────────────────────────────────────────────────────
@@ -432,11 +417,12 @@ function renderContent(content: string): string {
       </div>
 
       <div class="pg-sidebar__body">
-        <!-- 模式切换 -->
+        <!-- 模式切换：模型 / 模型组 / API Key 三种调用方式 -->
         <div class="field">
-          <label class="field__label">模式</label>
+          <label class="field__label">调用方式</label>
           <el-radio-group v-model="mode" size="small" class="field__control" :disabled="isStreaming">
-            <el-radio-button value="session">会话</el-radio-button>
+            <el-radio-button value="model">模型</el-radio-button>
+            <el-radio-button value="group">模型组</el-radio-button>
             <el-radio-button value="apikey">API Key</el-radio-button>
           </el-radio-group>
         </div>
@@ -475,14 +461,14 @@ function renderContent(content: string): string {
           />
         </div>
 
-        <!-- 会话模式：模型组筛选 -->
-        <div v-if="mode === 'session'" class="field">
+        <!-- 模型组模式：选择模型组 -->
+        <div v-if="mode === 'group'" class="field">
           <label class="field__label">模型组</label>
           <el-select
             v-model="selectedGroupId"
             filterable
             clearable
-            placeholder="全部模型"
+            placeholder="选择模型组"
             :loading="loadingGroups"
             class="field__control"
             @change="onGroupChange"
@@ -496,8 +482,8 @@ function renderContent(content: string): string {
           </el-select>
         </div>
 
-        <!-- 模型选择 -->
-        <div class="field">
+        <!-- 模型选择（模型 / API Key 模式） -->
+        <div v-if="mode !== 'group'" class="field">
           <label class="field__label">模型</label>
           <el-select
             v-model="config.model"
@@ -516,7 +502,7 @@ function renderContent(content: string): string {
             >
               <div class="model-option">
                 <span class="model-option__name">{{ m.name }}</span>
-                <span v-if="mode === 'session'" class="model-option__owner">{{ m.provider?.name || m.provider_id }}</span>
+                <span v-if="mode === 'model'" class="model-option__owner">{{ m.provider?.name || m.provider_id }}</span>
               </div>
             </el-option>
           </el-select>
@@ -603,7 +589,7 @@ function renderContent(content: string): string {
             />
           </div>
 
-          <div v-if="mode === 'session'" class="field">
+          <div v-if="mode !== 'apikey'" class="field">
             <label class="field__label">密钥</label>
             <el-input
               v-model="config.apiKey"

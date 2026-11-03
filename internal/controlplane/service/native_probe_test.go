@@ -114,3 +114,65 @@ func TestIsNonOpenAICompatible_NativeProtocols(t *testing.T) {
 		}
 	}
 }
+
+func TestProbeVertexGenerate_UsesNativePathAndHeaders(t *testing.T) {
+	var gotPath, gotKey string
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotKey = r.Header.Get("x-goog-api-key")
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}`))
+	}))
+	defer srv.Close()
+
+	// 线上 vertex 渠道的 endpoint 是原生面（/publishers/google 结尾）。
+	// adapter 用 VertexBaseURLs 把它识别成 native base，再拼 /models/{model}:generateContent。
+	res := ProbeVertexGenerate(context.Background(), srv.URL+"/publishers/google", "sk-vertex", "gemini-1.5-flash")
+	if !res.Success {
+		t.Fatalf("探针应成功，得到错误: %s", res.Message)
+	}
+	if gotPath != "/publishers/google/models/gemini-1.5-flash:generateContent" {
+		t.Fatalf("必须走原生 generateContent 并保留 endpoint 前缀，实际 %q", gotPath)
+	}
+	if gotKey != "sk-vertex" {
+		t.Fatalf("必须用 x-goog-api-key 鉴权，实际 %q", gotKey)
+	}
+	// generateContent 用 contents 而非 messages；探针若还按 OpenAI 体发送，
+	// 上游会 400，而这里断言的正是「请求体来自 adapter 而非手拼」。
+	if _, ok := gotBody["contents"]; !ok {
+		t.Fatalf("请求体必须是 generateContent 格式（contents），实际 %v", gotBody)
+	}
+}
+
+func TestProbeAzureChat_UsesAdapterPathAndHeaders(t *testing.T) {
+	var gotPath, gotKey string
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotKey = r.Header.Get("api-key")
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
+	}))
+	defer srv.Close()
+
+	res := ProbeAzureChat(context.Background(), srv.URL, "sk-azure", "gpt-4o")
+	if !res.Success {
+		t.Fatalf("探针应成功，得到错误: %s", res.Message)
+	}
+	if gotPath != "/openai/v1/chat/completions" {
+		t.Fatalf("必须走 azure 的 /openai/v1/chat/completions，实际 %q", gotPath)
+	}
+	if gotKey != "sk-azure" {
+		t.Fatalf("azure 必须用 api-key 头鉴权，实际 %q", gotKey)
+	}
+	if gotBody["model"] != "gpt-4o" {
+		t.Fatalf("model 必须原样透传，实际 %v", gotBody["model"])
+	}
+}

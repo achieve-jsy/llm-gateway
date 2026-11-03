@@ -24,6 +24,8 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
+	baseproviders "github.com/example/llm-gateway/internal/providers"
+	bedrockprovider "github.com/example/llm-gateway/internal/providers/bedrock"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
@@ -825,76 +827,20 @@ func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, str
 // 这样可以发现：模型名拼错、账号没有该模型的访问权限等问题。
 func (s *HealthCheckService) doBedrockModelCheck(provider *model.Provider, credJSON string, m *model.Model) (bool, int, string) {
 	apiKey := extractAPIKey(credJSON)
-	region := regionFromBedrockEndpoint(provider.Endpoint)
-	if region == "" {
-		region = "us-east-1"
-	}
 
-	loadOpts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
-	var runtimeOpts []func(*bedrockruntime.Options)
+	// 走真实 adapter：凭证解析（IAM JSON / Bearer API Key）、region 提取、
+	// Converse 请求构造都在 bedrock 包内，探针不再复刻一份。
+	//
+	// 这样探针不会比转发更宽容：原先这里会给 region 缺失的 endpoint 兜底
+	// us-east-1，而 adapter 不兜底，于是「探针通过、线上必然失败」。
+	p := bedrockprovider.New(baseproviders.ProviderConfig{
+		APIKey:  apiKey,
+		BaseURL: provider.Endpoint,
+	}, baseproviders.ProviderOptions{})
 
-	if apiKey != "" {
-		if strings.HasPrefix(apiKey, "{") {
-			var creds struct {
-				AccessKeyID     string `json:"access_key_id"`
-				SecretAccessKey string `json:"secret_access_key"`
-				SessionToken    string `json:"session_token,omitempty"`
-			}
-			if err := json.Unmarshal([]byte(apiKey), &creds); err == nil && creds.AccessKeyID != "" {
-				loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(
-					credentials.NewStaticCredentialsProvider(creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken),
-				))
-			}
-		} else {
-			// Bedrock API Key (Bearer token) 模式：
-			// 使用 AnonymousCredentials 让 SDK 不做 SigV4 签名，也不走默认凭证链
-			loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(aws.AnonymousCredentials{}))
-			tokenVal := apiKey
-			runtimeOpts = append(runtimeOpts, func(o *bedrockruntime.Options) {
-				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {
-					return bearer.Token{Value: tokenVal}, nil
-				})
-				o.AuthSchemePreference = []string{"smithy.api#httpBearerAuth"}
-			})
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), BedrockProbeTimeout)
-	defer cancel()
-
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
-	if err != nil {
-		return false, 0, "AWS 配置加载失败: " + err.Error()
-	}
-
-	runtime := bedrockruntime.NewFromConfig(awsCfg, runtimeOpts...)
-
-	modelName := m.UpstreamName()
-
-	maxTokens := BedrockProbeMaxTokens
-	userMsg := "hi"
-	start := time.Now()
-
-	_, err = runtime.Converse(ctx, &bedrockruntime.ConverseInput{
-		ModelId: &modelName,
-		Messages: []bedrockruntimetypes.Message{
-			{
-				Role: bedrockruntimetypes.ConversationRoleUser,
-				Content: []bedrockruntimetypes.ContentBlock{
-					&bedrockruntimetypes.ContentBlockMemberText{
-						Value: bedrockruntimetypes.ContentBlockMemberText{Value: userMsg}.Value,
-					},
-				},
-			},
-		},
-		InferenceConfig: &bedrockruntimetypes.InferenceConfiguration{
-			MaxTokens: &maxTokens,
-		},
-	})
-
-	elapsed := int(time.Since(start).Milliseconds())
-	if err != nil {
-		return false, elapsed, err.Error()
+	ok, elapsed, errMsg := probeViaAdapter(context.Background(), p, m.UpstreamName())
+	if !ok {
+		return false, elapsed, errMsg
 	}
 	return true, elapsed, ""
 }

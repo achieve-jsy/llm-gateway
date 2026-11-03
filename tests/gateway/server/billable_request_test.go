@@ -107,7 +107,7 @@ func TestBillingFactGuard_BillablePathWhitelist(t *testing.T) {
 			method: http.MethodGet, path: "/v1/models", wantBillable: false,
 		},
 		{
-			name: "model.info 不背压", description: "GET /v1/model/info 是只读端点，不背压",
+			name: "model_info 不背压", description: "GET /v1/model/info 是只读端点，不背压",
 			method: http.MethodGet, path: "/v1/model/info", wantBillable: false,
 		},
 		{

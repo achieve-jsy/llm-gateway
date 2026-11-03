@@ -14,7 +14,7 @@ import (
 //	embeddings             POST /v1/embeddings
 //	rerank                 POST /v1/rerank
 //	models                 GET  /v1/models
-//	model.info             GET  /v1/model/info
+//	model_info             GET  /v1/model/info
 //	video.create           POST /v1/contents/generations/tasks（Seedance 原生创建）
 //	video.get              GET  /v1/contents/generations/tasks/{task_id}（Seedance 原生查询）
 //	image.generations      POST /v1/images/generations
@@ -40,7 +40,7 @@ const (
 	callTypeEmbeddings         = "embeddings"
 	callTypeRerank             = "rerank"
 	callTypeModels             = "models"
-	callTypeModelInfo          = "model.info"
+	callTypeModelInfo          = "model_info"
 	callTypeImageGenerations   = "image.generations"
 	callTypeImageEdits         = "image.edits"
 	callTypeVideoCreate        = "video.create"

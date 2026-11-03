@@ -18,7 +18,7 @@ const videoAssetPrefix = "video.asset."
 
 // TestDeriveCallType 逐条断言「端点 × 方法 → call_type 取值」。
 //
-// 测什么：现有端点（chat/messages/count_tokens/responses/embeddings/rerank/models/model.info）、
+// 测什么：现有端点（chat/messages/count_tokens/responses/embeddings/rerank/models/model_info）、
 // Seedance 视频与素材端点、本次新增的媒体端点（images/videos）的归一化结果；
 // 同时覆盖"路径对但方法不对"、尾部斜杠、超长素材 Action、未知路径四类边界。
 // 怎么测：纯函数表驱动，逐条比对返回值。
@@ -68,8 +68,8 @@ func TestDeriveCallType(t *testing.T) {
 			method: http.MethodGet, path: "/v1/models", want: "models",
 		},
 		{
-			name: "model.info 端点", description: "GET /v1/model/info 应归一为 model.info",
-			method: http.MethodGet, path: "/v1/model/info", want: "model.info",
+			name: "model_info 端点", description: "GET /v1/model/info 应归一为 model_info",
+			method: http.MethodGet, path: "/v1/model/info", want: "model_info",
 		},
 
 		// ── Seedance 现有视频 / 素材端点 ───────────────────────────────────────
@@ -138,8 +138,8 @@ func TestDeriveCallType(t *testing.T) {
 			method: http.MethodPost, path: "/v1/messages//", want: "messages",
 		},
 		{
-			name: "尾部斜杠 model.info", description: "GET /v1/model/info/ 应仍是 model.info",
-			method: http.MethodGet, path: "/v1/model/info/", want: "model.info",
+			name: "尾部斜杠 model_info", description: "GET /v1/model/info/ 应仍是 model_info",
+			method: http.MethodGet, path: "/v1/model/info/", want: "model_info",
 		},
 		{
 			name: "尾部斜杠 视频提交", description: "POST /v1/videos/ 应仍是 video.submit",
@@ -172,7 +172,7 @@ func TestDeriveCallType(t *testing.T) {
 			method: http.MethodPost, path: "/v1/models", want: "",
 		},
 		{
-			name: "model.info 方法不对", description: "POST /v1/model/info 不命中路由，不应算作 model.info",
+			name: "model_info 方法不对", description: "POST /v1/model/info 不命中路由，不应算作 model_info",
 			method: http.MethodPost, path: "/v1/model/info", want: "",
 		},
 		{

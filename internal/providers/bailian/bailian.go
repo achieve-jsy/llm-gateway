@@ -139,6 +139,10 @@ const (
 	// 百炼 text-embedding-v4 官方文档限制最多 10 条/次。
 	// 参考: https://help.aliyun.com/zh/model-studio/text-embedding-api
 	maxEmbeddingBatchSize = 10
+
+	// maxEmbeddingConcurrency 分批请求的最大并发数。
+	// 避免大量文本（如 1000 条）产生 100 个并发请求触发百炼限流。
+	maxEmbeddingConcurrency = 3
 )
 
 type bailianTextEmbeddingReq struct {
@@ -178,10 +182,10 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 	// 大输入分批处理，避免单次请求体超过百炼 API 限制
 	batches := splitTextsByCount(texts, maxEmbeddingBatchSize)
 	if len(batches) == 1 {
-		return p.doNativeEmbedding(ctx, req.Model, batches[0])
+		return p.doNativeEmbedding(ctx, req.Model, batches[0], 0)
 	}
 
-	// 多批次并发请求，合并结果
+	// 多批次并发请求，合并结果（限流避免触发百炼限流）
 	type batchResult struct {
 		data  []core.EmbeddingData
 		usage core.EmbeddingUsage
@@ -190,12 +194,18 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var firstErr error
+	sem := make(chan struct{}, maxEmbeddingConcurrency)
 
+	offset := 0
 	for i, batch := range batches {
+		batchOffset := offset
+		offset += len(batch)
 		wg.Add(1)
-		go func(idx int, b []string) {
+		go func(idx int, b []string, off int) {
 			defer wg.Done()
-			resp, err := p.doNativeEmbedding(ctx, req.Model, b)
+			sem <- struct{}{}        // 限流
+			defer func() { <-sem }() // 释放
+			resp, err := p.doNativeEmbedding(ctx, req.Model, b, off)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -208,7 +218,7 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 				data:  resp.Data,
 				usage: resp.Usage,
 			}
-		}(i, batch)
+		}(i, batch, batchOffset)
 	}
 	wg.Wait()
 
@@ -216,7 +226,7 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 		return nil, firstErr
 	}
 
-	// 合并结果：按原始索引排序
+	// 合并结果
 	allData := make([]core.EmbeddingData, 0, len(texts))
 	totalTokens := 0
 	for _, r := range results {
@@ -236,7 +246,8 @@ func (p *Provider) nativeEmbeddings(ctx context.Context, req *core.EmbeddingRequ
 }
 
 // doNativeEmbedding 发送单个批次的 embedding 请求到原生 text-embedding API。
-func (p *Provider) doNativeEmbedding(ctx context.Context, model string, texts []string) (*core.EmbeddingResponse, error) {
+// indexOffset 用于修正分批后的索引，确保返回的 Index 与原始输入顺序一致。
+func (p *Provider) doNativeEmbedding(ctx context.Context, model string, texts []string, indexOffset int) (*core.EmbeddingResponse, error) {
 	bailianReq := bailianTextEmbeddingReq{
 		Model: model,
 		Input: bailianTextEmbeddingInput{Texts: texts},
@@ -258,7 +269,7 @@ func (p *Provider) doNativeEmbedding(ctx context.Context, model string, texts []
 		data[i] = core.EmbeddingData{
 			Object:    "embedding",
 			Embedding: b,
-			Index:     e.TextIndex,
+			Index:     indexOffset + e.TextIndex,
 		}
 	}
 
@@ -337,6 +348,7 @@ func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.Embedding
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var firstErr error
+	sem := make(chan struct{}, maxEmbeddingConcurrency)
 	offset := 0
 
 	for i, batch := range batches {
@@ -345,6 +357,8 @@ func (p *Provider) multimodalEmbeddings(ctx context.Context, req *core.Embedding
 		wg.Add(1)
 		go func(idx int, b []string, off int) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			resp, err := p.doMultimodalEmbedding(ctx, req.Model, b, off)
 			mu.Lock()
 			defer mu.Unlock()

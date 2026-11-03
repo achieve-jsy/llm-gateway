@@ -25,12 +25,15 @@ func TestProbeAnthropicMessages_UsesNativePathAndHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ok, _, msg := ProbeAnthropicMessages(context.Background(), srv.URL, "sk-test", "claude-x")
+	// 线上 endpoint 普遍带路径前缀（如百炼 /apps/anthropic/v1）。
+	// 探针必须像 adapter 一样原样保留前缀，不能自己 TrimRight 后再拼 ——
+	// 那样会比生产更宽容，把「转发必然 404」的渠道判成健康。
+	ok, _, msg := ProbeAnthropicMessages(context.Background(), srv.URL+"/apps/anthropic/v1", "sk-test", "claude-x")
 	if !ok {
 		t.Fatalf("探针应成功，得到错误: %s", msg)
 	}
-	if gotPath != "/messages" {
-		t.Fatalf("必须走原生 /messages，实际 %q", gotPath)
+	if gotPath != "/apps/anthropic/v1/messages" {
+		t.Fatalf("必须走原生 /messages 并保留 endpoint 前缀，实际 %q", gotPath)
 	}
 	if gotKey != "sk-test" {
 		t.Fatalf("必须用 x-api-key 鉴权，实际 %q", gotKey)
@@ -51,12 +54,15 @@ func TestProbeGeminiGenerate_UsesNativePathAndHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ok, _, msg := ProbeGeminiGenerate(context.Background(), srv.URL, "gk-test", "gemini-2.5-pro")
+	// 同时锁两件事：endpoint 前缀保留，以及模型名归一化。
+	// 模型名前缀（models/ 、google/）在配置里很常见，手写拼接会产生
+	// /models/models/xxx:generateContent 这种永久 404。
+	ok, _, msg := ProbeGeminiGenerate(context.Background(), srv.URL+"/v1beta", "gk-test", "models/gemini-2.5-pro")
 	if !ok {
 		t.Fatalf("探针应成功，得到错误: %s", msg)
 	}
-	if gotPath != "/models/gemini-2.5-pro:generateContent" {
-		t.Fatalf("必须走原生 generateContent，实际 %q", gotPath)
+	if gotPath != "/v1beta/models/gemini-2.5-pro:generateContent" {
+		t.Fatalf("必须走原生 generateContent，且前缀与模型名都已归一化，实际 %q", gotPath)
 	}
 	if gotKey != "gk-test" {
 		t.Fatalf("必须用 x-goog-api-key 鉴权，实际 %q", gotKey)

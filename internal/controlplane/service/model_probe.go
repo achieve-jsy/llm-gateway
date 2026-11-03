@@ -10,6 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/example/llm-gateway/internal/core"
+	"github.com/example/llm-gateway/internal/providers"
+	"github.com/example/llm-gateway/internal/providers/anthropic"
+	"github.com/example/llm-gateway/internal/providers/gemini"
 	"github.com/example/llm-gateway/internal/providers/openai"
 )
 
@@ -288,14 +292,6 @@ func cloneProbeRequest(src map[string]interface{}) map[string]interface{} {
 }
 
 func doProbeRequest(ctx context.Context, endpoint, apiKey string, payload map[string]interface{}, streamMode bool) (bool, int, string) {
-	return doProbeRequestWithHeaders(ctx, endpoint,
-		map[string]string{"Authorization": "Bearer " + apiKey}, payload, streamMode)
-}
-
-// doProbeRequestWithHeaders 是 doProbeRequest 的可定制鉴权头版本。
-// Anthropic（x-api-key + anthropic-version）与 Gemini（x-goog-api-key）都不认
-// Bearer，探测器必须模拟 adapter 实际发出去的 header，否则会把正常渠道判成故障。
-func doProbeRequestWithHeaders(ctx context.Context, endpoint string, headers map[string]string, payload map[string]interface{}, streamMode bool) (bool, int, string) {
 	body, _ := json.Marshal(payload)
 	client := &http.Client{
 		Timeout: 120 * time.Second,
@@ -306,9 +302,7 @@ func doProbeRequestWithHeaders(ctx context.Context, endpoint string, headers map
 	start := time.Now()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := client.Do(req)
 	elapsed := int(time.Since(start).Milliseconds())
@@ -408,29 +402,55 @@ func ExtractRequiredTemperature(lower string) *float64 {
 // 进而在「连续 N 次失败」后被自动禁用 —— 即使渠道本身完全正常。
 // 探针必须按各家原生协议发最小请求，并模拟 adapter 真正使用的鉴权头。
 
-// ProbeAnthropicMessages 用最小 /messages 请求探测 Anthropic 原生渠道。
-func ProbeAnthropicMessages(ctx context.Context, endpoint, apiKey, model string) (bool, int, string) {
-	url := strings.TrimRight(endpoint, "/") + "/messages"
-	payload := map[string]interface{}{
-		"model":      model,
-		"max_tokens": 16,
-		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+const (
+	// probeAdapterMaxTokens 探针请求的 token 上限。
+	// 取 16 是为了兼容最严格的上游（阿里百炼要求 ≥ 16，Bedrock GPT 系列同样要求 ≥ 16）。
+	probeAdapterMaxTokens = 16
+	probeAdapterTimeout   = 120 * time.Second
+)
+
+// probeViaAdapter 用真实 adapter 发一条最小 chat 请求，作为渠道探针。
+//
+// 探测器不自己拼 URL / header / body，而是复用 adapter 的实现：路径、鉴权头、
+// API 版本常量、参数改写、超时全部与线上转发同源。协议升级时探针自动跟随，
+// 不会出现「探测通过但真实转发失败」这种最难排查的错配。
+//
+// 故意不继承生产的重试与熔断：探测需要快速给出确定结论，
+// 重试会把一次失败拖成 3 倍超时，反而掩盖真实状态。
+func probeViaAdapter(ctx context.Context, p core.Provider, model string) (bool, int, string) {
+	ctx, cancel := context.WithTimeout(ctx, probeAdapterTimeout)
+	defer cancel()
+
+	maxTokens := probeAdapterMaxTokens
+	start := time.Now()
+	_, err := p.ChatCompletion(ctx, &core.ChatRequest{
+		Model:     model,
+		MaxTokens: &maxTokens,
+		Messages:  []core.Message{{Role: "user", Content: "hi"}},
+	})
+	elapsed := int(time.Since(start).Milliseconds())
+	if err != nil {
+		return false, elapsed, "adapter probe: " + truncateProbeString(err.Error(), 200)
 	}
-	return doProbeRequestWithHeaders(ctx, url, map[string]string{
-		"x-api-key":         apiKey,
-		"anthropic-version": "2023-06-01",
-	}, payload, false)
+	return true, elapsed, ""
 }
 
-// ProbeGeminiGenerate 用最小 generateContent 请求探测 Gemini 原生渠道。
+// ProbeAnthropicMessages 用真实 Anthropic adapter 探测渠道。
+// 构造参数与生产一致（provider_loader.go 的 ProviderConfig 只设 APIKey / BaseURL），
+// 否则会探测到与线上不同的协议变体。
+func ProbeAnthropicMessages(ctx context.Context, endpoint, apiKey, model string) (bool, int, string) {
+	return probeViaAdapter(ctx,
+		anthropic.New(
+			providers.ProviderConfig{APIKey: apiKey, BaseURL: endpoint},
+			providers.ProviderOptions{},
+		), model)
+}
+
+// ProbeGeminiGenerate 用真实 Gemini adapter 探测渠道，构造参数同上。
 func ProbeGeminiGenerate(ctx context.Context, endpoint, apiKey, model string) (bool, int, string) {
-	url := strings.TrimRight(endpoint, "/") + "/models/" + model + ":generateContent"
-	payload := map[string]interface{}{
-		"contents": []map[string]interface{}{
-			{"role": "user", "parts": []map[string]string{{"text": "hi"}}},
-		},
-	}
-	return doProbeRequestWithHeaders(ctx, url, map[string]string{
-		"x-goog-api-key": apiKey,
-	}, payload, false)
+	return probeViaAdapter(ctx,
+		gemini.New(
+			providers.ProviderConfig{APIKey: apiKey, BaseURL: endpoint},
+			providers.ProviderOptions{},
+		), model)
 }

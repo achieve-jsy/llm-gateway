@@ -63,3 +63,30 @@ export interface PublicSettingsResponse {
   message: string
   data: PublicSettings
 }
+
+export interface NotificationChannelRule {
+  notification_type: string
+  channel: 'inapp' | 'email'
+  enabled: boolean
+}
+
+export interface NotificationTypeMeta {
+  type: string
+  label: string
+}
+
+export interface NotificationChannelMeta {
+  channel: string
+  label: string
+}
+
+export interface NotificationChannelMetadata {
+  types: NotificationTypeMeta[]
+  channels: NotificationChannelMeta[]
+}
+
+export interface NotificationChannelMetadataResponse {
+  code: number
+  message: string
+  data: NotificationChannelMetadata
+}

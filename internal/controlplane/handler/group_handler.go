@@ -29,14 +29,17 @@ type GroupServiceInterface interface {
 }
 
 type GroupHandler struct {
-	svc        GroupServiceInterface
-	modelRepo  ModelRepoInterface
+	svc          GroupServiceInterface
+	modelRepo    ModelRepoInterface
 	providerRepo ProviderRepoInterface
 	settingsSvc  SettingsServiceInterface
 }
 
 type ModelRepoInterface interface {
 	GetByID(id uuid.UUID) (*model.Model, error)
+	// GetByIDsWithCatalog 批量取模型并预加载 Catalog：路由 payload 的能力位
+	// （supports_video_input）需要读 catalog 声明，且逐模型 GetByID 会 N+1。
+	GetByIDsWithCatalog(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error)
 }
 
 type ProviderRepoInterface interface {
@@ -54,9 +57,9 @@ func (h *GroupHandler) WithSettingsService(svc SettingsServiceInterface) *GroupH
 }
 
 type addModelsRequest struct {
-	ModelIDs        []uuid.UUID         `json:"model_ids" binding:"required,min=1"`
-	Priorities      map[uuid.UUID]int   `json:"priorities,omitempty"`
-	Weights         map[uuid.UUID]int   `json:"weights,omitempty"`
+	ModelIDs        []uuid.UUID          `json:"model_ids" binding:"required,min=1"`
+	Priorities      map[uuid.UUID]int    `json:"priorities,omitempty"`
+	Weights         map[uuid.UUID]int    `json:"weights,omitempty"`
 	ComplexityTiers map[uuid.UUID]string `json:"complexity_tiers,omitempty"`
 }
 
@@ -470,6 +473,28 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 		Models           []modelInfo `json:"models"`
 	}
 
+	// 一次性批量取模型（含 catalog）。能力位必须能读到 catalog 声明，
+	// 否则"catalog 已声明支持视频"的模型在路由期会被判成不支持。
+	modelsByID := make(map[uuid.UUID]*model.Model)
+	if h.modelRepo != nil {
+		ids := make([]uuid.UUID, 0, len(groups)*4)
+		for _, g := range groups {
+			for _, gm := range g.Models {
+				ids = append(ids, gm.ModelID)
+			}
+		}
+		if len(ids) > 0 {
+			byID, err := h.modelRepo.GetByIDsWithCatalog(ids)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": gin.H{"type": "internal_error", "message": "failed to load models", "code": CodeInternalError},
+				})
+				return
+			}
+			modelsByID = byID
+		}
+	}
+
 	result := make([]groupInfo, 0, len(groups))
 	for _, g := range groups {
 		// 解析 effective sticky：组级显式设置优先，否则用全局默认
@@ -501,29 +526,29 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 				ComplexityTier: gm.ComplexityTier,
 			}
 			if h.modelRepo != nil {
-				m, err := h.modelRepo.GetByID(gm.ModelID)
-				if err == nil && m != nil {
+				m := modelsByID[gm.ModelID]
+				if m != nil {
 					// model 本身必须启用，否则跳过（不下发到 gateway snapshot）
 					if m.Enabled == nil || !*m.Enabled {
 						continue
 					}
-				mi.Name = m.UpstreamName()
-				mi.ModelType = m.ModelType
-				mi.ProviderID = m.ProviderID
-				mi.SupportsVideoInput = service.EffectiveSupportsVideoInput(m)
-				providerEnabled := false
-				if h.providerRepo != nil {
-					p, err := h.providerRepo.GetByID(m.ProviderID)
-					if err == nil && p != nil && p.Enabled {
-						mi.ProviderType = p.DefinitionID
-						if mi.ProviderType == "" {
-							mi.ProviderType = p.Type
+					mi.Name = m.UpstreamName()
+					mi.ModelType = m.ModelType
+					mi.ProviderID = m.ProviderID
+					mi.SupportsVideoInput = service.EffectiveSupportsVideoInput(m)
+					providerEnabled := false
+					if h.providerRepo != nil {
+						p, err := h.providerRepo.GetByID(m.ProviderID)
+						if err == nil && p != nil && p.Enabled {
+							mi.ProviderType = p.DefinitionID
+							if mi.ProviderType == "" {
+								mi.ProviderType = p.Type
+							}
+							mi.ProviderName = p.Name
+							mi.Endpoint = p.Endpoint
+							providerEnabled = true
 						}
-						mi.ProviderName = p.Name
-						mi.Endpoint = p.Endpoint
-						providerEnabled = true
 					}
-				}
 					if !providerEnabled {
 						continue
 					}

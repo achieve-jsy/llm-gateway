@@ -33,10 +33,24 @@ func (r *ModelRepo) BatchCreate(models []*model.Model) error {
 	return r.db.Omit("Provider", "Catalog").CreateInBatches(models, 100).Error
 }
 
-// GetByID 按 ID 查询模型
+// GetByID 按 ID 查询模型。
+// 注意：**不**预加载 Catalog。这里被 UpdateModel 等写路径复用，而 Update 走
+// db.Save，预加载关联会让 Save 顺带 upsert 一份可能过期的 catalog 快照。
+// 需要 catalog 能力（如 supports_video_input）的读路径请用 GetByIDsWithCatalog。
 func (r *ModelRepo) GetByID(id uuid.UUID) (*model.Model, error) {
 	var m model.Model
 	err := r.db.Preload("Provider").First(&m, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// GetByIDWithCatalog 按 ID 查询模型并预加载 Catalog，供能力判定使用
+// （EffectiveSupportsVideoInput 在无 override 时依赖 m.Catalog）。
+func (r *ModelRepo) GetByIDWithCatalog(id uuid.UUID) (*model.Model, error) {
+	var m model.Model
+	err := r.db.Preload("Provider").Preload("Catalog").First(&m, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -220,8 +234,8 @@ func (r *ModelRepo) UpdateModelCheckResult(id uuid.UUID, responseTime int, check
 func (r *ModelRepo) AutoDisableModel(id uuid.UUID) error {
 	enabled := false
 	return r.db.Model(&model.Model{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"enabled":                      &enabled,
-		"status":                       model.ModelStatusAutoDisabled,
+		"enabled":                        &enabled,
+		"status":                         model.ModelStatusAutoDisabled,
 		"consecutive_recovery_successes": 0,
 	}).Error
 }

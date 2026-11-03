@@ -229,3 +229,29 @@ atlas-migrations/<ts>_add_video_input_capability.sql    A-2 A-3
 Kimi `ms://` 上传与 `/v1/videos/{id}/content` 反代、`/v1/models` 的
 `architecture.input_modalities` 与 OpenCode 插件版本 bump。
 
+
+### E2E 验收（真进程）
+
+`scripts/e2e-video-input.sh` 是这一节的验收入口：真 control-plane + 真 gateway +
+真 Postgres/Redis + 桩上游，覆盖单测覆盖不到的「控制面 payload → 网关 config syncer
+→ 路由期能力过滤 → 上游实际收到的字节」整链。最后一次运行结果 **PASS=10 FAIL=0**：
+
+| # | 断言 | 结果 |
+|---|---|---|
+| 1 | catalog 声明支持视频的成员，路由 payload `supports_video_input=true` | ✅ |
+| 2 | catalog 未声明的成员为 `false` | ✅ |
+| 3 | 混合组 + 视频片段 → 200 | ✅ |
+| 4 | 上游原样收到 `{"type":"video_url","video_url":{"url":...,"fps":2}}` | ✅ |
+| 5 | 纯文本组 + 视频 → `400 video_input_not_supported` | ✅ |
+| 6 | `/v1/messages` + 视频 → `400 unsupported_content_part`（不再静默丢） | ✅ |
+| 7 | 未知片段类型 → `400 unsupported_content_part` 且 `param=content[0].type` | ✅ |
+| 8 | 模型级 override=true（catalog=false）→ 同一请求变 200，上游收到该模型 | ✅ |
+| 9 | override 清回 NULL（跟随 catalog）→ 又变 400 | ✅ |
+
+另有两条手工验证（未纳入脚本）：内联 base64 视频 11MB → `400 inline_media_too_large`；
+启动期 catalog 同步会重写 catalog 行的能力位，因此 LiteLLM 未声明的厂商（dashscope/ark/
+智谱）必须靠模型级 override 才能真正带视频。
+
+运行前提：两个二进制可构建（若 `internal/controlplane/router` 因他人未提交改动编译失败，
+脚本会在构建阶段停下）。
+

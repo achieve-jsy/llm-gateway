@@ -11,8 +11,10 @@ import (
 // 设计要点：
 //   - 唯一键 (source, source_model_id)：source_model_id 可能含 '/' 例如 azure_ai/deepseek-v3.2，
 //     因此**所有 API 不要把 source_model_id 放路径参数**，请使用 query 形式。
-//   - 价格字段以 "per million tokens" 为单位（与 models.input_price/output_price 同语义），
+//   - token 价格字段以 "per million tokens" 为单位（与 models.input_price/output_price 同语义），
 //     一键填充时直接复制即可，**不要再次做单位换算**。
+//   - 媒体价格字段（per_image / input_per_image / per_second_input / per_second_output /
+//     per_request）以「每张 / 每秒 / 每次」的美元原值为单位，**不折算成 token 价**。
 //   - tier_threshold/input_price_above_tier/output_price_above_tier 表达阶梯定价（如 Claude
 //     200K 阈值上的不同单价）；若上游条目无阶梯字段，则 tier_threshold 为 nil。
 //   - RawPayload 保留原始 JSON entry，预留以后扩字段（避免每次新字段都要改 schema）。
@@ -37,6 +39,15 @@ type ModelCatalog struct {
 	TierThreshold                   *int64     `json:"tier_threshold,omitempty"`
 	InputPriceAboveTier             *float64   `gorm:"type:decimal(14,6)" json:"input_price_above_tier,omitempty"`
 	OutputPriceAboveTier            *float64   `gorm:"type:decimal(14,6)" json:"output_price_above_tier,omitempty"`
+	// 媒体价（对应 core.ModelPricing 既有的 per_image / input_per_image /
+	// per_second_input / per_second_output / per_request 字段族）。
+	// 单位是「每张 / 每秒 / 每次」的美元原值，**不经过 tokenPriceScale 缩放**；
+	// 可空：NULL = 无价（区别于 token 价列的 0 占位），供计价层判定 usage_missing。
+	PerImage                        *float64   `gorm:"type:decimal(18,8)" json:"per_image,omitempty"`
+	InputPerImage                   *float64   `gorm:"type:decimal(18,8)" json:"input_per_image,omitempty"`
+	PerSecondInput                  *float64   `gorm:"type:decimal(18,8)" json:"per_second_input,omitempty"`
+	PerSecondOutput                 *float64   `gorm:"type:decimal(18,8)" json:"per_second_output,omitempty"`
+	PerRequest                      *float64   `gorm:"type:decimal(18,8)" json:"per_request,omitempty"`
 	SupportsFunctionCalling         bool       `gorm:"default:false" json:"supports_function_calling"`
 	SupportsVision                  bool       `gorm:"default:false" json:"supports_vision"`
 	SupportsPromptCaching           bool       `gorm:"default:false" json:"supports_prompt_caching"`

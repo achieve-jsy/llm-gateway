@@ -58,6 +58,34 @@ func (r *RoleRepo) Revoke(userID string, role model.RoleType, scopeID string) er
 		Delete(&model.UserRole{}).Error
 }
 
+// SyncUserRoleField 撤销角色后同步 users.role 字段：
+//   - 若该用户在 user_roles 中已无任何管理角色（admin/studio_admin/dept_admin，不含 user），
+//     则将 users 表 role 置为 'user'，保证下次 SSO 登录签发的 JWT 不再携带 admin；
+//   - 若用户在 users 表查不到（dev 账号），兼容回退更新 dev_users 表（与 legacyUserRole 双表逻辑一致）；
+//   - 若用户仍持有任意管理角色，保持 users.role 不动，避免误伤多角色用户。
+func (r *RoleRepo) SyncUserRoleField(userID string) error {
+	// 1. 查询 user_roles 中是否仍存在管理角色
+	var count int64
+	if err := r.db.Model(&model.UserRole{}).
+		Where("user_id = ? AND role != ?", userID, model.RoleUser).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	// 2. 无管理角色：优先更新 users 表，未命中（dev 账号）回退 dev_users 表
+	update := r.db.Table("users").Where("id = ?", userID).Update("role", string(model.RoleUser))
+	if update.Error != nil {
+		return update.Error
+	}
+	if update.RowsAffected > 0 {
+		return nil
+	}
+	return r.db.Table("dev_users").Where("id = ?", userID).Update("role", string(model.RoleUser)).Error
+}
+
 // HasAdmins 检查系统是否存在任意 admin
 func (r *RoleRepo) HasAdmins() (bool, error) {
 	var count int64

@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// makeJWT 生成包含指定 claims 的 JWT（用任意 secret 签名，AuthMiddleware 不验签）
+// makeJWT 生成包含指定 claims 的 JWT（用 testJWTSecret 签名，AuthMiddleware 验签）
 func makeJWT(t *testing.T, claims jwt.MapClaims) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -26,14 +26,14 @@ func TestAuthMiddleware_JWT_StudioID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
-		name            string
-		description     string
-		claims          jwt.MapClaims
-		wantStatus      int
-		wantUserID      string
-		wantDeptID      string
-		wantStudioID    string
-		wantStudioName  string
+		name           string
+		description    string
+		claims         jwt.MapClaims
+		wantStatus     int
+		wantUserID     string
+		wantDeptID     string
+		wantStudioID   string
+		wantStudioName string
 	}{
 		{
 			name:        "JWT 携带完整 org 信息",
@@ -95,7 +95,7 @@ func TestAuthMiddleware_JWT_StudioID(t *testing.T) {
 			)
 
 			r := gin.New()
-			r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+			r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTSecret, nil))
 			r.GET("/test", func(c *gin.Context) {
 				if val, exists := c.Get("identity"); exists {
 					capturedIdentity = val.(*gwmodel.UserIdentity)
@@ -143,7 +143,7 @@ func TestAuthMiddleware_JWT_OrgCheck_Integration(t *testing.T) {
 	})
 
 	r := gin.New()
-	r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTSecret, nil))
 	r.Use(middleware.OrgCheckMiddleware())
 	r.GET("/v1/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
@@ -173,7 +173,7 @@ func TestAuthMiddleware_JWT_OrgCheck_WithStudio_Pass(t *testing.T) {
 	})
 
 	r := gin.New()
-	r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	r.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTSecret, nil))
 	r.Use(middleware.OrgCheckMiddleware())
 	r.GET("/v1/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 

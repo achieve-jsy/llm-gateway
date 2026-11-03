@@ -31,6 +31,10 @@ func (ch *Checker) buildActor(c *gin.Context) Actor {
 	userID := c.GetString("user_id")
 
 	// JWT claim admin → 全局权限
+	// 说明：此直通仅适用于 SSO 签发的 admin——JWT 的 user_role claim 来自 users.role 字段，
+	// 属于 SSO 信任语义（auth 包签发逻辑不在本包改动范围内），不做 DB 复核。
+	// 通过 user_roles 表授予的 admin 被撤销后，RoleService.Revoke 会同步 users.role 为 user，
+	// 用户下次 SSO 登录时签发的 JWT 不再携带 admin，撤销随之生效。
 	if c.GetString("user_role") == "admin" {
 		return Actor{UserID: userID, IsGlobal: true}
 	}

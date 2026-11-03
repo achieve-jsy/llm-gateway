@@ -6,9 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
+	acrypto "github.com/example/llm-gateway/internal/auth/crypto"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
+	"github.com/gin-gonic/gin"
 	j "github.com/golang-jwt/jwt/v5"
 )
 
@@ -16,7 +17,11 @@ import (
 // 同时支持两种 Header 格式：
 //   - OpenAI 兼容格式：Authorization: Bearer sk-xxx
 //   - Anthropic 原生格式：x-api-key: sk-xxx（Claude Code 等客户端使用）
-func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
+//
+// jwtSecret 是 control-plane 签发员工 JWT 的 HS256 密钥（JWT_SECRET）；
+// jwtManager 为可选参数，用于校验新 auth 服务的 RS256 JWT。
+// 两个至少配置一个，JWT 路径才会放行；否则拒绝一切 eyJ token。
+func AuthMiddleware(authClient *infra.AuthClient, jwtSecret string, jwtManager *acrypto.JWTManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var token string
 		auth := c.GetHeader("Authorization")
@@ -113,10 +118,33 @@ func AuthMiddleware(authClient *infra.AuthClient) gin.HandlerFunc {
 		}
 
 		// JWT path for employee self-service (e.g. /v1/me/models)
+		// 必须校验签名：HS256 使用 control-plane 的 JWT_SECRET 验签，
+		// RS256 使用 auth JWTManager 公钥验签；不再 ParseUnverified。
 		if strings.HasPrefix(token, "eyJ") {
-			parser := j.NewParser()
-			parsed, _, err := parser.ParseUnverified(token, j.MapClaims{})
-			if err != nil {
+			if jwtSecret == "" && (jwtManager == nil || jwtManager.PublicKey() == nil) {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+					"error": gin.H{"type": "authentication_error", "message": "invalid JWT", "code": "invalid_token"},
+				})
+				return
+			}
+			parser := j.NewParser(j.WithLeeway(5 * time.Second))
+			parsed, err := parser.ParseWithClaims(token, j.MapClaims{}, func(t *j.Token) (interface{}, error) {
+				switch t.Method.(type) {
+				case *j.SigningMethodHMAC:
+					if jwtSecret == "" {
+						return nil, j.ErrSignatureInvalid
+					}
+					return []byte(jwtSecret), nil
+				case *j.SigningMethodRSA:
+					if jwtManager == nil || jwtManager.PublicKey() == nil {
+						return nil, j.ErrSignatureInvalid
+					}
+					return jwtManager.PublicKey(), nil
+				default:
+					return nil, j.ErrSignatureInvalid
+				}
+			})
+			if err != nil || parsed == nil || !parsed.Valid {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 					"error": gin.H{"type": "authentication_error", "message": "invalid JWT", "code": "invalid_token"},
 				})

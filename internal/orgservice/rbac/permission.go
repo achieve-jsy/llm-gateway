@@ -27,6 +27,7 @@ const (
 
 	// ── 映射管理 ────────────────────────────────────────────────────────────
 	PermMappingEdit Permission = "org:mapping:edit" // 编辑部门-工作室映射
+	PermDeptAssign  Permission = "org:dept:assign"  // 修改单个部门的工作室归属
 
 	// ── 用量看板 ────────────────────────────────────────────────────────────
 	PermUsageViewAll    Permission = "usage:view:all"    // 查看全公司用量

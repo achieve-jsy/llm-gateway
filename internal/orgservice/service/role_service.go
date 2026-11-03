@@ -95,6 +95,11 @@ func (s *RoleService) Revoke(ctx context.Context, operatorID string, operatorTar
 	if err := s.roleRepo.Revoke(userID, role, scopeID); err != nil {
 		return err
 	}
+	// 撤销后同步 users.role：若该用户已无任何管理角色，重置为 user，
+	// 保证下次 SSO 登录签发的 JWT 不再携带 admin（同步失败仅记日志，不阻断主流程）
+	if err := s.roleRepo.SyncUserRoleField(userID); err != nil {
+		slog.WarnContext(ctx, "[orgservice] failed to sync user role field after revoke", "user_id", userID, "role", role, "error", err)
+	}
 	s.invalidateCache(ctx, userID)
 	return nil
 }

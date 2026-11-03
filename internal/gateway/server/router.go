@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	acrypto "github.com/example/llm-gateway/internal/auth/crypto"
 	"github.com/example/llm-gateway/internal/configsync"
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/binding"
@@ -42,6 +43,8 @@ func Setup(
 	routerCache *infra.Cache,
 	state *provider.RuntimeState,
 	authClient *infra.AuthClient,
+	jwtSecret string,
+	jwtManager *acrypto.JWTManager,
 	controlPlaneURL, internalToken string,
 	sch *scheduler.Scheduler,
 	nameCache *cache.GroupNameCache,
@@ -52,7 +55,7 @@ func Setup(
 	tierHolder *budget.SnapshotHolder,
 	onSeedanceReloadReady ...func(reload func(entries []gwmodel.ProviderEntry)),
 ) *gin.Engine {
-	return setup(nil, routerGetter, routerCache, state, authClient, controlPlaneURL, internalToken,
+	return setup(nil, routerGetter, routerCache, state, authClient, jwtSecret, jwtManager, controlPlaneURL, internalToken,
 		sch, nameCache, collectorOpt, traceWriterOpt, bindClient, rdb, tierHolder, onSeedanceReloadReady...)
 }
 
@@ -62,6 +65,8 @@ func SetupWithBudgetAlertDispatcher(
 	routerCache *infra.Cache,
 	state *provider.RuntimeState,
 	authClient *infra.AuthClient,
+	jwtSecret string,
+	jwtManager *acrypto.JWTManager,
 	controlPlaneURL, internalToken string,
 	sch *scheduler.Scheduler,
 	nameCache *cache.GroupNameCache,
@@ -72,7 +77,7 @@ func SetupWithBudgetAlertDispatcher(
 	tierHolder *budget.SnapshotHolder,
 	onSeedanceReloadReady ...func(reload func(entries []gwmodel.ProviderEntry)),
 ) *gin.Engine {
-	return setup(alertDispatcher, routerGetter, routerCache, state, authClient, controlPlaneURL, internalToken,
+	return setup(alertDispatcher, routerGetter, routerCache, state, authClient, jwtSecret, jwtManager, controlPlaneURL, internalToken,
 		sch, nameCache, collectorOpt, traceWriterOpt, bindClient, rdb, tierHolder, onSeedanceReloadReady...)
 }
 
@@ -82,6 +87,8 @@ func setup(
 	routerCache *infra.Cache,
 	state *provider.RuntimeState,
 	authClient *infra.AuthClient,
+	jwtSecret string,
+	jwtManager *acrypto.JWTManager,
 	controlPlaneURL, internalToken string,
 	sch *scheduler.Scheduler,
 	nameCache *cache.GroupNameCache,
@@ -260,7 +267,7 @@ func setup(
 	relayAdapter, volcengineAdapter := adapters.asVideoProviders()
 
 	v1 := r.Group("/v1")
-	v1.Use(middleware.AuthMiddleware(authClient))
+	v1.Use(middleware.AuthMiddleware(authClient, jwtSecret, jwtManager))
 	v1.Use(BillingFactGuard(collectorOpt))
 	// 请求/响应正文捕获（供 trace 记录使用）
 	v1.Use(middleware.TraceCapture())

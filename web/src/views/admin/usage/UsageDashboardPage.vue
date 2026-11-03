@@ -250,6 +250,7 @@ const filterKeyType  = ref('')
 const filterEndpoint = ref('')
 const filterProvider = ref('')
 const providerOptions = ref<string[]>([])
+const allModelOptions = ref<string[]>([])
 const activeTab = ref('chat')
 const videoRefreshToken = ref(0)
 const videoModelParam = computed(() =>
@@ -355,6 +356,7 @@ async function loadProviderOptions() {
   try {
     const r = await http.get('/api/v1/usage/options')
     providerOptions.value = r.data.providers || []
+    allModelOptions.value = r.data.models || []
   } catch { /* ignore */ }
 }
 
@@ -756,10 +758,12 @@ const modelsLoading = ref(false)
 const modelsData    = ref<any[]>([])
 
 const modelOptions = computed(() => {
-  return modelsData.value
-    .map((m: any) => m.model)
-    .filter((name: string) => name && name.trim())
-    .sort((a: string, b: string) => a.localeCompare(b))
+  const seen = new Set(allModelOptions.value)
+  for (const m of modelsData.value) {
+    const name = m?.model
+    if (name && name.trim()) seen.add(name.trim())
+  }
+  return Array.from(seen).sort((a: string, b: string) => a.localeCompare(b))
 })
 
 const modelChartType = ref<'bar' | 'doughnut'>('bar')

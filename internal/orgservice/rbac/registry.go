@@ -46,6 +46,9 @@ var Registry = map[Permission]PolicyEntry{
 	// 部门-工作室映射编辑：仅 admin
 	PermMappingEdit: {ScopeGlobal},
 
+	// 修改单个部门的工作室归属：studio_admin（限自己工作室内调整）
+	PermDeptAssign: {ScopeStudio},
+
 	// 用量看板（全公司）：仅 admin
 	PermUsageViewAll: {ScopeGlobal},
 

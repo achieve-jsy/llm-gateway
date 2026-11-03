@@ -845,14 +845,20 @@ type NamedOption struct {
 // UsageOptions 过滤项枚举（下拉选项）
 type UsageOptions struct {
 	Providers []string      `json:"providers"`
+	Models    []string      `json:"models"`
+	Groups    []string      `json:"groups"`
+	Keys      []NamedOption `json:"keys"`
 	Depts     []NamedOption `json:"depts"`
 	Studios   []NamedOption `json:"studios"`
 }
 
-// QueryOptions 返回过去 90 天内出现过的 provider / dept / studio 枚举
+// QueryOptions 返回过去 90 天内出现过的 provider / model / group / key / dept / studio 枚举
 func (s *RollupService) QueryOptions(ctx context.Context) (*UsageOptions, error) {
 	opts := &UsageOptions{
 		Providers: []string{},
+		Models:    []string{},
+		Groups:    []string{},
+		Keys:      []NamedOption{},
 		Depts:     []NamedOption{},
 		Studios:   []NamedOption{},
 	}
@@ -864,6 +870,41 @@ func (s *RollupService) QueryOptions(ctx context.Context) (*UsageOptions, error)
 		Where("provider != '' AND ts >= NOW() - INTERVAL '90 days'").
 		Pluck("provider", &providers).Error; err == nil {
 		opts.Providers = providers
+	}
+
+	// models — 从 call_logs 取过去 90 天实际出现过的模型名
+	var models []string
+	if err := s.db.WithContext(ctx).Table("call_logs").
+		Select("DISTINCT model").
+		Where("model != '' AND ts >= NOW() - INTERVAL '90 days'").
+		Pluck("model", &models).Error; err == nil {
+		opts.Models = models
+	}
+
+	// groups — 从 model_groups 取启用组名
+	if err := s.db.WithContext(ctx).Table("model_groups").
+		Select("name").
+		Where("deleted_at IS NULL AND enabled = TRUE").
+		Order("name").
+		Pluck("name", &opts.Groups).Error; err != nil {
+		opts.Groups = []string{}
+	}
+
+	// keys — 从 call_logs 取过去 90 天出现过的 key_id / key_name
+	type keyRow struct {
+		KeyID   string `gorm:"column:key_id"`
+		KeyName string `gorm:"column:key_name"`
+	}
+	var keys []keyRow
+	if err := s.db.WithContext(ctx).Table("call_logs").
+		Select("DISTINCT key_id, COALESCE(MAX(key_name),'') AS key_name").
+		Where("key_id != '' AND ts >= NOW() - INTERVAL '90 days'").
+		Group("key_id").
+		Order("key_id").
+		Find(&keys).Error; err == nil {
+		for _, k := range keys {
+			opts.Keys = append(opts.Keys, NamedOption{ID: k.KeyID, Name: k.KeyName})
+		}
 	}
 
 	// depts — 从 departments 表读取（dept_id 在 call_logs 中为空，用 dept_name 作为筛选 key）

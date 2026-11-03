@@ -463,7 +463,10 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.POST("/budgets/tier-limits/batch/preview", guard(rbac.PermBudgetSet), budgetTierHandler.PreviewBatch)
 		adminGroup.POST("/budgets/tier-limits/batch/apply", guard(rbac.PermBudgetSet), budgetTierHandler.ApplyBatch)
 		adminGroup.GET("/budgets/tier-usage", guard(rbac.PermBudgetViewScoped), budgetTierHandler.TierUsage)
-		adminGroup.GET("/my/budget/tiers", budgetTierHandler.MyBudgetTiers)
+		adminGroup.GET("/my/budget/tiers", func(c *gin.Context) {
+			orgContainer.RBAC.BuildAndInjectActor(c)
+			c.Next()
+		}, budgetTierHandler.MyBudgetTiers)
 
 		adminGroup.POST("/models", modelHandler.CreateModel)
 		adminGroup.GET("/models", modelHandler.ListModels)
@@ -860,10 +863,10 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	adminGroup.GET("/keys/:id/quota", guard(rbac.PermQuotaServiceKeySet), quotaHandler.GetServiceKeyQuota)
 	// 模型组配额（仅 admin）
 	adminGroup.PATCH("/groups/:id/quota", guard(rbac.PermQuotaGroupSet), quotaHandler.SetGroupQuota)
-	adminGroup.GET("/groups/:id/quota", guard(rbac.PermQuotaGroupSet), quotaHandler.GetGroupQuota)
+	adminGroup.GET("/groups/:id/quota", guard(rbac.PermQuotaViewScoped), quotaHandler.GetGroupQuota)
 	// 模型配额（仅 admin）
 	adminGroup.PATCH("/models/:id/quota", guard(rbac.PermQuotaModelSet), quotaHandler.SetModelQuota)
-	adminGroup.GET("/models/:id/quota", guard(rbac.PermQuotaModelSet), quotaHandler.GetModelQuota)
+	adminGroup.GET("/models/:id/quota", guard(rbac.PermQuotaViewScoped), quotaHandler.GetModelQuota)
 	// 我的配额（所有登录用户只读）
 	r.GET("/api/v1/me/quota", middleware.JWTAuth(), quotaHandler.GetMyQuota)
 	// 紧急豁免（admin only）
@@ -906,7 +909,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		// ── 部门与映射（admin 可改映射，所有人可读列表）──────────────────────
 		orgGroup.GET("/departments", mappingH.ListDepartments)
 		orgGroup.GET("/departments/unmapped", mappingH.ListUnmappedDepts)
-		orgGroup.PUT("/departments/:id/studio", guard(rbac.PermMappingEdit), mappingH.SetDeptStudio)
+		orgGroup.PUT("/departments/:id/studio", guard(rbac.PermDeptAssign), mappingH.SetDeptStudio)
 		orgGroup.GET("/dept-studio-map", mappingH.ListMappings)
 		orgGroup.POST("/dept-studio-map/import", guard(rbac.PermMappingEdit), mappingH.ImportMappings)
 
@@ -919,7 +922,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		orgGroup.POST("/roles/grant", guard(rbac.PermRoleGrant), roleH.GrantRole)
 		orgGroup.POST("/roles/revoke", guard(rbac.PermRoleRevoke), roleH.RevokeRole)
 		orgGroup.GET("/roles/me", roleH.GetMyRoles) // 当前用户 org 角色（/me 须在 /:user_id 前）
-		orgGroup.GET("/roles/:user_id", roleH.GetUserRoles)
+		orgGroup.GET("/roles/:user_id", guard(rbac.PermRoleList), roleH.GetUserRoles)
 
 		// ── 员工花名册导入（仅 admin）────────────────────────────────────────
 		orgGroup.POST("/employees/import", guard(rbac.PermEmployeeImport), empImportH.Import)

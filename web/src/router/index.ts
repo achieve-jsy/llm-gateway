@@ -164,7 +164,8 @@ const routes: RouteRecordRaw[] = [
     path: '/admin/expansion-requests',
     name: 'ExpansionRequests',
     component: () => import('@/views/admin/ExpansionRequestPage.vue'),
-    meta: { title: '扩容申请' }
+    // 页面加载时无条件调用 GET /api/v1/model-tiers（后端 PermModelTierView = ScopeManage，仅管理角色）
+    meta: { title: '扩容申请', requiresManager: true }
   },
   {
     path: '/admin/key-requests',

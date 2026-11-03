@@ -83,9 +83,9 @@
             </div>
           </div>
           <div class="panel-actions">
-            <!-- 指定负责人：admin 或当前工作室的 studio_admin -->
+            <!-- 指定工作室负责人：仅 admin 可授（后端 OrgPolicy.CanGrant 仅 admin 可授 studio_admin） -->
             <el-button
-              v-if="isGlobalAdmin || myStudioIds.includes(selectedStudio?.id ?? '')"
+              v-if="(isGlobalAdmin || myStudioIds.includes(selectedStudio?.id ?? '')) && canGrantStudioAdmin"
               size="small" @click="openGrantDialog('studio_admin')"
             >指定负责人</el-button>
             <!-- 批量导入映射/删除工作室：仅 admin -->
@@ -199,7 +199,7 @@
                 <el-icon size="32" color="#c0c4cc"><UserFilled /></el-icon>
                 <p>该工作室尚未指定负责人</p>
                 <el-button
-                  v-if="isGlobalAdmin || myStudioIds.includes(selectedStudio?.id ?? '')"
+                  v-if="(isGlobalAdmin || myStudioIds.includes(selectedStudio?.id ?? '')) && canGrantStudioAdmin"
                   size="small" type="primary" plain @click="openGrantDialog('studio_admin')"
                 >立即指定</el-button>
               </div>
@@ -232,9 +232,9 @@
             </div>
           </div>
           <div class="panel-actions">
-            <!-- 指定部门负责人：admin 或父工作室 studio_admin -->
+            <!-- 指定部门负责人：admin 或父工作室 studio_admin 可授（dept_admin 无权授权） -->
             <el-button
-              v-if="isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')"
+              v-if="(isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')) && canGrantDeptAdmin"
               size="small" @click="openGrantDialog('dept_admin')"
             >指定负责人</el-button>
             <!-- 移出工作室：admin 或父工作室 studio_admin -->
@@ -407,7 +407,7 @@
                 <div v-else>
                   <span class="text-muted">未设置</span>
                   <el-button
-                    v-if="isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')"
+                    v-if="(isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')) && canGrantDeptAdmin"
                     link type="primary" size="small" @click="openGrantDialog('dept_admin')"
                   >立即指定</el-button>
                 </div>
@@ -676,6 +676,13 @@
           </el-descriptions-item>
           <el-descriptions-item label="管辖范围">{{ grantPresetScopeName }}</el-descriptions-item>
         </el-descriptions>
+        <el-alert
+          style="margin-top: 10px"
+          :type="grantPresetRole === 'studio_admin' ? 'warning' : 'info'"
+          :closable="false" show-icon size="small"
+        >
+          {{ grantRoleTip }}<template v-if="authStore.effectiveRole === 'studio_admin'">（您当前可授予的角色）</template>
+        </el-alert>
       </div>
     </div>
 
@@ -1002,6 +1009,14 @@ const myDeptIds = computed(() =>
 // 是否为全局 admin（JWT role=admin 或 org role=admin）
 const isGlobalAdmin = computed(() =>
   authStore.isAdmin || myOrgRoles.value.some(r => r.role === 'admin')
+)
+// 授权能力：对齐后端 OrgPolicy.CanGrant
+// - admin：可授任意角色
+// - studio_admin：仅可授 dept_admin
+// - dept_admin / 其他：不可授权任何角色
+const canGrantStudioAdmin = computed(() => authStore.effectiveRole === 'admin')
+const canGrantDeptAdmin   = computed(() =>
+  authStore.effectiveRole === 'admin' || authStore.effectiveRole === 'studio_admin'
 )
 
 // ─── 树 ───────────────────────────────────────────────────────────────────────
@@ -1391,8 +1406,17 @@ const grantSearchKeyword   = ref('')
 const grantSearchResults   = ref<UserSearchResult[]>([])
 const grantSearchLoading   = ref(false)
 const grantSelectedUser    = ref<UserSearchResult | null>(null)
+// 角色说明文案（弹窗内展示）
+const grantRoleTip = computed(() =>
+  grantPresetRole.value === 'studio_admin'
+    ? '工作室负责人：负责整个工作室的成员与预算管理，管辖工作室下所有部门'
+    : '部门负责人：负责本部门成员管理与预算分配'
+)
 
 function openGrantDialog(role: 'studio_admin' | 'dept_admin') {
+  // 对齐后端 OrgPolicy.CanGrant：admin 可授任意；studio_admin 仅可授 dept_admin；dept_admin 无权授权
+  const roleAllowed = role === 'studio_admin' ? canGrantStudioAdmin.value : canGrantDeptAdmin.value
+  if (!roleAllowed) return
   grantPresetRole.value = role
   if (role === 'studio_admin' && selectedStudio.value) {
     grantPresetScopeType.value = 'studio'

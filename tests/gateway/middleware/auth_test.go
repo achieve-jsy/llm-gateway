@@ -25,6 +25,9 @@ func newAuthClient(baseURL string) *infra.AuthClient {
 	return infra.NewAuthClient(baseURL, "test-internal-token")
 }
 
+// testJWTSecret 与测试中 makeJWT/validToken 使用的签名密钥保持一致。
+const testJWTSecret = "test-secret"
+
 func TestAuthMiddleware_MissingAuthorizationHeader(t *testing.T) {
 	// 测试目的：缺少 Authorization header 时应返回 401
 	gin.SetMode(gin.TestMode)
@@ -35,7 +38,7 @@ func TestAuthMiddleware_MissingAuthorizationHeader(t *testing.T) {
 	defer srv.Close()
 
 	router := gin.New()
-	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTSecret, nil))
 	router.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	w := httptest.NewRecorder()
@@ -55,7 +58,7 @@ func TestAuthMiddleware_InvalidAuthorizationFormat(t *testing.T) {
 	defer srv.Close()
 
 	router := gin.New()
-	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTSecret, nil))
 	router.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	w := httptest.NewRecorder()
@@ -76,7 +79,7 @@ func TestAuthMiddleware_EmptyBearerToken(t *testing.T) {
 	defer srv.Close()
 
 	router := gin.New()
-	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTSecret, nil))
 	router.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	w := httptest.NewRecorder()
@@ -140,7 +143,7 @@ func TestAuthMiddleware_APIKey(t *testing.T) {
 
 			var capturedIdentity *gwmodel.UserIdentity
 			router := gin.New()
-			router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+			router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTSecret, nil))
 			router.GET("/test", func(c *gin.Context) {
 				if val, exists := c.Get("identity"); exists {
 					capturedIdentity = val.(*gwmodel.UserIdentity)
@@ -175,7 +178,7 @@ func TestAuthMiddleware_JWT(t *testing.T) {
 	}{
 		{
 			name:        "有效的 JWT token",
-			description: "JWT 以 eyJ 开头且 ParseUnverified 能解析，应提取 user_id 和 dept_id 设入 context",
+			description: "JWT 以 eyJ 开头且使用 JWT_SECRET 验签通过，应提取 user_id 和 dept_id 设入 context",
 			token:       "", // 动态生成
 			wantStatus:  http.StatusOK,
 			wantUserID:  "jwt-user-789",
@@ -183,8 +186,14 @@ func TestAuthMiddleware_JWT(t *testing.T) {
 		},
 		{
 			name:        "无效的 JWT token",
-			description: "token 以 eyJ 开头但格式不合法导致 ParseUnverified 失败，应返回 401",
+			description: "token 以 eyJ 开头但格式不合法导致解析失败，应返回 401",
 			token:       "eyJinvalidtoken.notreal.garbage",
+			wantStatus:  http.StatusUnauthorized,
+		},
+		{
+			name:        "签名被篡改的 JWT token",
+			description: "token 格式合法但签名与 JWT_SECRET 不匹配，应返回 401",
+			token:       "", // 动态生成
 			wantStatus:  http.StatusUnauthorized,
 		},
 	}
@@ -198,6 +207,15 @@ func TestAuthMiddleware_JWT(t *testing.T) {
 	require.NoError(t, err)
 	tests[0].token = validTokenString
 
+	// 篡改 payload 后不重新签名，签名应无法通过 testJWTSecret 校验
+	forged := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": "jwt-forged",
+		"dept_id": "jwt-dept-forged",
+	})
+	forgedString, err := forged.SignedString([]byte("wrong-secret"))
+	require.NoError(t, err)
+	tests[2].token = forgedString
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// JWT 路径不需要 auth service
@@ -208,7 +226,7 @@ func TestAuthMiddleware_JWT(t *testing.T) {
 
 			var capturedIdentity *gwmodel.UserIdentity
 			router := gin.New()
-			router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+			router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTSecret, nil))
 			router.GET("/test", func(c *gin.Context) {
 				if val, exists := c.Get("identity"); exists {
 					capturedIdentity = val.(*gwmodel.UserIdentity)
@@ -241,7 +259,7 @@ func TestAuthMiddleware_UnknownTokenFormat(t *testing.T) {
 	defer srv.Close()
 
 	router := gin.New()
-	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL)))
+	router.Use(middleware.AuthMiddleware(newAuthClient(srv.URL), testJWTSecret, nil))
 	router.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	w := httptest.NewRecorder()

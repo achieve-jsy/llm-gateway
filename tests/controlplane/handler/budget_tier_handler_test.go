@@ -442,14 +442,15 @@ func TestMyBudgetTiersHandlerUsesJWTUserIDWhenRBACActorMissing(t *testing.T) {
 	require.Equal(t, "member-from-jwt", fake.myActor.UserID)
 }
 
-func TestMyBudgetTiersHandlerMarksJWTAdminAsGlobalActor(t *testing.T) {
+func TestMyBudgetTiersHandlerUsesInjectedGlobalActor(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeBudgetTierHandlerService{}
 	h := handler.NewBudgetTierHandler(fake)
 	router := gin.New()
 	router.GET("/api/v1/my/budget/tiers", func(c *gin.Context) {
-		c.Set("user_id", "admin-user")
-		c.Set("user_role", "admin")
+		// admin 全局身份由路由层 Actor 注入中间件（BuildAndInjectActor）负责，
+		// handler 直接消费注入的 Actor，不再手动判 user_role
+		rbac.SetActor(c, rbac.Actor{UserID: "admin-user", IsGlobal: true})
 		h.MyBudgetTiers(c)
 	})
 

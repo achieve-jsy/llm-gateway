@@ -60,6 +60,8 @@ node .xflow/scripts/xf-manifest.mjs --module-type <module_type> --all-phases --c
 
 > 单模块模式下，如果步骤 4/5/6 需要跨模块对比（如前后端 contracts 对齐），额外对关联模块调用 manifest 并加载关键文件。
 
+
+
 ## 步骤 2：需求覆盖检查
 
 **目标**：确保 `xspec/changes/change.yaml` 的 `scope.include` 中确认的功能点都在模块级 spec 中有对应内容。

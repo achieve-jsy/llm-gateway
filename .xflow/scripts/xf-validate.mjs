@@ -13,7 +13,7 @@
  * 校验检查点语义（validate 的 --phase → CATALOG.yaml 的 phase 集合）:
  *   clarify → { clarify }                    // 只检查 spec.md
  *   detail  → { design, detail }             // 检查 hld.md 及所有 detail 阶段产物
- *                                            // （因为 detail 检查点时 /xf:design 应已执行）
+ *                                            // （因为 detail 检查点时 /xf/design 应已执行）
  *
  * 输出 JSON:
  *   { "phase": "clarify", "pass": true/false, "summary": {...}, "results": [...] }

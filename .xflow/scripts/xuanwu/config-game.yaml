@@ -1,0 +1,45 @@
+# =============================================================================
+# XuanWu Scaffold 配置文件 — 玄武-游戏
+# =============================================================================
+
+required:
+  client:
+    git: https://git.example.com/GameAbcTea_mobile/SiChuanMahjongFairyGUI/client/fgui-scmahjong-lobby.git
+    branch: gz_dev
+    target: client
+    depends:
+      - xwRef
+
+  # 游戏服务器 - 含子模块（Logic/mahjong_server 等）
+  game_server:
+    git: https://git.example.com/GameAbcTea_mobile/ai_code/gamemahjongserver.git
+    branch: main
+    target: server/game_server
+
+optional:
+  xwRef:
+    git: https://git.example.com/GameAbcTea_mobile/ai_code/reference_sichuanmahjongfairygui.git
+    branch: main
+    target: xwRef
+
+tools:
+  opencode:
+    enabled: true
+    config_path: .opencode
+    install_cmd: curl -fsSL https://opencode.ai/install | bash
+
+model:
+  url: https://llm.xk-devops.com
+  apikey: ""
+  models:
+    claude-opus-4-5:
+      id: claude-opus-4-5-20251101
+      name: claude-opus-4-5-20251101
+    glm-5: {}
+    qwen3.6-plus: {}
+    doubao-seed-2.0-code: {}
+    doubao-seed-2.0-pro: {}
+    deepseek-v3.2: {}
+
+files:
+  - AGENTS.md

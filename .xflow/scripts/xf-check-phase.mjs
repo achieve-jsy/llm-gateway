@@ -4,14 +4,14 @@
  * xf-check-phase — 校验当前 phase 是否为目标命令的合法入口
  *
  * 设计意图：xflow 的 phase 是单调向前推进的（clarify → design → detail →
- * task → implement → archive）。每条 /xf:* 命令都有"允许的入口 phase 集合"，
+ * task → implement → archive）。每条 /xf/* 命令都有"允许的入口 phase 集合"，
  * 跑错了 phase 就该被立即挡下，避免如下事故：
  *
- *   - implement 完成但未归档时，agent 又跑 /xf:clarify 试图开新变更
- *     → 应先 /xf:archive 归档，否则两批不连贯的工作会被塞进同一个 changelog
- *   - design 还没审批，agent 越级跑 /xf:detail
+ *   - implement 完成但未归档时，agent 又跑 /xf/clarify 试图开新变更
+ *     → 应先 /xf/archive 归档，否则两批不连贯的工作会被塞进同一个 changelog
+ *   - design 还没审批，agent 越级跑 /xf/detail
  *     → xf-gate.mjs 已挡住"门禁审批"那条路，但 phase 入口也该单独挡
- *   - 已经 task 了，agent 又退回 /xf:design 改架构
+ *   - 已经 task 了，agent 又退回 /xf/design 改架构
  *     → phase 不应回退；改架构请走"开新变更 + design"
  *
  * 这是事故防御的"流程硬层"：xf-check-invariants.mjs 防的是结构异常（多 yaml /
@@ -158,7 +158,7 @@ export function renderPhaseViolation(violation) {
 
   const { command, current_phase, allowed_phases, change } = violation;
   const lines = [];
-  lines.push(`❌ phase 入口不合法：/xf:${command} 不能在 phase=${current_phase} 时执行。`);
+  lines.push(`❌ phase 入口不合法：/xf/${command} 不能在 phase=${current_phase} 时执行。`);
   lines.push("");
   lines.push("当前状态：");
   if (change.active) {
@@ -199,7 +199,7 @@ function suggestFix(command, currentPhase, change) {
     ["implement", "archive"].includes(currentPhase)
   ) {
     suggestions.push(
-      "新需求场景：先执行 `/xf:archive` 归档当前变更，再开新变更",
+      "新需求场景：先执行 `/xf/archive` 归档当前变更，再开新变更",
     );
     suggestions.push(
       "严格反对：把已 implement 的变更回退到 clarify、或把新模块"
@@ -220,12 +220,12 @@ function suggestFix(command, currentPhase, change) {
       `如果只是想补几个 clarify 问题：直接在当前 ${currentPhase} 阶段的对话里讨论，必要时人工调整 spec.md / spec.delta.md`,
     );
     suggestions.push(
-      `如果是新需求：先执行对应的推进命令完成当前变更（接下来应跑 \`/xf:${currentPhase}\`），归档后再开新变更`,
+      `如果是新需求：先执行对应的推进命令完成当前变更（接下来应跑 \`/xf/${currentPhase}\`），归档后再开新变更`,
     );
     return suggestions;
   }
 
-  // 场景 3：phase 推进命令越级（如 phase=clarify 时跑 /xf:detail）
+  // 场景 3：phase 推进命令越级（如 phase=clarify 时跑 /xf/detail）
   if (
     ["design", "detail", "task", "implement", "archive"].includes(command)
   ) {
@@ -237,7 +237,7 @@ function suggestFix(command, currentPhase, change) {
       suggestions.push(
         `phase 不能越级：当前 ${currentPhase}，目标 ${command}，中间漏了 ${nextPhase}`,
       );
-      suggestions.push(`下一步应执行 \`/xf:${nextPhase}\` 推进到下一阶段`);
+      suggestions.push(`下一步应执行 \`/xf/${nextPhase}\` 推进到下一阶段`);
       return suggestions;
     }
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
@@ -256,13 +256,13 @@ function suggestFix(command, currentPhase, change) {
 
   // 场景 4：phase=null（无活跃变更）跑了推进命令
   if (currentPhase === PHASE_NULL && command !== "brainstorm" && command !== "clarify" && command !== "split") {
-    suggestions.push(`当前没有活跃变更，请先执行 \`/xf:clarify\`（或 \`/xf:brainstorm\`）开新变更`);
+    suggestions.push(`当前没有活跃变更，请先执行 \`/xf/clarify\`（或 \`/xf/brainstorm\`）开新变更`);
     return suggestions;
   }
 
   // 兜底
   suggestions.push(
-    `当前 phase=${currentPhase} 与命令 /xf:${command} 不兼容。请检查 phase 流转：clarify → design → detail → task → implement → archive`,
+    `当前 phase=${currentPhase} 与命令 /xf/${command} 不兼容。请检查 phase 流转：clarify → design → detail → task → implement → archive`,
   );
   return suggestions;
 }
@@ -282,7 +282,7 @@ async function main() {
     output(result);
   } else if (result.ok) {
     console.log(
-      `✓ phase=${result.current_phase} 是 /xf:${result.command} 命令的合法入口`,
+      `✓ phase=${result.current_phase} 是 /xf/${result.command} 命令的合法入口`,
     );
   } else if (result.violation.kind === "unknown-command") {
     console.error(`[xflow] Error: ${result.violation.message}`);

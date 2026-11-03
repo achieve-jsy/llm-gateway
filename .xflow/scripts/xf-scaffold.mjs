@@ -103,7 +103,7 @@ async function main() {
   }
 
   // modified 模块：no-op 防御
-  // 这是命令编排层（/xf:clarify、/xf:detail）误把 modified 当 added 跑 scaffold 时的兜底，
+  // 这是命令编排层（/xf/clarify、/xf/detail）误把 modified 当 added 跑 scaffold 时的兜底，
   // 避免在 changes/<module>/ 下出现完整 .md 副本与 *.delta.md 共存的歧义现象。
   // 真正的 delta 文件（spec.delta.md / hld.delta.md / ...）由命令编排层的 AI 直接撰写。
   if (changeType === "modified") {

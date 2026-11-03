@@ -38,10 +38,16 @@ xflow 是一套内部 SDD（Specification-Driven Development）框架，通过�
 │   │   └── spec / hld / design / data-model / task
 │   └── _default/                    #   通用兜底模板（自定义模块类型无专属模板时自动使用）
 │       └── spec / hld / design / data-model / task
+├── init.json                        #   项目 init 元数据（含 profiles.active，init 阶段 profile SSOT）
+├── profiles/                        #   legacy 方言包（如 xuanwu-activity；yaml 业务 profile 不用此路径）
 └── scripts/                         # 辅助脚本（Node.js ESM）
     ├── xf-init.mjs                  #   初始化 xspec/ 目录结构
     ├── xf-scaffold.mjs              #   从模板创建模块骨架文件（按 CATALOG.yaml 铺齐）
     ├── xf-manifest.mjs              #   模块文件清单查询（CATALOG.yaml 消费入口）
+    ├── xf-profile.mjs               #   读取 project_profile（宪章 → init.json → general）
+    ├── xf-current-change.mjs        #   活跃变更事实查询（active / phase / id）
+    ├── xf-check-invariants.mjs      #   changes/ 结构合法性校验
+    ├── xf-check-phase.mjs           #   命令 phase 入口校验
     ├── xf-archive.mjs               #   归档（复制新模块 / 搬运到 archive）
     ├── xf-deps.mjs                  #   任务依赖关系查询（--task / --feature / --module）
     ├── xf-gate.mjs                  #   阶段门禁检查（--to design / --to task）
@@ -79,11 +85,13 @@ xspec/                               # 项目数据（读写，运行时生成�
     └── <change-id>/                 #   每次归档保留 changes/ 的完整副本
         └── (与 changes/ 结构一致)
 
-.claude/
-├── commands/xf/                     # xflow 命令（13 个 .md 文件）
-├── agents/xf-research.md            # 技术研究 subagent
+.claude/                             # Claude Code 平台目录（OpenCode 为 .opencode/，Cursor 为 .cursor/）
+├── commands/xf/                     # xflow 命令（13 个 .md；business profile 定制已体现在此）
+├── agents/xf-research.md            # 框架 subagent
 └── agent-memory/xf-research/        # subagent 持久记忆（运行时生成）
 ```
+
+> business profile 的定制在平台命令目录（如 `.opencode/commands/xf/`）——**直接执行该目录下的命令**即可。`.xflow/profiles/<profile>/` 仅 legacy 方言（如 `xuanwu-activity`）使用，yaml 业务 profile 勿去该路径找定制。
 
 ## 辅助工具
 
@@ -170,6 +178,45 @@ node .xflow/scripts/xf-check-phase.mjs --command clarify
 - `/xf/*` 命令在"前置条件"段落（先于方言加载）会自动跑 `xf-check-invariants.mjs` + `xf-check-phase.mjs`，任一违规整条命令立即终止
 - 用户问"我这个 xspec 状态健康吗"时直接跑 `xf-check-invariants.mjs` 给报告
 - 用户在错误的 phase 想跑命令时（最常见：implement 阶段还没归档、又想 clarify 新需求），`xf-check-phase.mjs` 会立刻挡下并打印诊断报告 + 修复建议
+
+## Profile 机制（project_profile 与业务扩展）
+
+`project_profile` 决定**整个项目** xflow 命令链的行为分支；`module_type` 决定**单个模块** scaffold 用哪套模板。二者**正交**——`profiles.active = retail-checkout` **不会**自动让 `/xf/split` 选用 `retail-checkout` 模块类型，需在 split 或 profile 定制中显式指定。
+
+### SSOT 与统一读取
+
+| 阶段 | SSOT | 说明 |
+| :--- | :--- | :--- |
+| 宪章已创建（运行时） | `xspec/constitution.md` 的 `project_profile` | 以宪章为准 |
+| init 后、宪章未创建 | `.xflow/init.json` 的 `profiles.active` | init 阶段写入 |
+| 均不可用 | `general` | legacy 项目或未指定 profile |
+
+所有命令与脚本**禁止**自行解析宪章取 profile，统一调用：
+
+```bash
+node .xflow/scripts/xf-profile.mjs              # JSON：profile + source
+node .xflow/scripts/xf-profile.mjs --value-only   # 仅 profile 名
+```
+
+`/xf/constitution` 首次创建时：若 `init.json` 已有 `profiles.active`（含 `general` 与任意 business profile），**跳过步骤 1.5 交互**，直接将 active 写入宪章；仅 legacy 项目（无 init.json 或无 `profiles.active`）才弹 profile 选择题。
+
+### 两条并行的定制路径（不要混用）
+
+| 路径 | 适用 | Agent 怎么消费 |
+| :--- | :--- | :--- |
+| **Yaml + Compose**（新业务 profile） | business profile 项目 | **直接读并执行**平台命令目录（如 `.opencode/commands/xf/`）里的命令文件 |
+| **Legacy 方言** | 框架内置（如 `xuanwu-activity`） | 各命令**步骤 0**（前置条件与门禁之后）读 `.xflow/profiles/<profile>/<command>.md` 覆写后续步骤 |
+
+yaml business profile：**以平台命令目录为准**；步骤 0 对 `.xflow/profiles/` 的查找通常是空操作，勿误以为定制「漏装」。
+
+### Agent 禁令与常见误判
+
+- **禁止**用 `profiles.active` 或 `project_profile` **推断**应用哪个 `module_type`——二者独立。
+- **禁止**对 yaml business profile 去 `.xflow/profiles/<name>/` 找定制——已在平台命令目录里。
+- **禁止**在步骤 0 之前执行方言覆写——前置条件（`xf-check-invariants.mjs` / `xf-check-phase.mjs` / `xf-gate.mjs`）**先于**步骤 0，方言不可绕过门禁与结构校验。
+- legacy profile（如 `xuanwu-activity`）的步骤 0 方言加载**仍然有效**；`/xf/constitution` 首次创建时步骤 1.6 可补加载 legacy 预置宪章模板。
+
+选型与 `module_type` 细节见 `.xflow/templates/CATALOG.md` §四。
 
 ## 阶段门禁
 

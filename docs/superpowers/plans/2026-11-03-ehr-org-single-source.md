@@ -238,6 +238,7 @@ func (s *AIAppHubSyncService) projectOrg(ctx context.Context, items []ehrclient.
 
 - [ ] **Step 4: 差量写进结果与状态**
 
+按 `UpsertStudio/UpsertDepartment/UpsertMapping` 返回的 `"inserted"|"updated"|"unchanged"` 累计到 `SyncDiff`，两个对账方法返回的行数直接进 `Deleted`。
 `HubSyncResult` 加 `Diff SyncDiff \`json:"diff"\``；`markStatus` 成功分支额外写一个键 `ai_app_hub.last_diff`（JSON 字符串，便于状态接口原样返回）。
 
 - [ ] **Step 5: 加 `Running()`**
@@ -370,7 +371,41 @@ git commit -m "test(org): 手动同步审计留痕回归"
 
 ---
 
-### Task 8: 拆除后端 7 个手工写入口
+### Task 8: 组织读接口过滤软删除，用量视图不受影响
+
+**Files:**
+- Modify: `internal/orgservice/repository/studio_repo.go`、`dept_repo.go`（列表查询加 `visible = true` / `status <> 'deleted'`）
+- Modify: `internal/orgservice/repository/user_org_repo.go`（成员列表同样过滤）
+- Test: `tests/orgservice/repository/org_soft_delete_visibility_test.go`
+
+**Interfaces:**
+- Consumes: Task 3 写入的 `departments.status='deleted'`、`studios.visible=false`
+- Produces: 组织视图隐藏已删数据；用量视图（`call_logs`/`usage_daily` join）行为不变
+
+- [ ] **Step 1: 写失败测试**
+
+```go
+// 1) 硬删一个 studio（visible=false）→ ListStudios 不再返回它，但 SELECT 该行仍在
+// 2) 部门 status='deleted' → ListDepartments 默认不返回；显式查 status='deleted' 能查到
+// 3) 用量 join：按 studio_id 聚合 call_logs 仍能 join 出同名工作室（含 visible=false 的）
+```
+
+- [ ] **Step 2: 跑测试确认失败** → `go test ./tests/orgservice/repository/ -run TestSoftDeleteVisibility -v` → FAIL
+
+- [ ] **Step 3: 改查询**
+
+只改组织侧查询，**不要**给模型加 `gorm.DeletedAt`；用量侧 repository 一行不改。
+
+- [ ] **Step 4: 跑测试 + `go test ./tests/...` + Commit**
+
+```bash
+git add internal/orgservice/repository/ tests/orgservice/repository/org_soft_delete_visibility_test.go
+git commit -m "feat(org): 组织视图过滤软删除，用量视图保持可关联"
+```
+
+---
+
+### Task 9: 拆除后端 7 个手工写入口
 
 **Files:**
 - Modify: `internal/controlplane/router/router.go:1054-1086`（删 7 条路由）
@@ -407,7 +442,7 @@ git commit -m "refactor(org): 移除组织数据的手工写入口，只保留 E
 
 ---
 
-### Task 9: 拆除前端手工入口
+### Task 10: 拆除前端手工入口
 
 **Files:**
 - Modify: `web/src/views/admin/org/OrgTreePage.vue`（删导入员工按钮/弹窗、新建/删除工作室、编辑映射）
@@ -415,7 +450,7 @@ git commit -m "refactor(org): 移除组织数据的手工写入口，只保留 E
 - Test: `web/src/views/admin/org/__tests__/OrgTreePage.noManualWrite.spec.ts`
 
 **Interfaces:**
-- Consumes: Task 8 已删的路由
+- Consumes: Task 9 已删的路由
 - Produces: 组织页只读 + 同步卡
 
 - [ ] **Step 1: 写失败测试**
@@ -437,9 +472,9 @@ git commit -m "refactor(web): 移除组织手工维护入口"
 
 ---
 
-### Task 10（阶段 B）: 拆掉 `ai_app_studios` / `ai_app_departments`
+### Task 11（阶段 B）: 拆掉 `ai_app_studios` / `ai_app_departments`
 
-**前置**：Task 1–9 已上线并观察 ≥2 天，差量统计正常，页面数据与 EHR 一致。
+**前置**：Task 1–10 已上线并观察 ≥2 天，差量统计正常，页面数据与 EHR 一致。
 
 **Files:**
 - Create: `atlas-migrations/20261112090000_drop_ai_app_org_tables.sql`

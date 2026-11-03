@@ -89,12 +89,79 @@ go test -count=1 ./internal/archive/... ./internal/observability/... ./tests/arc
 
 ---
 
+### 4.4 真实 PG + 真实 Redis 端到端（补齐此前的最大验证缺口）
+
+**背景**：在本节之前，本特性的全部测试都用脚本化假 DB 驱动——「Go 代码 ↔ 真实 PG」这一层
+（GORM 参数绑定、`AT TIME ZONE ?` 传参、`COLLATE "C"` 游标、keyset 分页循环、事务与 jsonb 往返）
+一次都没真跑过，而历史缺陷恰恰都藏在这条接缝上。
+
+新增 `tests/archive/pg_e2e_integration_test.go`（`-tags=integration`，缺环境变量则跳过），
+核心断言是【唯一安全不变量】的端到端编码：
+
+> **凡 `archive_status=2`（正文已从 PG 离场）的行，其正文必须能从归档回读出来。**
+
+任何「置空了但读不回来」的组合都会在此失败，因此它同时是 F1（盖戳集合 ⊋ 归档集合）
+与 F2（索引不可读却被判 ok）的探测器。
+
+**执行位置与结果**
+
+| 环境 | PG | collation | 结果 |
+|---|---|---|---|
+| 本机 | 18.3 | `zh_CN.UTF-8` | 3/3 PASS |
+| **测试环境 191.121** | **18.4（与生产同版）** | `en_US.utf8` | **3/3 PASS** |
+
+测试环境上验证的实际内容（真实 PG + 真实 Redis + 真实文件系统）：
+
+- 迁移在真实 PG 18.4 上从「迁移前 schema」一路应用成功：5 个归档列、`trace_archive_manifests`、部分索引
+- 独立冻结期望集落库正确：`expected_total=300`、`expected_body_count=240`、rid 摘要非空
+- 多块 zstd 归档：`chunk_mb=1` 下切出 **4 个块**，`.spool` 无残留
+- 索引 C 序且块间不重叠：`first_rid > last_rid` 与块间重叠均被断言拦下
+- janitor 全周期：巡检 `verify_state=ok` → 置空 → `state=cleaned`
+- **241 个置空行全部从归档回读成功**（含跨天补归档的行）
+- 天边界正确：相邻天的行各自落到自己的 `dt`，本天归档指针下无更早时间的数据
+- 无正文的 60 行**始终未被盖戳**（F1 的直接体现）
+- 点读 fail-closed：索引缺失、块文件缺失、`_SUCCESS` 缺失三种情况下均**明确报错**，
+  不会把「归档不可读」误呈现为「数据不存在」
+
+**测试本身有牙齿（变异测试证明）**
+
+把 `readbody.go` 快路径的 `return obj, nil` 改成 `return &ArchiveObject{}, nil`
+（模拟"归档静默不可读"）：
+
+```
+变异后: --- FAIL: TestArchiveEndToEndRealPostgres
+        --- FAIL: TestArchiveLateArrivalIsNotLost
+        【不可逆丢失】late-arrival 回读到的正文为空
+还原后: 与变异前逐字节一致，3/3 全绿
+```
+
+**过程中修正的 3 处测试假设（都是测试错，不是代码错）**
+
+1. 归档落在 `{root}/dt=<date>/`，**无** `call_traces/` 前缀——我最初路径写错
+2. 相邻天的行会被 janitor 的**补归档**阶段各自归档（设计行为），
+   因此不能断言它们保持 `archive_status=0`；正确断言是"落到各自的 dt"
+3. 归档后落入的 `late-arrival` 被置空是**正确**的——F4 修复触发了整日重归档把它收进了归档，
+   且回读成功。因此该用例的正确断言是"离场即可回读"，而不是"必须保持热存"
+
+**测试环境安全性**（全程未触碰共享资源，已复核）
+
+| 资源 | 测试前 | 测试后 |
+|---|---|---|
+| 共享库 `llm_gateway_test.call_traces` | 1087 行 / 925 有正文 / 0 归档列 | **完全一致** |
+| Redis DB 0（169 万键） | 1690156 | **1690156** |
+| 独立 scratch 库 / 归档目录 | — | **已删除** |
+| Redis DB 15（测试专用） | 0 | 0（leader 锁自行释放） |
+
+> 说明：测试环境 `/` 分区已 100% 占满（0 字节可用），因此二进制与归档数据全部走 `/data`（92G 空闲）。
+
+---
+
 ## 5. 残留风险与未决项（诚实清单）
 
 | # | 项 | 性质 | 建议 |
 |---|---|---|---|
 | **P1** | **正文回填通道未实现**。契约声明了 `archive.backfill.enabled` / `max_days`，但**无任何工作流拥有回填实现文件**（契约自身的所有权缺口），两个配置项当前是死配置 | v3 §7.3 要求的子系统缺位 | 需你决策：是否本期实现，或明确记为下期 |
-| P3 | 归档链路的 Go↔PG 集成仅由**假 DB 驱动**测试覆盖（SQL 语句形状已在真实 PG 手工验证，但无 CI 守门） | 测试强度 | 建议补一条 `-tags=integration` 的真实 PG 用例 |
+| ~~P3~~ | ~~归档链路的 Go↔PG 集成仅由假 DB 驱动覆盖~~ | **已关闭** | 见 §4.4：真实 PG 18.4 + 真实 Redis 端到端 3/3 通过，并附变异测试证明 |
 | R1 | F6 的 fail-closed 会造成**活性风险**：若归档对象里存在 SQL 非 NULL 但 JSON 字面量 `null` 的正文，门闸④ 永不通过 → 该天永久无法置空（不丢数据，但链路停摆且静默） | 设计取舍 | 建议加可观测计数/告警 |
 | R2 | F1 的两道防线都是**计数相等**而非集合逐行相等。要绕过需 `archive_status=2` 且正文非空，而唯一的 `=2` 写入点与正文置空是同一条语句 → 当前**不可达**，但无 DB 约束兜底 | 理论 | 可考虑加 `CHECK (archive_status <> 2 OR (request_body IS NULL AND response_body IS NULL))` |
 | R3 | F2b 守门只判 `index.jsonl` 是否存在（part 文件仍在而 index 被人工删除时不触发） | 低概率 | 可扩展为「index 或任一 part 存在」 |

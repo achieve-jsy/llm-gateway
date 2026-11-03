@@ -609,9 +609,9 @@ onMounted(() => { load() })
 
 /* ── 骨架屏卡片 ──────────────────────────── */
 .gc-skeleton {
-  cursor: default !important;
+  cursor: default;
   pointer-events: none;
-  &:hover { transform: none !important; box-shadow: none !important; }
+  opacity: 0.7;
 }
 
 .sk-line {

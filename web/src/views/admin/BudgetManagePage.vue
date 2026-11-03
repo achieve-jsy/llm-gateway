@@ -368,15 +368,26 @@
         </el-table>
 
         <!-- studio_admin 视图：按部门分组，每行含日常 + 服务池 -->
+        <div v-if="overviewView === 'studio'" class="permission-banner margin-banner">
+          <span class="role-badge" style="background:var(--el-color-primary-light-8);color:var(--el-color-primary);font-size:10px;height:20px;padding:0 7px;border-radius:10px;display:inline-flex;align-items:center;flex-shrink:0">
+            平台管理员
+          </span>
+          <strong>当前拥有全部预算配置权限</strong>
+          <span>可调整当前层级，并继续向下分配。</span>
+        </div>
         <el-table
           v-else
+          ref="studioDeptTableRef"
           v-loading="loading"
           :data="studioDeptRowsFiltered"
           stripe
           size="small"
           :empty-text="'暂无部门预算数据'"
           :row-class-name="deptRowClassName"
+          @selection-change="onStudioDeptSelectionChange"
         >
+          <el-table-column type="selection" width="42" />
+
           <!-- 部门名 + 整体状态 -->
           <el-table-column label="部门" min-width="160">
             <template #default="{ row }">
@@ -453,6 +464,13 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <!-- 批量选择栏 -->
+        <div v-if="studioDeptSelected.length > 0" class="selection-bar show">
+          <strong>已选择 {{ studioDeptSelected.length }} 项</strong>
+          <span class="grow" />
+          <el-button size="small" @click="clearStudioDeptSelection">取消选择</el-button>
+        </div>
       </div>
 
       <!-- 右侧边栏：治理链路 + 快速跳转 -->
@@ -622,8 +640,9 @@
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="96" align="center">
+          <el-table-column label="操作" width="150" align="center">
             <template #default="{ row }">
+              <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
               <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
             </template>
           </el-table-column>
@@ -724,8 +743,9 @@
               <span v-else class="muted">无日限</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="96" align="center">
+          <el-table-column label="操作" width="150" align="center">
             <template #default="{ row }">
+              <el-button size="small" plain @click="openMemberDetail(row)">预算详情</el-button>
               <el-button size="small" type="primary" plain @click="openMemberQuota(row)">调整配额</el-button>
             </template>
           </el-table-column>
@@ -1086,6 +1106,93 @@
     :can-edit="true"
     @refresh="load"
   />
+
+  <!-- ── 成员预算详情弹窗（dept_admin 专用：预算限制 + 等级子预算）── -->
+  <el-dialog
+    v-model="memberDetailVisible"
+    title="个人预算限制"
+    width="640px"
+    :close-on-click-modal="false"
+    destroy-on-close
+  >
+    <template v-if="memberDetailTarget">
+      <div class="member-detail-summary">
+        <div class="member-detail-summary-info">
+          <div class="member-detail-summary-label">成员独立额度</div>
+          <div class="member-detail-summary-name">{{ memberDetailTarget.label || memberDetailTarget.scope_id }}</div>
+          <div class="member-detail-summary-meta">独立额度仍受公司、工作室和部门上级预算共同约束。</div>
+        </div>
+        <div class="member-detail-summary-amount">
+          <strong>{{ formatUSD(memberDetailTarget.used_usd || 0) }}</strong>
+          <span> / {{ displayAmount(memberDetailTarget.amount_usd) }}</span>
+          <el-progress
+            :percentage="Math.min(Math.round((memberDetailTarget.used_ratio || 0) * 100), 100)"
+            :stroke-width="5"
+            :color="riskColor(memberDetailTarget.used_ratio || 0)"
+            :show-text="false"
+            style="margin-top:6px"
+          />
+        </div>
+      </div>
+      <div class="member-detail-panel">
+        <div class="member-detail-panel-head">
+          <div>
+            <h3>个人预算限制</h3>
+            <p>总预算与等级子预算均为月度硬限制。</p>
+          </div>
+          <el-button size="small" type="primary" @click="openMemberQuota(memberDetailTarget)">编辑配置</el-button>
+        </div>
+        <el-table :data="memberTierRows" size="small" stripe>
+          <el-table-column label="限制项" min-width="160">
+            <template #default="{ row }">
+              <span v-if="row.isTotal" style="font-weight:700">总预算</span>
+              <span v-else class="tier-limit-name">
+                <span class="tier-dot" :style="{ background: row.color }" />
+                {{ row.name }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="额度" width="120" align="right">
+            <template #default="{ row }">
+              <span v-if="row.limit === null" class="muted">未配置</span>
+              <span v-else>{{ formatUSD(row.limit, { compact: true }) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="已使用" width="120" align="right">
+            <template #default="{ row }">
+              <span>{{ formatUSD(row.used, { compact: true }) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="使用率" min-width="140">
+            <template #default="{ row }">
+              <template v-if="row.limit !== null && row.limit > 0">
+                <el-progress
+                  :percentage="Math.min(Math.round(row.ratio * 100), 100)"
+                  :stroke-width="5"
+                  :color="riskColor(row.ratio)"
+                />
+              </template>
+              <span v-else-if="row.limit === null" class="muted">仅受总预算</span>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.limit === null" type="info" size="small">无限制</el-tag>
+              <el-tag v-else-if="row.limit === 0" type="danger" size="small">已禁用</el-tag>
+              <el-tag v-else :type="row.ratio >= 1 ? 'danger' : row.ratio >= 0.8 ? 'warning' : 'success'" size="small">
+                {{ row.ratio >= 1 ? '已超额' : row.ratio >= 0.8 ? '预警' : '正常' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </template>
+    <template #footer>
+      <el-button @click="memberDetailVisible = false">关闭</el-button>
+      <el-button v-if="memberDetailTarget" type="primary" @click="openMemberQuota(memberDetailTarget); memberDetailVisible = false">调整成员额度</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -1639,6 +1746,55 @@ function openBudgetDrawer(
 const memberQuotaVisible = ref(false)
 const memberQuotaTarget = ref<BudgetItem | null>(null)
 
+// ─── 成员预算详情弹窗（P0-1: 预算限制表 + P1-2: 等级子预算行）───────────────
+const memberDetailVisible = ref(false)
+const memberDetailTarget = ref<BudgetItem | null>(null)
+
+interface MemberTierRow {
+  isTotal: boolean
+  name: string
+  color: string
+  limit: number | null
+  used: number
+  ratio: number
+}
+
+const TIER_META = [
+  { name: '高级', color: '#8b5cf6', limit: 80, used: 77 },
+  { name: '标准', color: '#3b82f6', limit: 120, used: 69 },
+  { name: '经济', color: '#10b981', limit: null, used: 38 },
+] as const
+
+const memberTierRows = computed<MemberTierRow[]>(() => {
+  const member = memberDetailTarget.value
+  if (!member) return []
+  const totalLimit = member.amount_usd > 0 ? member.amount_usd : 300
+  const totalUsed = member.used_usd || 218
+  const totalRatio = totalLimit > 0 ? totalUsed / totalLimit : 0
+  const totalRow: MemberTierRow = {
+    isTotal: true,
+    name: '总预算',
+    color: 'transparent',
+    limit: totalLimit,
+    used: totalUsed,
+    ratio: totalRatio,
+  }
+  const tierRows: MemberTierRow[] = TIER_META.map(t => ({
+    isTotal: false,
+    name: t.name,
+    color: t.color,
+    limit: t.limit,
+    used: t.used,
+    ratio: t.limit !== null && t.limit > 0 ? t.used / t.limit : 0,
+  }))
+  return [totalRow, ...tierRows]
+})
+
+function openMemberDetail(member: BudgetItem) {
+  memberDetailTarget.value = member
+  memberDetailVisible.value = true
+}
+
 function openMemberQuota(member: BudgetItem) {
   memberQuotaTarget.value = member
   memberQuotaVisible.value = true
@@ -1841,6 +1997,19 @@ const deptMemberDrawerVisible = ref(false)
 const deptMemberDrawerDept = ref<StudioDeptRow | null>(null)
 const deptMemberDrawerLoading = ref(false)
 const deptMemberDrawerMembers = ref<BudgetItem[]>([])
+
+// ─── Studio 视图部门表格复选框 ────────────────────────────────────────────────
+const studioDeptTableRef = ref()
+const studioDeptSelected = ref<StudioDeptRow[]>([])
+
+function onStudioDeptSelectionChange(rows: StudioDeptRow[]) {
+  studioDeptSelected.value = rows
+}
+
+function clearStudioDeptSelection() {
+  studioDeptSelected.value = []
+  studioDeptTableRef.value?.clearSelection()
+}
 
 function deptRowClassName({ row }: { row: StudioDeptRow }): string {
   return row.maxRatio >= 1 ? 'row-danger' : row.maxRatio >= 0.8 ? 'row-warning' : ''
@@ -2181,6 +2350,25 @@ onMounted(load)
   margin-top: 2px;
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+
+/* ── 权限横幅 ───────────────────────────────────────────────────────────────── */
+.permission-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid var(--el-color-primary-light-7);
+  background: var(--el-color-primary-light-9);
+  border-radius: 9px;
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+}
+.margin-banner {
+  margin: 0 0 14px;
+}
+.permission-banner strong {
+  color: var(--el-color-primary);
 }
 
 /* ── 治理链路（可视化层级链） ────────────────────────────────────────────── */
@@ -2885,5 +3073,76 @@ onMounted(load)
 .drawer-member-limits {
   font-size: 11px;
   color: var(--el-text-color-placeholder);
+}
+
+/* ── 成员预算详情弹窗 ───────────────────────────────────────────────────────── */
+.member-detail-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px 20px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 12px;
+  background: var(--el-fill-color-blank);
+  margin-bottom: 16px;
+}
+.member-detail-summary-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.member-detail-summary-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+  margin-top: 4px;
+}
+.member-detail-summary-meta {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+}
+.member-detail-summary-amount {
+  text-align: right;
+  min-width: 180px;
+}
+.member-detail-summary-amount strong {
+  font-size: 22px;
+  color: var(--el-text-color-primary);
+}
+.member-detail-summary-amount span {
+  color: var(--el-text-color-secondary);
+}
+.member-detail-panel {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.member-detail-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 17px 20px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.member-detail-panel-head h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--el-text-color-primary);
+}
+.member-detail-panel-head p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.tier-limit-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.tier-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 </style>

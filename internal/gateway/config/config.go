@@ -21,6 +21,17 @@ type Config struct {
 	OIDC          OIDCConfig
 	Observability ObservabilityConfig
 	TraceBody     TraceBodyConfig
+	Media         MediaConfig
+}
+
+// MediaConfig 媒体链路（图像 / 视频）配置。
+type MediaConfig struct {
+	// RequirePricing 命中「媒体请求 + 无价」时是否拒绝准入（402 media_pricing_missing）。
+	//
+	// 默认 true（保守）：model_catalog 的媒体价列默认 NULL 表示「无价」，
+	// 放行等于静默记 0 元。关闭后放行，但采集侧会强制 usage_missing=true 并打
+	// Error 级强告警（见 docs/media-channels-integration-design.md §8.3 / D3）。
+	RequirePricing bool
 }
 
 // ServerConfig 服务配置
@@ -118,6 +129,12 @@ func Load() *Config {
 	v.SetDefault("trace_body.disk_watermark_percent", 90)
 	v.SetDefault("otlp.endpoint", "localhost:4317")
 	v.SetDefault("otlp.enabled", false)
+	// 媒体准入计价闸门（A2）：无价即拒绝，默认 true（保守）。
+	// 注：AutomaticEnv + envKeyReplacer 已能把 MEDIA_REQUIRE_PRICING 映射到
+	// media.require_pricing，下面的 BindEnv 是显式登记（与历史变量写法保持一致）；
+	// 空字符串的 env 会被 viper 判为"未设置"（getEnv 要求 val != ""），
+	// 因此 MEDIA_REQUIRE_PRICING= 不会把开关意外翻成 false。
+	v.SetDefault("media.require_pricing", true)
 	v.SetDefault("provider.internal_token", "")
 	v.SetDefault("provider.control_plane_url", "http://localhost:8081")
 	v.SetDefault("auth.url", "http://localhost:8082")
@@ -156,6 +173,7 @@ func Load() *Config {
 
 	// 额外绑定一些与 YAML key 命名不一致的历史环境变量
 	_ = v.BindEnv("server.port", "GATEWAY_PORT")
+	_ = v.BindEnv("media.require_pricing", "MEDIA_REQUIRE_PRICING")
 	_ = v.BindEnv("redis.addr", "REDIS_ADDR")
 	_ = v.BindEnv("redis.password", "REDIS_PASSWORD")
 	_ = v.BindEnv("redis.db", "REDIS_DB")
@@ -206,6 +224,9 @@ func Load() *Config {
 			}
 			return tb
 		}(),
+		Media: MediaConfig{
+			RequirePricing: v.GetBool("media.require_pricing"),
+		},
 		OTLP: OTLPConfig{
 			Endpoint: v.GetString("otlp.endpoint"),
 			Enabled:  v.GetBool("otlp.enabled"),

@@ -7,11 +7,13 @@ controlplane:
 
 redis:
   addr: "192.0.2.10:6379"
-  password: "CHANGE_ME_REDIS_PASSWORD"
+  # 口令由环境变量 REDIS_PASSWORD 注入（见 skill: test-env-config），禁止明文
+  password: ""
   db: 0
 
 database:
-  url: "host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway sslmode=disable"
+  # 连接串由环境变量 DATABASE_URL 注入（Viper BindEnv 覆盖），禁止明文
+  url: ""
 
 otlp:
   endpoint: "127.0.0.1:4317"

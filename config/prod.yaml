@@ -6,11 +6,13 @@ controlplane:
 
 redis:
   addr: "192.0.2.10:6379"
-  password: "CHANGE_ME_REDIS_PASSWORD"
+  # 口令由环境变量 REDIS_PASSWORD 注入（见 skill: test-env-config），禁止明文
+  password: ""
   db: 2
 
 database:
-  url: "postgres://llm_gateway:CHANGE_ME_PASSWORD@192.0.2.10:5433/llm_gateway_prod?sslmode=disable"
+  # 连接串由 CI/CD 变量 PROD_DATABASE_URL 经环境变量 DATABASE_URL 注入，禁止明文
+  url: ""
 
 otlp:
   endpoint: "localhost:4317"

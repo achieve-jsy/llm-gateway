@@ -13,19 +13,6 @@
 
       <div class="tree-toolbar">
         <span class="tree-title">组织架构</span>
-        <div class="tree-toolbar-actions">
-          <el-button
-            v-if="isGlobalAdmin"
-            link size="small"
-            title="导入员工花名册"
-            @click="empImportDialogVisible = true"
-          >
-            <el-icon><Upload /></el-icon>
-          </el-button>
-          <el-button v-if="isGlobalAdmin" link size="small" title="新建工作室" @click="createDialogVisible = true">
-            <el-icon><Plus /></el-icon>
-          </el-button>
-        </div>
       </div>
 
       <div class="tree-search">
@@ -96,18 +83,6 @@
               v-if="isGlobalAdmin || myStudioIds.includes(selectedStudio?.id ?? '')"
               size="small" @click="openGrantDialog('studio_admin')"
             >指定负责人</el-button>
-            <!-- 批量导入映射/删除工作室：仅 admin -->
-            <template v-if="isGlobalAdmin">
-              <el-button size="small" @click="importDialogVisible = true">批量导入映射</el-button>
-              <el-dropdown @command="onStudioCmd">
-                <el-button link size="small"><el-icon><MoreFilled /></el-icon></el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="delete" style="color:#f56c6c">删除工作室</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </template>
           </div>
         </div>
 
@@ -119,15 +94,6 @@
               <el-badge :value="selectedStudioDepts.length" :max="99" type="info" class="tab-badge" />
             </template>
             <div class="tab-content">
-              <div class="tab-toolbar" v-if="isGlobalAdmin || myStudioIds.includes(selectedStudio?.id ?? '')">
-                <el-button
-                  size="small"
-                  :icon="Plus"
-                  :disabled="unmappedDepts.length === 0"
-                  @click="openAddDeptDialog"
-                >从待归属部门添加</el-button>
-                <span v-if="unmappedDepts.length === 0" class="text-muted" style="font-size:12px; margin-left:8px">暂无待归属部门</span>
-              </div>
               <div class="org-table-wrap"><el-table :data="selectedStudioDepts" stripe size="small">
                 <el-table-column label="部门名称" min-width="160">
                   <template #default="{ row }">
@@ -160,17 +126,9 @@
                     <span v-else class="text-muted">未设置</span>
                   </template>
                 </el-table-column>
-                <el-table-column
-                  v-if="isGlobalAdmin || myStudioIds.includes(selectedStudio?.id ?? '')"
-                  label="操作" width="80" align="center"
-                >
-                  <template #default="{ row }">
-                    <el-button link type="danger" size="small" @click="unassignDept(row)">移出</el-button>
-                  </template>
-                </el-table-column>
               </el-table></div>
               <div v-if="selectedStudioDepts.length === 0" class="tab-empty">
-                该工作室暂无部门，可在「待归属部门」中为部门分配工作室
+                该工作室暂无部门
               </div>
             </div>
           </el-tab-pane>
@@ -245,18 +203,6 @@
               v-if="isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')"
               size="small" @click="openGrantDialog('dept_admin')"
             >指定负责人</el-button>
-            <!-- 移出工作室：admin 或父工作室 studio_admin -->
-            <el-dropdown
-              v-if="isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')"
-              @command="onDeptCmd"
-            >
-              <el-button link size="small"><el-icon><MoreFilled /></el-icon></el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item v-if="selectedDept.studio_id" command="unassign" style="color:#e6a23c">移出工作室</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
           </div>
         </div>
 
@@ -341,22 +287,13 @@
                 </el-table-column>
                 <el-table-column
                   v-if="isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')"
-                  label="操作" width="180" align="center"
+                  label="操作" width="90" align="center"
                 >
                   <template #default="{ row }">
                     <el-button
                       link type="primary" size="small"
                       @click.stop="openUserQuotaDialog(row)"
                     >配额</el-button>
-                    <el-button
-                      link type="primary" size="small"
-                      @click.stop="openChangeDeptDialog(row)"
-                    >修改部门</el-button>
-                    <el-button
-                      v-if="row.dept_source === 'manual'"
-                      link size="small"
-                      @click.stop="doFollowSSO(row)"
-                    >恢复SSO</el-button>
                   </template>
                 </el-table-column>
               </el-table></div>
@@ -436,14 +373,11 @@
               <el-tag type="warning" size="small" class="title-badge">{{ unmappedDepts.length }}</el-tag>
             </div>
           </div>
-          <div class="panel-actions" v-if="isGlobalAdmin">
-            <el-button size="small" @click="importDialogVisible = true">批量导入映射</el-button>
-          </div>
         </div>
 
         <div class="tab-content" style="padding-top: 0">
           <el-alert
-            title="以下部门的员工登录后无法使用模型，请为其指定所属工作室。"
+            title="以下部门在 EHR 中无对应上级工作室，员工登录后无法使用模型。请联系 EHR 管理员补齐组织关系。"
             type="warning"
             :closable="false"
             show-icon
@@ -456,21 +390,6 @@
                 <code class="dept-id-code">{{ row.dept_id }}</code>
               </template>
             </el-table-column>
-            <el-table-column label="指定工作室" min-width="180">
-              <template #default="{ row }">
-                <el-select
-                  v-if="studios.length > 0"
-                  v-model="pendingAssign[row.dept_id]"
-                  placeholder="选择工作室"
-                  size="small"
-                  style="width: 150px"
-                  @change="val => assignDept(row, val)"
-                >
-                  <el-option v-for="s in studios" :key="s.id" :label="s.name" :value="s.id" />
-                </el-select>
-                <el-text v-else type="warning" size="small">请先创建工作室</el-text>
-              </template>
-            </el-table-column>
           </el-table></div>
         </div>
       </template>
@@ -480,151 +399,10 @@
         <el-icon size="52" color="#c0c4cc"><OfficeBuilding /></el-icon>
         <p class="empty-title">选择左侧节点查看详情</p>
         <p class="empty-sub">点击工作室查看部门列表，点击部门查看成员</p>
-        <el-button v-if="studios.length === 0" type="primary" @click="createDialogVisible = true">创建第一个工作室</el-button>
       </div>
 
     </main>
   </div>
-
-  <!-- ═══ 新建工作室弹窗 ════════════════════════════════════════════════════ -->
-  <el-dialog v-model="createDialogVisible" title="新建工作室" width="400px" @close="resetCreate">
-    <el-form :model="createForm" :rules="createRules" ref="createFormRef" label-width="80px">
-      <el-form-item label="显示名称" prop="name">
-        <el-input v-model="createForm.name" placeholder="如：研发工作室" />
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="createDialogVisible = false">取消</el-button>
-      <el-button type="primary" :loading="creating" @click="doCreate">创建</el-button>
-    </template>
-  </el-dialog>
-
-  <!-- ═══ 批量导入弹窗 ══════════════════════════════════════════════════════ -->
-  <el-dialog v-model="importDialogVisible" title="批量导入部门映射" width="520px" @close="resetImport">
-    <template v-if="importState === 'idle'">
-      <el-upload :auto-upload="false" :limit="1" accept=".csv" @change="e => selectedFile = e.raw">
-        <el-button>选择 CSV 文件</el-button>
-        <template #tip><div class="el-upload__tip">{{ selectedFile?.name }}</div></template>
-      </el-upload>
-      <div style="margin-top:16px; text-align:right">
-        <el-button @click="importDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="!selectedFile" @click="previewImport">预览</el-button>
-      </div>
-    </template>
-    <template v-else-if="importState === 'preview' && importDiff">
-      <div class="diff-tags">
-        <el-tag type="success">新增 {{ importDiff.added.length }}</el-tag>
-        <el-tag type="warning">变更 {{ importDiff.updated.length }}</el-tag>
-        <el-tag type="info">无变化 {{ importDiff.unchanged }}</el-tag>
-      </div>
-      <div style="margin-top:16px; text-align:right">
-        <el-button @click="importState = 'idle'">返回</el-button>
-        <el-button type="primary" :loading="importing" @click="doImport">确认导入</el-button>
-      </div>
-    </template>
-    <template v-else-if="importState === 'done'">
-      <el-result icon="success" title="导入完成" />
-      <div style="text-align:right">
-        <el-button @click="importDialogVisible = false">关闭</el-button>
-      </div>
-    </template>
-  </el-dialog>
-
-  <!-- ═══ 添加部门弹窗（从待归属部门选择） ════════════════════════════════════ -->
-  <el-dialog v-model="addDeptDialogVisible" title="添加部门到工作室" width="520px" @close="addDeptSelection = []">
-    <el-alert
-      :title="`将选中部门归入「${selectedStudio?.name}」工作室`"
-      type="info"
-      :closable="false"
-      show-icon
-      style="margin-bottom: 16px"
-    />
-    <el-table
-      ref="addDeptTableRef"
-      :data="unmappedDepts"
-      stripe
-      size="small"
-      max-height="360"
-      @selection-change="addDeptSelection = $event"
-    >
-      <el-table-column type="selection" width="48" />
-      <el-table-column label="部门名称" min-width="160" prop="dept_name" />
-      <el-table-column label="部门ID" min-width="140">
-        <template #default="{ row }">
-          <code class="dept-id-code">{{ row.dept_id }}</code>
-        </template>
-      </el-table-column>
-    </el-table>
-    <template #footer>
-      <el-button @click="addDeptDialogVisible = false">取消</el-button>
-      <el-button
-        type="primary"
-        :disabled="addDeptSelection.length === 0"
-        :loading="addingDepts"
-        @click="doAddDepts"
-      >确认添加 {{ addDeptSelection.length > 0 ? `(${addDeptSelection.length})` : '' }}</el-button>
-    </template>
-  </el-dialog>
-
-  <!-- ═══ 修改部门弹窗 ═════════════════════════════════════════════════════ -->
-  <el-dialog v-model="changeDeptDialogVisible" title="修改成员部门归属" width="460px" @close="resetChangeDept">
-    <div v-if="changeDeptTarget" class="change-dept-body">
-      <div class="selected-user" style="margin-bottom:16px">
-        <div class="selected-avatar">{{ changeDeptTarget.name.charAt(0) }}</div>
-        <div class="selected-info">
-          <span class="selected-name">{{ changeDeptTarget.name }}</span>
-          <span class="selected-meta">{{ changeDeptTarget.email }}</span>
-        </div>
-      </div>
-
-      <el-alert
-        v-if="changeDeptTarget.dept_source === 'manual'"
-        type="warning"
-        :closable="false"
-        style="margin-bottom:12px"
-        title="该成员当前为手动指定部门，修改后将保持手动优先（不受 SSO 影响）"
-      />
-
-      <el-form label-width="80px" size="small">
-        <el-form-item label="目标部门">
-          <el-select
-            v-model="changeDeptSelected"
-            placeholder="选择目标部门"
-            style="width:100%"
-            filterable
-          >
-            <el-option
-              v-for="d in allDepts"
-              :key="d.dept_id"
-              :label="d.dept_name"
-              :value="d.dept_id"
-              :disabled="d.status === 'pending_studio'"
-            >
-              <span>{{ d.dept_name }}</span>
-              <el-tag
-                v-if="d.status === 'pending_studio'"
-                type="warning" size="small" style="margin-left:6px"
-              >待归属</el-tag>
-            </el-option>
-          </el-select>
-          <div v-if="changeDeptSelectedInfo?.status === 'pending_studio'" style="margin-top:4px">
-            <el-alert type="warning" :closable="false" size="small"
-              title="该部门尚未归属工作室，员工将按「未归属」处置。建议先完成映射。" />
-          </div>
-        </el-form-item>
-      </el-form>
-    </div>
-
-    <template #footer>
-      <el-button @click="changeDeptDialogVisible = false">取消</el-button>
-      <el-button
-        type="primary"
-        :disabled="!changeDeptSelected || changeDeptSelected === currentMemberDeptId"
-        :loading="changeDeptLoading"
-        @click="doChangeDept"
-      >确认修改</el-button>
-    </template>
-  </el-dialog>
 
   <!-- ═══ 授权弹窗 ══════════════════════════════════════════════════════════ -->
   <el-dialog v-model="grantDialogVisible" title="指定负责人" width="460px" @close="resetGrant">
@@ -695,135 +473,6 @@
         :loading="granting"
         @click="doGrant"
       >确认授权</el-button>
-    </template>
-  </el-dialog>
-
-  <!-- ═══ 员工花名册导入弹窗 ═════════════════════════════════════════════════ -->
-  <el-dialog
-    v-model="empImportDialogVisible"
-    title="导入员工花名册"
-    width="900px"
-    :close-on-click-modal="false"
-    @close="resetEmpImport"
-  >
-    <!-- Step 1: 上传文件 -->
-    <div v-if="empImportStep === 'upload'">
-      <el-alert type="info" :closable="false" style="margin-bottom:16px">
-        <div>支持 <b>CSV</b> / <b>XLSX</b> 格式，列顺序：</div>
-        <div style="font-family:monospace;margin-top:4px;font-size:12px">工号 &nbsp; 姓名 &nbsp; 邮箱 &nbsp; 事业部 &nbsp; 部门 &nbsp; 岗位族群 &nbsp; 岗位类别 &nbsp; 岗位</div>
-        <div style="margin-top:4px;color:var(--el-color-warning)">首行为表头，邮箱列为用户匹配主键</div>
-      </el-alert>
-      <el-upload
-        drag
-        :auto-upload="false"
-        :limit="1"
-        accept=".csv,.xlsx,.xls"
-        :on-change="onEmpFileChange"
-        :on-remove="() => empImportFile = null"
-        style="width:100%"
-      >
-        <el-icon class="el-icon--upload"><Upload /></el-icon>
-        <div class="el-upload__text">拖拽文件到此处，或 <em>点击选择</em></div>
-        <template #tip>
-          <div class="el-upload__tip">CSV / XLSX，文件大小 ≤ 10 MB</div>
-        </template>
-      </el-upload>
-    </div>
-
-    <!-- Step 2: 预览 + 手动匹配 -->
-    <div v-else-if="empImportStep === 'preview'">
-      <div class="emp-preview-summary">
-        <el-tag>共 {{ empPreviewRows.length }} 行</el-tag>
-        <el-tag type="success">自动匹配 {{ empPreviewRows.filter(r => r.status === 'linked').length }}</el-tag>
-        <el-tag type="warning">未匹配 {{ empPreviewRows.filter(r => r.status === 'unmatched').length }}</el-tag>
-        <el-tag v-if="newStudioCount > 0" type="info">新建工作室 {{ newStudioCount }}</el-tag>
-        <el-tag v-if="newDeptCount > 0" type="info">新建部门 {{ newDeptCount }}</el-tag>
-      </div>
-
-      <el-table :data="empPreviewRows" size="small" stripe max-height="420" style="margin-top:12px">
-        <el-table-column label="行" width="50" prop="row_index" align="center" />
-        <el-table-column label="姓名" min-width="90" prop="name" />
-        <el-table-column label="邮箱" min-width="160" prop="email" />
-        <el-table-column label="事业部" min-width="120" prop="studio_name">
-          <template #default="{ row }">
-            <span>{{ row.studio_name }}</span>
-            <el-tag v-if="row.new_studio" type="info" size="small" style="margin-left:4px">新建</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="部门" min-width="100" prop="dept_name">
-          <template #default="{ row }">
-            <span>{{ row.dept_name }}</span>
-            <el-tag v-if="row.new_dept" type="info" size="small" style="margin-left:4px">新建</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="岗位" min-width="100" prop="job_title" />
-        <el-table-column label="状态" width="200">
-          <template #default="{ row }">
-            <el-tag v-if="row.status === 'linked'" type="success" size="small">已匹配：{{ row.matched_user_name }}</el-tag>
-            <el-select
-              v-else
-              v-model="empOverrides[row.row_index]"
-              placeholder="手动指定用户"
-              size="small"
-              clearable
-              filterable
-              remote
-              :remote-method="(q: string) => searchEmpUser(q, row.row_index)"
-              :loading="empUserSearchLoading[row.row_index]"
-              style="width:100%"
-            >
-              <el-option
-                v-for="u in (empUserSearchResults[row.row_index] || [])"
-                :key="u.id"
-                :label="`${u.name} (${u.email})`"
-                :value="u.id"
-              />
-            </el-select>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <el-alert
-        v-if="empPreviewRows.some(r => r.status === 'unmatched' && !empOverrides[r.row_index])"
-        type="warning"
-        :closable="false"
-        style="margin-top:12px"
-        title="存在未匹配用户，未指定的行将跳过（不影响导入其他行）"
-      />
-    </div>
-
-    <!-- Step 3: 结果 -->
-    <div v-else-if="empImportStep === 'done'">
-      <el-result icon="success" title="导入完成">
-        <template #sub-title>
-          <div v-if="empImportSummary" class="emp-result-grid">
-            <span>共处理 <b>{{ empImportSummary.total }}</b> 行</span>
-            <span>用户归属 <b class="c-green">{{ empImportSummary.users_linked }}</b></span>
-            <span v-if="empImportSummary.users_pending">待登录 <b class="c-orange">{{ empImportSummary.users_pending }}</b></span>
-            <span v-if="empImportSummary.studios_created">新建工作室 <b>{{ empImportSummary.studios_created }}</b></span>
-            <span v-if="empImportSummary.depts_created">新建部门 <b>{{ empImportSummary.depts_created }}</b></span>
-            <span v-if="empImportSummary.unmatched_emails?.length">
-              未匹配 <b class="c-orange">{{ empImportSummary.unmatched_emails.length }}</b>
-            </span>
-          </div>
-        </template>
-      </el-result>
-    </div>
-
-    <template #footer>
-      <template v-if="empImportStep === 'upload'">
-        <el-button @click="empImportDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="!empImportFile" :loading="empImportPreviewing" @click="doEmpPreview">
-          预览 →
-        </el-button>
-      </template>
-      <template v-else-if="empImportStep === 'preview'">
-        <el-button @click="empImportStep = 'upload'">← 返回</el-button>
-        <el-button type="primary" :loading="empImporting" @click="doEmpImport">确认导入</el-button>
-      </template>
-      <template v-else-if="empImportStep === 'done'">
-        <el-button type="primary" @click="empImportDialogVisible = false; reload()">关闭并刷新</el-button>
-      </template>
     </template>
   </el-dialog>
 
@@ -972,15 +621,15 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 Chart.register(...registerables)
-import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import type { ElTree } from 'element-plus'
 import {
-  Plus, Upload, OfficeBuilding, Folder, Warning, MoreFilled, Search,
+  OfficeBuilding, Folder, Warning, Search,
   ArrowRight, UserFilled, Close, Money, DataLine, CircleCheck, List,
 } from '@element-plus/icons-vue'
 import { useOrgStore, type RoleWithUser, type UserSearchResult, type DeptMember } from '@/stores/org'
 import { useAuthStore } from '@/stores/auth'
-import type { Studio, OrgDepartment, ImportDiff, EmployeeImportPreviewRow, EmployeeImportSummary } from '@/types/org'
+import type { Studio, OrgDepartment } from '@/types/org'
 import http from '@/services/http'
 import { useRoute, useRouter } from 'vue-router'
 import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
@@ -1277,151 +926,6 @@ function onMemberSearch() {
   // 本地过滤，无需防抖
 }
 
-// ─── 工作室操作 ────────────────────────────────────────────────────────────────
-async function onStudioCmd(cmd: string) {
-  if (cmd === 'delete' && selectedStudio.value) {
-    try {
-      await ElMessageBox.confirm(
-        `确认删除工作室「${selectedStudio.value.name}」？删除后该工作室下的部门将变为"待归属"状态。`,
-        '删除确认',
-        { type: 'warning' }
-      )
-      try {
-        await orgStore.deleteStudio(selectedStudio.value.id)
-        ElMessage.success('已删除')
-        selectedType.value = null
-        selectedStudio.value = null
-        await reload()
-      } catch (e: any) {
-        ElMessage.error(e?.response?.data?.message || e?.message || '删除失败')
-      }
-    } catch {}
-  }
-}
-
-// ─── 部门操作 ──────────────────────────────────────────────────────────────────
-async function onDeptCmd(cmd: string) {
-  if (cmd === 'unassign' && selectedDept.value) {
-    await unassignDept(selectedDept.value)
-  }
-}
-
-async function assignDept(dept: OrgDepartment, studioId: string) {
-  try {
-    await orgStore.setDeptStudio(dept.dept_id, studioId)
-    ElMessage.success(`${dept.dept_name} 已归属到工作室`)
-    delete pendingAssign.value[dept.dept_id]
-    await reload()
-  } catch {}
-}
-
-async function unassignDept(dept: OrgDepartment) {
-  try {
-    await ElMessageBox.confirm(
-      `确认将「${dept.dept_name}」从工作室移出？移出后该部门员工将无法使用模型。`,
-      '移出确认',
-      { type: 'warning', confirmButtonText: '确认移出', cancelButtonText: '取消' }
-    )
-    await orgStore.setDeptStudio(dept.dept_id, '')
-    ElMessage.success('已移出')
-    // 如果当前正在查看该部门，更新选中状态
-    if (selectedDept.value?.dept_id === dept.dept_id) {
-      selectedType.value = null
-      selectedDept.value = null
-    }
-    await reload()
-  } catch {}
-}
-
-const pendingAssign = ref<Record<string, string>>({})
-
-// ─── 从待归属部门添加到工作室 ──────────────────────────────────────────────────
-const addDeptDialogVisible = ref(false)
-const addDeptSelection     = ref<OrgDepartment[]>([])
-const addingDepts          = ref(false)
-
-function openAddDeptDialog() {
-  addDeptSelection.value = []
-  addDeptDialogVisible.value = true
-}
-
-async function doAddDepts() {
-  if (!selectedStudio.value || addDeptSelection.value.length === 0) return
-  addingDepts.value = true
-  try {
-    await Promise.all(
-      addDeptSelection.value.map(dept => orgStore.setDeptStudio(dept.dept_id, selectedStudio.value!.id))
-    )
-    ElMessage.success(`已将 ${addDeptSelection.value.length} 个部门加入工作室`)
-    addDeptDialogVisible.value = false
-    await reload()
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.message || '操作失败')
-  } finally {
-    addingDepts.value = false
-  }
-}
-
-// ─── 新建工作室 ────────────────────────────────────────────────────────────────
-const createDialogVisible = ref(false)
-const creating            = ref(false)
-const createFormRef       = ref<FormInstance>()
-const createForm          = ref({ name: '' })
-const createRules         = {
-  name: [{ required: true, message: '请填写显示名称', trigger: 'blur' }],
-}
-
-async function doCreate() {
-  if (!await createFormRef.value?.validate().catch(() => false)) return
-  creating.value = true
-  try {
-    await orgStore.createStudio(createForm.value.name)
-    ElMessage.success('工作室创建成功')
-    createDialogVisible.value = false
-    await reload()
-  } catch {} finally {
-    creating.value = false
-  }
-}
-
-function resetCreate() {
-  createForm.value = { name: '' }
-}
-
-// ─── 批量导入 ──────────────────────────────────────────────────────────────────
-const importDialogVisible = ref(false)
-const importState         = ref<'idle' | 'preview' | 'done'>('idle')
-const selectedFile        = ref<File | null>(null)
-const importDiff          = ref<ImportDiff | null>(null)
-const importing           = ref(false)
-
-async function previewImport() {
-  if (!selectedFile.value) return
-  try {
-    const res = await orgStore.importMappings(selectedFile.value, true)
-    importDiff.value = res.diff || null
-    importState.value = 'preview'
-  } catch {}
-}
-
-async function doImport() {
-  if (!selectedFile.value) return
-  importing.value = true
-  try {
-    await orgStore.importMappings(selectedFile.value, false)
-    importState.value = 'done'
-    await reload()
-  } catch {} finally {
-    importing.value = false
-  }
-}
-
-function resetImport() {
-  importState.value = 'idle'
-  selectedFile.value = null
-  importDiff.value = null
-}
-
 // ─── 授权弹窗 ─────────────────────────────────────────────────────────────────
 const grantDialogVisible  = ref(false)
 const granting            = ref(false)
@@ -1508,145 +1012,6 @@ function resetGrant() {
 // ─── 辅助 ─────────────────────────────────────────────────────────────────────
 function formatDate(str: string) {
   return str ? str.slice(0, 10) : '—'
-}
-
-// ─── 修改成员部门归属 ──────────────────────────────────────────────────────────
-const changeDeptDialogVisible = ref(false)
-const changeDeptTarget    = ref<DeptMember | null>(null)
-const changeDeptSelected  = ref('')
-const changeDeptLoading   = ref(false)
-
-// 当前成员所在的 dept_id（用于判断幂等）
-const currentMemberDeptId = computed(() =>
-  selectedDept.value?.dept_id ?? ''
-)
-
-const changeDeptSelectedInfo = computed(() =>
-  allDepts.value.find(d => d.dept_id === changeDeptSelected.value) ?? null
-)
-
-function openChangeDeptDialog(member: DeptMember) {
-  changeDeptTarget.value   = member
-  changeDeptSelected.value = selectedDept.value?.dept_id ?? ''
-  changeDeptDialogVisible.value = true
-}
-
-function resetChangeDept() {
-  changeDeptTarget.value   = null
-  changeDeptSelected.value = ''
-}
-
-async function doChangeDept() {
-  if (!changeDeptTarget.value || !changeDeptSelected.value) return
-  changeDeptLoading.value = true
-  try {
-    await orgStore.changeUserDept(changeDeptTarget.value.id, changeDeptSelected.value)
-    ElMessage.success(`已将「${changeDeptTarget.value.name}」的部门修改为手动指定`)
-    changeDeptDialogVisible.value = false
-    await loadDeptMembers(deptMembersPage.value)
-  } catch (e: any) {
-    const msg = e?.response?.data?.message || e?.message || '修改失败'
-    ElMessage.error(msg)
-  } finally {
-    changeDeptLoading.value = false
-  }
-}
-
-async function doFollowSSO(member: DeptMember) {
-  try {
-    await ElMessageBox.confirm(
-      `确认将「${member.name}」恢复跟随 SSO？下次登录时将按 SSO 部门自动归集。`,
-      '恢复跟随 SSO',
-      { type: 'info', confirmButtonText: '确认恢复', cancelButtonText: '取消' }
-    )
-    await orgStore.followSSO(member.id)
-    ElMessage.success('已恢复跟随 SSO')
-    await loadDeptMembers(deptMembersPage.value)
-  } catch {}
-}
-
-// ─── 员工花名册导入 ────────────────────────────────────────────────────────────
-const empImportDialogVisible = ref(false)
-const empImportStep = ref<'upload' | 'preview' | 'done'>('upload')
-const empImportFile = ref<File | null>(null)
-const empImportPreviewing = ref(false)
-const empImporting = ref(false)
-const empPreviewRows = ref<EmployeeImportPreviewRow[]>([])
-const empImportSummary = ref<EmployeeImportSummary | null>(null)
-// row_index -> user_id（手动覆盖）
-const empOverrides = ref<Record<number, string>>({})
-// 用户搜索（按行缓存）
-const empUserSearchResults = ref<Record<number, UserSearchResult[]>>({})
-const empUserSearchLoading = ref<Record<number, boolean>>({})
-
-const newStudioCount = computed(() => new Set(empPreviewRows.value.filter(r => r.new_studio).map(r => r.studio_name)).size)
-const newDeptCount   = computed(() => new Set(empPreviewRows.value.filter(r => r.new_dept).map(r => r.dept_name)).size)
-
-function onEmpFileChange(file: any) {
-  empImportFile.value = file.raw
-}
-
-async function doEmpPreview() {
-  if (!empImportFile.value) return
-  empImportPreviewing.value = true
-  try {
-    const fd = new FormData()
-    fd.append('file', empImportFile.value)
-    const res = await http.post('/api/v1/org/employees/import?dry_run=true', fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
-    empPreviewRows.value = res.data.data.rows || []
-    empOverrides.value   = {}
-    empUserSearchResults.value = {}
-    empImportStep.value  = 'preview'
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.message || '预览失败')
-  } finally {
-    empImportPreviewing.value = false
-  }
-}
-
-async function searchEmpUser(query: string, rowIndex: number) {
-  if (!query.trim()) return
-  empUserSearchLoading.value[rowIndex] = true
-  try {
-    const results = await orgStore.searchUsers(query)
-    empUserSearchResults.value[rowIndex] = results
-  } finally {
-    empUserSearchLoading.value[rowIndex] = false
-  }
-}
-
-async function doEmpImport() {
-  empImporting.value = true
-  try {
-    const fd = new FormData()
-    fd.append('file', empImportFile.value!)
-    // 序列化手动覆盖：row_index(string) -> user_id
-    const overrideMap: Record<string, string> = {}
-    for (const [k, v] of Object.entries(empOverrides.value)) {
-      if (v) overrideMap[k] = v
-    }
-    fd.append('overrides', JSON.stringify(overrideMap))
-    const res = await http.post('/api/v1/org/employees/import', fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
-    empImportSummary.value = res.data.data
-    empImportStep.value = 'done'
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.message || '导入失败')
-  } finally {
-    empImporting.value = false
-  }
-}
-
-function resetEmpImport() {
-  empImportStep.value  = 'upload'
-  empImportFile.value  = null
-  empPreviewRows.value = []
-  empOverrides.value   = {}
-  empImportSummary.value = null
-  empUserSearchResults.value = {}
 }
 
 // ─── 数据加载 ─────────────────────────────────────────────────────────────────
@@ -2075,7 +1440,6 @@ function onUserQuotaSaved() {
   flex-shrink: 0;
 }
 
-.tab-toolbar { display: flex; align-items: center; margin-bottom: 10px; }
 .inline-owners { display: flex; flex-direction: column; gap: 6px; }
 .inline-owner { display: flex; align-items: center; gap: 8px; }
 
@@ -2207,24 +1571,10 @@ function onUserQuotaSaved() {
 
 .grant-scope-info { margin-top: 12px; }
 
-/* ─── 弹窗：批量导入 ─────────────────────────────────────────────────────────── */
-.diff-tags { display: flex; gap: 8px; flex-wrap: wrap; }
 code { background: var(--el-fill-color); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
-
-/* ─── 弹窗：员工花名册导入 ───────────────────────────────────────────────────── */
-.emp-preview-summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
-.emp-result-grid { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; justify-content: center; }
-.emp-result-grid .c-green { color: var(--el-color-success); }
-.emp-result-grid .c-orange { color: var(--el-color-warning); }
 
 /* ─── 成员列表 ───────────────────────────────────────────────────────────────── */
 .text-mono { font-family: monospace; font-size: 12px; color: var(--el-text-color-secondary); }
-
-/* ─── 弹窗：修改部门 ─────────────────────────────────────────────────────────── */
-.change-dept-body { min-height: 120px; }
-
-/* ─── 树工具栏 ───────────────────────────────────────────────────────────────── */
-.tree-toolbar-actions { display: flex; align-items: center; gap: 2px; }
 
 /* ─── 成员用量快览抽屉 ────────────────────────────────────────────────────────── */
 :deep(.md-drawer .el-drawer__body) { padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
@@ -2361,9 +1711,6 @@ code { background: var(--el-fill-color); padding: 1px 4px; border-radius: 3px; f
   /* Member toolbar: full-width */
   .members-toolbar { width: 100%; }
   .members-toolbar .el-input { width: 100% !important; }
-
-  /* Tab toolbar: allow wrap */
-  .tab-toolbar { flex-wrap: wrap; gap: 8px; }
 
   /* Pagination: center */
   .members-pagination { justify-content: center; }

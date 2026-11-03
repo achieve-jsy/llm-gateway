@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Studio, OrgDepartment, DeptStudioMapping, ImportDiff, HubSyncStatus } from '@/types/org'
+import type { Studio, OrgDepartment, HubSyncStatus } from '@/types/org'
 import http from '@/services/http'
 
 export interface DeptMember {
@@ -103,35 +103,6 @@ export const useOrgStore = defineStore('org', () => {
     return res.data
   }
 
-  async function fetchMappings(page = 1, pageSize = 100) {
-    const res = await http.get('/api/v1/org/dept-studio-map', { params: { page, page_size: pageSize } })
-    return res.data as { mappings: DeptStudioMapping[]; total: number }
-  }
-
-  async function importMappings(file: File, dryRun = false): Promise<{ dry_run: boolean; diff?: ImportDiff; updated?: number; skipped?: number; backfilled?: number }> {
-    const form = new FormData()
-    form.append('file', file)
-    const res = await http.post('/api/v1/org/dept-studio-map/import', form, {
-      params: { dry_run: dryRun },
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
-    return res.data
-  }
-
-  async function setDeptStudio(deptID: string, studioID: string) {
-    const res = await http.put(`/api/v1/org/departments/${deptID}/studio`, { studio_id: studioID })
-    return res.data
-  }
-
-  async function createStudio(name: string) {
-    const res = await http.post('/api/v1/org/studios', { name })
-    return res.data
-  }
-
-  async function deleteStudio(id: string) {
-    await http.delete(`/api/v1/org/studios/${id}`)
-  }
-
   async function fetchDeptMembers(deptId: string, page = 1, pageSize = 20): Promise<{ members: DeptMember[]; total: number }> {
     const res = await http.get(`/api/v1/org/departments/${deptId}/members`, { params: { page, page_size: pageSize } })
     return { members: res.data.members || [], total: res.data.total || 0 }
@@ -196,22 +167,10 @@ export const useOrgStore = defineStore('org', () => {
     return res.data
   }
 
-  async function changeUserDept(userID: string, deptId: string) {
-    const res = await http.put(`/api/v1/org/users/${userID}/department`, { dept_id: deptId })
-    return res.data
-  }
-
-  async function followSSO(userID: string) {
-    const res = await http.put(`/api/v1/org/users/${userID}/department/follow-sso`)
-    return res.data
-  }
-
   return {
     studios, departments, unmappedDepts, unmappedCount, loading,
     syncStatus, fetchSyncStatus, triggerSync,
-    fetchStudios, fetchDepartments, fetchUnmapped, fetchMappings,
-    importMappings, setDeptStudio, createStudio, deleteStudio,
+    fetchStudios, fetchDepartments, fetchUnmapped,
     fetchDeptMembers, searchUsers, fetchRolePage, fetchAllRoles, grantRole, revokeRole, getUserRoles,
-    changeUserDept, followSSO,
   }
 })

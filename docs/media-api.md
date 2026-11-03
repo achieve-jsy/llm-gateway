@@ -104,6 +104,7 @@
 ### 4.1 `POST /v1/videos`（创建）
 
 - 请求字段：`model`（模型组名，必填）、`prompt`、`image`、`duration`、`resolution`、`mode`、`action`、`aspect_ratio`。
+- ⚠️ **`image` 支持单值或数组**：0 张→文生、1 张→图生、2 张→首尾帧、>2 张→参考生视频（Vidu；Kling 仅支持 0/1 张）。网关统一归一为内部 `images []string`，适配器只认数组（见设计文档 §6.1.1）。
 - 可选请求头：`Idempotency-Key` —— 命中已知 key 时**直接返回既有任务**，不重复打上游、不重复计费。
 - 响应（OpenAI 形状）：
 

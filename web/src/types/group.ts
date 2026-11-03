@@ -44,6 +44,8 @@ export interface GroupModel {
 
 export interface GroupListItem extends Group {
   strategy_label: string
+  model_tier_id?: string | null
+  model_tier_name?: string | null
 }
 
 export interface CreateGroupRequest {

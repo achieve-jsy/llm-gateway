@@ -35,9 +35,11 @@ type Group struct {
 	OverrideSupportsTC      bool           `gorm:"not null;default:false;column:override_supports_tool_choice" json:"override_supports_tool_choice"`
 	// 四层配额体系（Phase 1）
 	// NULL = 不限，运行时按主体独立计数
-	QuotaRPM            *int `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`
-	QuotaMaxConcurrency *int `gorm:"column:quota_max_concurrency" json:"quota_max_concurrency,omitempty"`
-	Models                  []GroupModel   `gorm:"foreignKey:GroupID" json:"models,omitempty"`
+	QuotaRPM            *int         `gorm:"column:quota_rpm" json:"quota_rpm,omitempty"`
+	QuotaMaxConcurrency *int         `gorm:"column:quota_max_concurrency" json:"quota_max_concurrency,omitempty"`
+	BudgetTierID        *uuid.UUID   `gorm:"type:uuid;index:idx_model_groups_budget_tier,where:budget_tier_id IS NOT NULL AND deleted_at IS NULL" json:"budget_tier_id,omitempty"`
+	BudgetTier          *ModelTier   `gorm:"foreignKey:BudgetTierID;constraint:OnDelete:RESTRICT" json:"budget_tier,omitempty"`
+	Models              []GroupModel `gorm:"foreignKey:GroupID" json:"models,omitempty"`
 }
 
 func (Group) TableName() string {

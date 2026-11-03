@@ -285,6 +285,9 @@
       <el-tab-pane label="我的配额" name="quota" lazy>
         <MyQuotaPanel ref="quotaPanelRef" />
       </el-tab-pane>
+      <el-tab-pane label="模型等级额度" name="tier" lazy>
+        <MyTierBudgetPanel ref="tierTabRef" />
+      </el-tab-pane>
     </el-tabs>
 
     <el-dialog v-model="expansionVisible" title="申请提升个人额度" width="520px">
@@ -332,6 +335,7 @@ import { PERIOD_LABELS, PERIOD_SUFFIX, STATUS_COLORS, STATUS_LABELS } from '@/ty
 import type { KeyRequest, KeyRequestStatus } from '@/types/key-request'
 import { KEY_REQUEST_STATUS_LABELS, formatKeyRequestBudget, keyRequestHasBudget } from '@/types/key-request'
 import MyQuotaPanel from '@/components/budget/MyQuotaPanel.vue'
+import MyTierBudgetPanel from '@/components/budget/MyTierBudgetPanel.vue'
 
 type BudgetActivityKind = 'expansion' | 'key_budget'
 type BudgetActivityStatus = ExpansionStatus | KeyRequestStatus
@@ -351,12 +355,13 @@ const route = useRoute()
 const authStore = useAuthStore()
 
 // Tab 切换：默认「我的预算」，支持 ?tab=quota 直达配额；切 tab 同步到 URL（书签/刷新可恢复）
-type BudgetTabName = 'budget' | 'quota'
-const activeTab = ref<BudgetTabName>(route.query.tab === 'quota' ? 'quota' : 'budget')
+type BudgetTabName = 'budget' | 'quota' | 'tier'
+const activeTab = ref<BudgetTabName>(route.query.tab === 'quota' ? 'quota' : route.query.tab === 'tier' ? 'tier' : 'budget')
 const quotaPanelRef = ref<InstanceType<typeof MyQuotaPanel> | null>(null)
+const tierTabRef = ref<InstanceType<typeof MyTierBudgetPanel> | null>(null)
 
 function onTabChange(name: string | number) {
-  const tab = name === 'quota' ? 'quota' : 'budget'
+  const tab = name === 'quota' ? 'quota' : name === 'tier' ? 'tier' : 'budget'
   const query = { ...route.query }
   if (tab === 'budget') delete query.tab
   else query.tab = tab
@@ -368,6 +373,15 @@ async function refreshActiveTab() {
     loading.value = true
     try {
       await quotaPanelRef.value?.loadQuota()
+    } finally {
+      loading.value = false
+    }
+    return
+  }
+  if (activeTab.value === 'tier') {
+    loading.value = true
+    try {
+      await tierTabRef.value?.loadTierBudget()
     } finally {
       loading.value = false
     }

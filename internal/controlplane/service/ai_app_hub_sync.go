@@ -589,8 +589,14 @@ func (s *AIAppHubSyncService) fetchRoster(ctx context.Context, rf RosterFetcher)
 	return out
 }
 
-// dedupeEmployees 同一个人可能有多条任职记录（一人多岗），保留 isDefault 那条。
-// 不这么做的话，按 employee_id upsert 时最后一条会随机覆盖，部门/岗位字段会漂。
+// dedupeEmployees 同一个人只留一条，保留 isDefault 那条（一人多岗 / 换过 employeeId）。
+//
+// 按 passport 去重而不是 employeeId：线上 ehr_employees 有 UNIQUE(passport)，
+// 实测 568 个档案里有 17 个 passport 对应多个 employeeId（离职再入职、历史重复档案），
+// 不去重整批 upsert 会因唯一约束失败，一行都写不进去。
+//
+// ponytail: passport 为空的人只能留一条（唯一索引不允许第二条），
+// 线上实测 0 例；真出现多人无 passport 时，该改索引而不是在这里凑。
 func dedupeEmployees(emps []ehrclient.Employee) []ehrclient.Employee {
 	if len(emps) < 2 {
 		return emps
@@ -598,13 +604,17 @@ func dedupeEmployees(emps []ehrclient.Employee) []ehrclient.Employee {
 	idx := make(map[string]int, len(emps))
 	out := make([]ehrclient.Employee, 0, len(emps))
 	for _, e := range emps {
-		if i, ok := idx[e.EmployeeID]; ok {
+		key := e.Passport
+		if key == "" {
+			key = "no-passport"
+		}
+		if i, ok := idx[key]; ok {
 			if e.IsDefault && !out[i].IsDefault {
 				out[i] = e
 			}
 			continue
 		}
-		idx[e.EmployeeID] = len(out)
+		idx[key] = len(out)
 		out = append(out, e)
 	}
 	return out

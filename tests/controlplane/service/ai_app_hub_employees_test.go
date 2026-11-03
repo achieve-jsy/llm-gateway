@@ -170,6 +170,32 @@ func TestSyncPrefersDefaultAppointment(t *testing.T) {
 	require.Equal(t, "经管办", rows[0].DepartmentName, "保留 isDefault 的主岗")
 }
 
+// 线上 ehr_employees 有 UNIQUE(passport)：同 passport 多个 employeeId 时只能留一条主档，
+// 否则整批 upsert 因唯一约束失败，一个人都写不进去。
+func TestSyncCollapsesSamePassportDifferentEmployeeIDs(t *testing.T) {
+	db, settings := newAIHubTestDBWithSettings(t)
+	repo := repository.NewAIAppHubRepo(db)
+
+	fetcher := &employeeFetcher{
+		items: deptWithPeople(),
+		employees: []ehrclient.Employee{
+			{OrgID: "org", EmployeeID: "old-id", PersonName: "冯静", Passport: "fengjing", GroupENumber: "BF00057", DepartmentName: "旧档案"},
+			{OrgID: "org", EmployeeID: "new-id", PersonName: "冯静", Passport: "fengjing", GroupENumber: "BF00057", DepartmentName: "飞天", IsDefault: true},
+		},
+	}
+	svc := service.NewAIAppHubSyncService(fetcher, repo, settings, service.DefaultSyncRules())
+
+	got, err := svc.Sync(context.Background(), service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+	require.Equal(t, 1, got.Employees)
+
+	var rows []model.EHREmployee
+	require.NoError(t, db.Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.Equal(t, "飞天", rows[0].DepartmentName, "保留主档")
+	require.Equal(t, "new-id", rows[0].EmployeeID)
+}
+
 func TestSyncKeepsDepartmentsWhenEmployeeFetchFails(t *testing.T) {
 	db, settings := newAIHubTestDBWithSettings(t)
 	repo := repository.NewAIAppHubRepo(db)

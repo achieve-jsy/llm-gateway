@@ -12,47 +12,47 @@ import (
 
 // AnthropicMessagesRequest represents a request to the Anthropic Messages API.
 type AnthropicMessagesRequest struct {
-	Model         string             `json:"model"`
-	MaxTokens     int                `json:"max_tokens"`
-	Messages      []AnthropicMessage `json:"messages"`
-	System        any                `json:"system,omitempty"`      // string or []AnthropicSystemBlock
-	Tools         []AnthropicTool    `json:"tools,omitempty"`       // Anthropic tool definition
-	ToolChoice    any                `json:"tool_choice,omitempty"` // string or AnthropicToolChoice
-	Stream        bool               `json:"stream,omitempty"`
-	Temperature   *float64           `json:"temperature,omitempty"`
-	TopP          *float64           `json:"top_p,omitempty"`
-	TopK          *int               `json:"top_k,omitempty"`
-	StopSequences []string           `json:"stop_sequences,omitempty"`
-	Metadata      map[string]string  `json:"metadata,omitempty"`
-	Thinking      *AnthropicThinking `json:"thinking,omitempty"`
+	Model         string                `json:"model"`
+	MaxTokens     int                   `json:"max_tokens"`
+	Messages      []AnthropicMessage    `json:"messages"`
+	System        any                   `json:"system,omitempty"`          // string or []AnthropicSystemBlock
+	Tools         []AnthropicTool       `json:"tools,omitempty"`           // Anthropic tool definition
+	ToolChoice    any                   `json:"tool_choice,omitempty"`     // string or AnthropicToolChoice
+	Stream        bool                  `json:"stream,omitempty"`
+	Temperature   *float64              `json:"temperature,omitempty"`
+	TopP          *float64              `json:"top_p,omitempty"`
+	TopK          *int                  `json:"top_k,omitempty"`
+	StopSequences []string              `json:"stop_sequences,omitempty"`
+	Metadata      map[string]string     `json:"metadata,omitempty"`
+	Thinking      *AnthropicThinking    `json:"thinking,omitempty"`
 }
 
 // AnthropicMessage is a single message in an Anthropic conversation.
 // Content is either a plain string or []AnthropicContentBlock.
 type AnthropicMessage struct {
-	Role    string `json:"role"`    // "user" or "assistant"
-	Content any    `json:"content"` // string or []AnthropicContentBlock
+	Role    string `json:"role"`            // "user" or "assistant"
+	Content any    `json:"content"`         // string or []AnthropicContentBlock
 }
 
 // AnthropicContentBlock is a discriminated content block inside a message.
 type AnthropicContentBlock struct {
-	Type         string                `json:"type"` // "text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking"
+	Type         string                `json:"type"`                    // "text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking"
 	Text         string                `json:"text,omitempty"`
-	Source       *AnthropicImageSource `json:"source,omitempty"`        // type="image"
-	ID           string                `json:"id,omitempty"`            // type="tool_use"
-	Name         string                `json:"name,omitempty"`          // type="tool_use"
-	Input        json.RawMessage       `json:"input,omitempty"`         // type="tool_use" — tool arguments
-	ToolUseID    string                `json:"tool_use_id,omitempty"`   // type="tool_result"
-	Content      any                   `json:"content,omitempty"`       // type="tool_result" — string or []AnthropicContentBlock
-	IsError      bool                  `json:"is_error,omitempty"`      // type="tool_result"
-	Thinking     string                `json:"thinking,omitempty"`      // type="thinking"
-	Signature    string                `json:"signature,omitempty"`     // type="redacted_thinking"
+	Source       *AnthropicImageSource `json:"source,omitempty"`         // type="image"
+	ID           string                `json:"id,omitempty"`             // type="tool_use"
+	Name         string                `json:"name,omitempty"`           // type="tool_use"
+	Input        json.RawMessage       `json:"input,omitempty"`          // type="tool_use" — tool arguments
+	ToolUseID    string                `json:"tool_use_id,omitempty"`    // type="tool_result"
+	Content      any                   `json:"content,omitempty"`        // type="tool_result" — string or []AnthropicContentBlock
+	IsError      bool                  `json:"is_error,omitempty"`       // type="tool_result"
+	Thinking     string                `json:"thinking,omitempty"`       // type="thinking"
+	Signature    string                `json:"signature,omitempty"`      // type="redacted_thinking"
 	CacheControl json.RawMessage       `json:"cache_control,omitempty"` // prompt-cache breakpoint
 }
 
 // AnthropicImageSource references an image for content blocks of type "image".
 type AnthropicImageSource struct {
-	Type      string `json:"type"`                 // "base64" or "url"
+	Type      string `json:"type"`                // "base64" or "url"
 	MediaType string `json:"media_type,omitempty"` // e.g. "image/png"
 	Data      string `json:"data,omitempty"`       // base64-encoded data
 	URL       string `json:"url,omitempty"`        // URL (when type="url")
@@ -68,14 +68,14 @@ type AnthropicTool struct {
 
 // AnthropicToolChoice controls which tool (if any) the model should use.
 type AnthropicToolChoice struct {
-	Type string `json:"type"`           // "auto", "any", "tool"
+	Type string `json:"type"`          // "auto", "any", "tool"
 	Name string `json:"name,omitempty"` // required when type="tool"
 }
 
 // AnthropicThinking enables extended thinking.
 type AnthropicThinking struct {
-	Type         string `json:"type"`                    // "enabled"
-	BudgetTokens int    `json:"budget_tokens,omitempty"` // max thinking tokens
+	Type          string `json:"type"`                     // "enabled"
+	BudgetTokens  int    `json:"budget_tokens,omitempty"`  // max thinking tokens
 }
 
 // AnthropicSystemBlock is a system message content block.
@@ -91,22 +91,22 @@ type AnthropicSystemBlock struct {
 
 // AnthropicMessagesResponse represents a response from the Anthropic Messages API.
 type AnthropicMessagesResponse struct {
-	ID           string                  `json:"id"`
-	Type         string                  `json:"type"` // "message"
-	Role         string                  `json:"role"` // "assistant"
-	Content      []AnthropicContentBlock `json:"content"`
-	Model        string                  `json:"model"`
-	StopReason   string                  `json:"stop_reason,omitempty"` // "end_turn", "max_tokens", "stop_sequence", "tool_use"
-	StopSequence string                  `json:"stop_sequence,omitempty"`
-	Usage        AnthropicUsage          `json:"usage"`
+	ID           string                    `json:"id"`
+	Type         string                    `json:"type"`                     // "message"
+	Role         string                    `json:"role"`                     // "assistant"
+	Content      []AnthropicContentBlock   `json:"content"`
+	Model        string                    `json:"model"`
+	StopReason   string                    `json:"stop_reason,omitempty"`    // "end_turn", "max_tokens", "stop_sequence", "tool_use"
+	StopSequence string                    `json:"stop_sequence,omitempty"`
+	Usage        AnthropicUsage            `json:"usage"`
 }
 
 // AnthropicUsage contains token usage information.
 type AnthropicUsage struct {
-	InputTokens              int  `json:"input_tokens"`
-	OutputTokens             int  `json:"output_tokens"`
-	CacheCreationInputTokens *int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     *int `json:"cache_read_input_tokens,omitempty"`
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	CacheCreationInputTokens  *int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens      *int `json:"cache_read_input_tokens,omitempty"`
 }
 
 // ──────────────────────────────────────────────
@@ -123,9 +123,9 @@ func AnthropicToChatRequest(anthReq *AnthropicMessagesRequest) (*ChatRequest, er
 		return nil, err
 	}
 	req := &ChatRequest{
-		Model:    anthReq.Model,
-		Stream:   anthReq.Stream,
-		Messages: messages,
+		Model:      anthReq.Model,
+		Stream:     anthReq.Stream,
+		Messages:   messages,
 	}
 	if anthReq.MaxTokens > 0 {
 		maxTok := anthReq.MaxTokens
@@ -306,10 +306,10 @@ func convertOneAnthropicMessage(anthMsg AnthropicMessage) ([]Message, error) {
 //   - tool_result (user) → separate messages with role "tool"
 func flattenAnthropicBlocksToMessages(role string, blocks []AnthropicContentBlock) ([]Message, error) {
 	var (
-		result      []Message
-		textParts   []ContentPart
-		toolCalls   []ToolCall
-		toolResults []Message
+		result       []Message
+		textParts    []ContentPart
+		toolCalls    []ToolCall
+		toolResults  []Message
 	)
 
 	for _, block := range blocks {
@@ -652,16 +652,12 @@ func ChatResponseToAnthropic(resp *ChatResponse, model string) *AnthropicMessage
 		},
 	}
 
-	// Cache tokens from details（OpenAI-compatible 用 prompt_tokens_details.cached_tokens，
-	// Anthropic / Bedrock 原生路径用 RawUsage 的 cache_* 字段）。
-	cacheRead, cacheCreation := anthropicCacheTokens(&resp.Usage)
-	if cacheRead > 0 {
-		v := cacheRead
-		anthResp.Usage.CacheReadInputTokens = &v
-	}
-	if cacheCreation > 0 {
-		v := cacheCreation
-		anthResp.Usage.CacheCreationInputTokens = &v
+	// Cache tokens from details
+	if resp.Usage.PromptTokensDetails != nil {
+		if resp.Usage.PromptTokensDetails.CachedTokens > 0 {
+			v := resp.Usage.PromptTokensDetails.CachedTokens
+			anthResp.Usage.CacheReadInputTokens = &v
+		}
 	}
 
 	// Convert choices to content blocks
@@ -677,60 +673,6 @@ func ChatResponseToAnthropic(resp *ChatResponse, model string) *AnthropicMessage
 	}
 
 	return anthResp
-}
-
-// anthropicCacheTokens 从 core.Usage 提取 cache 读/写 token，供非流式
-// Anthropic /v1/messages 响应透传使用。
-//
-// 数据来源（按优先级取最大值，避免不同 provider 口径下漏报）：
-//   - cache_read：OpenAI-compatible 的 prompt_tokens_details.cached_tokens，
-//     以及 Anthropic / Bedrock 原生路径 RawUsage["cache_read_input_tokens"]。
-//   - cache_creation：目前无结构化字段，仅来自 RawUsage["cache_creation_input_tokens"]。
-func anthropicCacheTokens(u *Usage) (cacheRead, cacheCreation int) {
-	if u == nil {
-		return 0, 0
-	}
-	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > cacheRead {
-		cacheRead = u.PromptTokensDetails.CachedTokens
-	}
-	if v, ok := rawUsageInt(u.RawUsage, "cache_read_input_tokens"); ok && v > cacheRead {
-		cacheRead = v
-	}
-	if v, ok := rawUsageInt(u.RawUsage, "cache_creation_input_tokens"); ok && v > cacheCreation {
-		cacheCreation = v
-	}
-	return cacheRead, cacheCreation
-}
-
-// rawUsageInt 从 RawUsage 中读取整型字段；缺失或非数字时 ok=false。
-func rawUsageInt(raw map[string]any, key string) (int, bool) {
-	if raw == nil {
-		return 0, false
-	}
-	v, ok := raw[key]
-	if !ok {
-		return 0, false
-	}
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	case json.Number:
-		if i, err := n.Int64(); err == nil {
-			return int(i), true
-		}
-	}
-	// 兼容字符串数字（某些 provider 的 raw 字段以字符串下发）
-	if s, ok := v.(string); ok {
-		var i int
-		if _, err := fmt.Sscanf(s, "%d", &i); err == nil {
-			return i, true
-		}
-	}
-	return 0, false
 }
 
 // mapOpenAIFinishReason maps OpenAI finish reasons to Anthropic stop_reason.

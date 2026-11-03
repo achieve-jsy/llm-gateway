@@ -18,7 +18,6 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/quota"
-	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/gin-gonic/gin"
 )
 
@@ -289,29 +288,6 @@ func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Contex
 	h.respondAnthropicUnifiedError(c, lastErr)
 }
 
-// perMessageOverhead 每条消息的结构 token 开销（role 标记、分隔符、tool_use
-// JSON 包装、词边界等）。旧估算完全忽略结构 token，导致短/结构化 prompt（尤其
-// tool_use）被低算，故按消息逐条补计。
-const perMessageOverhead = 3
-
-// estimatePromptTokens 估算请求消息的 input_tokens（复用 scheduler 的 CJK 感知
-// tokenizer，并额外按消息逐条计入结构 overhead）。当流式上游不返回真实 usage 时，
-// 作为 message_start 的非零兜底值。
-func estimatePromptTokens(msgs []core.Message) int {
-	if len(msgs) == 0 {
-		return 0
-	}
-	total := 0
-	for _, m := range msgs {
-		total += scheduler.EstimateTokensCalibrated(core.ExtractTextContent(m.Content))
-		total += perMessageOverhead
-	}
-	if total < 1 {
-		return 1
-	}
-	return total
-}
-
 // handleStream processes a streaming request.
 func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string) {
 	timeout := h.streamTimeout(originalModel)
@@ -339,9 +315,8 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 				&cancelOnClose{ReadCloser: rawStream, cancel: cancel},
 				c.GetString("request_id"),
 				originalModel,
-				estimatePromptTokens(req.Messages),
 			)
-			HandleStreamResponseAs(c, anthStream, DialectAnthropic)
+			HandleStreamResponse(c, anthStream)
 			return
 		}
 		lastErr = err
@@ -425,16 +400,27 @@ func (h *MessagesHandler) HandleCountTokens(c *gin.Context) {
 		return
 	}
 
-	// Convert to ChatRequest and count tokens approximately.
-	// 改用与流式 message_start 一致的校准估算（CJK≈0.66/字 + 每条消息结构开销），
-	// 替代旧的 totalChars/4——后者会严重低估中文（中文按 1 字近 1 token，而非 4 字 1 token）。
+	// Convert to ChatRequest and count tokens approximately
 	req, convErr := core.AnthropicToChatRequest(&anthReq)
 	if convErr != nil {
 		h.respondAnthropicConversionError(c, convErr)
 		return
 	}
 
-	estimatedTokens := estimatePromptTokens(req.Messages)
+	totalChars := 0
+	for _, msg := range req.Messages {
+		switch content := msg.Content.(type) {
+		case string:
+			totalChars += len(content)
+		case []core.ContentPart:
+			for _, part := range content {
+				totalChars += len(part.Text)
+			}
+		}
+	}
+
+	// Rough estimate: ~4 chars per token for English text
+	estimatedTokens := totalChars / 4
 	if estimatedTokens < 1 {
 		estimatedTokens = 1
 	}

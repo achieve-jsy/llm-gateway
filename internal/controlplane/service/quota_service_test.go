@@ -3,7 +3,6 @@ package service_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
@@ -105,13 +104,7 @@ func setupQuotaServiceTestDB(t *testing.T) *gorm.DB {
 		override_supports_function_calling INTEGER NOT NULL DEFAULT 0,
 		override_supports_tool_choice INTEGER NOT NULL DEFAULT 0,
 		quota_rpm INTEGER,
-		quota_max_concurrency INTEGER,
-		budget_tier_id TEXT,
-		override_mode TEXT DEFAULT '',
-		override_context_length INTEGER DEFAULT 0,
-		override_max_output_tokens INTEGER DEFAULT 0,
-		sticky_enabled INTEGER DEFAULT 0,
-		sticky_ttl_seconds INTEGER DEFAULT 0
+		quota_max_concurrency INTEGER
 	)`).Error)
 
 	// providers table
@@ -153,8 +146,6 @@ func setupQuotaServiceTestDB(t *testing.T) *gorm.DB {
 		max_output_tokens INTEGER DEFAULT 0,
 		input_price REAL DEFAULT 0,
 		output_price REAL DEFAULT 0,
-		cache_read_price REAL DEFAULT 0,
-		cache_write_price REAL DEFAULT 0,
 		price_mode TEXT NOT NULL DEFAULT 'catalog',
 		weight INTEGER NOT NULL DEFAULT 1,
 		catalog_id TEXT,
@@ -835,208 +826,4 @@ func TestSetModelQuota_Success(t *testing.T) {
 	assert.Equal(t, 30, *updatedModel.QuotaRPM)
 	require.NotNil(t, updatedModel.QuotaMaxConcurrency)
 	assert.Equal(t, 5, *updatedModel.QuotaMaxConcurrency)
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// GetUserCurrentUsage：并发读路径必须与网关租约键格式一致，且只读、不虚报
-// ──────────────────────────────────────────────────────────────────────────────
-
-// TestGetUserCurrentUsage_KeyAbsent_ReturnsZero 键不存在属正常（用户无在途请求），
-// 返回 0 而不是错误——旧实现按字符串 GET，恒 redis.Nil，被吞掉后恒返回 0 并伴随告警。
-func TestGetUserCurrentUsage_KeyAbsent_ReturnsZero(t *testing.T) {
-	db := setupQuotaServiceTestDB(t)
-	rdb, cleanup := setupQuotaServiceMiniredis(t)
-	defer cleanup()
-	svc := service.NewQuotaService(db, rdb)
-
-	usage, err := svc.GetUserCurrentUsage(context.Background(), uuid.NewString())
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	assert.Equal(t, 0, usage.MaxConcurrency)
-	assert.Equal(t, 0, usage.RPM)
-}
-
-// TestGetUserCurrentUsage_ReadsLeaseKey_GatewayFormat 读路径必须命中网关实际写入的键：
-// 用 gateway quota 包的 ConcurrencyKey 写入（生产写入方），断言控制面能读到。
-// 该用例是「键格式漂移」的回归闸门：若两侧前缀/格式再次不一致即失败。
-func TestGetUserCurrentUsage_ReadsLeaseKey_GatewayFormat(t *testing.T) {
-	db := setupQuotaServiceTestDB(t)
-	rdb, cleanup := setupQuotaServiceMiniredis(t)
-	defer cleanup()
-	svc := service.NewQuotaService(db, rdb)
-	ctx := context.Background()
-	userID := uuid.NewString()
-
-	// 关键：键由 share 常量构造，网关与控制面必须一致
-	require.Equal(t, corequota.ConcurrencyKey("user", userID, "", ""),
-		gwquota.ConcurrencyKey("user", userID, "", ""),
-		"网关与控制面必须使用完全相同的并发键")
-
-	// 模拟网关写入 3 条在途租约（score = 未来到期时间戳）
-	key := gwquota.ConcurrencyKey("user", userID, "", "")
-	expireAt := float64(time.Now().Add(6 * time.Minute).UnixMilli())
-	for i := 0; i < 3; i++ {
-		require.NoError(t, rdb.ZAdd(ctx, key, redis.Z{Score: expireAt, Member: "lease-" + uuid.NewString()}).Err())
-	}
-
-	usage, err := svc.GetUserCurrentUsage(ctx, userID)
-	require.NoError(t, err)
-	assert.Equal(t, 3, usage.MaxConcurrency, "应读到网关写入的 3 条在途租约")
-}
-
-// TestGetUserCurrentUsage_IgnoresExpiredMembers 只有已过期成员时必须返回 0：
-// 不能用 ZCARD（会把已过期但未被清理的成员算进来，向上虚报占用）。
-func TestGetUserCurrentUsage_IgnoresExpiredMembers(t *testing.T) {
-	db := setupQuotaServiceTestDB(t)
-	rdb, cleanup := setupQuotaServiceMiniredis(t)
-	defer cleanup()
-	svc := service.NewQuotaService(db, rdb)
-	ctx := context.Background()
-	userID := uuid.NewString()
-	key := gwquota.ConcurrencyKey("user", userID, "", "")
-
-	// 3 条已过期（score 在过去）、2 条仍在飞（score 在未来）
-	past := float64(time.Now().Add(-time.Minute).UnixMilli())
-	future := float64(time.Now().Add(5 * time.Minute).UnixMilli())
-	for i := 0; i < 3; i++ {
-		require.NoError(t, rdb.ZAdd(ctx, key, redis.Z{Score: past, Member: "expired-" + uuid.NewString()}).Err())
-	}
-	for i := 0; i < 2; i++ {
-		require.NoError(t, rdb.ZAdd(ctx, key, redis.Z{Score: future, Member: "in-flight-" + uuid.NewString()}).Err())
-	}
-
-	usage, err := svc.GetUserCurrentUsage(ctx, userID)
-	require.NoError(t, err)
-	assert.Equal(t, 2, usage.MaxConcurrency, "只应统计未过期（score > now）的成员")
-	// 且不得顺手清理：只读语义，过期成员必须仍在
-	assert.Equal(t, int64(5), rdb.ZCard(ctx, key).Val(), "读路径不得删除任何成员（非破坏性）")
-}
-
-// TestGetUserCurrentUsage_ReadOnly_NoWriteSideEffects 读路径不得改动任何键：
-// 断言调用前后 key 的成员集合、score 与 TTL 完全不变。
-func TestGetUserCurrentUsage_ReadOnly_NoWriteSideEffects(t *testing.T) {
-	db := setupQuotaServiceTestDB(t)
-	rdb, cleanup := setupQuotaServiceMiniredis(t)
-	defer cleanup()
-	svc := service.NewQuotaService(db, rdb)
-	ctx := context.Background()
-	userID := uuid.NewString()
-	concKey := gwquota.ConcurrencyKey("user", userID, "", "")
-	rpmKey := corequota.RPMKey("user", userID, "", "")
-
-	require.NoError(t, rdb.ZAdd(ctx, concKey, redis.Z{
-		Score: float64(time.Now().Add(time.Minute).UnixMilli()), Member: "lease-a"}).Err())
-	require.NoError(t, rdb.ZAdd(ctx, concKey, redis.Z{
-		Score: float64(time.Now().Add(-time.Minute).UnixMilli()), Member: "lease-expired"}).Err())
-	require.NoError(t, rdb.ZAdd(ctx, rpmKey, redis.Z{
-		Score: float64(time.Now().UnixMilli()), Member: "req-1"}).Err())
-	t.Cleanup(func() {
-		rdb.Del(context.Background(), concKey, rpmKey)
-	})
-
-	beforeConc, err := rdb.ZRangeWithScores(ctx, concKey, 0, -1).Result()
-	require.NoError(t, err)
-	beforeRPM, err := rdb.ZRangeWithScores(ctx, rpmKey, 0, -1).Result()
-	require.NoError(t, err)
-
-	usage, err := svc.GetUserCurrentUsage(ctx, userID)
-	require.NoError(t, err)
-	require.Equal(t, 1, usage.MaxConcurrency)
-	require.Equal(t, 1, usage.RPM)
-
-	afterConc, err := rdb.ZRangeWithScores(ctx, concKey, 0, -1).Result()
-	require.NoError(t, err)
-	afterRPM, err := rdb.ZRangeWithScores(ctx, rpmKey, 0, -1).Result()
-	require.NoError(t, err)
-	assert.Equal(t, beforeConc, afterConc, "读路径不得改动并发键")
-	assert.Equal(t, beforeRPM, afterRPM, "读路径不得改动 RPM 键")
-}
-
-// TestGetUserCurrentUsage_AllExpired_MustUseZCountNotZCard 选型对照断言（t5 追加要求）：
-// 构造「全部成员都已过期但尚未被清理」的 ZSET —— 这是租约式设计引入的新常态
-// （进程被强杀 / 优雅退出强断长流式请求导致归还丢失，条目到期后仍留在集合里，
-// 直到下一次 acquire 的 ZREMRANGEBYSCORE 顺手清理）。
-//
-// 本用例同时固定两件事：
-//
-//	(a) 这种残留状态在真实运行中确实存在（ZCARD > 0），不是理论假设；
-//	(b) 用 ZCARD 读会把它算成占用而虚报，因此读路径必须用带 now 下界的 ZCOUNT。
-//
-// 判别力：若将来有人把只读路径「优化」回 ZCARD，本用例立即失败。
-func TestGetUserCurrentUsage_AllExpired_MustUseZCountNotZCard(t *testing.T) {
-	db := setupQuotaServiceTestDB(t)
-	rdb, cleanup := setupQuotaServiceMiniredis(t)
-	defer cleanup()
-	svc := service.NewQuotaService(db, rdb)
-	ctx := context.Background()
-	userID := uuid.NewString()
-	key := gwquota.ConcurrencyKey("user", userID, "", "")
-
-	// 3 条已过期（score 在过去）、0 条在飞
-	past := float64(time.Now().Add(-time.Minute).UnixMilli())
-	for i := 0; i < 3; i++ {
-		require.NoError(t, rdb.ZAdd(ctx, key,
-			redis.Z{Score: past, Member: "lost-lease-" + uuid.NewString()}).Err())
-	}
-
-	// 对照组的两个原始读数（故意用 ZCARD 展示会虚报）
-	zcard := rdb.ZCard(ctx, key).Val()
-	zcount, err := rdb.ZCount(ctx, key, fmt.Sprintf("(%d", time.Now().UnixMilli()), "+inf").Result()
-	require.NoError(t, err)
-
-	if zcard <= 0 {
-		t.Fatalf("前置条件不成立：应存在已过期未清理的成员（ZCARD=%d）", zcard)
-	}
-	if zcount != 0 {
-		t.Fatalf("ZCARD=%d 但真正在飞数应为 0，实际 ZCOUNT=%d", zcard, zcount)
-	}
-	if zcard == zcount {
-		t.Fatalf("本对照要求 ZCARD(%d) 与 ZCOUNT(%d) 必须不同，否则选型差异未被覆盖", zcard, zcount)
-	}
-
-	// 读路径必须返回 0（等价于 ZCOUNT 语义），不得被 ZCARD 虚报
-	usage, err := svc.GetUserCurrentUsage(ctx, userID)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	assert.Equal(t, 0, usage.MaxConcurrency,
-		"全部成员已过期时读路径必须返回 0（ZCARD=%d 属虚报）", zcard)
-
-	// 只读语义：读完之后那些残留成员必须原封不动（不得 DEL / 不得 ZREMRANGEBYSCORE）
-	assert.Equal(t, int64(3), rdb.ZCard(ctx, key).Val(),
-		"只读路径不得清理已过期成员")
-	assert.True(t, rdb.Exists(ctx, key).Val() > 0, "只读路径不得删除键")
-}
-
-// TestGetUserCurrentUsage_RPM_WindowOnly 选型一致性：RPM 读数同样只统计窗口内请求。
-// 写入侧判定脚本用 ZREMRANGEBYSCORE 丢弃窗口外条目，因此读侧也必须带窗口下界，
-// 否则窗口外但尚未清理的残留成员会被 ZCARD 算进来而虚报。
-func TestGetUserCurrentUsage_RPM_WindowOnly(t *testing.T) {
-	db := setupQuotaServiceTestDB(t)
-	rdb, cleanup := setupQuotaServiceMiniredis(t)
-	defer cleanup()
-	svc := service.NewQuotaService(db, rdb)
-	ctx := context.Background()
-	userID := uuid.NewString()
-	rpmKey := corequota.RPMKey("user", userID, "", "")
-
-	nowMS := float64(time.Now().UnixMilli())
-	window := float64(corequota.RPMWindowMS)
-	// 2 条窗口内 + 2 条窗口外（更早，但键尚未过期/尚未被写入侧清理）
-	for i := 0; i < 2; i++ {
-		require.NoError(t, rdb.ZAdd(ctx, rpmKey, redis.Z{Score: nowMS - 1000, Member: "in-" + uuid.NewString()}).Err())
-	}
-	for i := 0; i < 2; i++ {
-		stale := nowMS - window - float64(i+1)*1000
-		require.NoError(t, rdb.ZAdd(ctx, rpmKey, redis.Z{Score: stale, Member: "stale-" + uuid.NewString()}).Err())
-	}
-
-	if zcard := rdb.ZCard(ctx, rpmKey).Val(); zcard != 4 {
-		t.Fatalf("前置条件：集合应有 4 条成员（含窗口外残留），实际 %d", zcard)
-	}
-
-	usage, err := svc.GetUserCurrentUsage(ctx, userID)
-	require.NoError(t, err)
-	assert.Equal(t, 2, usage.RPM, "RPM 只应统计窗口内请求（窗口外残留不得计入）")
-	// 只读：窗口外残留必须原封不动
-	assert.Equal(t, int64(4), rdb.ZCard(ctx, rpmKey).Val(), "只读路径不得清理窗口外成员")
 }

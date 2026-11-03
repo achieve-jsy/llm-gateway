@@ -697,7 +697,7 @@ export async function resetKey(id: string): Promise<CreateKeyWrappedResponse> {
 
 // ===================== 系统设置 =====================
 
-import type { SystemSettings, SettingsResponse, PublicSettingsResponse, NotificationChannelRule, NotificationChannelMetadata, NotificationChannelMetadataResponse } from '@/types/settings'
+import type { SystemSettings, SettingsResponse, PublicSettingsResponse, NotificationChannelRule, NotificationConfigMetadata, NotificationChannelConfig, NotificationConfigListResponse, NotificationConfigResponse, NotificationWebhookTarget, NotificationWebhookTargetListResponse, NotificationWebhookTargetResponse } from '@/types/settings'
 
 export async function getPublicSettings(): Promise<PublicSettingsResponse> {
   const response = await http.get<PublicSettingsResponse>('/api/v1/settings/public')
@@ -744,11 +744,6 @@ export async function getNotificationChannelRules(): Promise<NotificationChannel
 
 export async function updateNotificationChannelRules(rules: NotificationChannelRule[]): Promise<void> {
   await http.put('/api/v1/settings/notification-channels', rules)
-}
-
-export async function getNotificationChannelMetadata(): Promise<NotificationChannelMetadata> {
-  const response = await http.get<NotificationChannelMetadataResponse>('/api/v1/settings/notification-channels/metadata')
-  return response.data.data
 }
 
 // ===================== OpenCode 配置 =====================
@@ -1335,7 +1330,7 @@ export async function applyTotalBudgetBatch(payload: TotalBudgetBatchPayload): P
 
 // ─── 站内通知 (Notifications) ──────────────────────────────────────────────
 
-import type { Notification } from '@/types/notification'
+import type { Notification, AdminNotificationListResponse } from '@/types/notification'
 
 export async function getUnreadNotifications(): Promise<Notification[]> {
   const res = await http.get<ApiResponse<Notification[]>>('/api/v1/notifications/unread', { _silent: true } as any)
@@ -1350,6 +1345,22 @@ export async function getUnreadNotificationCount(): Promise<number> {
 export async function getNotificationHistory(): Promise<Notification[]> {
   const res = await http.get<ApiResponse<Notification[]>>('/api/v1/notifications/history', { _silent: true } as any)
   return res.data.data || []
+}
+
+/** 管理端全渠道通知历史（站内信 + email/webhook 投递） */
+export async function getAdminNotificationHistory(params: {
+  channel?: string
+  type?: string
+  level?: string
+  keyword?: string
+  user?: string
+  start_time?: string
+  end_time?: string
+  page?: number
+  page_size?: number
+}): Promise<AdminNotificationListResponse> {
+  const res = await http.get<ApiResponse<AdminNotificationListResponse>>('/api/v1/notifications/admin/history', { params })
+  return res.data.data
 }
 
 export async function markNotificationRead(id: string): Promise<void> {
@@ -1602,4 +1613,80 @@ export async function setDeptKeyCreationPolicy(
     { policy },
   )
   return res.data.data
+}
+
+// ===================== 通知配置管理 =====================
+
+/** 获取通知配置元数据（类型定义 + 可用变量） */
+export async function getNotificationConfigMetadata(): Promise<NotificationConfigMetadata> {
+  const response = await http.get<ApiResponse<NotificationConfigMetadata>>('/api/v1/notification-configs/metadata')
+  return response.data.data
+}
+
+/** 获取所有通知配置列表 */
+export async function listNotificationConfigs(): Promise<NotificationChannelConfig[]> {
+  const response = await http.get<NotificationConfigListResponse>('/api/v1/notification-configs')
+  return response.data.data
+}
+
+/** 获取单个通知配置 */
+export async function getNotificationConfig(type: string, channel: string): Promise<NotificationChannelConfig> {
+  const response = await http.get<NotificationConfigResponse>(`/api/v1/notification-configs/${type}/${channel}`)
+  return response.data.data
+}
+
+/** 更新通知配置 */
+export async function updateNotificationConfig(type: string, channel: string, config: Partial<NotificationChannelConfig>): Promise<NotificationChannelConfig> {
+  const response = await http.put<NotificationConfigResponse>(`/api/v1/notification-configs/${type}/${channel}`, config)
+  return response.data.data
+}
+
+/** 测试通知配置 */
+export async function testNotificationConfig(type: string, channel: string): Promise<{ success: boolean; message: string }> {
+  const response = await http.post<ApiResponse<{ success: boolean; message: string }>>(`/api/v1/notification-configs/${type}/${channel}/test`)
+  return response.data.data
+}
+
+// ─── Webhook 端点（多 webhook fan-out）───────────────────────────────────────
+
+/** 获取所有 Webhook 端点（按类型过滤由调用方处理） */
+export async function listWebhookTargets(): Promise<NotificationWebhookTarget[]> {
+  const response = await http.get<NotificationWebhookTargetListResponse>('/api/v1/notification-configs/webhook-targets')
+  return response.data.data ?? []
+}
+
+/** 创建 Webhook 端点 */
+export async function createWebhookTarget(
+  type: string,
+  body: { name?: string; url: string; secret?: string | null; enabled?: boolean; sort_order?: number },
+): Promise<NotificationWebhookTarget> {
+  const response = await http.post<NotificationWebhookTargetResponse>(`/api/v1/notification-configs/${type}/webhook/targets`, body)
+  return response.data.data
+}
+
+/** 更新 Webhook 端点（secret 仅显式携带时更新：null 不变，'' 清空） */
+export async function updateWebhookTarget(
+  type: string,
+  id: string,
+  body: { name?: string; url?: string; secret?: string | null; enabled?: boolean; sort_order?: number },
+): Promise<NotificationWebhookTarget> {
+  const response = await http.put<NotificationWebhookTargetResponse>(`/api/v1/notification-configs/${type}/webhook/targets/${id}`, body)
+  return response.data.data
+}
+
+/** 测试单个 Webhook 端点 */
+export async function testWebhookTarget(
+  type: string,
+  targetId: string,
+): Promise<{ success: boolean; message: string }> {
+  const response = await http.post<ApiResponse<{ success: boolean; message: string }>>(
+    `/api/v1/notification-configs/${type}/webhook/test`,
+    { target_id: targetId },
+  )
+  return response.data.data
+}
+
+/** 删除 Webhook 端点 */
+export async function deleteWebhookTarget(type: string, id: string): Promise<void> {
+  await http.delete(`/api/v1/notification-configs/${type}/webhook/targets/${id}`)
 }

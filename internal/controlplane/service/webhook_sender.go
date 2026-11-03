@@ -28,6 +28,11 @@ func NewWebhookSender(url, secret string) *WebhookSender {
 	}
 }
 
+// webhookSenderIface 可注入的 webhook 发送器(测试用 fake;真实实现为 WebhookSender)。
+type webhookSenderIface interface {
+	SendText(ctx context.Context, text string) error
+}
+
 func (w *WebhookSender) Send(ctx context.Context, msgType string, content map[string]interface{}) error {
 	if w.url == "" {
 		return nil

@@ -19,7 +19,6 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
-	"github.com/example/llm-gateway/internal/notification"
 	obscron "github.com/example/llm-gateway/internal/observability/cron"
 	obshandler "github.com/example/llm-gateway/internal/observability/handler"
 	obssvc "github.com/example/llm-gateway/internal/observability/service"
@@ -207,7 +206,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	// 注入 Redis 用于写 budget:amount:{scope_type}:{scope_id} 键。
 	budgetSvc.SetPublisher(service.NewEventPublisherAdapter(publisher))
 	budgetSvc.SetRedis(rdb)
-	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo, nil)
+	budgetAlertSvc := service.NewBudgetAlertService(budgetRepo, budgetAlertRepo)
 	budgetAlertSvc.SetRedis(rdb)
 	budgetAlertSvc.SetBudgetTierRepo(budgetTierRepo)
 	budgetRiskSvc := service.NewBudgetRiskService(
@@ -217,51 +216,67 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	notificationRepo := repository.NewNotificationRepo(db)
 	notificationChannelRepo := repository.NewNotificationChannelRepo(db)
 	notificationChannelSvc := service.NewNotificationChannelService(notificationChannelRepo)
+	notificationConfigRepo := repository.NewNotificationConfigRepo(db)
+	webhookTargetRepo := repository.NewNotificationWebhookTargetRepo(db)
+	notificationConfigHandler := handler.NewNotificationConfigHandler(notificationConfigRepo, webhookTargetRepo, settingsRepo)
 	// v0.8: 审计日志（仅管理面写操作落库）
 	auditRepo := repository.NewAuditLogRepo(db)
 	auditSvc := service.NewAuditLogService(auditRepo)
-	// 解耦的通知分发：MultiNotifier = 站内信 + 邮件
-	// 调用方只管构造 model.Notification，内部按已配置通道分发。
-	// 每个 Notifier 外挂 GatedNotifier，由 notification_channel_rules 表控制逐类型开关。
+	// 统一通知分发：调用方构造 model.Notification，Notify 按配置路由到
+	// inapp（rules 总开关）/ email（rules AND config 明细 AND 全局开关）/ webhook（config 行 + 去重）。
+	// 类型清单唯一事实源 = notification_registry.go（19 类）。
 	emailNotifier := service.NewEmailNotifier(settingsRepo)
 	emailNotifier.SetAuditRecorder(auditSvc)
-	sharedNotifier := service.NewMultiNotifier(
-		service.NewGatedNotifier(service.NewDBNotifier(notificationRepo), "inapp", notificationChannelSvc),
-		service.NewGatedNotifier(emailNotifier, "email", notificationChannelSvc),
+	notifier := service.NewUnifiedNotifier(
+		notificationConfigRepo,
+		settingsRepo,
+		db,
+		notificationRepo,
+		emailNotifier,
+		notificationChannelSvc,
+		slog.Default(),
+		auditSvc,
+		webhookTargetRepo,
 	)
-	budgetAlertSvc.SetNotifier(sharedNotifier)
+	// 请求线程内的消费者注入"入队"版 notifier：Notify 只写 notification_outbox（~1ms），
+	// 由下方 worker 周期消费并真实投递，避免同步等待飞书 HTTP / SMTP 拖慢响应。
+	// lifecycleObserver 保留真实 notifier（其 RetryPending 需实际分发）。
+	consumerNotifier := service.NewOutboxNotifier(db)
+	budgetAlertSvc.SetNotifier(consumerNotifier)
 	expansionRepo := repository.NewExpansionRepo(db)
 	approvalPoolResolver := service.NewDatabaseApprovalPoolResolver(db)
 	budgetOwnerResolver := service.NewDatabaseBudgetOwnerResolver(db, approvalPoolResolver)
 	lifecycleObserver := service.NewBudgetLifecycleNotificationObserver(
-		db, expansionRepo, budgetOwnerResolver, sharedNotifier,
+		db, expansionRepo, budgetOwnerResolver, notifier,
 	)
 	budgetLifecycleExecutor := service.NewBudgetLifecycleExecutor(
 		budgetTierRepo, budgetRepo, budgetTierRepo, budgetSnapshotPublisher, lifecycleObserver,
 	)
 	go budgetLifecycleExecutor.Start(lifecycleCtx, time.Minute)
-
-	// 动态 notifier：按 settings 中的 webhook / email 配置构建；
-	// Dispatcher 统一负责写日志文件 + Webhook + 邮件三条通道。
+	// 通知 outbox 后台消费：每 3 秒扫一次待投递队列（RetryPending 内 SKIP LOCKED +
+	// 5 分钟租约防并发重复），调真实 Notify 分发 inapp/email/webhook。executor 的
+	// RunOnce 也会周期性排空（安全网），两者并发安全。
 	go func() {
-		cfg, err := settingsSvc.GetSystemSettings(context.Background())
-		if err != nil {
-			slog.Warn("budget_alert: failed to load notification settings", "error", err)
-			return
+		drain := func() {
+			ctx, cancel := context.WithTimeout(lifecycleCtx, 30*time.Second)
+			defer cancel()
+			if err := lifecycleObserver.RetryPending(ctx, 100); err != nil {
+				slog.Warn("notification outbox drain failed", "error", err)
+			}
 		}
-
-		alertLogger := notification.NewAlertLogger("logs")
-
-		var webhookSender *service.WebhookSender
-		if cfg.WebhookEnabled && cfg.WebhookURL != "" {
-			webhookSender = service.NewWebhookSender(cfg.WebhookURL, cfg.WebhookSecret)
-			slog.Info("budget_alert: webhook notifier initialized", "url", cfg.WebhookURL)
+		drain()
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-lifecycleCtx.Done():
+				return
+			case <-ticker.C:
+				drain()
+			}
 		}
-
-		dispatcher := notification.NewDispatcher(nil, alertLogger, webhookSender)
-		dispatcher.SetAuditRecorder(newEmailAuditAdapter(auditSvc))
-		budgetAlertSvc.SetWebhookNotifier(dispatcher)
 	}()
+
 	// v0.7: 上线默认预算初始化（异步，不阻塞启动）
 	// 默认额度：部门日常 500 USD/月，部门程序服务 200 USD/月，工作室 2000 USD/月
 	// 运维可通过 PUT /api/v1/budgets 按域调整
@@ -283,7 +298,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	expansionSvc.SetBudgetTierService(budgetTierSvc)
 	expansionSvc.WithApprovalPool(approvalPoolResolver).
 		WithSnapshotPublisher(budgetSnapshotPublisher).
-		WithNotifier(sharedNotifier)
+		WithNotifier(consumerNotifier)
 	expansionUserRepo := authrepo.NewUserRepository(db)
 
 	// feat/key-approval: Key 创建申请 + 部门策略审批
@@ -292,7 +307,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	keyRequestSvc := service.NewKeyRequestService(keyRequestRepo, deptPolicyRepo, settingsRepo)
 	keyRequestSvc.SetKeyCreator(keySvc)
 	keyRequestSvc.SetBudgetService(budgetSvc)
-	keyRequestSvc.SetNotificationRepo(notificationRepo)
+	keyRequestSvc.SetNotificationRepo(service.NewKeyRequestNotifierAdapter(consumerNotifier))
 
 	systemKeySvc := service.NewSystemKeyService(db)
 	// gateway.url 从 yaml 配置读取，环境变量 GATEWAY_URL 可覆盖
@@ -407,10 +422,9 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 
 	// Key 活动提醒：离线扫描器（不碰 gateway 热路径）
 	// 影子模式（enabled=false）：只写 key_activity_alert 表，不发通知；待观测命中分布合理后再开启通知
-	// 复用 sharedNotifier：keyactivity 的扁平签名通过适配器转换成 model.Notification 后分发
-	// 到站内信 + 邮件两条通道。
+	// 复用统一 notifier：keyactivity 的扁平签名通过适配器转换成 model.Notification 后分发。
 	kaRepo := keyactivity.NewRepo(db)
-	kaNotif := service.NewKeyActivityNotifierAdapter(sharedNotifier)
+	kaNotif := service.NewKeyActivityNotifierAdapter(consumerNotifier)
 	kaScanner := keyactivity.NewScanner(kaRepo, kaNotif, settingsSvc, kaRepo)
 	kaCron := keyactivity.NewCron(kaScanner, settingsSvc)
 	kaCron.Start(context.Background())
@@ -718,6 +732,17 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/settings/notification-channels", settingsHandler.GetNotificationChannelRules)
 		adminGroup.PUT("/settings/notification-channels", settingsHandler.UpdateNotificationChannelRules)
 
+		// 通知配置管理（新增）
+		adminGroup.GET("/notification-configs/metadata", notificationConfigHandler.GetMetadata)
+		adminGroup.GET("/notification-configs/webhook-targets", notificationConfigHandler.ListWebhookTargets)
+		adminGroup.GET("/notification-configs", notificationConfigHandler.ListAll)
+		adminGroup.GET("/notification-configs/:type/:channel", notificationConfigHandler.Get)
+		adminGroup.PUT("/notification-configs/:type/:channel", notificationConfigHandler.Update)
+		adminGroup.POST("/notification-configs/:type/:channel/test", notificationConfigHandler.Test)
+		adminGroup.POST("/notification-configs/:type/webhook/targets", notificationConfigHandler.CreateWebhookTarget)
+		adminGroup.PUT("/notification-configs/:type/webhook/targets/:id", notificationConfigHandler.UpdateWebhookTarget)
+		adminGroup.DELETE("/notification-configs/:type/webhook/targets/:id", notificationConfigHandler.DeleteWebhookTarget)
+
 		// 公告管理
 		adminGroup.GET("/announcements", announcementHandler.List)
 		adminGroup.POST("/announcements", announcementHandler.Create)
@@ -735,6 +760,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/notifications/unread", notificationHandler.GetUnread)
 		adminGroup.GET("/notifications/unread/count", notificationHandler.GetUnreadCount)
 		adminGroup.GET("/notifications/history", notificationHandler.GetHistory)
+		adminGroup.GET("/notifications/admin/history", notificationHandler.GetAdminHistory)
 		adminGroup.POST("/notifications/:id/read", notificationHandler.MarkRead)
 		adminGroup.POST("/notifications/read-all", notificationHandler.MarkAllRead)
 
@@ -808,6 +834,16 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	budgetHandler.SetCounterRebuildService(service.NewBudgetCounterRebuildService(
 		db, rdb, budgetperiod.Config{Timezone: cfg.Budget.Timezone, WeekStart: cfg.Budget.WeekStart},
 	))
+	// 平台风险检测器：每 5 分钟检查计数器完整性 / 周期健康 / Redis 健康
+	riskDetector := service.NewPlatformRiskDetector(
+		db, rdb,
+		service.NewBudgetCounterRebuildService(
+			db, rdb, budgetperiod.Config{Timezone: cfg.Budget.Timezone, WeekStart: cfg.Budget.WeekStart},
+		),
+		budgetperiod.Config{Timezone: cfg.Budget.Timezone, WeekStart: cfg.Budget.WeekStart},
+		consumerNotifier,
+	)
+	go riskDetector.Start()
 	// 注册内部告警触发端点（供 gateway 调用）
 	internalGroup.POST("/budget/evaluate-alert", budgetHandler.EvaluateAlert)
 	// 视频任务写入/查询（供 gateway 调用）

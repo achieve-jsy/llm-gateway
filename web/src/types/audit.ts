@@ -142,6 +142,8 @@ export const AUDIT_ACTIONS = [
   // 邮件
   { value: 'email.send_test', label: '邮件测试发送' },
   { value: 'email.send_alert', label: '告警邮件发送' },
+  // Webhook
+  { value: 'webhook.send_alert', label: 'Webhook 告警发送' },
 ]
 
 // 资源类型常量

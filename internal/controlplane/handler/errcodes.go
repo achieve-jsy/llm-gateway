@@ -15,6 +15,7 @@ const (
 	CodeInvalidStrategy      = "invalid_strategy"
 
 	// 404 not_found
+	CodeNotFound             = "not_found"
 	CodeProviderNotFound         = "provider_not_found"
 	CodeModelNotFound            = "model_not_found"
 	CodeCatalogNotFound          = "catalog_not_found"

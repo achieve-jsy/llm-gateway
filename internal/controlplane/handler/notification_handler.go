@@ -2,6 +2,8 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/gin-gonic/gin"
@@ -15,6 +17,7 @@ type NotificationRepoInterface interface {
 	MarkRead(userID, notificationID uuid.UUID) error
 	MarkAllRead(userID uuid.UUID) error
 	GetHistory(userID uuid.UUID) ([]model.Notification, error)
+	ListAllPaged(channel, notifType, level, keyword, user string, startTime, endTime *time.Time, page, pageSize int) ([]model.AdminNotificationRecord, int64, error)
 }
 
 type NotificationHandler struct {
@@ -93,4 +96,59 @@ func (h *NotificationHandler) GetHistory(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": items})
+}
+
+// GetAdminHistory GET /api/v1/notifications/admin/history
+// 管理端全渠道通知历史（站内信 + email/webhook 投递），支持分页与筛选。
+func (h *NotificationHandler) GetAdminHistory(c *gin.Context) {
+	channel := c.Query("channel")
+	notifType := c.Query("type")
+	level := c.Query("level")
+	keyword := c.Query("keyword")
+	user := c.Query("user")
+
+	var startTime, endTime *time.Time
+	for _, f := range []struct {
+		name string
+		dst  **time.Time
+	}{
+		{"start_time", &startTime},
+		{"end_time", &endTime},
+	} {
+		if v := c.Query(f.name); v != "" {
+			t, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": gin.H{"type": "invalid_time", "message": "时间格式无效", "code": CodeBadRequest},
+				})
+				return
+			}
+			*f.dst = &t
+		}
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 20
+	}
+
+	items, total, err := h.repo.ListAllPaged(channel, notifType, level, keyword, user, startTime, endTime, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"type": "internal_error", "message": "获取通知历史失败", "code": CodeInternalError},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"items":     items,
+			"total":     total,
+			"page":      page,
+			"page_size": pageSize,
+		},
+	})
 }

@@ -94,8 +94,9 @@ const (
 
 	ActionEmployeeImport Action = "employee.import"
 
-	ActionEmailTest  Action = "email.send_test"
-	ActionEmailAlert Action = "email.send_alert"
+	ActionEmailTest     Action = "email.send_test"
+	ActionEmailAlert    Action = "email.send_alert"
+	ActionWebhookAlert  Action = "webhook.send_alert"
 
 	// v0.15 配额审计
 	ActionQuotaDefaultUpdate    Action = "quota.default.update"
@@ -124,6 +125,7 @@ const (
 	ResourceHealthCheck  Resource = "health_check"
 	ResourceEmployee     Resource = "employee"
 	ResourceEmail        Resource = "email"
+	ResourceWebhook      Resource = "webhook"
 	ResourceQuota        Resource = "quota"
 	ResourceUnknown      Resource = "unknown"
 )

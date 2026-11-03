@@ -70,23 +70,71 @@ export interface NotificationChannelRule {
   enabled: boolean
 }
 
-export interface NotificationTypeMeta {
-  type: string
-  label: string
+// 通知渠道配置（per-type per-channel 精细化配置）
+export interface NotificationChannelConfig {
+  notification_type: string
+  channel: 'webhook' | 'email'
+  enabled: boolean
+  webhook_url?: string | null
+  webhook_secret?: string | null
+  subject_template?: string | null
+  body_template?: string | null
+  created_at: string
+  updated_at: string
 }
 
-export interface NotificationChannelMeta {
-  channel: string
-  label: string
+// 通知配置元数据（类型定义 + 可用变量 + 支持渠道）
+export interface NotificationConfigMetadata {
+  types: Array<{
+    name: string
+    displayName: string
+    description: string
+    defaultVariables: string[]
+    channels: string[]
+  }>
+  channels: Array<{
+    name: string
+    displayName: string
+  }>
 }
 
-export interface NotificationChannelMetadata {
-  types: NotificationTypeMeta[]
-  channels: NotificationChannelMeta[]
-}
-
-export interface NotificationChannelMetadataResponse {
+// 通知配置列表响应
+export interface NotificationConfigListResponse {
   code: number
   message: string
-  data: NotificationChannelMetadata
+  data: NotificationChannelConfig[]
+}
+
+// 通知配置单个响应
+export interface NotificationConfigResponse {
+  code: number
+  message: string
+  data: NotificationChannelConfig
+}
+
+// Webhook 端点（多 webhook fan-out：同类型下多个端点，一条告警发往所有启用端点）
+export interface NotificationWebhookTarget {
+  id: string
+  notification_type: string
+  name: string
+  url: string
+  secret?: string | null
+  enabled: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+// Webhook 端点列表响应
+export interface NotificationWebhookTargetListResponse {
+  code: number
+  message: string
+  data: NotificationWebhookTarget[]
+}
+
+// Webhook 端点单个响应
+export interface NotificationWebhookTargetResponse {
+  code: number
+  message: string
+  data: NotificationWebhookTarget
 }

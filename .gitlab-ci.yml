@@ -381,9 +381,9 @@ deploy-app-test:
         export BUDGET_LEGACY_TOTAL_WRITE_ENABLED=true
         export DEV_LOGIN_ENABLED='${TEST_DEV_LOGIN_ENABLED:-false}'
         export DEV_LOGIN_PROD_ALLOWED='${TEST_DEV_LOGIN_PROD_ALLOWED:-false}'
-        # 可逆脱敏：测试环境先跑 detect（只记 privacy_hits，不改写、不需 key_path）。
-        # 上 mask 需先配 PRIVACY_KEY_PATH（多副本共享同一份密钥文件），见 docs/redaction.md 5.3。
-        export PRIVACY_MODE='detect'
+        # 可逆脱敏：默认 detect（只记 privacy_hits，不改写、不需 key_path）。
+        # 切 mask：把 TEST_PRIVACY_MODE 设为 mask，并保证密钥文件就位（蓝绿共用），见 docs/redaction.md 七。
+        export PRIVACY_MODE='${TEST_PRIVACY_MODE:-detect}' PRIVACY_KEY_PATH='${TEST_PRIVACY_KEY_PATH:-/datalog/privacy-key}'
         bash deploy-blue-green.sh
       "
   environment:
@@ -640,6 +640,9 @@ deploy-prod:
         export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         # 可选：配置后用真实探针 Key 额外验证一次（默认用合成 Key 冒烟，不需要此变量）
         export AUTH_SMOKE_KEY='${PROD_AUTH_SMOKE_KEY:-}' AUTH_SMOKE_MODEL='${PROD_AUTH_SMOKE_MODEL:-}'
+        # 可逆脱敏：默认 detect（只观测、记 privacy_hits，不改写请求、不影响上游缓存）。
+        # 确认无异常后把 PROD_PRIVACY_MODE 设为 mask 即真改写；mask 需 /datalog/privacy-key 就位（蓝绿共用、0600、不进仓库）。
+        export PRIVACY_MODE='${PROD_PRIVACY_MODE:-detect}' PRIVACY_KEY_PATH='${PROD_PRIVACY_KEY_PATH:-/datalog/privacy-key}'
         export DATABASE_URL='${PROD_DATABASE_URL}'
         export REDIS_ADDR='${PROD_REDIS_ADDR}' REDIS_DB='${PROD_REDIS_DB}' REDIS_PASSWORD='${PROD_REDIS_PASSWORD}'
         export JWT_SECRET='${PROD_JWT_SECRET}'

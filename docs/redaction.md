@@ -204,3 +204,64 @@ chat 模型、模型组）→ 起假上游 → 起 control-plane → 起网关 �
 `user_roles` / `dept_studio_map`、配额列 `quota_rpm`、`encryption_keys` 等），从零建库后服务一启动就报
 `column does not exist`。已由 `atlas-migrations/20261030062033_add_org_quota_and_crypto_tables.sql` 补齐，
 `seed` 不再做任何 `AutoMigrate`——本地库与生产库都只认 Atlas。
+
+## 八、环境启用步骤（test / prod）
+
+脱敏由两个环境变量控制，均由 CI 在部署时注入（非密钥，不进 GitLab 变量也能跑）：
+
+| 变量 | compose 透传 | 默认 | 说明 |
+|---|---|---|---|
+| `PRIVACY_MODE` | `PRIVACY_MODE: ${PRIVACY_MODE:-off}` | test/prod 部署为 `detect` | `off` 不启用 / `detect` 只观测 / `mask` 改写并还原 |
+| `PRIVACY_KEY_PATH` | `PRIVACY_KEY_PATH: ${PRIVACY_KEY_PATH:-}` | `/datalog/privacy-key` | 仅 `mask` 需要；`/datalog` 已 bind mount 进容器，蓝绿两色共用同一份 |
+
+CI 侧用可覆盖变量做开关：`TEST_PRIVACY_MODE` / `PROD_PRIVACY_MODE`（缺省 `detect`），
+路径同理 `TEST_PRIVACY_KEY_PATH` / `PROD_PRIVACY_KEY_PATH`。
+
+### 8.1 开启 detect（默认，零行为变更）
+
+打 tag 后手动依次执行 `migrate-prod` → `deploy-prod`。网关日志会出现：
+
+```
+privacy redaction configured mode=detect ... key_path_set=false
+```
+
+请求照原样发往上游（**不改写、不影响前缀缓存**），命中时多一行：
+
+```
+privacy_hits mode=detect count=1 kinds={"GITLAB_TOKEN":1}
+```
+
+用真实流量观察 1~3 天：确认命中率与 `kinds` 分布合理、无误报风暴（误报指标 = 同一用户反复命中
+普通字符串）。`rules_only=true` 时只跑规则，不加载语义模型。
+
+### 8.2 切 mask（真改写）
+
+前置：**密钥文件必须先就位**。在两色共用、且已挂载进容器的目录里生成一次（不要靠首启自动生成，
+蓝绿两色同时首启会各自生成不同的 key，占位符不一致 → 上游前缀缓存全废）：
+
+```bash
+# prod 主机上（容器内路径 /datalog/privacy-key ↔ 宿主 /datalog/privacy-key）
+umask 077 && head -c 32 /dev/urandom | xxd -p -c 64 > /datalog/privacy-key
+chmod 600 /datalog/privacy-key
+```
+
+然后建 GitLab 变量 `PROD_PRIVACY_MODE=mask`（`protected=false` 仅当部署 ref 未受保护；prod 由 tag
+触发，保持默认 protected 即可），重跑 `deploy-prod`。启动日志应显示
+`mode=mask key_path_set=true`；若 `key_path_set=false` 会出现 placeholder churn 的 WARN。
+
+### 8.3 回滚
+
+- 只回代码：`rollback-prod` 手动任务（旧颜色容器还在，秒级切回）。
+- 关掉脱敏：把 `PROD_PRIVACY_MODE` 改回 `detect`（或 `off`）重跑 `deploy-prod`。
+- **不要删密钥文件**：mask 期间客户端历史里已经存在还原后的原文，文件丢失只影响新请求的占位符
+  稳定性（变成新映射），不会损坏历史数据，但会让上游缓存整体失效一轮。
+
+### 8.4 上线顺序与已知约束
+
+1. `migrate-prod`（加法迁移，`IF NOT EXISTS`；`departments` 两个索引建在既有小表上）→ 再 `deploy-prod`，
+   `deploy-prod` 的 `needs` 已强制这个顺序。
+2. 蓝绿期间新旧两色同时在线，**必须共用同一份 `/datalog/privacy-key`**，否则同一条 token 在两色得到
+   不同占位符：还原仍然正确（各自内存映射），但上游前缀缓存命中率归零。
+3. 覆盖范围仍受第六节限制：`/p/:provider/*` 透传链路未接脱敏，别把它当"全链路已保护"。
+4. `privacy_hits` 目前只有日志，没有指标/看板；量级评估靠 `docker logs | grep -c privacy_hits`。
+

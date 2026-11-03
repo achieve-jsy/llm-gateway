@@ -1,4 +1,4 @@
-h1:prPVR0OYK9i6NA0K0lV79ErWCdl6hAJaWAHhrmOorRA=
+h1:Jx4o0S7tM7ap0okKpRdtU2e00pm9LwTqWGJHKhg4x+M=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -63,3 +63,4 @@ h1:prPVR0OYK9i6NA0K0lV79ErWCdl6hAJaWAHhrmOorRA=
 20261029130554_add_call_logs_upstream_protocol.sql h1:dmgz7fCeKkDxdW9b4aaVxgYe3wJ68CgdZ0lonGhZ7vw=
 20261030062033_add_org_quota_and_crypto_tables.sql h1:BZvGLIlB5DH5IBB+pPckyj3IqYpvCfAMc1xVtVzsP88=
 20261103135932_add_users_deleted_at.sql h1:O5rEge2GmYzRHYXfuZkUfxdMssZ4xDuCjaiDwq4ASOE=
+20261104090000_studios_ehr_identity.sql h1:0aSXAXh9R7UDDIyGInL9UklYp75R+hfdbPnOzBNhSCc=

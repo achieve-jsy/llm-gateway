@@ -10,6 +10,18 @@ type Studio struct {
 	Name      string    `gorm:"type:varchar(255);not null;uniqueIndex:idx_studios_name" json:"name"`
 	OwnerID   string    `gorm:"type:varchar(64)" json:"owner_id,omitempty"`
 	CreatedAt time.Time `gorm:"not null;autoCreateTime" json:"created_at"`
+
+	// EHRDepartmentID EHR 事业部部门 ID：同步的唯一匹配键。手工建的工作室为 NULL。
+	// 一旦回填终身不变 —— api_keys / user_roles / call_logs / usage_daily 里的
+	// studio_id 快照全靠 studios.id 稳定，改名只能改 Name。
+	EHRDepartmentID *string `gorm:"type:varchar(64);uniqueIndex:uniq_studios_ehr_dept" json:"ehr_department_id,omitempty"`
+	// Visible 组织视图是否可见。同步只会把它置 false（EHR 里消失），永不自动置回 true。
+	Visible bool `gorm:"not null;default:true" json:"visible"`
+	// Source 数据来源：ehr（同步维护）/ manual（手工残留，同步完全忽略）。
+	Source           string `gorm:"type:varchar(16);not null;default:manual" json:"source"`
+	LeaderName       string `gorm:"type:varchar(128);not null;default:''" json:"leader_name,omitempty"`
+	LeaderPassport   string `gorm:"type:varchar(64);not null;default:''" json:"leader_passport,omitempty"`
+	LeaderEmployeeID string `gorm:"type:varchar(64);not null;default:''" json:"leader_employee_id,omitempty"`
 }
 
 func (Studio) TableName() string { return "studios" }
@@ -64,10 +76,10 @@ func (DeptStudioMap) TableName() string { return "dept_studio_map" }
 type RoleType string
 
 const (
-	RoleUser         RoleType = "user"
-	RoleDeptAdmin    RoleType = "dept_admin"
-	RoleStudioAdmin  RoleType = "studio_admin"
-	RoleAdmin        RoleType = "admin"
+	RoleUser        RoleType = "user"
+	RoleDeptAdmin   RoleType = "dept_admin"
+	RoleStudioAdmin RoleType = "studio_admin"
+	RoleAdmin       RoleType = "admin"
 )
 
 // ScopeType 管辖域类型
@@ -98,11 +110,11 @@ func (UserRole) TableName() string { return "user_roles" }
 
 // OrgMigrationLog 用户部门迁移历史
 type OrgMigrationLog struct {
-	ID          int64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserID      string    `gorm:"type:varchar(64);not null;index:idx_migration_log_user_id" json:"user_id"`
-	FromDept    string    `gorm:"type:varchar(64);not null" json:"from_dept"`
-	ToDept      string    `gorm:"type:varchar(64);not null" json:"to_dept"`
-	MigratedAt  time.Time `gorm:"not null;autoCreateTime" json:"migrated_at"`
+	ID         int64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID     string    `gorm:"type:varchar(64);not null;index:idx_migration_log_user_id" json:"user_id"`
+	FromDept   string    `gorm:"type:varchar(64);not null" json:"from_dept"`
+	ToDept     string    `gorm:"type:varchar(64);not null" json:"to_dept"`
+	MigratedAt time.Time `gorm:"not null;autoCreateTime" json:"migrated_at"`
 }
 
 func (OrgMigrationLog) TableName() string { return "org_migration_log" }
@@ -119,8 +131,8 @@ type AggregateRequest struct {
 
 // AggregateResult SSO 归集结果
 type AggregateResult struct {
-	DeptID   string // departments.dept_id
-	StudioID string // studios.id（空表示 pending_studio）
+	DeptID    string // departments.dept_id
+	StudioID  string // studios.id（空表示 pending_studio）
 	IsPending bool
 }
 
@@ -138,15 +150,15 @@ type ImportRow struct {
 
 // ImportResult 映射导入结果
 type ImportResult struct {
-	Updated   int `json:"updated"`
-	Skipped   int `json:"skipped"`
+	Updated    int `json:"updated"`
+	Skipped    int `json:"skipped"`
 	Backfilled int `json:"backfilled"`
 }
 
 // ImportDiff 映射导入预览 diff
 type ImportDiff struct {
-	Added    []ImportRow `json:"added"`
-	Updated  []struct {
+	Added   []ImportRow `json:"added"`
+	Updated []struct {
 		DeptID      string `json:"dept_id"`
 		OldStudioID string `json:"old_studio_id"`
 		NewStudioID string `json:"new_studio_id"`
@@ -173,24 +185,24 @@ type EmployeeImportRow struct {
 type EmployeeImportRowStatus string
 
 const (
-	ImportStatusLinked      EmployeeImportRowStatus = "linked"       // 邮箱匹配，自动归属
-	ImportStatusUnmatched   EmployeeImportRowStatus = "unmatched"    // 邮箱未匹配到用户（需手动指定）
-	ImportStatusNewStudio   EmployeeImportRowStatus = "new_studio"   // 工作室将被创建
-	ImportStatusNewDept     EmployeeImportRowStatus = "new_dept"     // 部门将被创建
+	ImportStatusLinked    EmployeeImportRowStatus = "linked"     // 邮箱匹配，自动归属
+	ImportStatusUnmatched EmployeeImportRowStatus = "unmatched"  // 邮箱未匹配到用户（需手动指定）
+	ImportStatusNewStudio EmployeeImportRowStatus = "new_studio" // 工作室将被创建
+	ImportStatusNewDept   EmployeeImportRowStatus = "new_dept"   // 部门将被创建
 )
 
 // EmployeeImportPreviewRow 预览行（dry_run 响应）
 type EmployeeImportPreviewRow struct {
-	RowIndex    int                     `json:"row_index"`
-	EmployeeID  string                  `json:"employee_id"`
-	Name        string                  `json:"name"`
-	Email       string                  `json:"email"`
-	StudioName  string                  `json:"studio_name"`
-	DeptName    string                  `json:"dept_name"`
-	JobTitle    string                  `json:"job_title"`
-	Status      EmployeeImportRowStatus `json:"status"`
-	NewStudio   bool                    `json:"new_studio"`   // 该工作室将被新建
-	NewDept     bool                    `json:"new_dept"`     // 该部门将被新建
+	RowIndex   int                     `json:"row_index"`
+	EmployeeID string                  `json:"employee_id"`
+	Name       string                  `json:"name"`
+	Email      string                  `json:"email"`
+	StudioName string                  `json:"studio_name"`
+	DeptName   string                  `json:"dept_name"`
+	JobTitle   string                  `json:"job_title"`
+	Status     EmployeeImportRowStatus `json:"status"`
+	NewStudio  bool                    `json:"new_studio"` // 该工作室将被新建
+	NewDept    bool                    `json:"new_dept"`   // 该部门将被新建
 	// 仅当 Status=linked 时有值
 	MatchedUserID   string `json:"matched_user_id,omitempty"`
 	MatchedUserName string `json:"matched_user_name,omitempty"`
@@ -206,11 +218,11 @@ type EmployeeImportRequest struct {
 
 // EmployeeImportSummary 导入结果汇总
 type EmployeeImportSummary struct {
-	Total          int      `json:"total"`
-	StudiosCreated int      `json:"studios_created"`
-	DeptsCreated   int      `json:"depts_created"`
-	DeptsMapped    int      `json:"depts_mapped"`
-	UsersLinked    int      `json:"users_linked"`
-	UsersPending   int      `json:"users_pending"`
+	Total           int      `json:"total"`
+	StudiosCreated  int      `json:"studios_created"`
+	DeptsCreated    int      `json:"depts_created"`
+	DeptsMapped     int      `json:"depts_mapped"`
+	UsersLinked     int      `json:"users_linked"`
+	UsersPending    int      `json:"users_pending"`
 	UnmatchedEmails []string `json:"unmatched_emails"`
 }

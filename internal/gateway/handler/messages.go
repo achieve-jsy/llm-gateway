@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/quota"
+	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/gin-gonic/gin"
 )
 
@@ -82,7 +84,12 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 	c.Set("model", anthReq.Model)
 
 	// Convert Anthropic request to internal ChatRequest
-	req := core.AnthropicToChatRequest(&anthReq)
+	req, convErr := core.AnthropicToChatRequest(&anthReq)
+	if convErr != nil {
+		// 协议不支持的内容（如视频片段）在这里就拒绝，不要带着被丢弃的内容继续转发。
+		h.respondAnthropicConversionError(c, convErr)
+		return
+	}
 
 	originalModel := anthReq.Model
 
@@ -282,6 +289,29 @@ func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Contex
 	h.respondAnthropicUnifiedError(c, lastErr)
 }
 
+// perMessageOverhead 每条消息的结构 token 开销（role 标记、分隔符、tool_use
+// JSON 包装、词边界等）。旧估算完全忽略结构 token，导致短/结构化 prompt（尤其
+// tool_use）被低算，故按消息逐条补计。
+const perMessageOverhead = 3
+
+// estimatePromptTokens 估算请求消息的 input_tokens（复用 scheduler 的 CJK 感知
+// tokenizer，并额外按消息逐条计入结构 overhead）。当流式上游不返回真实 usage 时，
+// 作为 message_start 的非零兜底值。
+func estimatePromptTokens(msgs []core.Message) int {
+	if len(msgs) == 0 {
+		return 0
+	}
+	total := 0
+	for _, m := range msgs {
+		total += scheduler.EstimateTokensCalibrated(core.ExtractTextContent(m.Content))
+		total += perMessageOverhead
+	}
+	if total < 1 {
+		return 1
+	}
+	return total
+}
+
 // handleStream processes a streaming request.
 func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string) {
 	timeout := h.streamTimeout(originalModel)
@@ -309,8 +339,9 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 				&cancelOnClose{ReadCloser: rawStream, cancel: cancel},
 				c.GetString("request_id"),
 				originalModel,
+				estimatePromptTokens(req.Messages),
 			)
-			HandleStreamResponse(c, anthStream)
+			HandleStreamResponseAs(c, anthStream, DialectAnthropic)
 			return
 		}
 		lastErr = err
@@ -394,23 +425,16 @@ func (h *MessagesHandler) HandleCountTokens(c *gin.Context) {
 		return
 	}
 
-	// Convert to ChatRequest and count tokens approximately
-	req := core.AnthropicToChatRequest(&anthReq)
-
-	totalChars := 0
-	for _, msg := range req.Messages {
-		switch content := msg.Content.(type) {
-		case string:
-			totalChars += len(content)
-		case []core.ContentPart:
-			for _, part := range content {
-				totalChars += len(part.Text)
-			}
-		}
+	// Convert to ChatRequest and count tokens approximately.
+	// 改用与流式 message_start 一致的校准估算（CJK≈0.66/字 + 每条消息结构开销），
+	// 替代旧的 totalChars/4——后者会严重低估中文（中文按 1 字近 1 token，而非 4 字 1 token）。
+	req, convErr := core.AnthropicToChatRequest(&anthReq)
+	if convErr != nil {
+		h.respondAnthropicConversionError(c, convErr)
+		return
 	}
 
-	// Rough estimate: ~4 chars per token for English text
-	estimatedTokens := totalChars / 4
+	estimatedTokens := estimatePromptTokens(req.Messages)
 	if estimatedTokens < 1 {
 		estimatedTokens = 1
 	}
@@ -452,6 +476,23 @@ func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, 
 	}
 	middleware.SetTraceResponseObject(c, body)
 	c.JSON(httpStatus, body)
+}
+
+// respondAnthropicConversionError 把 core 转换层错误（协议不支持的内容片段，如视频）
+// 渲染为 Anthropic 形状的错误体：/v1/messages 的客户端只认 Anthropic 错误格式。
+func (h *MessagesHandler) respondAnthropicConversionError(c *gin.Context, err error) {
+	status := http.StatusBadRequest
+	message := err.Error()
+	var gwErr *core.GatewayError
+	if errors.As(err, &gwErr) {
+		if gwErr.StatusCode > 0 {
+			status = gwErr.StatusCode
+		}
+		if gwErr.Message != "" {
+			message = gwErr.Message
+		}
+	}
+	h.respondAnthropicError(c, status, "invalid_request_error", "unsupported_content_part", message, nil)
 }
 
 // respondAnthropicGroupError handles group dispatch errors.

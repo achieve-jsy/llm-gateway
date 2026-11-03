@@ -7,11 +7,14 @@ import (
 
 // TestFlattenAnthropicBlocks_ToolResultBeforeText verifies that a user message
 // containing [tool_result, text] produces OpenAI messages in the order:
-//   role:"tool" (matching the prior assistant tool_call)
-//   role:"user" (the accompanying text)
+//
+//	role:"tool" (matching the prior assistant tool_call)
+//	role:"user" (the accompanying text)
 //
 // This prevents the Azure/OpenAI error:
-//   "An assistant message with 'tool_calls' must be followed by tool messages..."
+//
+//	"An assistant message with 'tool_calls' must be followed by tool messages..."
+//
 // which occurs when the user text message is emitted before the tool result.
 func TestFlattenAnthropicBlocks_ToolResultBeforeText(t *testing.T) {
 	blocks := []AnthropicContentBlock{
@@ -26,7 +29,10 @@ func TestFlattenAnthropicBlocks_ToolResultBeforeText(t *testing.T) {
 		},
 	}
 
-	msgs := flattenAnthropicBlocksToMessages("user", blocks)
+	msgs, err := flattenAnthropicBlocksToMessages("user", blocks)
+	if err != nil {
+		t.Fatalf("flatten: %v", err)
+	}
 
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 messages, got %d: %v", len(msgs), roles(msgs))
@@ -57,7 +63,10 @@ func TestFlattenAnthropicBlocks_ToolResultOnly(t *testing.T) {
 		},
 	}
 
-	msgs := flattenAnthropicBlocksToMessages("user", blocks)
+	msgs, err := flattenAnthropicBlocksToMessages("user", blocks)
+	if err != nil {
+		t.Fatalf("flatten: %v", err)
+	}
 
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
@@ -76,7 +85,10 @@ func TestFlattenAnthropicBlocks_MultipleToolResultsThenText(t *testing.T) {
 		{Type: "text", Text: "Done."},
 	}
 
-	msgs := flattenAnthropicBlocksToMessages("user", blocks)
+	msgs, err := flattenAnthropicBlocksToMessages("user", blocks)
+	if err != nil {
+		t.Fatalf("flatten: %v", err)
+	}
 
 	if len(msgs) != 3 {
 		t.Fatalf("expected 3 messages, got %d: %v", len(msgs), roles(msgs))
@@ -138,7 +150,10 @@ func TestAnthropicToChatRequest_ToolResultTextOrdering(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	chatReq := AnthropicToChatRequest(&anthReq)
+	chatReq, err := AnthropicToChatRequest(&anthReq)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
 	msgs := chatReq.Messages
 
 	// Expected sequence (no system):

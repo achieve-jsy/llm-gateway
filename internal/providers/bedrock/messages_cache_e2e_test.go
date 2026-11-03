@@ -50,7 +50,10 @@ func TestMessagesProtocol_CacheControl_EndToEnd(t *testing.T) {
 		t.Fatalf("unmarshal anthropic request: %v", err)
 	}
 
-	chatReq := core.AnthropicToChatRequest(&anthReq)
+	chatReq, convErr := core.AnthropicToChatRequest(&anthReq)
+	if convErr != nil {
+		t.Fatalf("convert: %v", convErr)
+	}
 	if chatReq == nil {
 		t.Fatal("AnthropicToChatRequest returned nil")
 	}
@@ -116,7 +119,10 @@ func TestMessagesProtocol_NoClientCache_AutoInjectTools(t *testing.T) {
 	if err := json.Unmarshal(raw, &anthReq); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	chatReq := core.AnthropicToChatRequest(&anthReq)
+	chatReq, convErr := core.AnthropicToChatRequest(&anthReq)
+	if convErr != nil {
+		t.Fatalf("convert: %v", convErr)
+	}
 	chatReq.Model = "global.anthropic.claude-sonnet-4-6"
 
 	parts, err := (&Provider{}).buildConverseParts(chatReq)

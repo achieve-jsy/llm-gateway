@@ -382,7 +382,10 @@ func TestE2E_ProtocolMatrix_AnthropicThinkingDoesNotAutoBridge(t *testing.T) {
 		}},
 		Thinking: &core.AnthropicThinking{Type: "enabled", BudgetTokens: 1024},
 	}
-	chatReq := core.AnthropicToChatRequest(anth)
+	chatReq, convErr := core.AnthropicToChatRequest(anth)
+	if convErr != nil {
+		t.Fatalf("convert: %v", convErr)
+	}
 	require.NotNil(t, chatReq)
 	assert.NotEmpty(t, chatReq.Tools)
 	assert.Nil(t, chatReq.Reasoning)

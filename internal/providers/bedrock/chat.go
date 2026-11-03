@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -83,6 +84,10 @@ func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, err
 		return converseParts{}, err
 	}
 
+	// toolUseId 的字符集与长度上限由 Bedrock Converse 自身校验（≤64、[a-zA-Z0-9_.:-]+）；
+	// 客户端（如 Claude Code）生成的 ID 可能超限，原样下发会让整个请求 400。
+	sanitizeMessageToolUseIDs(messages, model)
+
 	parts := converseParts{
 		modelID:  awssdk.String(model),
 		messages: messages,
@@ -91,6 +96,10 @@ func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, err
 		parts.system = system
 	}
 
+	// 部分模型族（OpenAI GPT 系列 / xAI Grok 系列）不接受 temperature / topP，
+	// 且 max_tokens 有下限；原样透传会让上游以 ValidationException 拒绝整个请求。
+	support := paramSupportForModel(model)
+
 	infCfg := &brtypes.InferenceConfiguration{}
 	hasInfCfg := false
 	if mt := resolveMaxTokens(req); mt > 0 {
@@ -98,14 +107,17 @@ func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, err
 			return converseParts{}, core.NewInvalidRequestError(
 				fmt.Sprintf("max_tokens %d exceeds the maximum of %d", mt, math.MaxInt32), nil)
 		}
+		if support.MinMaxTokens > 0 && int32(mt) < support.MinMaxTokens {
+			mt = int(support.MinMaxTokens)
+		}
 		infCfg.MaxTokens = awssdk.Int32(int32(mt))
 		hasInfCfg = true
 	}
-	if req.Temperature != nil {
+	if req.Temperature != nil && support.Temperature {
 		infCfg.Temperature = awssdk.Float32(float32(*req.Temperature))
 		hasInfCfg = true
 	}
-	if topP, ok := resolveTopP(req); ok {
+	if topP, ok := resolveTopP(req); ok && support.TopP {
 		infCfg.TopP = awssdk.Float32(float32(topP))
 		hasInfCfg = true
 	}
@@ -113,7 +125,7 @@ func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, err
 		parts.infCfg = infCfg
 	}
 
-	toolCfg, err := convertTools(req.Tools, req.ToolChoice)
+	toolCfg, err := convertTools(req.Tools, req.ToolChoice, model, support)
 	if err != nil {
 		return converseParts{}, err
 	}
@@ -155,6 +167,12 @@ func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, err
 	}
 	// 自动断点只能使用剩余配额；显式断点始终优先，避免 trim 阶段误删客户端边界。
 	trimExcessCachePoints(&parts, maxCachePointsPerRequest)
+
+	// prompt caching 只对部分模型开放：带 CachePoint 的不支持模型会被上游整体拒绝。
+	// 放在最后统一清理，同时覆盖工具、system 与消息三个分区（含客户端显式传入的 cache_control）。
+	if !modelSupportsPromptCaching(model) {
+		stripCachePoints(&parts)
+	}
 
 	return parts, nil
 }
@@ -612,6 +630,10 @@ func convertUserContentBlocks(content any) ([]brtypes.ContentBlock, error) {
 	blocks := make([]brtypes.ContentBlock, 0, len(parts)*2)
 	for _, part := range parts {
 		switch part.Type {
+		case "video_url", "input_video", "video":
+			// Bedrock Converse 没有视频内容块。显式拒绝，避免静默丢弃后让模型
+			// 在没有视频的情况下回答（用户会以为视频已经被看过）。
+			return nil, core.NewInvalidRequestError("bedrock 不支持视频输入", nil)
 		case "text", "input_text":
 			if part.Text != "" {
 				blocks = append(blocks, &brtypes.ContentBlockMemberText{Value: part.Text})
@@ -833,7 +855,11 @@ func convertToolResultMessage(msg core.Message) (brtypes.ContentBlock, error) {
 	}, nil
 }
 
-func convertTools(tools []map[string]any, toolChoice any) (*brtypes.ToolConfiguration, error) {
+// convertTools 把 OpenAI 形态的 tools[] 转成 Bedrock ToolConfiguration。
+//
+// model / support 用于按模型能力做兼容处理：不支持正则环视的模型（见 tool_guard.go）
+// 会先剥离 schema 中带不支持的 pattern 关键字，避免整个请求被上游拒绝。
+func convertTools(tools []map[string]any, toolChoice any, model string, support modelParamSupport) (*brtypes.ToolConfiguration, error) {
 	if len(tools) == 0 {
 		return nil, nil
 	}
@@ -873,6 +899,19 @@ func convertTools(tools []map[string]any, toolChoice any) (*brtypes.ToolConfigur
 		paramsObj, ok := params.(map[string]any)
 		if !ok {
 			return nil, core.NewInvalidRequestError("tool.function.parameters must be an object", nil)
+		}
+		if !support.ToolSchemaLookaround {
+			// 剥离带环视/反向引用的 pattern：原 schema 可能是客户端请求对象的一部分，
+			// stripUnsupportedPatterns 返回副本，不修改调用方数据。
+			stripped, removed := stripUnsupportedPatterns(paramsObj)
+			if removed > 0 {
+				slog.Warn("bedrock: 已移除模型不支持的正则 pattern",
+					"model", model,
+					"tool", name,
+					"patterns_removed", removed,
+				)
+			}
+			paramsObj = stripped
 		}
 		spec.InputSchema = &brtypes.ToolInputSchemaMemberJson{Value: toDocument(paramsObj)}
 		out.Tools = append(out.Tools, &brtypes.ToolMemberToolSpec{Value: spec})

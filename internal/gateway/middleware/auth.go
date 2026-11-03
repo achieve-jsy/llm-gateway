@@ -14,9 +14,11 @@ import (
 )
 
 // AuthMiddleware provides unified authentication (API key via auth service + JWT).
-// 同时支持两种 Header 格式：
+// 支持三种入站客户端的 Key 传递方式：
 //   - OpenAI 兼容格式：Authorization: Bearer sk-xxx
 //   - Anthropic 原生格式：x-api-key: sk-xxx（Claude Code 等客户端使用）
+//   - Gemini 原生格式：x-goog-api-key: sk-xxx 或 ?key=sk-xxx
+//     （google-genai SDK 只会用这两种，缺了它 /v1beta 入站对官方 SDK 完全不可用）
 //
 // jwtManager 为可选参数（nil 时 JWT 路径禁用）：持有签发 RSA 公钥，用于
 // 校验 employee 自助服务（/v1/me/models 等）的 JWT 签名，杜绝 ParseUnverified
@@ -25,12 +27,19 @@ func AuthMiddleware(authClient *infra.AuthClient, jwtManager *acrypto.JWTManager
 	return func(c *gin.Context) {
 		var token string
 		auth := c.GetHeader("Authorization")
-		if strings.HasPrefix(auth, "Bearer ") {
+		switch {
+		case strings.HasPrefix(auth, "Bearer "):
 			// OpenAI 兼容格式：Authorization: Bearer sk-xxx
 			token = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-		} else {
+		case strings.TrimSpace(c.GetHeader("x-api-key")) != "":
 			// Anthropic 原生格式：x-api-key: sk-xxx（Claude Code 使用）
 			token = strings.TrimSpace(c.GetHeader("x-api-key"))
+		case strings.TrimSpace(c.GetHeader("x-goog-api-key")) != "":
+			// Gemini 原生格式：google-genai SDK 的默认写法
+			token = strings.TrimSpace(c.GetHeader("x-goog-api-key"))
+		default:
+			// Gemini 的另一种写法：?key=sk-xxx（SDK 在 header 之外可用）
+			token = strings.TrimSpace(c.Query("key"))
 		}
 		if token == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": gwmodel.ErrUnauthorized})

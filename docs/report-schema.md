@@ -39,7 +39,11 @@
   `COUNT(*) AS req_count`，`COUNT(*) FILTER (WHERE status = 200) AS success_count`，`SUM(prompt/cached/cache_write/completion/reasoning_tokens)`，
   `SUM(est_cost_usd)`，`GROUP BY date(ts), key_id, COALESCE(dept_id,''), COALESCE(studio_id,''), model`。
 - `user_daily_stats`（`aggregateUserDailyStats`）：**排除 Service Key**（`WhereExcludeServiceKeyLogsCL`），
-  `COUNT(DISTINCT model)` 用 `cardinality(array_agg(DISTINCT unnest(model_list)))`（防跨小时重复计数），
+  跨小时去重模型数：`hourly` CTE 先按小时汇总出 `array_agg(DISTINCT model) AS model_list`，再由
+  `user_model_counts` CTE 经 `CROSS JOIN LATERAL unnest(model_list)` 展开成行后
+  `cardinality(array_agg(DISTINCT model))` 统计。
+  ⚠️ **不可**写成 `cardinality(array_agg(DISTINCT unnest(model_list)))`——PostgreSQL 会拒绝聚合函数入参含
+  集合返回函数（`SQLSTATE 0A000`），这正是 2026-10 之前该 rollup 从未成功的根因。
   `hourly_distribution` 为 `jsonb_object_agg(hour_key, hour_count)`。
 - `model_daily_stats`（`aggregateModelDailyStats`）：含 `p50/p90_duration_ms`、`avg_first_token_ms`、`user_count/dept_count`。
 

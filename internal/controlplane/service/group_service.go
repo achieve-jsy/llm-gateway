@@ -6,16 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
-
-// groupSnapshotRefreshTimeout 是组变更后异步刷新 provider 快照的超时上限。
-const groupSnapshotRefreshTimeout = 10 * time.Second
 
 var (
 	ErrGroupNotFound          = errors.New("group not found")
@@ -46,24 +42,21 @@ func (s *GroupService) SetSnapshotRefresher(snapshotter *ProviderSnapshotRefresh
 	s.snapshotRefresher = snapshotter
 }
 
-// refreshSnapshotAfterGroupChange 在组名集合可能变化后刷新 provider 快照。
+// refreshSnapshotAfterGroupChange 在组名集合可能变化后请求一次 provider 快照重建（异步）。
 //
-// 异步执行 + 超时（对齐 QuotaService.refreshSnapshotAsync）：刷新包含可用模型全量查询、
-// 逐 provider 凭据解密与 Redis 写，绝不能让它支配组管理接口的响应延迟；超时兜底避免
-// 后台 goroutine 在 PG/Redis 抖动时无限阻塞。刷新失败只告警：快照是网关侧的预热/加速数据，
+// 走 ProviderSnapshotRefresher.ScheduleRefresh 的「单飞 + 合并去抖」调度，而不是每个组变更
+// 各起一个 goroutine 直接重建：一轮批量操作（批量删组、批量改模型归属）可能产生几十次组变更，
+// 逐次并发全量重建（ListAvailable + 逐 provider 凭据解密 + 写 Redis）会把控制面打爆——
+// 2026-10-16 生产 OOM 正是这个模式（见 provider_snapshot_service.go 顶部注释）。
+// 调度本身不阻塞调用方、有 30s 硬超时且失败只告警：快照是网关侧的预热/加速数据，
 // 不能改变组管理接口的返回值与错误语义。
 func (s *GroupService) refreshSnapshotAfterGroupChange(action string, groupID uint) {
 	if s.snapshotRefresher == nil {
 		return
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), groupSnapshotRefreshTimeout)
-		defer cancel()
-		if _, err := s.snapshotRefresher.RefreshAvailableSnapshot(ctx); err != nil {
-			slog.Warn("provider snapshot refresh failed after group change",
-				"action", action, "group_id", groupID, "error", err)
-		}
-	}()
+	slog.Debug("schedule provider snapshot refresh after group change",
+		"action", action, "group_id", groupID)
+	s.snapshotRefresher.ScheduleRefresh(context.Background())
 }
 
 func (s *GroupService) WithBudgetTierSnapshotPublisher(p BudgetConfigPublisher) *GroupService {

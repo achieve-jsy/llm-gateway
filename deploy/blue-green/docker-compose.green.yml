@@ -66,6 +66,10 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-prod}
       CONTROL_PLANE_PORT: "8083"
+      # 本机观测端点（pprof/metrics）监听地址。蓝绿两色都以 host 网络**同时**运行，
+      # 必须错开端口：否则后启动的一色绑定失败，且观测端点可能停在“备用色”上，
+      # 排查事故时抓到的会是错误的进程。
+      CONTROL_PLANE_ADMIN_ADDR: 127.0.0.1:9092
       GATEWAY_URL: "http://127.0.0.1:8082"
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL required}
       REDIS_ADDR: ${REDIS_ADDR:-192.0.2.10:6379}

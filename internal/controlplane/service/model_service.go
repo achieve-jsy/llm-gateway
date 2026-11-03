@@ -114,7 +114,7 @@ func (s *ModelService) publishEvent(eventType event.ChangeEventType, resourceTyp
 type CreateModelInput struct {
 	Name            string          `json:"name" binding:"required,max=200"`
 	ProviderID      string          `json:"provider_id" binding:"required,uuid"`
-	ModelType       string          `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	ModelType       string          `json:"model_type" binding:"required,oneof=chat image embedding embedding_vl rerank rerank_vl video"`
 	UpstreamModelID string          `json:"upstream_model_id" binding:"omitempty,max=200"`
 	Description     string          `json:"description" binding:"omitempty,max=500"`
 	ContextLength   *int            `json:"context_length" binding:"omitempty,min=0,max=10000000"`
@@ -262,7 +262,7 @@ func (s *ModelService) GetModel(id uuid.UUID) (*model.Model, error) {
 type UpdateModelInput struct {
 	Name                       string          `json:"name" binding:"omitempty,max=200"`
 	ProviderID                 string          `json:"provider_id" binding:"omitempty,uuid"`
-	ModelType                  string          `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	ModelType                  string          `json:"model_type" binding:"omitempty,oneof=chat image embedding embedding_vl rerank rerank_vl video"`
 	Enabled                    *bool           `json:"enabled"`
 	UpstreamModelID            *string         `json:"upstream_model_id" binding:"omitempty,max=200"`
 	Description                *string         `json:"description" binding:"omitempty,max=500"`
@@ -480,7 +480,7 @@ func (s *ModelService) CreateModelFromCatalog(catalogID, providerID uuid.UUID, n
 type BatchCreateModelsInput struct {
 	Name            string          `json:"name" binding:"required,max=200"`
 	ProviderIDs     []string        `json:"provider_ids" binding:"required,min=1,dive,uuid"`
-	ModelType       string          `json:"model_type" binding:"required,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	ModelType       string          `json:"model_type" binding:"required,oneof=chat image embedding embedding_vl rerank rerank_vl video"`
 	UpstreamModelID string          `json:"upstream_model_id" binding:"omitempty,max=200"`
 	Description     string          `json:"description" binding:"omitempty,max=500"`
 	ContextLength   *int            `json:"context_length" binding:"omitempty,min=0,max=10000000"`

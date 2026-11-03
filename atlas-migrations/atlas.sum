@@ -1,4 +1,4 @@
-h1:/q1dzJgcMAgUkk5GWas5xr2p5WPJTW7R3Nw/iTtzgOI=
+h1:TubE+Wm8t9+yfMgkC+evOuXvQWNvnOfTzBZhP1X/bZ0=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -60,3 +60,4 @@ h1:/q1dzJgcMAgUkk5GWas5xr2p5WPJTW7R3Nw/iTtzgOI=
 20261016110000_add_model_catalog_media_extended_prices.sql h1:19ox+HGtlRlgxaufwyvpoOYAYikOIaQ3e8/P52o8mXs=
 20261016120000_add_call_logs_call_type.sql h1:OAM9/BkO5KMExi0vE+GgUHMln2p8LxOA5rf7kYVQT4U=
 20261016120100_backfill_call_logs_call_type.sql h1:5d+u6GWJBuHiaBav6VFJLkFEIicoH6oosTu4S1XM+Po=
+20261016140000_rename_video_tasks_to_media_tasks.sql h1:nVsd0Y+1qbEJ9I5f/deebVCdIm4eyp6gNhKl1rfenng=

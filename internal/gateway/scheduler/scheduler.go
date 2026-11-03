@@ -13,7 +13,6 @@ type Scheduler struct {
 	failoverHandler *FailoverHandler
 	healthStore     *HealthStore
 	configSyncer    *ConfigSyncer
-	healthProber    *HealthProber
 	eventPublisher  *EventPublisher
 	config          SchedulerConfig
 	ready           atomic.Bool
@@ -25,7 +24,7 @@ func New(cfg SchedulerConfig) (*Scheduler, error) {
 	}
 
 	rt := NewRouteTable()
-	hs := NewHealthStore(cfg.FailureThreshold, cfg.RecoverySuccessThreshold, cfg.QuickFailThreshold, cfg.QuickFailWindow)
+	hs := NewHealthStore(cfg.FailureThreshold, cfg.QuickFailThreshold, cfg.QuickFailWindow, cfg.UnhealthyTTL)
 	router := NewRouter(rt, hs)
 
 	// Wire sticky store if Redis client is available
@@ -37,14 +36,12 @@ func New(cfg SchedulerConfig) (*Scheduler, error) {
 
 	failoverHandler := NewFailoverHandler(rt, hs, router)
 	configSyncer := NewConfigSyncer(cfg.ControlPlaneURL, cfg.InternalToken, rt, hs, cfg.ConfigSyncInterval)
-	healthProber := NewHealthProber(hs, rt, cfg.HealthProbeInterval, cfg.MaxProbeConcurrency, cfg.ChannelProbeTimeout)
 
 	return &Scheduler{
 		router:          router,
 		failoverHandler: failoverHandler,
 		healthStore:     hs,
 		configSyncer:    configSyncer,
-		healthProber:    healthProber,
 		eventPublisher:  hs.Events(),
 		config:          cfg,
 	}, nil
@@ -52,7 +49,6 @@ func New(cfg SchedulerConfig) (*Scheduler, error) {
 
 func (s *Scheduler) Start(ctx context.Context) {
 	go s.configSyncer.Run()
-	go s.healthProber.Run()
 
 	go func() {
 		for {
@@ -100,8 +96,10 @@ func (s *Scheduler) GetGroupConfig(groupName string) *GroupRoutingConfig {
 	return s.router.routeTable.Get(groupName)
 }
 
+// NotifyFailure 记录一次真实请求失败。
+// 移除主动探测后，这是 gateway 侧唯一的状态来源：健康状态完全由真实流量驱动。
 func (s *Scheduler) NotifyFailure(modelID string) {
-	s.healthProber.NotifyFailure(modelID)
+	s.healthStore.RecordFailure(modelID)
 }
 
 func (s *Scheduler) IsReady() bool {
@@ -110,7 +108,6 @@ func (s *Scheduler) IsReady() bool {
 
 func (s *Scheduler) Shutdown() {
 	s.configSyncer.Stop()
-	s.healthProber.Stop()
 }
 
 // PersistSticky persists a sticky mapping after routing decision

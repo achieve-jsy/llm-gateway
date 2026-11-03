@@ -61,7 +61,7 @@ func makeWeightedConfig() *scheduler.ControlPlaneConfig {
 
 func newTestRouter() (*scheduler.Router, *scheduler.RouteTable, *scheduler.HealthStore) {
 	rt := scheduler.NewRouteTable()
-	hs := scheduler.NewHealthStore(5, 3, 3, 10*time.Second)
+	hs := scheduler.NewHealthStore(5, 3, 10*time.Second, time.Minute)
 	router := scheduler.NewRouter(rt, hs)
 	return router, rt, hs
 }

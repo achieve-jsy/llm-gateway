@@ -44,7 +44,7 @@ func TestConfigSyncerMapsVideoCapability(t *testing.T) {
 	defer srv.Close()
 
 	rt := NewRouteTable()
-	hs := NewHealthStore(3, 3, 3, 30*time.Second)
+	hs := NewHealthStore(3, 3, 30*time.Second, time.Minute)
 	syncer := NewConfigSyncer(srv.URL, "test-token", rt, hs, time.Second)
 
 	cfg, err := syncer.fetchConfig()

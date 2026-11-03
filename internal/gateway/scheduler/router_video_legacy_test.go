@@ -34,7 +34,7 @@ func TestVideoCapabilityAbsentFieldDefaultsToUnsupported(t *testing.T) {
 			SupportsVideoInput: cfg.Data[0].Models[0].SupportsVideoInput,
 		}},
 	})
-	router := NewRouter(rt, NewHealthStore(3, 3, 3, 30*time.Second))
+	router := NewRouter(rt, NewHealthStore(3, 3, 30*time.Second, time.Minute))
 
 	_, err := router.Route("legacy-group", videoRequest())
 	if !errors.Is(err, ErrNoVideoCapableModel) {

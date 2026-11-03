@@ -22,7 +22,7 @@ func makeModels(count int) []*ModelRoutingEntry {
 }
 
 func newStore() *HealthStore {
-	return NewHealthStore(3, 2, 5, 10*time.Second)
+	return NewHealthStore(3, 5, 10*time.Second, time.Minute)
 }
 
 // ─── FilterHealthy 核心行为 ───────────────────────────────────────────────
@@ -70,24 +70,46 @@ func TestFilterHealthy_AllUnhealthy_FallbackToAll(t *testing.T) {
 	assert.Equal(t, models, result, "全部不健康时应兜底返回全量，不能返回空列表")
 }
 
-func TestFilterHealthy_RecoveredModel_IncludedAgain(t *testing.T) {
+// gateway 不再主动探测上游，不健康状态只能靠观察期过期退出。
+func TestFilterHealthy_UnhealthyExcludedWithinTTL(t *testing.T) {
 	hs := newStore()
-	models := makeModels(2)
+	models := makeModels(3)
 
-	// 打到不健康
 	for i := 0; i < hs.failureThreshold; i++ {
 		hs.RecordFailure("1")
 	}
 	require.Equal(t, HealthUnhealthy, hs.Get("1").Status)
 
-	// 恢复
-	for i := 0; i < hs.recoverySuccessThreshold; i++ {
-		hs.RecordProbeSuccess("1")
+	result := hs.FilterHealthy(models)
+	ids := make([]uint, len(result))
+	for i, m := range result {
+		ids[i] = m.ModelID
 	}
-	require.Equal(t, HealthHealthy, hs.Get("1").Status)
+	assert.ElementsMatch(t, []uint{2, 3}, ids, "观察期内的不健康模型应被排除")
+}
+
+func TestFilterHealthy_UnhealthyReincludedAfterTTL(t *testing.T) {
+	hs := newStore()
+	models := makeModels(3)
+
+	for i := 0; i < hs.failureThreshold; i++ {
+		hs.RecordFailure("1")
+	}
+	require.Equal(t, HealthUnhealthy, hs.Get("1").Status)
+
+	// 把状态变更时间推到观察期之前，模拟观察期已过
+	hs.mu.Lock()
+	hs.data["1"].LastStateChange = time.Now().Add(-2 * hs.unhealthyTTL)
+	hs.mu.Unlock()
 
 	result := hs.FilterHealthy(models)
-	assert.Len(t, result, 2, "恢复后的模型应重新参与路由")
+	assert.Len(t, result, 3, "观察期过后应放回候选池，交由真实请求验证")
+
+	// 放回后再失败，必须立刻重新排除——不能因为「刚放回」而漏判
+	for i := 0; i < hs.failureThreshold; i++ {
+		hs.RecordFailure("1")
+	}
+	require.Equal(t, HealthUnhealthy, hs.Get("1").Status)
 }
 
 func TestFilterHealthy_MixedState(t *testing.T) {

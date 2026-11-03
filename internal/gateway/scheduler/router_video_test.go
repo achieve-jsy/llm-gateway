@@ -49,7 +49,7 @@ func textRequest() *core.ChatRequest {
 // TestRouteVideoCapability 视频请求只能落在声明支持视频的成员上；纯文本请求行为不变。
 func TestRouteVideoCapability(t *testing.T) {
 	rt := newVideoRouteTable()
-	router := NewRouter(rt, NewHealthStore(3, 3, 3, 30*time.Second))
+	router := NewRouter(rt, NewHealthStore(3, 3, 30*time.Second, time.Minute))
 
 	decision, err := router.Route("mixed-group", videoRequest())
 	if err != nil {
@@ -87,7 +87,7 @@ func TestRouteVideoCapabilityNoMember(t *testing.T) {
 	}
 	rt := NewRouteTable()
 	rt.ReplaceAll(cfg)
-	router := NewRouter(rt, NewHealthStore(3, 3, 3, 30*time.Second))
+	router := NewRouter(rt, NewHealthStore(3, 3, 30*time.Second, time.Minute))
 
 	_, err := router.Route("text-only-group", videoRequest())
 	if !errors.Is(err, ErrNoVideoCapableModel) {
@@ -104,7 +104,7 @@ func TestRouteVideoCapabilityNoMember(t *testing.T) {
 // （否则视频被静默丢弃，模型凭空作答，比直接报错更糟）。
 func TestFailoverStaysVideoCapable(t *testing.T) {
 	rt := newVideoRouteTable()
-	hs := NewHealthStore(3, 3, 3, 30*time.Second)
+	hs := NewHealthStore(3, 3, 30*time.Second, time.Minute)
 	router := NewRouter(rt, hs)
 	fh := NewFailoverHandler(rt, hs, router)
 
@@ -141,7 +141,7 @@ func TestFailoverStaysVideoCapable(t *testing.T) {
 // 也不得落到不支持视频的成员上。
 func TestFailoverExcludingVideoExplicitFlag(t *testing.T) {
 	rt := newVideoRouteTable()
-	hs := NewHealthStore(3, 3, 3, 30*time.Second)
+	hs := NewHealthStore(3, 3, 30*time.Second, time.Minute)
 	fh := NewFailoverHandler(rt, hs, NewRouter(rt, hs))
 
 	// 文本请求（req=nil）显式要求视频能力：只剩 text-only 可用，必须报错而不是降级

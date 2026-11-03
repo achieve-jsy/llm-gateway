@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"testing"
+	"time"
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/stretchr/testify/assert"
@@ -144,7 +145,7 @@ func TestClassify_SystemPrompt_Influence(t *testing.T) {
 
 func TestClassify_SingleModel_ReturnsEarly(t *testing.T) {
 	rt := NewRouteTable()
-	hs := NewHealthStore(3, 3, 3, 0)
+	hs := NewHealthStore(3, 3, 0, time.Minute)
 	router := NewRouter(rt, hs)
 	rt.ReplaceAll(&ControlPlaneConfig{
 		Groups: []GroupConfig{
@@ -162,7 +163,7 @@ func TestClassify_SingleModel_ReturnsEarly(t *testing.T) {
 
 func TestRouteAuto_BiasUp_WhenTierEmpty(t *testing.T) {
 	rt := NewRouteTable()
-	hs := NewHealthStore(3, 3, 3, 0)
+	hs := NewHealthStore(3, 3, 0, time.Minute)
 	router := NewRouter(rt, hs)
 	rt.ReplaceAll(&ControlPlaneConfig{
 		Groups: []GroupConfig{
@@ -184,7 +185,7 @@ func TestRouteAuto_BiasUp_WhenTierEmpty(t *testing.T) {
 
 func TestRouteAuto_FallbackToAll(t *testing.T) {
 	rt := NewRouteTable()
-	hs := NewHealthStore(3, 3, 3, 0)
+	hs := NewHealthStore(3, 3, 0, time.Minute)
 	router := NewRouter(rt, hs)
 	rt.ReplaceAll(&ControlPlaneConfig{
 		Groups: []GroupConfig{
@@ -202,7 +203,7 @@ func TestRouteAuto_FallbackToAll(t *testing.T) {
 
 func TestRouteAuto_NormalTier(t *testing.T) {
 	rt := NewRouteTable()
-	hs := NewHealthStore(3, 3, 3, 0)
+	hs := NewHealthStore(3, 3, 0, time.Minute)
 	router := NewRouter(rt, hs)
 	rt.ReplaceAll(&ControlPlaneConfig{
 		Groups: []GroupConfig{

@@ -30,7 +30,7 @@ func TestProviderNamePropagation(t *testing.T) {
 	}
 
 	// Router.Route
-	hs := NewHealthStore(3, 3, 3, 30*time.Second)
+	hs := NewHealthStore(3, 3, 30*time.Second, time.Minute)
 	router := NewRouter(rt, hs)
 	decision, err := router.Route("deepseek-v4-pro-official", nil)
 	if err != nil {
@@ -96,7 +96,7 @@ func TestRoundRobin_CounterOutOfBounds_WithFailover(t *testing.T) {
 
 	rt := NewRouteTable()
 	rt.ReplaceAll(cfg)
-	hs := NewHealthStore(3, 3, 3, 30*time.Second)
+	hs := NewHealthStore(3, 3, 30*time.Second, time.Minute)
 	router := NewRouter(rt, hs)
 
 	// 模拟场景：首轮 dispatch 选中 model-A（idx=0），counter 推进到 1

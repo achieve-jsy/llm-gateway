@@ -9,28 +9,31 @@ import (
 // HealthStore tracks the health status of models and provides health-based
 // filtering. It is safe for concurrent use.
 type HealthStore struct {
-	mu                       sync.RWMutex
-	data                     map[string]*ModelHealthStatus
-	cooldowns                map[string]time.Time // 429 冷却截止时间（key: modelID string）
-	events                   *EventPublisher
-	failureThreshold         int
-	recoverySuccessThreshold int
-	quickFailWindow          time.Duration
-	quickFailThreshold       int
-	failureRingCapacity      int
+	mu                  sync.RWMutex
+	data                map[string]*ModelHealthStatus
+	cooldowns           map[string]time.Time // 429 冷却截止时间（key: modelID string）
+	events              *EventPublisher
+	failureThreshold    int
+	unhealthyTTL        time.Duration
+	quickFailWindow     time.Duration
+	quickFailThreshold  int
+	failureRingCapacity int
 }
 
 // NewHealthStore creates a HealthStore with the given thresholds.
-func NewHealthStore(failureThreshold, recoverySuccessThreshold, quickFailThreshold int, quickFailWindow time.Duration) *HealthStore {
+func NewHealthStore(failureThreshold, quickFailThreshold int, quickFailWindow, unhealthyTTL time.Duration) *HealthStore {
+	if unhealthyTTL <= 0 {
+		unhealthyTTL = 60 * time.Second
+	}
 	return &HealthStore{
-		data:                     make(map[string]*ModelHealthStatus),
-		cooldowns:                make(map[string]time.Time),
-		events:                   &EventPublisher{},
-		failureThreshold:         failureThreshold,
-		recoverySuccessThreshold: recoverySuccessThreshold,
-		quickFailWindow:          quickFailWindow,
-		quickFailThreshold:       quickFailThreshold,
-		failureRingCapacity:      defaultRingCapacity,
+		data:                make(map[string]*ModelHealthStatus),
+		cooldowns:           make(map[string]time.Time),
+		events:              &EventPublisher{},
+		failureThreshold:    failureThreshold,
+		unhealthyTTL:        unhealthyTTL,
+		quickFailWindow:     quickFailWindow,
+		quickFailThreshold:  quickFailThreshold,
+		failureRingCapacity: defaultRingCapacity,
 	}
 }
 
@@ -74,6 +77,13 @@ func (hs *HealthStore) FilterHealthy(models []*ModelRoutingEntry) []*ModelRoutin
 		status, tracked := hs.data[modelKey]
 		// 未追踪（从未失败过）或状态明确为 Healthy，则纳入候选
 		if !tracked || status.Status == HealthHealthy {
+			result = append(result, m)
+			continue
+		}
+		// 不健康状态超过观察期后放回候选池（半开）：
+		// gateway 已不再主动探测上游，没有别的路径能把状态改回 Healthy。
+		// 放回来后由真实请求验证——成功即正常服务，失败则立刻重新标记。
+		if now.Sub(status.LastStateChange) >= hs.unhealthyTTL {
 			result = append(result, m)
 		}
 	}
@@ -120,53 +130,6 @@ func (hs *HealthStore) RecordFailure(modelID string) {
 	}
 }
 
-// RecordProbeSuccess records a successful probe for the given model ID.
-// It increments consecutive successes, resets consecutive failures, and
-// transitions to Healthy when the recovery threshold is met.
-func (hs *HealthStore) RecordProbeSuccess(modelID string) {
-	hs.mu.Lock()
-	defer hs.mu.Unlock()
-
-	status := hs.getOrCreateLocked(modelID)
-	now := time.Now()
-
-	status.ConsecutiveSuccesses++
-	status.ConsecutiveFailures = 0
-	status.QuickFailCount = 0
-	status.LastProbeTime = now
-
-	oldStatus := status.Status
-
-	if status.ConsecutiveSuccesses >= hs.recoverySuccessThreshold && status.Status == HealthUnhealthy {
-		status.Status = HealthHealthy
-		status.LastStateChange = now
-		hs.emitEvent(modelID, "", status.ModelName, oldStatus, HealthHealthy, "recovery threshold met")
-	}
-}
-
-// RecordProbeFailure records a failed probe for the given model ID.
-// It increments consecutive failures and transitions to Unhealthy when
-// the failure threshold is met.
-func (hs *HealthStore) RecordProbeFailure(modelID string) {
-	hs.mu.Lock()
-	defer hs.mu.Unlock()
-
-	status := hs.getOrCreateLocked(modelID)
-	now := time.Now()
-
-	status.ConsecutiveFailures++
-	status.ConsecutiveSuccesses = 0
-	status.LastFailTime = now
-
-	oldStatus := status.Status
-
-	if status.ConsecutiveFailures >= hs.failureThreshold && status.Status == HealthHealthy {
-		status.Status = HealthUnhealthy
-		status.LastStateChange = now
-		hs.emitEvent(modelID, "", status.ModelName, oldStatus, HealthUnhealthy, "probe failure threshold exceeded")
-	}
-}
-
 // CleanOrphaned removes health entries for model IDs not in the active set.
 func (hs *HealthStore) CleanOrphaned(activeModelIDs []string) {
 	hs.mu.Lock()
@@ -191,10 +154,10 @@ func (hs *HealthStore) getOrCreateLocked(modelID string) *ModelHealthStatus {
 	if !ok {
 		now := time.Now()
 		status = &ModelHealthStatus{
-			Status:            HealthHealthy,
-			FailureWindow:     NewFailureRingBuffer(hs.failureRingCapacity),
-			CreatedAt:         now,
-			LastStateChange:   now,
+			Status:          HealthHealthy,
+			FailureWindow:   NewFailureRingBuffer(hs.failureRingCapacity),
+			CreatedAt:       now,
+			LastStateChange: now,
 		}
 		hs.data[modelID] = status
 	}

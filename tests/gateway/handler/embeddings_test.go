@@ -67,7 +67,7 @@ func (f *fakeEmbeddingScheduler) SetCooldown(_ string, _ time.Duration) {}
 func (f *fakeEmbeddingScheduler) PersistSticky(_ context.Context, _, _ string, _ *scheduler.RouteDecision) {
 }
 
-func (f *fakeEmbeddingScheduler) UpdateSticky(_ context.Context, _, _, _ string) {}
+func (f *fakeEmbeddingScheduler) UpdateSticky(_ context.Context, _, _, _, _ string) bool { return false }
 
 func newEmbeddingGroupDispatcher(groupName, modelName, modelType string) *orchestrator.GroupAwareDispatcher {
 	nc := cache.NewGroupNameCache("")

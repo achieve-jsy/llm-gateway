@@ -65,7 +65,7 @@ func (f *fakeRerankScheduler) SetCooldown(_ string, _ time.Duration) {}
 func (f *fakeRerankScheduler) PersistSticky(_ context.Context, _, _ string, _ *scheduler.RouteDecision) {
 }
 
-func (f *fakeRerankScheduler) UpdateSticky(_ context.Context, _, _, _ string) {}
+func (f *fakeRerankScheduler) UpdateSticky(_ context.Context, _, _, _, _ string) bool { return false }
 
 func newRerankGroupDispatcher(groupName, modelName, modelType string) *orchestrator.GroupAwareDispatcher {
 	nc := cache.NewGroupNameCache("")

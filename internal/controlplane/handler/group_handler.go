@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
@@ -453,9 +452,5 @@ func upstreamModelName(m *model.Model) string {
 	if m.UpstreamModelID != "" {
 		return m.UpstreamModelID
 	}
-	name := m.Name
-	if idx := strings.Index(name, "/"); idx >= 0 {
-		return name[idx+1:]
-	}
-	return name
+	return m.Name
 }

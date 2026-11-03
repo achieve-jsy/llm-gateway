@@ -70,7 +70,7 @@ func realRedisClient(t *testing.T) *redis.Client {
 	}
 	pwd := os.Getenv("REDIS_PASSWORD")
 	if pwd == "" {
-		pwd = "CHANGE_ME_REDIS_PASSWORD"
+		t.Skip("REDIS_PASSWORD 未设置，跳过真实 Redis 集成测试")
 	}
 	c := redis.NewClient(&redis.Options{Addr: addr, Password: pwd})
 	t.Cleanup(func() { _ = c.Close() })

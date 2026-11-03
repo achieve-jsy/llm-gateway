@@ -8,7 +8,7 @@
 //   - Atlas 迁移已执行（三张 key_activity_* 表已建好）
 //
 // 运行方式：
-//   DATABASE_URL="host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway sslmode=disable" \
+//   DATABASE_URL="host=<host> port=5432 user=llm_gateway password=<口令> dbname=llm_gateway sslmode=disable" \
 //   go test ./internal/controlplane/keyactivity/... -tags=integration -v -run PG -timeout 60s -count=1
 
 package keyactivity_test

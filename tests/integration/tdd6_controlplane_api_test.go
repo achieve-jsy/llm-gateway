@@ -47,11 +47,11 @@ func gwURL() string {
 }
 
 func jwtSecret() string {
-	if s := os.Getenv("JWT_SECRET"); s != "" {
-		return s
+	s := os.Getenv("JWT_SECRET")
+	if s == "" {
+		panic("JWT_SECRET 未设置：集成测试需要由环境提供真实值，禁止在代码里内置口令")
 	}
-	// 默认：dev.yaml 里的 dev secret
-	return "d8f7a3b2c1e9f4567890abc123def456"
+	return s
 }
 
 func internalToken() string {

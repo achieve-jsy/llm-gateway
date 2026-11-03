@@ -1810,6 +1810,7 @@ interface EnrichedMember extends BudgetItem {
 interface TierBudgetItem {
   scope_id: string
   scope_type: string
+  model_tier_id?: string
   tier_name: string
   amount_usd: number
   used_usd: number
@@ -2291,6 +2292,7 @@ function tierLimitToBudgetItem(scope: BudgetItem, limit: BudgetTierLimit): TierB
   return {
     scope_id: scope.scope_id,
     scope_type: scope.scope_type,
+    model_tier_id: limit.model_tier_id,
     tier_name: limit.model_tier_name || limit.model_tier_id,
     amount_usd: Number.isFinite(amount) ? amount : 0,
     used_usd: Number.isFinite(used) ? used : 0,
@@ -2298,6 +2300,43 @@ function tierLimitToBudgetItem(scope: BudgetItem, limit: BudgetTierLimit): TierB
     label: scope.label || scope.scope_id,
     enabled: limit.enabled,
     state: !limit.enabled ? 'disabled' : amount === 0 ? 'blocked' : 'normal',
+  }
+}
+
+function tierBudgetMergeKey(item: TierBudgetItem): string {
+  return `${item.scope_type}:${item.scope_id}:${item.model_tier_id || item.tier_name}`
+}
+
+function normalizeTierUsageItem(raw: any, configuredByKey: Map<string, TierBudgetItem>): TierBudgetItem | null {
+  const scopeType = String(raw?.scope_type || 'studio')
+  const scopeID = String(raw?.scope_id || '')
+  const modelTierID = raw?.model_tier_id ? String(raw.model_tier_id) : undefined
+  const tierName = String(raw?.tier_name || raw?.model_tier_name || raw?.budget_tier_name_snapshot || modelTierID || '')
+  if (!modelTierID && !tierName) return null
+
+  const key = `${scopeType}:${scopeID}:${modelTierID || tierName}`
+  const configured = configuredByKey.get(key)
+  const amount = Number(raw?.amount_usd ?? configured?.amount_usd ?? 0)
+  const used = Number(raw?.used_usd ?? raw?.reported_cost_usd ?? raw?.accounting_cost_usd ?? 0)
+  const ratio = raw?.used_ratio !== undefined
+    ? Number(raw.used_ratio)
+    : amount > 0 && Number.isFinite(used)
+      ? used / amount
+      : 0
+  const enabled = configured?.enabled ?? raw?.enabled
+  const state = configured?.state ?? (enabled === false ? 'disabled' : amount === 0 ? 'blocked' : ratio >= 1 ? 'blocked' : ratio >= 0.8 ? 'warning' : 'normal')
+
+  return {
+    scope_id: scopeID,
+    scope_type: scopeType,
+    model_tier_id: modelTierID,
+    tier_name: configured?.tier_name || tierName,
+    amount_usd: Number.isFinite(amount) ? amount : 0,
+    used_usd: Number.isFinite(used) ? used : 0,
+    used_ratio: Number.isFinite(ratio) ? ratio : 0,
+    label: configured?.label || raw?.label || scopeID,
+    enabled,
+    state,
   }
 }
 
@@ -2551,20 +2590,23 @@ async function load() {
       ElMessage.warning('预算治理链路加载失败，列表仍可查看')
     }
 
+    const configuredTierItems = await loadConfiguredTierBudgets(items.value)
+    const mergedTierItems = new Map<string, TierBudgetItem>()
+    for (const item of configuredTierItems) {
+      mergedTierItems.set(tierBudgetMergeKey(item), item)
+    }
     let usageTierItems: TierBudgetItem[] = []
     if (tierResult.status === 'fulfilled') {
       const payload = tierResult.value?.data?.data ?? tierResult.value?.data ?? {}
       const list = payload?.items ?? (Array.isArray(payload) ? payload : [])
-      usageTierItems = (Array.isArray(list) ? list : []) as TierBudgetItem[]
-    }
-    const configuredTierItems = await loadConfiguredTierBudgets(items.value)
-    const mergedTierItems = new Map<string, TierBudgetItem>()
-    for (const item of configuredTierItems) {
-      mergedTierItems.set(`${item.scope_type}:${item.scope_id}:${item.tier_name}`, item)
+      usageTierItems = (Array.isArray(list) ? list : [])
+        .map(item => normalizeTierUsageItem(item, mergedTierItems))
+        .filter((item): item is TierBudgetItem => Boolean(item))
     }
     for (const item of usageTierItems) {
-      mergedTierItems.set(`${item.scope_type}:${item.scope_id}:${item.tier_name}`, {
-        ...(mergedTierItems.get(`${item.scope_type}:${item.scope_id}:${item.tier_name}`) ?? item),
+      const key = tierBudgetMergeKey(item)
+      mergedTierItems.set(key, {
+        ...(mergedTierItems.get(key) ?? item),
         ...item,
       })
     }

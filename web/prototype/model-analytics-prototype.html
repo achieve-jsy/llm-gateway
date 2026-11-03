@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM 用量看板 · 模型 × 小时 × 部门 × 用户</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#f1f5f9; --ink:#1a1d24; --mut:#64748b; --line:#e5e7eb;
+  --card:#fff; --blue:#2563eb; --red:#dc2626; --amber:#d97706;
+  --green:#16a34a; --purple:#7c3aed; --shadow:0 4px 20px rgba(15,23,42,.06);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans SC",sans-serif;line-height:1.55;font-size:14px}
+.wrap{max-width:1280px;margin:auto;padding:0 24px}
+header{background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;padding:40px 0 34px}
+header h1{margin:0 0 10px;font-size:30px;letter-spacing:-.02em}
+header p{margin:0;opacity:.92;font-size:15px}
+.htag{display:inline-block;background:rgba(255,255,255,.18);border-radius:999px;padding:4px 14px;font-size:13px;margin-top:14px}
+section{padding:26px 0}
+h2{font-size:20px;margin:0 0 6px;font-weight:700}
+.sub{color:var(--mut);font-size:13px;margin:0 0 14px}
+
+/* ── 全局筛选条（sticky） ───────────────────────── */
+.global-filter{
+  position:sticky;top:0;z-index:50;background:#fff;border-bottom:1px solid var(--line);
+  box-shadow:0 2px 12px rgba(15,23,42,.06);padding:12px 0;
+}
+.global-filter .inner{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.global-filter label{font-size:12px;color:var(--mut);font-weight:600}
+.global-filter select{padding:7px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;background:#fff;color:#1e293b;cursor:pointer;outline:none}
+.global-filter select:focus{border-color:var(--blue)}
+.global-filter .reset{margin-left:auto;padding:6px 14px;border:1px solid #d1d5db;border-radius:8px;background:#fff;font-size:13px;color:#475569;cursor:pointer}
+.global-filter .reset:hover{background:#f8fafc}
+.filter-chip{display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:2px 6px 2px 12px}
+
+/* ── KPI 行 ─────────────────────────────────────── */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.kpi{background:var(--card);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow)}
+.kpi .l{font-size:12px;color:var(--mut);margin-bottom:4px}
+.kpi .v{font-size:26px;font-weight:750;letter-spacing:-.02em}
+.kpi .n{font-size:12px;color:var(--mut);margin-top:4px}
+.kpi.amber .v{color:var(--amber)}
+.kpi.red .v{color:var(--red)}
+
+/* ── 异常清单 ───────────────────────────────────── */
+.alerts .item{border-left:4px solid var(--red);background:#fff5f5;border-radius:10px;padding:12px 16px;margin:10px 0;font-size:14px}
+.alerts .item b{color:var(--red)}
+.alerts .item.warn{border-left-color:var(--amber);background:#fffbeb}
+.alerts .item.warn b{color:var(--amber)}
+.alerts .none{padding:14px;color:var(--mut);font-size:13px}
+
+/* ── 卡片 / 图表 ────────────────────────────────── */
+.card{background:var(--card);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow);margin-bottom:18px}
+.card h3{margin:0 0 2px;font-size:16px;font-weight:600}
+.card .cs{color:var(--mut);font-size:12px;margin:0 0 12px}
+.chart-wrap{position:relative;height:300px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.section-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.section-head .n{font-size:12px;color:var(--mut)}
+.toggle{margin-left:auto}
+.toggle button{padding:5px 12px;border:1px solid #d1d5db;background:#fff;font-size:12px;color:#475569;cursor:pointer}
+.toggle button.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.toggle button:first-child{border-radius:7px 0 0 7px}
+.toggle button:last-child{border-radius:0 7px 7px 0}
+.btn-link{padding:5px 12px;border:1px solid #d1d5db;border-radius:7px;background:#fff;font-size:12px;color:#475569;cursor:pointer}
+.btn-link:hover{background:#f8fafc}
+
+/* ── 表格 ───────────────────────────────────────── */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--mut);font-weight:600;font-size:11px;letter-spacing:.04em;background:#f9fafb;white-space:nowrap}
+td.num{font-variant-numeric:tabular-nums}
+tr.hov:hover td{background:#f8fafc}
+tr.tot td{background:#f8fafc;font-weight:600;border-top:2px solid var(--line)}
+.cost{font-weight:600;color:#1f2937}
+.bar-bg{display:inline-block;height:7px;width:70px;background:#e5e7eb;border-radius:4px;vertical-align:middle;margin-left:6px;overflow:hidden}
+.bar-fill{height:100%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:4px}
+.dbl{font-size:12px;color:var(--mut)}
+.tier-ultra{background:#fef3c7;color:#92400e}
+.tier-high{background:#ede9fe;color:#5b21b6}
+.tier-low{background:#dcfce7;color:#14532d}
+.tier-tag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600;white-space:nowrap}
+.badge-red{background:#fee2e2;color:#dc2626}
+.badge-orange{background:#fef3c7;color:#d97706}
+.badge-green{background:#dcfce7;color:#16a34a}
+.pct-red{color:#dc2626;font-weight:600}.pct-orange{color:#d97706;font-weight:600}.pct-green{color:#16a34a;font-weight:600}
+
+/* ── 折叠下钻 ───────────────────────────────────── */
+.model-group{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:8px}
+.model-group .mg-head{display:flex;align-items:center;justify-content:space-between;padding:9px 14px;background:#f9fafb;cursor:pointer;user-select:none}
+.model-group .mg-head:hover{background:#f0f4ff}
+.model-group .mg-body{display:none;padding:8px 12px}
+.model-group.open .mg-body{display:block}
+.chev{display:inline-block;transition:transform .15s;color:#9ca3af;font-size:11px;margin-right:6px}
+.model-group.open .chev{transform:rotate(90deg)}
+
+/* ── 热力图 ─────────────────────────────────────── */
+.heat{display:grid;grid-template-columns:auto repeat(24,1fr);gap:2px;font-size:10px}
+.heat .cell{aspect-ratio:1;border-radius:2px;cursor:pointer}
+.heat .lbl{color:var(--mut);text-align:right;padding-right:6px;align-self:center}
+.heat .hh{color:var(--mut);text-align:center;font-size:9px}
+
+footer{padding:28px 0 48px;color:var(--mut);font-size:12px}
+@media(max-width:900px){.kpis,.grid2{grid-template-columns:1fr}.global-filter .reset{margin-left:0}}
+</style>
+</head>
+<body>
+
+<header>
+<div class="wrap">
+  <h1>LLM 用量看板</h1>
+  <p>一句话结论：钱主要花在 <b>高阶模型 × 少数人</b> 上，治理空间明确。</p>
+  <div class="htag" id="hdrScope">2026-07-28 ~ 2026-07-30 · 3 天</div>
+</div>
+</header>
+
+<!-- ① 全局筛选条（sticky，全页联动） -->
+<div class="global-filter">
+  <div class="wrap">
+  <div class="inner">
+    <div class="filter-chip"><label>日期</label>
+      <select id="f-date"><option value="">全部日期</option></select>
+    </div>
+    <div class="filter-chip"><label>模型</label>
+      <select id="f-model"><option value="">全部模型</option></select>
+    </div>
+    <div class="filter-chip"><label>等级</label>
+      <select id="f-tier"><option value="">全部等级</option></select>
+    </div>
+    <div class="filter-chip"><label>部门</label>
+      <select id="f-dept"><option value="">全部部门</option></select>
+    </div>
+    <button class="reset" id="f-reset">重置</button>
+  </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<!-- ② KPI 结论条 -->
+<section>
+  <div class="kpis">
+    <div class="kpi"><div class="l">总费用</div><div class="v" id="kpiCost">–</div><div class="n" id="kpiCalls">–</div></div>
+    <div class="kpi"><div class="l">人均费用</div><div class="v" id="kpiAvg">–</div><div class="n" id="kpiUsers">–</div></div>
+    <div class="kpi"><div class="l">高阶费用占比</div><div class="v" id="kpiHigh">–</div><div class="n">超高级 + 高等级模型</div></div>
+    <div class="kpi"><div class="l">异常预警</div><div class="v" id="kpiAlert">–</div><div class="n" id="kpiAlertSub">人均超标 / 高阶依赖</div></div>
+  </div>
+</section>
+
+<!-- ③ 异常清单 -->
+<section class="alerts">
+  <div class="section-head"><h2>需要关注</h2><span class="n" id="alertCount"></span></div>
+  <p class="sub">自动从过滤后数据中挑出：人均超标部门、高阶依赖部门、高阶重度用户。</p>
+  <div id="alertList"></div>
+</section>
+
+<!-- ④ 模型 × 小时 -->
+<section>
+  <div class="section-head">
+    <h2>模型每小时用量</h2>
+    <span class="n">每日每小时的输入 / 缓存 / 输出 Token 与费用</span>
+    <div class="toggle">
+      <button class="active" data-agg="model" onclick="setAgg('model',this)">按模型</button>
+      <button data-agg="tier" onclick="setAgg('tier',this)">按等级</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="chart-wrap"><canvas id="hourlyChart"></canvas></div>
+    <div id="hourLegend" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <h3>每日累计汇总</h3>
+    <p class="cs">与全局筛选联动 · 每天每模型的累计 Token 与费用</p>
+    <table>
+      <thead><tr><th>模型 / 等级</th><th class="num">7-28 输入</th><th class="num">7-28 缓存</th><th class="num">7-28 输出</th><th class="num">7-29 输入</th><th class="num">7-29 缓存</th><th class="num">7-29 输出</th><th class="num">7-30 输入</th><th class="num">7-30 缓存</th><th class="num">7-30 输出</th><th class="num">费用 $</th></tr></thead>
+      <tbody id="dailyBody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ⑤ 每日费用趋势 -->
+<section>
+  <div class="section-head"><h2>每日费用趋势</h2><span class="n">柱 = 当日费用 · 线 = 累计</span></div>
+  <div class="card"><div class="chart-wrap" style="height:220px"><canvas id="trendChart"></canvas></div></div>
+</section>
+
+<!-- ⑥ 部门 × 人均（含下钻） -->
+<section>
+  <div class="section-head"><h2>部门 × 人均</h2><span class="n">点击部门行下钻到用户明细</span></div>
+  <p class="sub">人均超均值 2x 标橙、3x 标红；高阶占比 ≥80% 标红、≥60% 标橙。</p>
+  <div class="grid2">
+    <div class="card" style="margin:0">
+      <h3>部门汇总</h3>
+      <p class="cs">费用 · 人均 · 高阶占比</p>
+      <table>
+        <thead><tr><th>部门</th><th class="num">费用 $</th><th class="num">人数</th><th class="num">人均 $</th><th class="num">高阶占比</th><th>预警</th></tr></thead>
+        <tbody id="deptBody"></tbody>
+      </table>
+      <div id="deptDrill" style="margin-top:12px"></div>
+    </div>
+    <div class="card" style="margin:0">
+      <h3>钱花在哪一档模型</h3>
+      <p class="cs">费用占比 · 越高级越贵</p>
+      <div class="chart-wrap" style="height:240px"><canvas id="tierDonut"></canvas></div>
+      <table style="margin-top:8px">
+        <thead><tr><th>等级</th><th class="num">费用 $</th><th class="num">占比</th></tr></thead>
+        <tbody id="tierBreakdown"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ⑦ 用户 × 占比 -->
+<section>
+  <div class="section-head">
+    <h2>谁在用 · 谁占大头</h2>
+    <span class="n" id="userNote"></span>
+    <button class="btn-link" id="userMore" onclick="toggleAllUsers()">展开全部</button>
+  </div>
+  <p class="sub">跨部门个人排行，Top 10 默认展示；含三参数 Token 与费用占比。</p>
+  <div class="card">
+    <table>
+      <thead><tr><th>#</th><th>用户</th><th>部门</th><th class="num">输入 Token</th><th class="num">缓存 Token</th><th class="num">输出 Token</th><th class="num">费用 $</th><th class="num">费用占比</th><th class="num">高阶占比</th><th class="num">调用</th></tr></thead>
+      <tbody id="userBody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ⑧ 什么时段最烧钱 -->
+<section>
+  <div class="section-head"><h2>什么时段最烧钱</h2><span class="n">7 × 24 小时费用热力图</span></div>
+  <div class="card"><div id="heatmap" class="heat"></div></div>
+</section>
+
+</div>
+<footer class="wrap">数据周期：2026-07-28 ~ 2026-07-30 · 时区 Asia/Shanghai · 源 call_logs · 原型仅供设计评审</footer>
+
+<script>
+/* ═══════════════ Mock 数据（单一数据源） ═══════════════ */
+const MODELS = [
+  { id:'gpt-4o',          tier:'ultra', tierLabel:'超高级', in:0.000012, out:0.000060, cache:0.0000012 },
+  { id:'claude-sonnet-5', tier:'high',  tierLabel:'高等级', in:0.000003, out:0.000015, cache:0.0000003 },
+  { id:'deepseek-v3',     tier:'low',   tierLabel:'低等级', in:0.000004, out:0.000016, cache:0.0000004 },
+];
+const DEPTS = ['AI研发中心','数据平台部','产品设计部','运营管理部','X-Lab'];
+const USERS = {
+  'AI研发中心':['张伟','李娜','王磊','刘洋'],
+  '数据平台部':['陈静','赵鑫','吴雨'],
+  '产品设计部':['周涛','徐明','孙颖'],
+  '运营管理部':['黄辉','马丽'],
+  'X-Lab':      ['林峰','曹宇','谢婷'],
+};
+const DAYS = ['2026-07-28','2026-07-29','2026-07-30'];
+const ACT  = { 'AI研发中心':1.6, '数据平台部':1.2, '产品设计部':0.9, '运营管理部':0.7, 'X-Lab':1.4 };
+const PREF = {
+  'AI研发中心':{ 'gpt-4o':0.42,'claude-sonnet-5':0.23,'deepseek-v3':0.35 },
+  '数据平台部':{ 'gpt-4o':0.30,'claude-sonnet-5':0.30,'deepseek-v3':0.40 },
+  '产品设计部':{ 'gpt-4o':0.20,'claude-sonnet-5':0.30,'deepseek-v3':0.50 },
+  '运营管理部':{ 'gpt-4o':0.12,'claude-sonnet-5':0.28,'deepseek-v3':0.60 },
+  'X-Lab':      { 'gpt-4o':0.42,'claude-sonnet-5':0.18,'deepseek-v3':0.40 },
+};
+const HOUR_W = [0.3,0.2,0.15,0.1,0.1,0.2,0.5,1.0,1.6,1.9,1.8,1.7,1.4,1.5,1.8,1.9,1.7,1.4,1.1,0.8,0.6,0.5,0.4,0.35];
+
+function h2(str){ let h=2166136261; for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619);} return h>>>0; }
+function det(str,lo,hi){ const h=h2(str); return lo + (h % (hi-lo+1)); }
+
+const ALL_ROWS = [];
+(function build(){
+  for (const dept of DEPTS) {
+    for (const user of USERS[dept]) {
+      for (const date of DAYS) {
+        for (let hh=0; hh<24; hh++) {
+          const w = HOUR_W[hh]*ACT[dept];
+          for (const m of MODELS) {
+            const calls = Math.round(det(user+date+hh+m.id+'c', 0, 6) * PREF[dept][m.id]);
+            if (calls === 0) continue;
+            const base = 56000 * w;
+            const prompt = Math.round(base * det(user+date+hh+m.id+'p', 70, 130)/100);
+            const cached = Math.round(prompt * det(user+date+hh+m.id+'k', 0, 55)/100);
+            const completion = Math.round(prompt * det(user+date+hh+m.id+'o', 28, 80)/100);
+            const cost = prompt*m.in + cached*m.cache + completion*m.out;
+            ALL_ROWS.push({ model:m.id, tier:m.tier, date, hour:hh, user, dept,
+              prompt, cached, completion, calls,
+              cost: Math.round(cost*10000)/10000 });
+          }
+        }
+      }
+    }
+  }
+})();
+
+/* ═══════════════ 全局筛选 state ═══════════════ */
+let state = { date:'', model:'', tier:'', dept:'' };
+let agg   = 'model';   // hourly chart: model | tier
+let userShowAll = false;
+const dayColor = ['#3b82f6','#8b5cf6','#10b981'];
+const tierColor = { ultra:'#f59e0b', high:'#8b5cf6', low:'#10b981' };
+const TIER_KEY = { ultra:'超高级', high:'高等级', low:'低等级' };
+
+const fmtN = n => n>=1e6 ? (n/1e6).toFixed(2)+'M' : n>=1e3 ? (n/1e3).toFixed(1)+'K' : String(Math.round(n));
+const fmtC = c => '$' + Number(c).toFixed(2);
+const M = id => MODELS.find(x=>x.id===id);
+
+/* ── 数据派生 ── */
+function filtered(){
+  return ALL_ROWS.filter(r =>
+    (!state.date  || r.date === state.date) &&
+    (!state.model || r.model === state.model) &&
+    (!state.tier  || r.tier  === state.tier) &&
+    (!state.dept  || r.dept  === state.dept));
+}
+function by(fn, rows){ const map={}; for(const r of rows){ const k=fn(r); (map[k]=map[k]||[]).push(r); } return map; }
+function sum(rows, f){ return rows.reduce((s,r)=>s+f(r),0); }
+
+/* ═══════════════ 渲染：KPI + 异常 ═══════════════ */
+function renderKpi(){
+  const rows = filtered();
+  const cost = sum(rows, r=>r.cost);
+  const users = new Set(rows.map(r=>r.user));
+  const highCost = sum(rows.filter(r=>r.tier!=='low'), r=>r.cost);
+  const highPct = cost>0 ? highCost/cost*100 : 0;
+  const calls = sum(rows, r=>r.calls);
+
+  document.getElementById('kpiCost').textContent = fmtC(cost);
+  document.getElementById('kpiCalls').textContent = fmtN(calls) + ' 次调用 · ' + rows.length + ' 条记录';
+  document.getElementById('kpiAvg').textContent = users.size>0 ? fmtC(cost/users.size) : '–';
+  document.getElementById('kpiUsers').textContent = users.size + ' 人 · ' + new Set(rows.map(r=>r.dept)).size + ' 个部门';
+  document.getElementById('kpiHigh').textContent = highPct.toFixed(1)+'%';
+  document.getElementById('kpiHigh').style.color = highPct>=70?'#dc2626':highPct>=50?'#d97706':'#16a34a';
+
+  renderAlerts(rows, cost, highPct);
+}
+
+function renderAlerts(rows, totalCost, highPct){
+  const list = [];
+  // 部门人均超标
+  const deptRows = by(r=>r.dept, rows);
+  const users = new Set(rows.map(r=>r.user));
+  const globalAvg = users.size>0 ? totalCost/users.size : 1;
+  const deptAlert = [];
+  for (const d of Object.keys(deptRows)) {
+    const dr = deptRows[d];
+    const cost = sum(dr, r=>r.cost);
+    const du = new Set(dr.map(r=>r.user)).size;
+    if (!du) continue;
+    const avg = cost/du, ratio = avg/globalAvg;
+    if (ratio > 3) deptAlert.push({lvl:'red', txt:`<b>${d}</b> 人均 <b>${fmtC(avg)}</b>，超整体均值 ${ratio.toFixed(1)}x —— 疑似高阶滥用`});
+    else if (ratio > 2) deptAlert.push({lvl:'warn', txt:`<b>${d}</b> 人均 ${fmtC(avg)}，超整体均值 ${ratio.toFixed(1)}x`});
+  }
+  list.push(...deptAlert.sort((a,b)=>a.lvl==='red'?-1:1).slice(0,2));
+
+  // 高阶依赖部门
+  for (const d of Object.keys(deptRows)) {
+    const dr = deptRows[d];
+    const cost = sum(dr, r=>r.cost);
+    if (cost <= 0) continue;
+    const hc = sum(dr.filter(r=>r.tier!=='low'), r=>r.cost);
+    const pct = hc/cost*100;
+    if (pct >= 80) list.push({lvl:'red', txt:`<b>${d}</b> 高阶费用占比 <b>${pct.toFixed(0)}%</b>，重度依赖高阶模型`});
+    else if (pct >= 60) list.push({lvl:'warn', txt:`<b>${d}</b> 高阶费用占比 ${pct.toFixed(0)}%`});
+  }
+
+  // 高阶重度用户
+  const userRows = by(r=>r.user, rows);
+  const uAlert = [];
+  for (const u of Object.keys(userRows)) {
+    const ur = userRows[u];
+    const cost = sum(ur, r=>r.cost);
+    if (cost <= 0) continue;
+    const hc = sum(ur.filter(r=>r.tier!=='low'), r=>r.cost);
+    const pct = hc/cost*100;
+    if (pct >= 80 && cost >= totalCost*0.05)
+      uAlert.push({lvl:'warn', txt:`<b>${u}</b>（${ur[0].dept}）费用 ${fmtC(cost)}，高阶占比 ${pct.toFixed(0)}%`});
+  }
+  list.push(...uAlert.slice(0,2));
+
+  const el = document.getElementById('alertList');
+  document.getElementById('alertCount').textContent = list.length ? list.length + ' 条' : '';
+  if (!list.length) { el.innerHTML = '<div class="none">当前筛选下暂无异常 🎉</div>'; }
+  else { el.innerHTML = list.slice(0,4).map(a=>`<div class="item ${a.lvl}">${a.txt}</div>`).join(''); }
+  document.getElementById('kpiAlert').textContent = list.length;
+  document.getElementById('kpiAlert').style.color = list.length>=3?'#dc2626':list.length?'#d97706':'#16a34a';
+  document.getElementById('kpiAlertSub').textContent = list.length ? '见下方清单' : '当前筛选无异常';
+}
+
+/* ═══════════════ 渲染：模型 × 小时 ═══════════════ */
+let hourlyChart=null;
+function renderHourly(){
+  const rows = filtered();
+  const el = document.getElementById('hourlyChart');
+
+  const keyOf = agg==='model' ? r=>r.model : r=>TIER_KEY[r.tier];
+  const grouped = by(keyOf, rows);
+  const labels = [];
+  const byKey = {};
+  for (const k of Object.keys(grouped)) {
+    const grp = grouped[k].sort((a,b)=>a.date.localeCompare(b.date)||a.hour-b.hour);
+    for (const r of grp) {
+      const lab = r.date.slice(5)+' '+String(r.hour).padStart(2,'0')+':00';
+      if (!labels.includes(lab)) labels.push(lab);
+      (byKey[k]=byKey[k]||{})[lab] = { prompt:0,cached:0,completion:0,cost:0 };
+      const cell = byKey[k][lab];
+      cell.prompt+=r.prompt; cell.cached+=r.cached; cell.completion+=r.completion; cell.cost+=r.cost;
+    }
+  }
+  labels.sort();
+
+  const datasets = [];
+  Object.keys(byKey).forEach((k, i) => {
+    const c = agg==='model' ? M(k).tier : k;
+    const base = agg==='model' ? tierColor[M(k).tier] : tierColor[k]===undefined?tierColor.low:tierColor[k];
+    datasets.push({ label:k, data:labels.map(l=>byKey[k][l].prompt), backgroundColor:base, stack:'in' });
+    datasets.push({ label:k+'·缓存', data:labels.map(l=>byKey[k][l].cached), backgroundColor:'rgba(167,139,250,.8)', stack:'in' });
+    datasets.push({ label:k+'·输出', data:labels.map(l=>byKey[k][l].completion), backgroundColor:'rgba(16,185,129,.8)', stack:'in' });
+  });
+
+  if (hourlyChart) hourlyChart.destroy();
+  if (!labels.length) { el.parentElement.innerHTML='<div class="cs" style="padding:40px;text-align:center">暂无数据</div>'; return; }
+  hourlyChart = new Chart(el, {
+    type:'bar',
+    data:{ labels, datasets },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{ display:datasets.length<=9, position:'top', labels:{ boxWidth:10, font:{size:11} } },
+        tooltip:{ callbacks:{ label:ctx=>{
+          const v=ctx.parsed.y;
+          return ` ${ctx.dataset.label}: ${fmtN(v)}`; } } }
+      },
+      scales:{
+        x:{ stacked:true, ticks:{ font:{size:10}, maxRotation:0, autoSkip:true, maxTicksLimit:24 }, grid:{color:'#f1f5f9'} },
+        y:{ stacked:true, ticks:{ font:{size:10}, color:'#64748b', callback:v=>fmtN(v) }, grid:{color:'#f1f5f9'} }
+      }
+    }
+  });
+  document.getElementById('hourLegend').innerHTML =
+    `<span class="dbl">按${agg==='model'?'模型':'等级'}堆叠 · 蓝=输入 紫=缓存 绿=输出 · X 轴 = 日期+小时</span>`;
+}
+
+/* ── 每日累计：行=模型/等级，列=日期（每日期三 token），末列总费用 ── */
+function renderDaily(){
+  const rows = filtered();
+  const keyOf = agg==='model' ? r=>r.model : r=>TIER_KEY[r.tier];
+  const grouped = by(k=>k.key, rows.map(r=>({key:keyOf(r), date:r.date, ...r})));
+  const body = document.getElementById('dailyBody');
+  body.innerHTML='';
+  const keys = Object.keys(grouped).sort();
+  const cell = (g,d,f) => { const x=g.find(r=>r.date===d); return x? fmtN(x[f]) : '<span class="dbl">0</span>'; };
+  const totP = {prompt:0,cached:0,completion:0,cost:0};
+  for (const k of keys) {
+    const g = grouped[k];
+    const cost = sum(g,r=>r.cost);
+    for (const f of ['prompt','cached','completion']) totP[f]+=sum(g,r=>r[f]);
+    totP.cost+=cost;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span class="tier-tag ${'tier-'+(agg==='model'?M(k).tier:keyToTier(k))}">${k}</span></td>
+      ${DAYS.map(d=>cell(g,d,'prompt')).join('')}
+      ${DAYS.map(d=>cell(g,d,'cached')).join('')}
+      ${DAYS.map(d=>cell(g,d,'completion')).join('')}
+      <td class="num cost">${fmtC(cost)}</td>`;
+    body.appendChild(tr);
+  }
+  if (!keys.length) body.innerHTML='<tr><td colspan="10" style="text-align:center;color:#9ca3af;padding:24px">暂无数据</td></tr>';
+  else body.insertAdjacentHTML('beforeend',
+    `<tr class="tot"><td>合计</td>${DAYS.map(d=>`<td class="num">${fmtN(totP.prompt)}</td>`).join('')}${DAYS.map(d=>`<td class="num">${fmtN(totP.cached)}</td>`).join('')}${DAYS.map(d=>`<td class="num">${fmtN(totP.completion)}</td>`).join('')}<td class="num">${fmtC(totP.cost)}</td></tr>`);
+}
+function keyToTier(k){ const m=MODELS.find(x=>TIER_KEY[x.tier]===k); return m?m.tier:'low'; }
+
+/* ═══════════════ 渲染：每日趋势 ═══════════════ */
+let trendChart=null;
+function renderTrend(){
+  const rows = filtered();
+  const byDate = {};
+  for (const r of rows) byDate[r.date]=(byDate[r.date]||0)+r.cost;
+  const labels = DAYS.filter(d=>d in byDate);
+  const vals = labels.map(d=>Math.round(byDate[d]*100)/100);
+  let acc=0; const cum = vals.map(v=>acc+=v);
+  if (trendChart) trendChart.destroy();
+  const el = document.getElementById('trendChart');
+  if (!labels.length){ el.parentElement.innerHTML='<div class="cs" style="padding:30px;text-align:center">暂无数据</div>'; return; }
+  trendChart = new Chart(el, {
+    data:{
+      labels: labels.map(d=>d.slice(5)),
+      datasets:[
+        {type:'bar', label:'当日费用 $', data:vals, backgroundColor:'#93c5fd', yAxisID:'y', borderRadius:4},
+        {type:'line', label:'累计 $', data:cum.map(v=>Math.round(v*100)/100), borderColor:'#1e3a8a', backgroundColor:'#1e3a8a', tension:.3, pointRadius:3, yAxisID:'y1'}
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'top', labels:{ boxWidth:12, font:{size:11} } } },
+      scales:{
+        y:{ ticks:{ font:{size:10}, callback:v=>'$'+v }, grid:{color:'#f1f5f9'} },
+        y1:{ position:'right', grid:{drawOnChartArea:false}, ticks:{ font:{size:10}, callback:v=>'$'+v } }
+      }
+    }
+  });
+}
+
+/* ═══════════════ 渲染：部门 × 人均 + 下钻 ═══════════════ */
+let openDept = null;
+let tierDonut=null;
+function renderDept(){
+  const rows = filtered();
+  const deptRows = by(r=>r.dept, rows);
+  const users = new Set(rows.map(r=>r.user));
+  const totalCost = sum(rows, r=>r.cost);
+  const globalAvg = users.size? totalCost/users.size : 1;
+  const body = document.getElementById('deptBody');
+  body.innerHTML='';
+
+  const rowsArr = DEPTS.map(d=>({ d, rows: deptRows[d]||[] })).filter(x=>x.rows.length);
+  rowsArr.sort((a,b)=>sum(b.rows,r=>r.cost)-sum(a.rows,r=>r.cost));
+
+  for (const {d, rows:dr} of rowsArr) {
+    const cost = sum(dr, r=>r.cost);
+    const du = new Set(dr.map(r=>r.user)).size;
+    const avg = cost/du, ratio = avg/globalAvg;
+    const hc = sum(dr.filter(r=>r.tier!=='low'), r=>r.cost);
+    const hpct = cost>0? hc/cost*100 : 0;
+
+    let warn='';
+    if (ratio>3) warn='<span class="badge badge-red">🔴 人均超标</span>';
+    else if (ratio>2) warn='<span class="badge badge-orange">🟠 偏高</span>';
+    const hp = hpct>=80?'<span class="pct-red">'+hpct.toFixed(0)+'%</span>':hpct>=60?'<span class="pct-orange">'+hpct.toFixed(0)+'%</span>':'<span class="pct-green">'+hpct.toFixed(0)+'%</span>';
+
+    const tr = document.createElement('tr');
+    tr.className='hov'; tr.style.cursor='pointer';
+    tr.innerHTML = `
+      <td style="font-weight:600;color:#1e40af">${d} ${openDept===d?'▾':'▸'}</td>
+      <td class="num cost">${fmtC(cost)}</td>
+      <td class="num">${du}</td>
+      <td class="num">${fmtC(avg)}</td>
+      <td class="num">${hp}</td>
+      <td>${warn||'<span class="dbl">—</span>'}</td>`;
+    tr.addEventListener('click', ()=>{ openDept = openDept===d? null : d; renderDept(); });
+    body.appendChild(tr);
+  }
+  if (!rowsArr.length) body.innerHTML='<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:20px">暂无数据</td></tr>';
+
+  renderDeptDrill(rowsArr);
+  renderTierDonut(rows, totalCost);
+}
+
+function renderDeptDrill(rowsArr){
+  const el = document.getElementById('deptDrill');
+  if (!openDept) { el.innerHTML=''; return; }
+  const entry = rowsArr.find(x=>x.d===openDept);
+  if (!entry) { el.innerHTML=''; return; }
+  const dr = entry.rows;
+  const aggMap = {};
+  for (const r of dr) {
+    if (!aggMap[r.user]) aggMap[r.user]={user:r.user,prompt:0,cached:0,completion:0,cost:0,high:0};
+    const u=aggMap[r.user]; u.prompt+=r.prompt; u.cached+=r.cached; u.completion+=r.completion; u.cost+=r.cost;
+    if (r.tier!=='low') u.high+=r.cost;
+  }
+  const rows = Object.values(aggMap).sort((a,b)=>b.cost-a.cost);
+  const mTotal = sum(rows, r=>r.cost);
+  const deptAvg = rows.length? mTotal/rows.length : 0;
+  const html = [`<div style="background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:12px">
+    <div style="font-weight:700;margin-bottom:8px;color:#1e40af">${openDept} · 用户明细（${rows.length} 人 · 按费用降序）</div>
+    <table>
+      <thead><tr><th>用户</th><th class="num">输入</th><th class="num">缓存</th><th class="num">输出</th><th class="num">费用 $</th><th class="num">占比</th><th class="num">人均倍数</th></tr></thead>
+      <tbody>`];
+  for (const r of rows) {
+    const pct = mTotal>0? r.cost/mTotal*100 : 0;
+    const ratio = deptAvg>0? r.cost/deptAvg : 1;
+    const hb = r.cost>0&&r.high/r.cost>=.8 ? '<span class="badge badge-red">高阶</span>' : r.cost>0&&r.high/r.cost>=.6 ? '<span class="badge badge-orange">偏高</span>' : '';
+    html.push(`<tr>
+      <td style="font-weight:600">${r.user} ${hb}</td>
+      <td class="num">${fmtN(r.prompt)}</td><td class="num">${fmtN(r.cached)}</td><td class="num">${fmtN(r.completion)}</td>
+      <td class="num cost">${fmtC(r.cost)}</td>
+      <td class="num"><span class="bar-bg"><span class="bar-fill" style="width:${Math.min(pct,100)}%"></span></span><span class="dbl">${pct.toFixed(0)}%</span></td>
+      <td class="num">${ratio>=3?'<span class="pct-red">':ratio>=2?'<span class="pct-orange">':'<span class="pct-green">'}${ratio.toFixed(1)}x</span></td>
+    </tr>`);
+  }
+  html.push('</tbody></table></div>');
+  el.innerHTML = html.join('');
+}
+
+function renderTierDonut(rows, totalCost){
+  const t = {};
+  for (const r of rows) t[r.tier]=(t[r.tier]||0)+r.cost;
+  const keys = ['ultra','high','low'].filter(k=>t[k]);
+  if (tierDonut) tierDonut.destroy();
+  const el = document.getElementById('tierDonut');
+  if (!keys.length){ el.parentElement.innerHTML='<div class="cs" style="padding:30px;text-align:center">暂无数据</div>'; return; }
+  tierDonut = new Chart(el, {
+    type:'doughnut',
+    data:{ labels: keys.map(k=>TIER_KEY[k]),
+      datasets:[{ data: keys.map(k=>Math.round(t[k]*100)/100), backgroundColor: keys.map(k=>tierColor[k]), borderWidth:2, borderColor:'#fff' }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'right', labels:{ boxWidth:10, font:{size:11} } },
+        tooltip:{ callbacks:{ label:ctx=>` ${ctx.label}: ${fmtC(ctx.parsed)}` } } } }
+  });
+  const tb = document.getElementById('tierBreakdown');
+  tb.innerHTML = keys.map(k=>{
+    const pct = totalCost>0? t[k]/totalCost*100 : 0;
+    return `<tr><td><span class="tier-tag ${'tier-'+k}">${TIER_KEY[k]}</span></td>
+      <td class="num cost">${fmtC(t[k])}</td><td class="num">${pct.toFixed(1)}%</td></tr>`;
+  }).join('');
+  if (!keys.length) tb.innerHTML='<tr><td colspan="3" style="text-align:center;color:#9ca3af;padding:16px">暂无数据</td></tr>';
+}
+
+/* ═══════════════ 渲染：用户排行 ═══════════════ */
+function renderUsers(){
+  const rows = filtered();
+  const um = {};
+  for (const r of rows) {
+    if (!um[r.user]) um[r.user]={ user:r.user, dept:r.dept, prompt:0,cached:0,completion:0,cost:0,high:0,calls:0 };
+    const u=um[r.user]; u.prompt+=r.prompt; u.cached+=r.cached; u.completion+=r.completion; u.cost+=r.cost; u.calls+=r.calls;
+    if (r.tier!=='low') u.high+=r.cost;
+  }
+  const arr = Object.values(um).sort((a,b)=>b.cost-a.cost);
+  const totalCost = sum(arr, r=>r.cost);
+  const show = arr.slice(0, userShowAll ? 20 : 10);
+  const body = document.getElementById('userBody');
+  body.innerHTML = '';
+  const note = document.getElementById('userNote');
+  note.textContent = arr.length ? `${arr.length} 人 · 按费用降序${arr.length>20?' · Top 20':''}` : '';
+  const more = document.getElementById('userMore');
+  more.style.display = arr.length>10 ? '' : 'none';
+  more.textContent = userShowAll ? '收起' : '展开全部';
+  show.forEach((u,i)=>{
+    const pct = totalCost>0? u.cost/totalCost*100 : 0;
+    const hpct = u.cost>0? u.high/u.cost*100 : 0;
+    const tr=document.createElement('tr'); tr.className='hov';
+    tr.innerHTML = `
+      <td class="dbl">${i+1}</td>
+      <td style="font-weight:600">${u.user}${i<3?' <span style="font-size:11px">🏅</span>':''}</td>
+      <td><span class="badge badge-green">${u.dept}</span></td>
+      <td class="num">${fmtN(u.prompt)}</td><td class="num">${fmtN(u.cached)}</td><td class="num">${fmtN(u.completion)}</td>
+      <td class="num cost">${fmtC(u.cost)}</td>
+      <td class="num"><span class="bar-bg"><span class="bar-fill" style="width:${Math.min(pct,100)}%"></span></span><span class="dbl">${pct.toFixed(1)}%</span></td>
+      <td class="num">${hpct>=80?'<span class="pct-red">':hpct>=60?'<span class="pct-orange">':'<span class="pct-green">'}${hpct.toFixed(0)}%</span></td>
+      <td class="num dbl">${fmtN(u.calls)}</td>`;
+    body.appendChild(tr);
+  });
+  if (!show.length) body.innerHTML='<tr><td colspan="10" style="text-align:center;color:#9ca3af;padding:20px">暂无数据</td></tr>';
+}
+function toggleAllUsers(){ userShowAll = !userShowAll; renderUsers(); }
+
+/* ═══════════════ 渲染：热力图 ═══════════════ */
+function renderHeat(){
+  const rows = filtered();
+  const cell = {};
+  for (const r of rows) cell[r.date+'|'+r.hour] = (cell[r.date+'|'+r.hour]||0) + r.cost;
+  const max = Math.max(1, ...Object.values(cell));
+  const el = document.getElementById('heatmap');
+  let html = '<div class="lbl"></div>' + Array.from({length:24},(_,h)=>`<div class="hh">${h}</div>`).join('');
+  for (const date of DAYS) {
+    html += `<div class="lbl">${date.slice(5)}</div>`;
+    for (let h=0; h<24; h++) {
+      const v = cell[date+'|'+h]||0;
+      const a = v>0 ? Math.max(.08, Math.pow(v/max,.55)) : 0;
+      html += `<div class="cell" style="background:rgba(37,99,235,${a})" title="${date} ${String(h).padStart(2,'0')}:00 · $${v.toFixed(2)}"></div>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+/* ═══════════════ 总渲染 + 筛选绑定 ═══════════════ */
+function renderAll(){
+  renderKpi();
+  renderHourly();
+  renderDaily();
+  renderTrend();
+  renderDept();
+  renderUsers();
+  renderHeat();
+}
+function setAgg(a, btn){
+  agg = a;
+  document.querySelectorAll('.toggle button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderHourly(); renderDaily();
+}
+
+function initFilters(){
+  const fm=document.getElementById('f-model'), ft=document.getElementById('f-tier'),
+        fd=document.getElementById('f-date'), fdp=document.getElementById('f-dept');
+  for (const m of MODELS) fm.insertAdjacentHTML('beforeend', `<option value="${m.id}">${m.id}（${m.tierLabel}）</option>`);
+  for (const k of ['ultra','high','low']) ft.insertAdjacentHTML('beforeend', `<option value="${k}">${TIER_KEY[k]}</option>`);
+  for (const d of DAYS) fd.insertAdjacentHTML('beforeend', `<option value="${d}">${d.slice(5)}</option>`);
+  for (const d of DEPTS) fdp.insertAdjacentHTML('beforeend', `<option value="${d}">${d}</option>`);
+  fm.onchange=()=>{state.model=fm.value; renderAll();};
+  ft.onchange=()=>{state.tier=ft.value; renderAll();};
+  fd.onchange=()=>{state.date=fd.value; renderAll();};
+  fdp.onchange=()=>{state.dept=fdp.value; renderAll();};
+  document.getElementById('f-reset').onclick=()=>{
+    state={date:'',model:'',tier:'',dept:''};
+    [fm,ft,fd,fdp].forEach(s=>s.value='');
+    renderAll();
+  };
+}
+
+initFilters();
+renderAll();
+</script>
+</body>
+</html>

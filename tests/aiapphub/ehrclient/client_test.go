@@ -69,4 +69,3 @@ func TestFetchDepartmentsErrors(t *testing.T) {
 		})
 	}
 }
-

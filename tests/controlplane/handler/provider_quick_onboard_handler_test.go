@@ -134,6 +134,14 @@ func quickProviderOnboardPayloadWithNamePrefix() string {
 	return strings.Replace(quickProviderOnboardPayload(), `"purpose":"坐席",`, `"purpose":"坐席","name_prefix":"agent-prod",`, 1)
 }
 
+func quickProviderOnboardPayloadWithJSONCredentials() string {
+	return strings.Replace(quickProviderOnboardPayload(), `"sk-live-credential-a"`, `"{\"api_key\":\"sk-json-credential-a\"}"`, 1)
+}
+
+func quickProviderOnboardPayloadWithCatalog(catalogID string) string {
+	return strings.Replace(quickProviderOnboardPayload(), `{"name":"qwen-plus","model_type":"chat"}`, `{"name":"qwen-plus","model_type":"chat","catalog_id":"`+catalogID+`"}`, 1)
+}
+
 func doQuickProviderRequest(r *gin.Engine, method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -227,6 +235,26 @@ func TestProviderQuickOnboardHandler_PreviewUsesCustomNamePrefix(t *testing.T) {
 	assert.Equal(t, "agent-prod-002", resp.Data.Providers[1].Name)
 }
 
+func TestProviderQuickOnboardHandler_PreviewMasksJSONCredentialField(t *testing.T) {
+	// 中文说明：前端传入 JSON 凭证时，preview 应脱敏真实 api_key，而不是把整个 JSON 脱敏成 {a****31}。
+	r, _ := setupProviderQuickOnboardHandler(t)
+
+	w := doQuickProviderRequest(r, http.MethodPost, quickProviderPreviewPath, quickProviderOnboardPayloadWithJSONCredentials())
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp struct {
+		Data struct {
+			Providers []struct {
+				Credential string `json:"credential"`
+			} `json:"providers"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data.Providers, 2)
+	assert.Equal(t, "sk-****al-a", resp.Data.Providers[0].Credential)
+	assert.NotContains(t, resp.Data.Providers[0].Credential, "{")
+}
+
 func TestProviderQuickOnboardHandler_CreateCreatesProviderModelMatrix(t *testing.T) {
 	// 中文说明：create 以单个 credential 为事务目标；2 个凭证和 2 个模型应创建 2 个渠道、每个渠道 2 个模型，并返回逐目标结果。
 	r, db := setupProviderQuickOnboardHandler(t)
@@ -296,5 +324,22 @@ func TestProviderQuickOnboardHandler_CreateCreatesProviderModelMatrix(t *testing
 		assert.Equal(t, []string{"qwen-max", "qwen-plus"}, []string{models[0].Name, models[1].Name})
 		assert.Equal(t, "chat", models[0].ModelType)
 		assert.Equal(t, "catalog", models[0].PriceMode)
+	}
+}
+
+func TestProviderQuickOnboardHandler_CreatePersistsCatalogBinding(t *testing.T) {
+	// 中文说明：快速接入可按模型手动关联 Catalog，创建出的每个渠道模型都写入 catalog_id。
+	r, db := setupProviderQuickOnboardHandler(t)
+	catalogID := uuid.New()
+
+	w := doQuickProviderRequest(r, http.MethodPost, quickProviderCreatePath, quickProviderOnboardPayloadWithCatalog(catalogID.String()))
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var models []model.Model
+	require.NoError(t, db.Where("name = ?", "qwen-plus").Find(&models).Error)
+	require.Len(t, models, 2)
+	for _, m := range models {
+		require.NotNil(t, m.CatalogID)
+		assert.Equal(t, catalogID, *m.CatalogID)
 	}
 }

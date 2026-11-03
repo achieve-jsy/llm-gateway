@@ -111,6 +111,7 @@ export interface QuickOnboardModelInput {
   output_price?: number
   cache_read_price?: number
   cache_write_price?: number
+  catalog_id?: string
   weight?: number
 }
 

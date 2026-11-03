@@ -52,7 +52,7 @@ func (v *VideoURLContent) UnmarshalJSON(data []byte) error {
 
 func (v VideoURLContent) MarshalJSON() ([]byte, error) {
 	if v.URL == "" && v.FileID == "" {
-		return nil, fmt.Errorf("video_url part is missing url or file_id")
+		return nil, NewContentPartError("video_url", "video_url.url")
 	}
 	return marshalWithUnknownJSONFields(struct {
 		URL         string   `json:"url,omitempty"`
@@ -126,7 +126,7 @@ func (p ContentPart) MarshalJSON() ([]byte, error) {
 		}, p.ExtraFields)
 	case "video_url", "input_video", "video":
 		if p.VideoURL == nil || (p.VideoURL.URL == "" && p.VideoURL.FileID == "") {
-			return nil, fmt.Errorf("video_url part is missing url or file_id")
+			return nil, NewContentPartError("video_url", "video_url.url")
 		}
 		return marshalWithUnknownJSONFields(struct {
 			Type     string           `json:"type"`
@@ -136,7 +136,7 @@ func (p ContentPart) MarshalJSON() ([]byte, error) {
 			VideoURL: p.VideoURL,
 		}, p.ExtraFields)
 	default:
-		return nil, fmt.Errorf("unsupported content part type %q", p.Type)
+		return nil, NewContentPartError(p.Type, "")
 	}
 }
 
@@ -274,7 +274,7 @@ func UnmarshalMessageContent(data []byte) (any, error) {
 		for i, rawPart := range rawParts {
 			part, err := unmarshalContentPart(rawPart)
 			if err != nil {
-				return nil, fmt.Errorf("part %d: %w", i, err)
+				return nil, wrapContentPartError(i, err)
 			}
 			parts[i] = part
 		}
@@ -296,7 +296,7 @@ func NormalizeMessageContent(content any) (any, error) {
 		for i, part := range c {
 			normalized, err := normalizeTypedContentPart(part)
 			if err != nil {
-				return nil, fmt.Errorf("part %d: %w", i, err)
+				return nil, wrapContentPartError(i, err)
 			}
 			parts[i] = normalized
 		}
@@ -306,7 +306,7 @@ func NormalizeMessageContent(content any) (any, error) {
 		for i, part := range c {
 			normalized, err := normalizeContentPartValue(part)
 			if err != nil {
-				return nil, fmt.Errorf("part %d: %w", i, err)
+				return nil, wrapContentPartError(i, err)
 			}
 			parts[i] = normalized
 		}
@@ -503,7 +503,7 @@ func unmarshalContentPart(data []byte) (ContentPart, error) {
 			ExtraFields: extraFields,
 		}, nil
 	default:
-		return ContentPart{}, fmt.Errorf("unsupported content part type %q", raw.Type)
+		return ContentPart{}, NewContentPartError(raw.Type, "")
 	}
 }
 
@@ -564,7 +564,7 @@ func normalizeTypedContentPart(part ContentPart) (ContentPart, error) {
 			ExtraFields: CloneUnknownJSONFields(part.ExtraFields),
 		}, nil
 	default:
-		return ContentPart{}, fmt.Errorf("unsupported content part type %q", part.Type)
+		return ContentPart{}, NewContentPartError(part.Type, "")
 	}
 }
 
@@ -621,7 +621,7 @@ func unmarshalImageURLContent(data []byte) (*ImageURLContent, error) {
 func unmarshalVideoURLContent(data []byte) (*VideoURLContent, error) {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return nil, fmt.Errorf("video_url part is missing url or file_id")
+		return nil, NewContentPartError("video_url", "video_url.url")
 	}
 
 	switch trimmed[0] {
@@ -631,7 +631,7 @@ func unmarshalVideoURLContent(data []byte) (*VideoURLContent, error) {
 			return nil, err
 		}
 		if url == "" {
-			return nil, fmt.Errorf("video_url part is missing url or file_id")
+			return nil, NewContentPartError("video_url", "video_url.url")
 		}
 		return &VideoURLContent{URL: url}, nil
 	case '{':
@@ -648,7 +648,7 @@ func unmarshalVideoURLContent(data []byte) (*VideoURLContent, error) {
 			return nil, err
 		}
 		if raw.URL == "" && raw.FileID == "" {
-			return nil, fmt.Errorf("video_url part is missing url or file_id")
+			return nil, NewContentPartError("video_url", "video_url.url")
 		}
 		extra, err := extractUnknownJSONFields(trimmed,
 			"url", "file_id", "fps", "max_frames", "start_offset", "end_offset", "media_type")
@@ -666,7 +666,7 @@ func unmarshalVideoURLContent(data []byte) (*VideoURLContent, error) {
 			ExtraFields: extra,
 		}, nil
 	default:
-		return nil, fmt.Errorf("video_url must be a string or object")
+		return nil, NewContentPartError("video_url", "video_url")
 	}
 }
 

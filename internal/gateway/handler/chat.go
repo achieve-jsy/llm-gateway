@@ -97,6 +97,19 @@ func (h *ChatHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
 func (h *ChatHandler) Handle(c *gin.Context) {
 	var req core.ChatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		// 内容片段错误单独成码：客户端能定位到 content[N] 的哪一段、哪个字段，
+		// 而不是只得到笼统的 request_body_invalid。
+		var partErr *core.ContentPartError
+		if errors.As(err, &partErr) {
+			param := fmt.Sprintf("content[%d].type", partErr.Index)
+			if partErr.Field != "" {
+				param = fmt.Sprintf("content[%d].%s", partErr.Index, partErr.Field)
+			}
+			gatewayerrors.WriteError(c, "unsupported_content_part",
+				gatewayerrors.WithMessage(err.Error()),
+				gatewayerrors.WithParam(param))
+			return
+		}
 		gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage(err.Error()))
 		return
 	}

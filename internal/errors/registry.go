@@ -44,6 +44,12 @@ var registry = map[string]ErrorCode{
 		HTTPStatus: http.StatusBadRequest,
 		Message:    "请求体无效",
 	},
+	"unsupported_content_part": {
+		Code:       "unsupported_content_part",
+		Type:       ErrorTypeInvalidRequest,
+		HTTPStatus: http.StatusBadRequest,
+		Message:    "内容片段类型或字段不受支持",
+	},
 
 	// ── Authentication errors ───────────────────────────────────────────────
 	"auth_key_invalid": {

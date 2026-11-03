@@ -18,6 +18,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
+	"github.com/example/llm-gateway/internal/llmclient"
 	"github.com/gin-gonic/gin"
 )
 
@@ -207,8 +208,12 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, r
 		}
 		lastErr = err
 
-		// 不触发 failover 的条件：无 groupDispatch、未路由到组、错误类型不可 failover
+		// 不触发 failover 的条件：无 groupDispatch、未路由到组、错误类型不可 failover、
+		// 或本次是**提交类**请求（见 shouldSkipFailoverForNoRetry 的说明）。
 		if h.groupDispatch == nil || !c.GetBool("routed_via_group") || !shouldTriggerFailover(err) {
+			break
+		}
+		if shouldSkipFailoverForNoRetry(roundCtx, c, originalModel, req, err) {
 			break
 		}
 
@@ -319,6 +324,9 @@ func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req 
 		if h.groupDispatch == nil || !c.GetBool("routed_via_group") || !shouldTriggerFailover(err) {
 			break
 		}
+		if shouldSkipFailoverForNoRetry(baseCtx, c, originalModel, req, err) {
+			break
+		}
 
 		failedID := req.Model
 		if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
@@ -412,6 +420,37 @@ func shouldTriggerFailover(err error) bool {
 	default:
 		return true
 	}
+}
+
+// shouldSkipFailoverForNoRetry 判断「提交类请求」是否必须放弃组内 failover（Batch 1 · B7）。
+//
+// 背景（与 A6 出站不重试同源风险）：llmclient 的 WithNoRetry / Request.NoRetry 只覆盖
+// **同一次**上游调用内部的重试；而这里 handler 层的 failover 会把**同一个请求体**
+// 发给组内另一个成员。对提交类请求（媒体提交、任务创建等非幂等操作）而言，
+// 那等于「换一个上游再建一次 + 重复计费」——A6 堵住了内层，这一层必须单独堵。
+//
+// 门控判据：请求 context 上的 llmclient 禁重试标记。submit 路径在进入 handler 前
+// 用 llmclient.WithNoRetry(ctx) 标记自己（标记随 context.WithTimeout 派生传递，
+// 因此 failover 轮次的 roundCtx / baseCtx 上都能读到）。
+//
+// 注意保留语义：**查询/轮询类路径不带该标记**，因此仍然享受完整 failover
+// （轮询是幂等的 GET，换渠道重试是净收益）。
+func shouldSkipFailoverForNoRetry(ctx context.Context, c *gin.Context, originalModel string, req *core.ChatRequest, err error) bool {
+	if !llmclient.IsNoRetry(ctx) {
+		return false
+	}
+	routedModel := ""
+	if req != nil {
+		routedModel = req.Model
+	}
+	slog.Warn("failover skipped: request is marked no-retry (submit-class endpoint)",
+		"request_id", c.GetString("request_id"),
+		"group", originalModel,
+		"routed_model", routedModel,
+		"error", err.Error(),
+		"hint", "提交类请求不 failover：同一请求体换上游会重复建单并重复计费（见 A6/B7）",
+	)
+	return true
 }
 
 // is429Error 判断错误是否为上游 429 限流错误。

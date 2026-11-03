@@ -156,10 +156,9 @@
         </el-form-item>
 
         <template v-if="editChannel === 'email'">
-          <el-form-item label="收件人">
-            <div class="readonly-hint">
-              收件人由系统按通知接收人自动确定（无需在此指定）。邮件会发给该通知对应的用户。
-            </div>
+          <el-form-item label="测试收件人">
+            <el-input v-model="testEmailRecipient" placeholder="不填则发给当前登录用户" />
+            <span class="form-hint">「测试发送」时的收件人（真实投递仍按通知接收人自动确定）</span>
           </el-form-item>
         </template>
 
@@ -225,6 +224,7 @@ const dialogVisible = ref(false)
 const dialogTitle = ref('')
 const editForm = ref<Partial<NotificationChannelConfig>>({})
 const editChannel = ref('')
+const testEmailRecipient = ref('')
 
 // Webhook 端点列表管理器（仅 webhook 对话框使用）
 interface EditableTarget {
@@ -355,6 +355,7 @@ function openEdit(notifType: string, channel: string) {
         body_template: '',
       }
   editChannel.value = channel
+  testEmailRecipient.value = ''
   removedTargetIds.value = []
   editTargets.value = channel === 'webhook'
     ? webhookTargets.value
@@ -478,7 +479,11 @@ const handleTestFromDialog = async () => {
   }
   testingInDialog.value = true
   try {
-    const result = await testNotificationConfig(type, channel)
+    const result = await testNotificationConfig(
+      type,
+      channel,
+      channel === 'email' ? testEmailRecipient.value || undefined : undefined,
+    )
     if (result.success) {
       ElMessage.success(result.message || '测试发送成功')
     } else {

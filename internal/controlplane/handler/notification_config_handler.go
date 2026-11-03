@@ -294,6 +294,9 @@ func (h *NotificationConfigHandler) Test(c *gin.Context) {
 	// target_id 为测试目标端点标识（多 webhook 时选择具体端点），不属于模板变量。
 	targetID, _ := testParams["target_id"].(string)
 	delete(testParams, "target_id")
+	// to_email 为测试邮件可选收件人（指定后覆盖当前登录用户邮箱，便于发给真实收件人），不属于模板变量。
+	toEmail, _ := testParams["to_email"].(string)
+	delete(testParams, "to_email")
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
@@ -304,7 +307,11 @@ func (h *NotificationConfigHandler) Test(c *gin.Context) {
 	if channel == "webhook" {
 		sendErr, message = h.testWebhook(ctx, config, testParams, targetID)
 	} else if channel == "email" {
-		sendErr, message = h.testEmail(ctx, config, testParams, c.GetString("user_email"))
+		targetEmail := toEmail
+		if targetEmail == "" {
+			targetEmail = c.GetString("user_email")
+		}
+		sendErr, message = h.testEmail(ctx, config, testParams, targetEmail)
 	}
 
 	if sendErr != nil {

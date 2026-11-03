@@ -1641,9 +1641,9 @@ export async function updateNotificationConfig(type: string, channel: string, co
   return response.data.data
 }
 
-/** 测试通知配置 */
-export async function testNotificationConfig(type: string, channel: string): Promise<{ success: boolean; message: string }> {
-  const response = await http.post<ApiResponse<{ success: boolean; message: string }>>(`/api/v1/notification-configs/${type}/${channel}/test`)
+/** 测试通知配置（email 渠道可选指定收件人 toEmail，未指定时发给当前登录用户） */
+export async function testNotificationConfig(type: string, channel: string, toEmail?: string): Promise<{ success: boolean; message: string }> {
+  const response = await http.post<ApiResponse<{ success: boolean; message: string }>>(`/api/v1/notification-configs/${type}/${channel}/test`, toEmail ? { to_email: toEmail } : {})
   return response.data.data
 }
 

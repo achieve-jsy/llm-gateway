@@ -258,6 +258,18 @@ type ModelPricing struct {
 	PerSecondOutput        *float64           `json:"per_second_output,omitempty" yaml:"per_second_output,omitempty"`
 	PerCharacterInput      *float64           `json:"per_character_input,omitempty" yaml:"per_character_input,omitempty"`
 	PerRequest             *float64           `json:"per_request,omitempty" yaml:"per_request,omitempty"`
+	// 媒体补充维度：既有字段族无法表达（逐层的单价单位不同），但确实存在于 LiteLLM
+	// model_prices_and_context_window.json（已核对 key 名）：
+	//   input/output_cost_per_image_token —— gpt-image 系列按「图像 token」计费
+	//   input/output_cost_per_pixel       —— dall-e-2 等按像素计费
+	//   input/output_cost_per_video_token —— 视频按 token 计费的上游
+	// 与 per-image/per-second/per-request 一样是美元原值，不做 token 折算。
+	InputPerImageToken     *float64           `json:"input_per_image_token,omitempty" yaml:"input_per_image_token,omitempty"`
+	OutputPerImageToken    *float64           `json:"output_per_image_token,omitempty" yaml:"output_per_image_token,omitempty"`
+	InputPerPixel          *float64           `json:"input_per_pixel,omitempty" yaml:"input_per_pixel,omitempty"`
+	OutputPerPixel         *float64           `json:"output_per_pixel,omitempty" yaml:"output_per_pixel,omitempty"`
+	InputPerVideoToken     *float64           `json:"input_per_video_token,omitempty" yaml:"input_per_video_token,omitempty"`
+	OutputPerVideoToken    *float64           `json:"output_per_video_token,omitempty" yaml:"output_per_video_token,omitempty"`
 	PerPage                *float64           `json:"per_page,omitempty" yaml:"per_page,omitempty"`
 	RerankPerSearchUnit    *float64           `json:"rerank_per_search_unit,omitempty" yaml:"rerank_per_search_unit,omitempty"`
 	Tiers                  []ModelPricingTier `json:"tiers,omitempty" yaml:"tiers,omitempty"`
@@ -298,6 +310,12 @@ func (p *ModelPricing) FieldSources(source string) map[string]string {
 	add("per_second_output", p.PerSecondOutput)
 	add("per_character_input", p.PerCharacterInput)
 	add("per_request", p.PerRequest)
+	add("input_per_image_token", p.InputPerImageToken)
+	add("output_per_image_token", p.OutputPerImageToken)
+	add("input_per_pixel", p.InputPerPixel)
+	add("output_per_pixel", p.OutputPerPixel)
+	add("input_per_video_token", p.InputPerVideoToken)
+	add("output_per_video_token", p.OutputPerVideoToken)
 	add("per_page", p.PerPage)
 	add("rerank_per_search_unit", p.RerankPerSearchUnit)
 	if len(p.Tiers) > 0 {
@@ -374,6 +392,12 @@ func (p *ModelPricing) Clone() *ModelPricing {
 	out.PerCharacterInput = cloneFloatPtr(p.PerCharacterInput)
 	out.PerRequest = cloneFloatPtr(p.PerRequest)
 	out.PerPage = cloneFloatPtr(p.PerPage)
+	out.InputPerImageToken = cloneFloatPtr(p.InputPerImageToken)
+	out.OutputPerImageToken = cloneFloatPtr(p.OutputPerImageToken)
+	out.InputPerPixel = cloneFloatPtr(p.InputPerPixel)
+	out.OutputPerPixel = cloneFloatPtr(p.OutputPerPixel)
+	out.InputPerVideoToken = cloneFloatPtr(p.InputPerVideoToken)
+	out.OutputPerVideoToken = cloneFloatPtr(p.OutputPerVideoToken)
 	out.RerankPerSearchUnit = cloneFloatPtr(p.RerankPerSearchUnit)
 	if len(p.Tiers) > 0 {
 		tiers := make([]ModelPricingTier, len(p.Tiers))

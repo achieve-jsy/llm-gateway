@@ -120,6 +120,12 @@ func MergePricing(base, override *core.ModelPricing) *core.ModelPricing {
 	mergeFloat(&out.PerRequest, override.PerRequest)
 	mergeFloat(&out.PerPage, override.PerPage)
 	mergeFloat(&out.RerankPerSearchUnit, override.RerankPerSearchUnit)
+	mergeFloat(&out.InputPerImageToken, override.InputPerImageToken)
+	mergeFloat(&out.OutputPerImageToken, override.OutputPerImageToken)
+	mergeFloat(&out.InputPerPixel, override.InputPerPixel)
+	mergeFloat(&out.OutputPerPixel, override.OutputPerPixel)
+	mergeFloat(&out.InputPerVideoToken, override.InputPerVideoToken)
+	mergeFloat(&out.OutputPerVideoToken, override.OutputPerVideoToken)
 	if len(override.Tiers) > 0 {
 		out.Tiers = override.Clone().Tiers
 	}

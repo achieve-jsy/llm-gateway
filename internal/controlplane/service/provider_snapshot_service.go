@@ -117,6 +117,7 @@ func snapshotModelPricing(m controlmodel.Model) core.ModelPricing {
 	var cacheReadPrice, cacheWritePrice *float64
 	var tierThreshold *int64
 	var inputPriceAboveTier, outputPriceAboveTier *float64
+	var mediaPricing controlpricing.MediaPricingInput
 	var rawPayload string
 	if m.Catalog != nil {
 		inputPricePerMillion = &m.Catalog.InputPricePerMillion
@@ -126,6 +127,23 @@ func snapshotModelPricing(m controlmodel.Model) core.ModelPricing {
 		tierThreshold = m.Catalog.TierThreshold
 		inputPriceAboveTier = m.Catalog.InputPriceAboveTier
 		outputPriceAboveTier = m.Catalog.OutputPriceAboveTier
+		mediaPricing = controlpricing.MediaPricingInput{
+			ModelType:           m.ModelType,
+			CatalogMode:         m.Catalog.Mode,
+			PriceMode:           m.PriceMode,
+			PerImage:            m.Catalog.PerImage,
+			InputPerImage:       m.Catalog.InputPerImage,
+			PerSecondInput:      m.Catalog.PerSecondInput,
+			PerSecondOutput:     m.Catalog.PerSecondOutput,
+			PerRequest:          m.Catalog.PerRequest,
+			InputPerImageToken:  m.Catalog.InputPerImageToken,
+			OutputPerImageToken: m.Catalog.OutputPerImageToken,
+			InputPerPixel:       m.Catalog.InputPerPixel,
+			OutputPerPixel:      m.Catalog.OutputPerPixel,
+			InputPerVideoToken:  m.Catalog.InputPerVideoToken,
+			OutputPerVideoToken: m.Catalog.OutputPerVideoToken,
+			PerCharacterInput:   m.Catalog.PerCharacterInput,
+		}
 		rawPayload = m.Catalog.RawPayload
 	}
 	pricing := controlpricing.ResolveModelPricing(
@@ -142,6 +160,8 @@ func snapshotModelPricing(m controlmodel.Model) core.ModelPricing {
 	if usagePricing.RerankPerSearchUnit != nil {
 		pricing.RerankPerSearchUnit = usagePricing.RerankPerSearchUnit
 	}
+	// 媒体价透传给网关快照：仅对 model_type=image/video 生效，token 价不受影响。
+	controlpricing.ApplyCatalogMediaPricing(&pricing, mediaPricing)
 	return pricing
 }
 

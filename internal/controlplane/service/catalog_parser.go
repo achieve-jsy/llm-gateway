@@ -15,19 +15,32 @@ import (
 // 决定是否落库（Upsert）；这样 parser 无 DB 依赖、可单测、可在测试中注入小 fixture，
 // 也可以在批处理（CLI 工具）里复用。
 type ModelCatalogParsed struct {
-	SourceModelID                   string
-	Provider                        string
-	Mode                            string
-	DisplayName                     string
-	ContextLength                   int64
-	MaxOutputTokens                 int64
-	InputPricePerMillion            float64
-	OutputPricePerMillion           float64
-	CacheReadPrice                  *float64
-	CacheWritePrice                 *float64
-	TierThreshold                   *int64
-	InputPriceAboveTier             *float64
-	OutputPriceAboveTier            *float64
+	SourceModelID         string
+	Provider              string
+	Mode                  string
+	DisplayName           string
+	ContextLength         int64
+	MaxOutputTokens       int64
+	InputPricePerMillion  float64
+	OutputPricePerMillion float64
+	CacheReadPrice        *float64
+	CacheWritePrice       *float64
+	TierThreshold         *int64
+	InputPriceAboveTier   *float64
+	OutputPriceAboveTier  *float64
+	// 媒体价（USD per image / second / request / image-token …），**不做 tokenPriceScale 缩放**。
+	PerImage                        *float64
+	InputPerImage                   *float64
+	PerSecondInput                  *float64
+	PerSecondOutput                 *float64
+	PerRequest                      *float64
+	InputPerImageToken              *float64
+	OutputPerImageToken             *float64
+	InputPerPixel                   *float64
+	OutputPerPixel                  *float64
+	InputPerVideoToken              *float64
+	OutputPerVideoToken             *float64
+	PerCharacterInput               *float64
 	SupportsFunctionCalling         bool
 	SupportsVision                  bool
 	SupportsPromptCaching           bool
@@ -116,6 +129,37 @@ func parseOne(sourceID string, payload json.RawMessage) (*ModelCatalogParsed, er
 		scaled := v * tokenPriceScale
 		entry.CacheWritePrice = &scaled
 	}
+
+	// 媒体价（每张 / 每秒 / 每次 / 每图像 token … 的美元原值）。
+	//
+	// key 名来源（LiteLLM model_prices_and_context_window.json，已在本仓库
+	// internal/controlplane/seed/litellm_catalog.json 中逐条核实存在）：
+	//   output_cost_per_image            126 条，如 vertex_ai/imagen-3.0-generate-002 = 0.04
+	//   input_cost_per_image             102 条，如 dall-e-3 = 0.04
+	//   input/output_cost_per_video_per_second，input/output_cost_per_second，cost_per_second
+	//   input_cost_per_request           4 条（perplexity *-online）
+	//   input/output_cost_per_image_token  19/25 条，如 gpt-image-1
+	//   input/output_cost_per_pixel      45/38 条，如 1024-x-1024/dall-e-2
+	//   input/output_cost_per_video_token（上游有，本地种子未见）
+	//   input_cost_per_character         32 条，如 azure/tts-1
+	//
+	// **关键**：这些单价本身就是「每张/每秒/每次/每 token」，绝不乘 tokenPriceScale。
+	// LiteLLM 用 0.0 表达「该档不单独计价」（如 output_cost_per_pixel: 0.0），
+	// 因此非正值一律落 NULL（= 无价），交给计价层判定 usage_missing。
+	entry.PerImage = firstPositivePrice(m, "output_cost_per_image")
+	entry.InputPerImage = firstPositivePrice(m, "input_cost_per_image")
+	entry.PerSecondInput = firstPositivePrice(m,
+		"input_cost_per_video_per_second", "input_cost_per_second", "cost_per_second")
+	entry.PerSecondOutput = firstPositivePrice(m,
+		"output_cost_per_video_per_second", "output_cost_per_second", "cost_per_second")
+	entry.PerRequest = firstPositivePrice(m, "input_cost_per_request")
+	entry.InputPerImageToken = firstPositivePrice(m, "input_cost_per_image_token")
+	entry.OutputPerImageToken = firstPositivePrice(m, "output_cost_per_image_token")
+	entry.InputPerPixel = firstPositivePrice(m, "input_cost_per_pixel")
+	entry.OutputPerPixel = firstPositivePrice(m, "output_cost_per_pixel")
+	entry.InputPerVideoToken = firstPositivePrice(m, "input_cost_per_video_token")
+	entry.OutputPerVideoToken = firstPositivePrice(m, "output_cost_per_video_token")
+	entry.PerCharacterInput = firstPositivePrice(m, "input_cost_per_character")
 
 	// 阶梯定价：扫一遍 keys
 	tierThreshold := int64(-1) // -1 = 未发现
@@ -219,6 +263,20 @@ func numberField(m map[string]any, key string) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// firstPositivePrice 按 keys 顺序取第一个可解析且 > 0 的媒体单价。
+//
+// 媒体单价不做 token 缩放；非正值（LiteLLM 用 0.0 占位表达「该档不单独计价」）
+// 与缺失同等对待，返回 nil，避免把「字段存在但为 0」当成有价。
+func firstPositivePrice(m map[string]any, keys ...string) *float64 {
+	for _, key := range keys {
+		if v, ok := floatField(m, key); ok && v > 0 {
+			price := v
+			return &price
+		}
+	}
+	return nil
 }
 
 func floatField(m map[string]any, key string) (float64, bool) {

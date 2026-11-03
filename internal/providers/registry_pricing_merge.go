@@ -66,6 +66,12 @@ func mergeConfigPricing(base, override *core.ModelPricing) *core.ModelPricing {
 	applyPricingOverride(&merged.PerCharacterInput, override.PerCharacterInput)
 	applyPricingOverride(&merged.PerRequest, override.PerRequest)
 	applyPricingOverride(&merged.PerPage, override.PerPage)
+	applyPricingOverride(&merged.InputPerImageToken, override.InputPerImageToken)
+	applyPricingOverride(&merged.OutputPerImageToken, override.OutputPerImageToken)
+	applyPricingOverride(&merged.InputPerPixel, override.InputPerPixel)
+	applyPricingOverride(&merged.OutputPerPixel, override.OutputPerPixel)
+	applyPricingOverride(&merged.InputPerVideoToken, override.InputPerVideoToken)
+	applyPricingOverride(&merged.OutputPerVideoToken, override.OutputPerVideoToken)
 	if len(override.Tiers) > 0 {
 		merged.Tiers = override.Clone().Tiers
 	}

@@ -70,6 +70,70 @@ func TestFetchDepartmentsErrors(t *testing.T) {
 	}
 }
 
+// employeeJSON 只用线上真实字段名（personName / groupENumber / location / personStatus），
+// 时间戳是毫秒数字——上游就是这么返回的。
+const employeeJSON = `{"items":[{"employeeId":"e1","personId":"p1","passport":"zhoutian","personName":"周甜","groupENumber":"BF00014","location":"浙数文化科技园","personStatus":1,"joinDate":1127664000000,"managerName":"何治国"}]}`
+
+func TestFetchEmployeesChunksAndRepeatsIDs(t *testing.T) {
+	var calls [][]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/open-apis/ehr-apic/open-apis/resource/v1/employees/batch", r.URL.Path)
+		require.Equal(t, "1428195512246472704", r.URL.Query().Get("orgId"))
+		calls = append(calls, r.URL.Query()["employeeIds"])
+		io.WriteString(w, employeeJSON)
+	}))
+	defer srv.Close()
+
+	ids := make([]string, 0, 11)
+	for i := 0; i < 11; i++ {
+		ids = append(ids, "id-"+string(rune('a'+i)))
+	}
+	got, err := newTestClient(srv.URL).FetchEmployees(context.Background(), ids)
+	require.NoError(t, err)
+
+	require.Len(t, calls, 2, "11 个 id 按每批 10 个分两次请求")
+	require.Len(t, calls[0], 10)
+	require.Len(t, calls[1], 1)
+	require.Equal(t, ids[:10], calls[0], "必须重复同名参数，逗号分隔上游不认")
+	require.Len(t, got, 2, "每批各返回 1 人")
+	require.Equal(t, "1428195512246472704", got[0].OrgID, "orgId 由 client 回填")
+	require.Equal(t, "BF00014", got[0].GroupENumber)
+	require.Equal(t, int64(1127664000000), got[0].JoinDate)
+}
+
+func TestFetchEmployeesToleratesEmptyChunks(t *testing.T) {
+	// 离职/失效的 id 查不到档案，返回空 items；这不是错误，不能中断整轮同步。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"items":[]}`)
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv.URL).FetchEmployees(context.Background(), []string{"gone"})
+	require.NoError(t, err)
+	require.Empty(t, got)
+}
+
+func TestFetchEmployeesSkipsWhenNoIDs(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer srv.Close()
+
+	got, err := newTestClient(srv.URL).FetchEmployees(context.Background(), []string{"", ""})
+	require.NoError(t, err)
+	require.Empty(t, got)
+	require.Zero(t, hits, "没有可查的 id 时不该发请求")
+}
+
+func TestDepartmentEmployeeIDsDedupes(t *testing.T) {
+	d := ehrclient.Department{
+		LeaderEmployeeID:    "e1",
+		ManagerEmployeeID:   "e1",
+		HrBpEmployeeID:      "e2",
+		FinanceBpEmployeeID: "",
+	}
+	require.Equal(t, []string{"e1", "e2"}, d.EmployeeIDs())
+}
+
 func TestFetchDepartmentsRejectsIncompleteConfig(t *testing.T) {
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

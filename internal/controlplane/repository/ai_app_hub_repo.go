@@ -98,6 +98,32 @@ func (r *AIAppHubRepo) UpsertDepartment(ctx context.Context, d *model.AIAppDepar
 		Create(d).Error
 }
 
+// UpsertEmployees 按 (org_id, employee_id) 幂等写入人员档案，返回写入行数。
+//
+// 查不到档案的 id（离职/失效）不会出现在入参里，所以这里不做删除；
+// 人员只是展示用数据，宁可保留最后一次已知状态，也不要因为一次拉取失败把人抹掉。
+//
+// ponytail: 线上还有 UNIQUE(passport) 单列索引。若上游某批里出现重复或空 passport，
+// 整批会失败（服务层只告警）。日常数据不会触发；真遇到时改成逐行 upsert 并跳过冲突行。
+func (r *AIAppHubRepo) UpsertEmployees(ctx context.Context, emps []model.EHREmployee) (int, error) {
+	if len(emps) == 0 {
+		return 0, nil
+	}
+	err := r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "org_id"}, {Name: "employee_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"person_id", "passport", "person_name", "group_e_number", "email",
+				"office", "appoint_name", "appoint_code", "department_id", "department_name",
+				"person_status", "person_type", "gender", "is_default", "location",
+				"manager_employee_id", "manager_person_id", "manager_passport", "manager_name",
+				"join_date", "on_board_date", "ehr_modify_date", "synced_at", "updated_at",
+			}),
+		}).
+		CreateInBatches(emps, 100).Error
+	return len(emps), err
+}
+
 func (r *AIAppHubRepo) GetDepartment(ctx context.Context, deptID string) (*model.AIAppDepartment, error) {
 	var d model.AIAppDepartment
 	if err := r.db.WithContext(ctx).Where("department_id = ?", deptID).First(&d).Error; err != nil {

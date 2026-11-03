@@ -66,6 +66,8 @@ type HubSyncResult struct {
 	Departments int    `json:"departments"`
 	Studios     int    `json:"studios"`
 	Hidden      int    `json:"hidden"`
+	// Employees 本轮写入的人员档案数（只有实现 EmployeeFetcher 的 fetcher 才会统计）。
+	Employees int `json:"employees"`
 	// DeletedStudios 本次对账隐藏的工作室数（只有 scope=all 会变）。
 	DeletedStudios int   `json:"deleted_studios"`
 	DurationMs     int64 `json:"duration_ms"`
@@ -94,6 +96,14 @@ func DefaultSyncRules() SyncRules {
 // DepartmentFetcher 只依赖这一次调用，方便测试注入。
 type DepartmentFetcher interface {
 	FetchDepartments(ctx context.Context) ([]ehrclient.Department, error)
+}
+
+// EmployeeFetcher 可选的第二段能力：按 employeeId 批量拉人员档案。
+//
+// 用可选接口而不是塞进 DepartmentFetcher，是因为人员是辅助数据——
+// 实现不了（或上游没授权）时组织树照常同步，不该让主流程跟着失败。
+type EmployeeFetcher interface {
+	FetchEmployees(ctx context.Context, employeeIDs []string) ([]ehrclient.Employee, error)
 }
 
 const (
@@ -170,6 +180,34 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		}
 	}
 
+	// 人员档案：EHR 没有"列全部人员"的授权路由，只能从部门节点的 9 类岗位上捡
+	// employeeId 再批量回查（见 ehrclient.Department.EmployeeIDs）。
+	// 失败只告警：组织树已经写完了，不值得为辅助数据整轮回滚。
+	//
+	// ponytail: 人员请求共用同步的 30s 超时。当前 100 个节点只捡出 ~41 个 id（5 个请求），
+	// 上游一旦开放全量花名册（数百人 → 数十个请求），需要单独放宽这段的超时。
+	var employees int
+	if ef, ok := s.fetcher.(EmployeeFetcher); ok {
+		ids := make([]string, 0, len(targets))
+		for id := range targets {
+			if it, ok := byID[id]; ok {
+				ids = append(ids, it.EmployeeIDs()...)
+			}
+		}
+		emps, ferr := ef.FetchEmployees(ctx, ids)
+		switch {
+		case ferr != nil:
+			slog.Warn("ai_app_hub_employees_fetch_failed", "error", ferr, "candidate_ids", len(ids))
+		default:
+			n, uerr := s.repo.UpsertEmployees(ctx, toEmployeeModels(emps))
+			if uerr != nil {
+				slog.Warn("ai_app_hub_employees_upsert_failed", "error", uerr)
+			} else {
+				employees = n
+			}
+		}
+	}
+
 	var studioIDs map[string]uuid.UUID
 	var studios, hidden int
 	studioIDs, studios, hidden, err = s.syncStudios(ctx, items, targets)
@@ -219,6 +257,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		Departments:    len(targets),
 		Studios:        studios,
 		Hidden:         hidden,
+		Employees:      employees,
 		DeletedStudios: int(deleted),
 		DurationMs:     time.Since(start).Milliseconds(),
 	}, nil
@@ -489,6 +528,53 @@ func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string,
 }
 
 // truncateRunes 按字符截断：按字节切中文会在 Postgres 产生非法 UTF-8 而整条写入失败。
+// toEmployeeModels 把上游档案映射成落库行。时间戳按毫秒原样转字符串，
+// 与线上 ehr_employees 的 varchar 列一致。
+func toEmployeeModels(emps []ehrclient.Employee) []model.EHREmployee {
+	now := time.Now()
+	out := make([]model.EHREmployee, 0, len(emps))
+	for _, e := range emps {
+		out = append(out, model.EHREmployee{
+			OrgID:             e.OrgID,
+			EmployeeID:        e.EmployeeID,
+			PersonID:          e.PersonID,
+			Passport:          e.Passport,
+			PersonName:        e.PersonName,
+			GroupENumber:      e.GroupENumber,
+			Email:             e.Email,
+			Office:            e.Office,
+			AppointName:       e.AppointName,
+			AppointCode:       e.AppointCode,
+			DepartmentID:      e.DepartmentID,
+			DepartmentName:    e.DepartmentName,
+			PersonStatus:      e.PersonStatus,
+			PersonType:        e.PersonType,
+			Gender:            e.Gender,
+			IsDefault:         e.IsDefault,
+			Location:          e.Location,
+			ManagerEmployeeID: e.ManagerEmployeeID,
+			ManagerPersonID:   e.ManagerPersonID,
+			ManagerPassport:   e.ManagerPassport,
+			ManagerName:       e.ManagerName,
+			JoinDate:          epochMillis(e.JoinDate),
+			OnBoardDate:       epochMillis(e.OnBoardDate),
+			EHRModifyDate:     epochMillis(e.LastModifyDate),
+			SyncedAt:          now,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		})
+	}
+	return out
+}
+
+// epochMillis 毫秒时间戳转字符串；0 视为"上游没给"，存空串而不是 "0"。
+func epochMillis(ms int64) string {
+	if ms <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(ms, 10)
+}
+
 func truncateRunes(s string, limit int) string {
 	runes := []rune(s)
 	if len(runes) <= limit {

@@ -156,7 +156,20 @@ func (d *DB) record(sql string, args []any) {
 
 func (d *DB) handle(sql string, args []any) (Result, error) {
 	d.record(sql, args)
+	// 会话级 GUC 设置（SET / SET LOCAL / RESET）在此直接吞掉并视为成功：
+	// 真实 PG 里它们不返回结果集，且不属于被测业务逻辑；若转交 handler，
+	// 每个测试都得为这类基础设施语句额外脚本化。语句仍会被记录，
+	// 因此继续可用 Statements() / FindContains() 断言它确实被执行过。
+	if isSessionGUC(sql) {
+		return Result{RowsAffected: 1}, nil
+	}
 	return d.h(sql, args)
+}
+
+// isSessionGUC 判定会话级 GUC 语句。注意 "SET " 带尾随空格，不会误匹配 SELECT。
+func isSessionGUC(sql string) bool {
+	u := strings.ToUpper(compact(sql))
+	return strings.HasPrefix(u, "SET ") || strings.HasPrefix(u, "RESET ")
 }
 
 func compact(sql string) string {
@@ -181,8 +194,17 @@ type conn struct{ d *DB }
 func (c *conn) Prepare(string) (driver.Stmt, error) {
 	return nil, fmt.Errorf("fakedb: Prepare 未实现（GORM 默认走 QueryerContext/ExecerContext）")
 }
-func (c *conn) Close() error              { return nil }
-func (c *conn) Begin() (driver.Tx, error) { return nil, fmt.Errorf("fakedb: 不支持事务") }
+func (c *conn) Close() error { return nil }
+
+// Begin 返回最小事务替身：不模拟隔离级别与回滚语义，只让 BEGIN/COMMIT/ROLLBACK 走通，
+// 使生产代码里的事务包裹 + SET LOCAL 能在假库上正常执行（见实现报告 §10 的导出关并行修复）。
+func (c *conn) Begin() (driver.Tx, error) { return fakeTx{}, nil }
+
+// fakeTx 是事务的最小替身：Commit/Rollback 均为空操作。
+type fakeTx struct{}
+
+func (fakeTx) Commit() error   { return nil }
+func (fakeTx) Rollback() error { return nil }
 
 func (c *conn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	res, err := c.d.handle(query, namedValues(args))

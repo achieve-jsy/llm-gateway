@@ -726,23 +726,52 @@ func (s *ArchiveService) streamExport(ctx context.Context, d time.Time, w *archi
 	}
 }
 
+// exportReadSession 在【关闭并行】的事务中执行归档导出读，返回结果。
+//
+// 【为什么必须关并行 —— 生产事故固化，见实现报告 §10】
+//
+// 并行 worker 要把元组经共享内存队列交回 leader，而【跨进程传递必须先把 TOAST 值 detoast】
+// （TOAST 指针指向源进程的缓冲区，在别的进程里无效）。于是 call_traces 的正文
+// （生产实测约 226 KB/行）在排序之前就被展开，leader 的 top-N 排序再把这些展开后的元组
+// 物化到临时文件 —— 生产实测单次批处理即可产生 GB 级临时文件。配合生产默认的
+// temp_file_limit = -1（无上限），足以写满 /data 并危及 PostgreSQL：
+//
+//	ERROR: could not write to file "base/pgsql_tmp/...": No space left on device
+//
+// 关闭并行后，Sort 拿到的是【含 TOAST 指针】的元组，top-N 只保留指针（约 18 字节/列），
+// 正文仅在行真正被投影出去时逐行 detoast（流式），因此几乎不产生临时文件。
+//
+// 用 SET LOCAL 限定在本次事务内，不污染连接池中连接上的后续查询。
+// 注：max_parallel_workers_per_gather 的 context 是 user，普通应用角色即可设置
+// （temp_file_limit 是 superuser，应用角色设不了，故只能从计划侧防守）。
+func (s *ArchiveService) exportReadSession(ctx context.Context, fn func(tx *gorm.DB) error) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SET LOCAL max_parallel_workers_per_gather = 0").Error; err != nil {
+			return fmt.Errorf("禁用导出并行: %w", err)
+		}
+		return fn(tx)
+	})
+}
+
 // fetchBatch 查询一批（keyset 游标）当天待归档行（契约 §5.2）。
 // 谓词与基准 2 一致（设计意图）；游标比较显式 `COLLATE "C"`，避免默认 collation 与
 // ORDER BY 不一致时漏行（request_id 是客户端可控任意文本，v3 §4.3）。
 func (s *ArchiveService) fetchBatch(ctx context.Context, dayStart, dayEnd time.Time, afterID string) ([]archiveExportRow, error) {
 	var rows []archiveExportRow
-	err := s.db.WithContext(ctx).Raw(`
-		SELECT ct.request_id, ct.ts, ct.request_headers, ct.request_body, ct.response_body,
-		       ct.error_code, ct.error_message
-		  FROM call_traces ct
-		 WHERE ct.ts >= ? AND ct.ts < ?
-		   AND (ct.request_body IS NOT NULL OR ct.response_body IS NOT NULL)
-		   AND ct.archive_status IN (0, 1)
-		   AND ct.request_id COLLATE "C" > ?
-		 ORDER BY ct.request_id COLLATE "C"
-		 LIMIT ?`,
-		dayStart, dayEnd, afterID, s.cfg.batchRows,
-	).Scan(&rows).Error
+	err := s.exportReadSession(ctx, func(tx *gorm.DB) error {
+		return tx.Raw(`
+			SELECT ct.request_id, ct.ts, ct.request_headers, ct.request_body, ct.response_body,
+			       ct.error_code, ct.error_message
+			  FROM call_traces ct
+			 WHERE ct.ts >= ? AND ct.ts < ?
+			   AND (ct.request_body IS NOT NULL OR ct.response_body IS NOT NULL)
+			   AND ct.archive_status IN (0, 1)
+			   AND ct.request_id COLLATE "C" > ?
+			 ORDER BY ct.request_id COLLATE "C"
+			 LIMIT ?`,
+			dayStart, dayEnd, afterID, s.cfg.batchRows,
+		).Scan(&rows).Error
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch batch: %w", err)
 	}

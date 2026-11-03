@@ -408,7 +408,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	r.GET("/api/v1/groups/capabilities", modelInfoHandler.GetGroupModelInfo)
 	r.GET("/api/v1/groups/defaults", middleware.JWTAuth(), groupHandler.GetDefaults)
 
-	// 启动健康检测调度器（优先使用环境变量 HEALTH_CHECK_INTERVAL 控制）
+	// 启动健康检测调度器（模型级 + 组级，开关由 health_check_configs.enabled 控制）
 	healthCheckSvc.StartBackground(context.Background())
 
 	// 启动用量统计每小时聚合（写 usage_daily）
@@ -517,7 +517,6 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/provider-definitions/:id", guard(rbac.PermProviderManage), defHandler.GetDefinition)
 
 		// 渠道管理
-		adminGroup.POST("/providers/check-all", guard(rbac.PermProviderManage), healthCheckHandler.CheckAll)
 		adminGroup.POST("/providers/quick-onboard/preview", guard(rbac.PermProviderManage), quickOnboardHandler.Preview)
 		adminGroup.POST("/providers/quick-onboard", guard(rbac.PermProviderManage), quickOnboardHandler.Create)
 		adminGroup.POST("/providers", guard(rbac.PermProviderManage), providerHandler.CreateProvider)
@@ -527,7 +526,6 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.PATCH("/providers/:id/status", guard(rbac.PermProviderManage), providerHandler.ToggleProviderStatus)
 		adminGroup.DELETE("/providers/:id", guard(rbac.PermProviderManage), providerHandler.DeleteProvider)
 		adminGroup.POST("/providers/:id/test", guard(rbac.PermProviderManage), testHandler.TestProvider)
-		adminGroup.POST("/providers/:id/check", guard(rbac.PermProviderManage), healthCheckHandler.CheckOne)
 		adminGroup.POST("/providers/:id/sync-models", guard(rbac.PermProviderManage), syncHandler.SyncModels)
 		adminGroup.POST("/providers/:id/sync-models/confirm", guard(rbac.PermProviderManage), syncHandler.ConfirmSync)
 		adminGroup.POST("/providers/:id/check-models", guard(rbac.PermProviderManage), syncHandler.CheckModels)

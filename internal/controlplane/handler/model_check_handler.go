@@ -260,16 +260,13 @@ func (h *ModelCheckHandler) checkModel(ctx context.Context, m *model.Model) *Mod
 }
 
 func (h *ModelCheckHandler) getModelFailureThreshold() int {
-	maxFailures := 3
 	config, err := h.healthRepo.GetConfig()
 	if err == nil && config != nil {
-		if config.ModelCheckFailureThreshold > 0 {
-			maxFailures = config.ModelCheckFailureThreshold
-		} else if config.FailureThreshold > 0 {
-			maxFailures = config.FailureThreshold
-		}
+		// GetConfig 已调用 ApplyDefaults，这个值必然 > 0。
+		// 兜底到渠道级 FailureThreshold 的那条分支随渠道检测一起删掉了。
+		return config.ModelCheckFailureThreshold
 	}
-	return maxFailures
+	return model.DefaultModelCheckFailureThreshold
 }
 
 func shouldAutoReenableModel(m *model.Model, threshold int) bool {

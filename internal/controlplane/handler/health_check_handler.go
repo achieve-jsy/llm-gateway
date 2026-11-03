@@ -1,12 +1,12 @@
 package handler
 
 import (
+	"github.com/example/llm-gateway/internal/controlplane/model"
 	"net/http"
 	"strconv"
 
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 // HealthCheckHandler 健康检测 Handler
@@ -19,6 +19,26 @@ func NewHealthCheckHandler(svc *service.HealthCheckService) *HealthCheckHandler 
 	return &HealthCheckHandler{svc: svc}
 }
 
+// healthCheckConfigResponse 把配置转成前端契约格式。
+//
+// GET 与 PUT 返回同一份结构，集中在这里避免两处各写一遍导致漂移。
+// 渠道级检测（interval/max_failures/check_mode/check_providers/...）已移除，
+// 这些键不再返回。
+func healthCheckConfigResponse(config *model.HealthCheckConfig) gin.H {
+	return gin.H{
+		"enabled":                          config.Enabled,
+		"model_check_enabled":              config.ModelCheckEnabled,
+		"model_check_interval_minutes":     config.ModelCheckIntervalSeconds / 60,
+		"model_check_interval_seconds":     config.ModelCheckIntervalSeconds,
+		"model_check_failure_threshold":    config.ModelCheckFailureThreshold,
+		"model_recovery_enabled":           config.ModelRecoveryEnabled,
+		"model_recovery_success_threshold": config.ModelRecoverySuccessThreshold,
+		"group_check_enabled":              config.GroupCheckEnabled,
+		"group_check_interval_minutes":     config.GroupCheckIntervalSeconds / 60,
+		"group_check_interval_seconds":     config.GroupCheckIntervalSeconds,
+	}
+}
+
 // GetConfig GET /api/v1/health-check/config — 获取检测配置
 func (h *HealthCheckHandler) GetConfig(c *gin.Context) {
 	config, err := h.svc.GetConfig()
@@ -26,61 +46,14 @@ func (h *HealthCheckHandler) GetConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "failed to get config"}})
 		return
 	}
-	checkMode := config.CheckMode
-	if checkMode == "" {
-		checkMode = "connectivity"
-	}
-	// 模型检测独立配置：使用默认值兜底
-	modelCheckIntervalSeconds := config.ModelCheckIntervalSeconds
-	if modelCheckIntervalSeconds <= 0 {
-		modelCheckIntervalSeconds = 300
-	}
-	modelCheckFailureThreshold := config.ModelCheckFailureThreshold
-	if modelCheckFailureThreshold <= 0 {
-		modelCheckFailureThreshold = 3
-	}
-
-	// 模型组检测独立配置：使用默认值兜底
-	groupCheckIntervalSeconds := config.GroupCheckIntervalSeconds
-	if groupCheckIntervalSeconds <= 0 {
-		groupCheckIntervalSeconds = 300
-	}
-
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"interval_minutes":               config.IntervalSeconds / 60,
-		"interval_seconds":               config.IntervalSeconds,
-		"max_failures":                   config.FailureThreshold,
-		"enabled":                        config.Enabled,
-		"check_providers":                config.CheckProviders,
-		"check_models":                   config.CheckModels,
-		"timeout_seconds":                config.TimeoutSeconds,
-		"failure_action":                 config.FailureAction,
-		"check_mode":                     checkMode,
-		"model_check_enabled":            config.ModelCheckEnabled,
-		"model_check_interval_minutes":   modelCheckIntervalSeconds / 60,
-		"model_check_interval_seconds":   modelCheckIntervalSeconds,
-		"model_check_failure_threshold":  modelCheckFailureThreshold,
-		"model_recovery_enabled":         config.ModelRecoveryEnabled,
-		"model_recovery_success_threshold": config.ModelRecoverySuccessThreshold,
-		"group_check_enabled":            config.GroupCheckEnabled,
-		"group_check_interval_minutes":   groupCheckIntervalSeconds / 60,
-		"group_check_interval_seconds":   groupCheckIntervalSeconds,
-	}})
+	// GetConfig 已经过 ApplyDefaults，无需在这里再兜底。
+	c.JSON(http.StatusOK, gin.H{"data": healthCheckConfigResponse(config)})
 }
 
 // UpdateConfig PUT /api/v1/health-check/config — 更新检测配置
 func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 	var input struct {
-		Enabled          *bool   `json:"enabled"`
-		IntervalSeconds  *int    `json:"interval_seconds"`
-		IntervalMinutes  *int    `json:"interval_minutes"`
-		FailureThreshold *int    `json:"failure_threshold"`
-		MaxFailures      *int    `json:"max_failures"`
-		FailureAction    *string `json:"failure_action"`
-		CheckProviders   *bool   `json:"check_providers"`
-		CheckModels      *bool   `json:"check_models"`
-		CheckMode        *string `json:"check_mode"`
-		TimeoutSeconds   *int    `json:"timeout_seconds"`
+		Enabled *bool `json:"enabled"`
 
 		// 模型检测独立配置
 		ModelCheckEnabled          *bool `json:"model_check_enabled"`
@@ -89,7 +62,7 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 		ModelCheckFailureThreshold *int  `json:"model_check_failure_threshold"`
 
 		// 模型组检测独立配置
-		GroupCheckEnabled        *bool `json:"group_check_enabled"`
+		GroupCheckEnabled         *bool `json:"group_check_enabled"`
 		GroupCheckIntervalMinutes *int  `json:"group_check_interval_minutes"`
 		GroupCheckIntervalSeconds *int  `json:"group_check_interval_seconds"`
 
@@ -110,33 +83,6 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 
 	if input.Enabled != nil {
 		config.Enabled = *input.Enabled
-	}
-	if input.IntervalSeconds != nil {
-		config.IntervalSeconds = *input.IntervalSeconds
-	}
-	if input.IntervalMinutes != nil {
-		config.IntervalSeconds = *input.IntervalMinutes * 60
-	}
-	if input.FailureThreshold != nil {
-		config.FailureThreshold = *input.FailureThreshold
-	}
-	if input.MaxFailures != nil {
-		config.FailureThreshold = *input.MaxFailures
-	}
-	if input.FailureAction != nil {
-		config.FailureAction = *input.FailureAction
-	}
-	if input.CheckProviders != nil {
-		config.CheckProviders = *input.CheckProviders
-	}
-	if input.CheckModels != nil {
-		config.CheckModels = *input.CheckModels
-	}
-	if input.CheckMode != nil {
-		config.CheckMode = *input.CheckMode
-	}
-	if input.TimeoutSeconds != nil {
-		config.TimeoutSeconds = *input.TimeoutSeconds
 	}
 
 	// 模型检测独立配置
@@ -173,9 +119,6 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 	}
 
 	// 最小间隔校验：不低于 60 秒
-	if config.IntervalSeconds < 60 {
-		config.IntervalSeconds = 60
-	}
 	if config.ModelCheckIntervalSeconds < 60 {
 		config.ModelCheckIntervalSeconds = 60
 	}
@@ -188,42 +131,7 @@ func (h *HealthCheckHandler) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	checkMode := config.CheckMode
-	if checkMode == "" {
-		checkMode = "connectivity"
-	}
-	modelCheckIntervalSeconds := config.ModelCheckIntervalSeconds
-	if modelCheckIntervalSeconds <= 0 {
-		modelCheckIntervalSeconds = 300
-	}
-	modelCheckFailureThreshold := config.ModelCheckFailureThreshold
-	if modelCheckFailureThreshold <= 0 {
-		modelCheckFailureThreshold = 3
-	}
-	groupCheckIntervalSeconds := config.GroupCheckIntervalSeconds
-	if groupCheckIntervalSeconds <= 0 {
-		groupCheckIntervalSeconds = 300
-	}
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"interval_minutes":               config.IntervalSeconds / 60,
-		"interval_seconds":               config.IntervalSeconds,
-		"max_failures":                   config.FailureThreshold,
-		"enabled":                        config.Enabled,
-		"check_providers":                config.CheckProviders,
-		"check_models":                   config.CheckModels,
-		"timeout_seconds":                config.TimeoutSeconds,
-		"failure_action":                 config.FailureAction,
-		"check_mode":                     checkMode,
-		"model_check_enabled":            config.ModelCheckEnabled,
-		"model_check_interval_minutes":   modelCheckIntervalSeconds / 60,
-		"model_check_interval_seconds":   modelCheckIntervalSeconds,
-		"model_check_failure_threshold":  modelCheckFailureThreshold,
-		"model_recovery_enabled":         config.ModelRecoveryEnabled,
-		"model_recovery_success_threshold": config.ModelRecoverySuccessThreshold,
-		"group_check_enabled":            config.GroupCheckEnabled,
-		"group_check_interval_minutes":   groupCheckIntervalSeconds / 60,
-		"group_check_interval_seconds":   groupCheckIntervalSeconds,
-	}})
+	c.JSON(http.StatusOK, gin.H{"data": healthCheckConfigResponse(config)})
 }
 
 // GetLogs GET /api/v1/health-check/logs — 获取检测记录
@@ -270,29 +178,6 @@ func (h *HealthCheckHandler) GetTimeline(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "failed to get timeline"}})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": result})
-}
-
-// CheckAll POST /api/v1/providers/check-all — 批量检测所有启用渠道（同步返回结果）
-func (h *HealthCheckHandler) CheckAll(c *gin.Context) {
-	result := h.svc.CheckAll(c.Request.Context())
-	c.JSON(http.StatusOK, gin.H{"data": result})
-}
-
-// CheckOne POST /api/v1/providers/:id/check — 检测单个渠道
-func (h *HealthCheckHandler) CheckOne(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "invalid provider id"}})
-		return
-	}
-
-	result, err := h.svc.CheckOneByID(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": err.Error()}})
-		return
-	}
-
 	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 

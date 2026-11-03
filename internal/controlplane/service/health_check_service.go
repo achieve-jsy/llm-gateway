@@ -4,23 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/bedrock"
-	bedrocktypes "github.com/aws/aws-sdk-go-v2/service/bedrock/types"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	bedrockruntimetypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
-	"github.com/aws/smithy-go/auth/bearer"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
@@ -66,10 +55,8 @@ type HealthCheckService struct {
 	snapshotter       snapshotRefresher      // 自动禁用/恢复后刷新 Redis snapshot（可为 nil）
 
 	mu                sync.Mutex
-	cancel            context.CancelFunc
 	modelCheckCancel  context.CancelFunc
 	groupCheckCancel  context.CancelFunc
-	running           bool
 	modelCheckRunning bool
 	groupCheckRunning bool
 }
@@ -133,11 +120,11 @@ func (s *HealthCheckService) UpdateConfig(config *model.HealthCheckConfig) error
 	if err := s.healthRepo.UpdateConfig(config); err != nil {
 		return err
 	}
-	// 重启调度器（provider + model + group）
-	s.Stop()
-	if config.Enabled {
-		s.Start()
-	}
+	// 渠道级检测已移除，只剩模型级与组级需要重启。
+	// 必须显式停掉再起：两者各有自己的 running 标志，
+	// 不停就会直接 return，新配置根本不生效。
+	s.stopModelCheckBackground()
+	s.stopGroupCheckBackground()
 	if config.Enabled && config.ModelCheckEnabled {
 		s.startModelCheckBackground(context.Background(), config)
 	}
@@ -155,96 +142,29 @@ func (s *HealthCheckService) GetLogs(limit int) ([]model.HealthCheckLog, error) 
 	return s.healthRepo.GetRecentLogs(limit)
 }
 
-// Start 启动调度器
-func (s *HealthCheckService) Start() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.running {
-		return
-	}
-
-	config, err := s.healthRepo.GetConfig()
-	if err != nil || !config.Enabled {
-		return
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-	s.running = true
-
-	go s.runLoop(ctx, config)
-	slog.Info("health check scheduler started", "interval", config.IntervalSeconds)
-}
-
-// Stop 停止调度器
-func (s *HealthCheckService) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.running && s.cancel != nil {
-		s.cancel()
-		s.running = false
-	}
-	if s.modelCheckRunning && s.modelCheckCancel != nil {
-		s.modelCheckCancel()
-		s.modelCheckRunning = false
-	}
-	if s.groupCheckRunning && s.groupCheckCancel != nil {
-		s.groupCheckCancel()
-		s.groupCheckRunning = false
-	}
-	slog.Info("health check scheduler stopped")
-}
-
-// IsRunning 是否在运行
-func (s *HealthCheckService) IsRunning() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.running
-}
-
-// 三个后台检测的首跑延迟。
+// 两个后台检测的首跑延迟。
 //
-// 依次错开 15 秒是刻意的：三类检测共用同一条上游链路，同时启动会把上游的
-// 启动期抖动放大成一批「全部渠道失败」，进而误触发自动禁用。
+// 错开 15 秒是刻意的：两类检测共用同一条上游链路，同时启动会把上游的
+// 启动期抖动放大成一批失败，进而误触发自动禁用。
 // 之前这三个数字分别硬编码在各自的 goroutine 里，看不出是同一套节奏。
 const (
-	providerCheckStartDelay = 30 * time.Second
-	modelCheckStartDelay    = 45 * time.Second
-	groupCheckStartDelay    = 60 * time.Second
+	modelCheckStartDelay = 30 * time.Second
+	groupCheckStartDelay = 45 * time.Second
 )
 
-// StartBackground 根据环境变量启动后台定时检测 goroutine
-// HEALTH_CHECK_INTERVAL 单位为分钟，默认 5，0 表示禁用
+// StartBackground 启动后台定时检测（模型级 + 组级）。
+//
+// 渠道级定时检测已移除：渠道是否可用由它下面的模型体现，逐模型检测已经覆盖，
+// 再用一个代表模型复测整个渠道是冗余的。渠道的启用/禁用改由人工决定，
+// 需要验证连通性时仍可调 POST /providers/:id/test。
+//
+// 开关完全由 health_check_configs.enabled 控制，不再读 HEALTH_CHECK_INTERVAL：
+// 环境变量每次启动都会覆盖配置表，反而让界面上改的设置失效。
 func (s *HealthCheckService) StartBackground(ctx context.Context) {
-	intervalStr := os.Getenv("HEALTH_CHECK_INTERVAL")
-	intervalMin := 5
-	if intervalStr != "" {
-		if v, err := strconv.Atoi(intervalStr); err == nil {
-			intervalMin = v
-		}
-	}
-	if intervalMin <= 0 {
-		slog.Info("health check background disabled (HEALTH_CHECK_INTERVAL=0)")
-		return
-	}
-
 	config, err := s.healthRepo.GetConfig()
 	if err != nil {
 		slog.Warn("failed to get health check config for background start", "error", err)
 		return
-	}
-
-	// 环境变量只在配置尚未初始化时作为种子值。
-	// 原实现每次启动都无条件写回 interval + enabled=true，导致运维在管理界面上
-	// 改过的间隔和关掉的开关，重启一次就被静默改回去。
-	if config.IntervalSeconds <= 0 {
-		config.IntervalSeconds = intervalMin * 60
-		config.Enabled = true
-		if err := s.healthRepo.UpdateConfig(config); err != nil {
-			slog.Warn("failed to seed health check config", "error", err)
-		}
 	}
 
 	// 尊重配置表里的总开关：用户关掉自动检测后，重启不应该把它偷偷开起来。
@@ -253,53 +173,41 @@ func (s *HealthCheckService) StartBackground(ctx context.Context) {
 		return
 	}
 
-	s.mu.Lock()
-	if s.running {
-		s.mu.Unlock()
-		return
-	}
-	s.cancel = func() {} // 占位，下面覆盖
-	s.running = true
-	s.mu.Unlock()
-
-	bgCtx, cancel := context.WithCancel(ctx)
-	s.mu.Lock()
-	s.cancel = cancel
-	s.mu.Unlock()
-
-	// 渠道检测后台 goroutine
-	go func() {
-		interval := time.Duration(config.IntervalSeconds) * time.Second
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		slog.Info("health check background started", "interval_seconds", config.IntervalSeconds)
-
-		// 首次延迟 30 秒执行，避免启动时立即发请求
-		select {
-		case <-bgCtx.Done():
-			return
-		case <-time.After(providerCheckStartDelay):
-			s.runBackgroundCheck()
-		}
-
-		for {
-			select {
-			case <-bgCtx.Done():
-				s.mu.Lock()
-				s.running = false
-				s.mu.Unlock()
-				return
-			case <-ticker.C:
-				s.runBackgroundCheck()
-			}
-		}
-	}()
-
-	// 启动独立的模型检测后台 goroutine
 	s.startModelCheckBackground(ctx, config)
-
-	// 启动独立的模型组检测后台 goroutine
 	s.startGroupCheckBackground(ctx, config)
+}
+
+// IsRunning 是否有后台检测在运行。
+//
+// 渠道级检测移除后，这个状态只反映模型级与组级——两者任一在跑即为 true。
+// 管理界面用它显示「检测进行中」，语义保持不变。
+func (s *HealthCheckService) IsRunning() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.modelCheckRunning || s.groupCheckRunning
+}
+
+// stopModelCheckBackground 停掉模型级后台检测。
+//
+// UpdateConfig 里改完配置必须走这一趟：startModelCheckBackground 见到
+// modelCheckRunning 为 true 会直接 return，不停就永远用不上新配置。
+func (s *HealthCheckService) stopModelCheckBackground() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.modelCheckRunning && s.modelCheckCancel != nil {
+		s.modelCheckCancel()
+		s.modelCheckRunning = false
+	}
+}
+
+// stopGroupCheckBackground 停掉组级后台检测，语义同 stopModelCheckBackground。
+func (s *HealthCheckService) stopGroupCheckBackground() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.groupCheckRunning && s.groupCheckCancel != nil {
+		s.groupCheckCancel()
+		s.groupCheckRunning = false
+	}
 }
 
 // startModelCheckBackground 启动模型检测独立后台定时器
@@ -333,7 +241,7 @@ func (s *HealthCheckService) startModelCheckBackground(ctx context.Context, conf
 		defer ticker.Stop()
 		slog.Info("model check background started", "interval_seconds", modelInterval)
 
-		// 首次延迟 45 秒（错开渠道检测的 30 秒）
+		// 首次延迟 30 秒（与组检测的 45 秒错开）
 		select {
 		case <-modelCtx.Done():
 			return
@@ -900,158 +808,6 @@ func (s *HealthCheckService) doBedrockModelCheck(provider *model.Provider, credJ
 	return true, elapsed, ""
 }
 
-// runBackgroundCheck 后台执行一轮检测
-func (s *HealthCheckService) runBackgroundCheck() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	result := s.CheckAll(ctx)
-	slog.Info("background health check completed",
-		"total", result.Total,
-		"success", result.Success,
-		"failed", result.Failed,
-		"auto_disabled", result.AutoDisabled,
-	)
-	s.invalidateTimelineCache()
-}
-
-// CheckAll 检测所有启用渠道，并行返回结果
-func (s *HealthCheckService) CheckAll(ctx context.Context) *CheckAllResult {
-	filter := &repository.ProviderListFilter{}
-	providers, _, err := s.providerRepo.List(*filter, 0, 1000)
-	if err != nil {
-		slog.Error("health check: failed to list providers", "error", err)
-		return &CheckAllResult{}
-	}
-
-	config, _ := s.healthRepo.GetConfig()
-	maxFailures := model.DefaultFailureThreshold
-	checkMode := "connectivity"
-	if config != nil {
-		if config.FailureThreshold > 0 {
-			maxFailures = config.FailureThreshold
-		}
-		if config.CheckMode != "" {
-			checkMode = config.CheckMode
-		}
-	}
-
-	result := &CheckAllResult{
-		Results: make([]CheckResult, 0, len(providers)),
-	}
-
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 5)
-
-	for i := range providers {
-		p := &providers[i]
-		// 启用渠道正常检测；自动禁用 (status=3) 的渠道继续检测以便自动恢复；手动禁用跳过
-		if !p.Enabled && p.Status != model.ProviderStatusAutoDisabled {
-			continue
-		}
-		mu.Lock()
-		result.Total++
-		mu.Unlock()
-
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(provider *model.Provider) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			cr := s.CheckOne(ctx, provider, maxFailures, checkMode)
-			mu.Lock()
-			result.Results = append(result.Results, *cr)
-			if cr.Success {
-				result.Success++
-			} else {
-				result.Failed++
-			}
-			if cr.AutoDisabled {
-				result.AutoDisabled++
-			}
-			mu.Unlock()
-		}(p)
-	}
-
-	wg.Wait()
-
-	s.healthRepo.CleanOldLogs(30)
-
-	return result
-}
-
-// CheckOne 检测单个渠道，支持 connectivity / model_forward / both 三种模式
-func (s *HealthCheckService) CheckOne(ctx context.Context, provider *model.Provider, maxFailures int, checkMode string) *CheckResult {
-	cr := &CheckResult{
-		ProviderID:   provider.ID,
-		ProviderName: provider.Name,
-	}
-
-	// 解密凭证
-	credJSON, err := crypto.Decrypt(provider.EncryptedCredentials)
-	if err != nil {
-		cr.Error = "decrypt credentials failed"
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
-		s.handleProviderFailure(provider, maxFailures, cr)
-		return cr
-	}
-
-	// 非 OpenAI 兼容 provider 走专属检测路径
-	if isNonOpenAICompatible(provider.DefinitionID) {
-		return s.checkNonOpenAIProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
-	}
-
-	apiKey := extractAPIKey(credJSON)
-
-	// 连通性检测
-	if checkMode == "connectivity" || checkMode == "both" {
-		success, elapsed, errMsg := s.checkConnectivity(ctx, provider, apiKey)
-		cr.ResponseTime = elapsed
-		if !success {
-			cr.Error = errMsg
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, elapsed, errMsg)
-			s.handleProviderFailure(provider, maxFailures, cr)
-			return cr
-		}
-		// 仅连通性模式直接返回成功
-		if checkMode == "connectivity" {
-			cr.Success = true
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, elapsed, "")
-			s.finalizeProviderSuccess(provider, cr)
-			return cr
-		}
-	}
-
-	// 模型转发检测
-	if checkMode == "model_forward" || checkMode == "both" {
-		success, elapsed, errMsg := s.checkModelForward(ctx, provider, apiKey)
-		if cr.ResponseTime == 0 {
-			cr.ResponseTime = elapsed
-		} else {
-			cr.ResponseTime += elapsed
-		}
-		if !success {
-			// errMsg 为 "skipped" 表示无模型可测，视为通过
-			if errMsg == "no model to test, skipped" {
-				cr.Success = true
-				s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, errMsg)
-				s.finalizeProviderSuccess(provider, cr)
-				return cr
-			}
-			cr.Error = errMsg
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, cr.ResponseTime, errMsg)
-			s.handleProviderFailure(provider, maxFailures, cr)
-			return cr
-		}
-	}
-
-	// 全部通过
-	cr.Success = true
-	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, "")
-	s.finalizeProviderSuccess(provider, cr)
-	return cr
-}
-
 // isNonOpenAICompatible 返回该 definition_id 是否为非 OpenAI 兼容协议。
 // 注意：仅为「不要走 GET /models / chat 通用路径」的标记；调用方必须再按 definition_id 分发，
 // 禁止把 seedance-relay 等误送进 Bedrock SDK。
@@ -1065,402 +821,6 @@ func isNonOpenAICompatible(definitionID string) bool {
 		return true
 	}
 	return false
-}
-
-// checkNonOpenAIProvider 对非 OpenAI 兼容 provider 做专属健康检测。
-// 参考 GoModel AvailabilityChecker 设计模式。
-func (s *HealthCheckService) checkNonOpenAIProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
-	switch provider.DefinitionID {
-	case "bedrock":
-		return s.checkBedrockProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
-	case "seedance-relay":
-		return s.checkSeedanceRelayProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
-	case "seedance-volcengine":
-		return s.checkSeedanceVolcengineProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
-	case "azure":
-		return s.checkAzureProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
-	case "vertex":
-		return s.checkVertexProvider(ctx, provider, credJSON, checkMode, maxFailures, cr)
-	case "anthropic":
-		return s.checkNativeProtocolProvider(ctx, provider, credJSON, maxFailures, cr, "anthropic", ProbeAnthropicMessages)
-	case "gemini":
-		return s.checkNativeProtocolProvider(ctx, provider, credJSON, maxFailures, cr, "gemini", ProbeGeminiGenerate)
-	default:
-		cr.Success = true // 未知类型跳过，不计失败
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, 0, "skipped: unsupported provider type for auto-check")
-		return cr
-	}
-}
-
-// checkAzureProvider Azure OpenAI v1 健康检测（与管理面「测试连接」共用探针）。
-func (s *HealthCheckService) checkAzureProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
-	apiKey := extractAPIKey(credJSON)
-
-	if checkMode == "connectivity" || checkMode == "both" {
-		res := ProbeAzureConnectivity(ctx, provider.Endpoint, apiKey)
-		cr.ResponseTime = res.ResponseTime
-		if !res.Success {
-			cr.Error = res.Message
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-			s.handleProviderFailure(provider, maxFailures, cr)
-			return cr
-		}
-		if checkMode == "connectivity" {
-			cr.Success = true
-			cr.Message = res.Message
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
-			s.finalizeProviderSuccess(provider, cr)
-			return cr
-		}
-		cr.Message = res.Message
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
-	}
-
-	if checkMode == "model_forward" || checkMode == "both" {
-		testModel := provider.TestModel
-		if testModel == "" {
-			skipMsg := "skipped: azure forward requires test_model"
-			cr.Success = true
-			if cr.Message != "" {
-				cr.Message = cr.Message + "; " + skipMsg
-			} else {
-				cr.Message = skipMsg
-			}
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, skipMsg)
-			s.finalizeProviderSuccess(provider, cr)
-			return cr
-		}
-		res := ProbeAzureChat(ctx, provider.Endpoint, apiKey, testModel)
-		cr.ResponseTime = res.ResponseTime
-		if !res.Success {
-			cr.Error = res.Message
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-			s.handleProviderFailure(provider, maxFailures, cr)
-			return cr
-		}
-		cr.Success = true
-		if cr.Message != "" {
-			cr.Message = cr.Message + "; " + res.Message
-		} else {
-			cr.Message = res.Message
-		}
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
-		s.finalizeProviderSuccess(provider, cr)
-		return cr
-	}
-
-	cr.Success = true
-	s.finalizeProviderSuccess(provider, cr)
-	return cr
-}
-
-// checkVertexProvider Google Vertex (native) 健康检测（与管理面「测试连接」共用 ProbeVertexGenerate）。
-// 原生面走 /models/{model}:generateContent + x-goog-api-key；
-// 非原生面（未以 /publishers/google 结尾）跳过，不判失败，避免误标记 provider 下线。
-func (s *HealthCheckService) checkVertexProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
-	endpoint := strings.TrimRight(provider.Endpoint, "/")
-	if !strings.HasSuffix(endpoint, "/publishers/google") {
-		cr.Success = true
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, 0, "skipped: vertex non-native endpoint, use admin test")
-		return cr
-	}
-	apiKey := extractAPIKey(credJSON)
-	testModel := strings.TrimSpace(provider.TestModel)
-	if testModel == "" {
-		testModel = "gemini-1.5-flash"
-	}
-	res := ProbeVertexGenerate(ctx, provider.Endpoint, apiKey, testModel)
-	cr.ResponseTime = res.ResponseTime
-	if !res.Success {
-		cr.Error = res.Message
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-		s.handleProviderFailure(provider, maxFailures, cr)
-		return cr
-	}
-	cr.Success = true
-	cr.Message = res.Message
-	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
-	s.finalizeProviderSuccess(provider, cr)
-	return cr
-}
-
-// checkSeedanceRelayProvider 景汐中转健康检测（与管理面「测试连接」共用 ProbeSeedanceRelayConnectivity）。
-//
-// 连通性：GET .../tasks/__gateway_health_probe__ —— 仅验证网络可达 + Bearer 鉴权（+ 非 5xx）。
-// 转发：本期 skip（不创建视频任务，不消耗生成额度）。
-func (s *HealthCheckService) checkSeedanceRelayProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
-	apiKey := extractAPIKey(credJSON)
-
-	if checkMode == "connectivity" || checkMode == "both" {
-		res := ProbeSeedanceRelayConnectivity(ctx, provider.Endpoint, apiKey)
-		cr.ResponseTime = res.ResponseTime
-		if !res.Success {
-			cr.Error = res.Message
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-			s.handleProviderFailure(provider, maxFailures, cr)
-			return cr
-		}
-		if checkMode == "connectivity" {
-			cr.Success = true
-			cr.Message = res.Message
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
-			s.finalizeProviderSuccess(provider, cr)
-			return cr
-		}
-		// both：连通已通过，继续转发段（skip）
-		cr.Message = res.Message
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
-	}
-
-	if checkMode == "model_forward" || checkMode == "both" {
-		skipMsg := "skipped: seedance-relay probe is connectivity+auth only (no video create)"
-		if checkMode == "model_forward" {
-			// 仅转发模式：仍跑一次连通+鉴权探针（与「检测=探测」一致），不做视频创建
-			res := ProbeSeedanceRelayConnectivity(ctx, provider.Endpoint, apiKey)
-			cr.ResponseTime = res.ResponseTime
-			if !res.Success {
-				cr.Error = res.Message
-				s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-				s.handleProviderFailure(provider, maxFailures, cr)
-				return cr
-			}
-			cr.Success = true
-			cr.Message = res.Message + "; " + skipMsg
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, cr.Message)
-			s.finalizeProviderSuccess(provider, cr)
-			return cr
-		}
-		// both：连通已成功，转发 skip 记成功
-		cr.Success = true
-		if cr.Message != "" {
-			cr.Message = cr.Message + "; " + skipMsg
-		} else {
-			cr.Message = skipMsg
-		}
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, cr.Message)
-		s.finalizeProviderSuccess(provider, cr)
-		return cr
-	}
-
-	cr.Success = true
-	if cr.Message == "" {
-		cr.Message = "ok: connectivity+auth only"
-	}
-	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, cr.Message)
-	s.finalizeProviderSuccess(provider, cr)
-	return cr
-}
-
-// checkSeedanceVolcengineProvider 官方 Seedance 健康检测（Bearer/HMAC 连通+鉴权，不创建视频）。
-func (s *HealthCheckService) checkSeedanceVolcengineProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
-	cred := ParseSeedanceVolcCreds(credJSON)
-	if !cred.HasAuth() {
-		cr.Error = "seedance-volcengine: missing credentials for selected auth_type"
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
-		s.handleProviderFailure(provider, maxFailures, cr)
-		return cr
-	}
-
-	runProbe := func() SeedanceRelayProbeResult {
-		return ProbeSeedanceVolcengineConnectivityCreds(ctx, provider.Endpoint, cred)
-	}
-	skipMsg := "skipped: seedance-volcengine probe is connectivity+auth only (no video create)"
-
-	if checkMode == "connectivity" || checkMode == "both" {
-		res := runProbe()
-		cr.ResponseTime = res.ResponseTime
-		if !res.Success {
-			cr.Error = res.Message
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-			s.handleProviderFailure(provider, maxFailures, cr)
-			return cr
-		}
-		cr.Message = res.Message
-		if checkMode == "connectivity" {
-			cr.Success = true
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
-			s.finalizeProviderSuccess(provider, cr)
-			return cr
-		}
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, res.Message)
-	}
-
-	if checkMode == "model_forward" || checkMode == "both" {
-		if checkMode == "model_forward" {
-			res := runProbe()
-			cr.ResponseTime = res.ResponseTime
-			if !res.Success {
-				cr.Error = res.Message
-				s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, res.ResponseTime, res.Message)
-				s.handleProviderFailure(provider, maxFailures, cr)
-				return cr
-			}
-			cr.Success = true
-			cr.Message = res.Message + "; " + skipMsg
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, res.ResponseTime, cr.Message)
-			s.finalizeProviderSuccess(provider, cr)
-			return cr
-		}
-		cr.Success = true
-		if cr.Message != "" {
-			cr.Message = cr.Message + "; " + skipMsg
-		} else {
-			cr.Message = skipMsg
-		}
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, cr.Message)
-		s.finalizeProviderSuccess(provider, cr)
-		return cr
-	}
-
-	cr.Success = true
-	if cr.Message == "" {
-		cr.Message = "ok: connectivity+auth only"
-	}
-	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, cr.Message)
-	s.finalizeProviderSuccess(provider, cr)
-	return cr
-}
-
-// checkBedrockProvider 使用 AWS SDK 对 Bedrock 做健康检测。
-//
-// 连通性检测：ListFoundationModels（控制面 API，零推理消耗）
-//   - 同时验证网络可达 + AWS 凭证有效
-//
-// 转发检测：Converse API（max_tokens=1，实际调用推理端）
-func (s *HealthCheckService) checkBedrockProvider(ctx context.Context, provider *model.Provider, credJSON string, checkMode string, maxFailures int, cr *CheckResult) *CheckResult {
-	apiKey := extractAPIKey(credJSON)
-	region := regionFromBedrockEndpoint(provider.Endpoint)
-	if region == "" {
-		region = "us-east-1"
-	}
-
-	// 构建 AWS 凭证选项
-	loadOpts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
-	var ctrlOpts []func(*bedrock.Options)
-	var runtimeOpts []func(*bedrockruntime.Options)
-
-	if apiKey != "" {
-		if strings.HasPrefix(apiKey, "{") {
-			var creds struct {
-				AccessKeyID     string `json:"access_key_id"`
-				SecretAccessKey string `json:"secret_access_key"`
-				SessionToken    string `json:"session_token,omitempty"`
-			}
-			if err := json.Unmarshal([]byte(apiKey), &creds); err == nil && creds.AccessKeyID != "" {
-				loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(
-					credentials.NewStaticCredentialsProvider(creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken),
-				))
-			}
-		} else {
-			// Bearer token 模式：用 AnonymousCredentials 阻止 SDK 走默认凭证链（EC2 IMDS 等）
-			loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(aws.AnonymousCredentials{}))
-			tokenVal := apiKey
-			ctrlOpts = append(ctrlOpts, func(o *bedrock.Options) {
-				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {
-					return bearer.Token{Value: tokenVal}, nil
-				})
-				o.AuthSchemePreference = []string{"smithy.api#httpBearerAuth"}
-			})
-			runtimeOpts = append(runtimeOpts, func(o *bedrockruntime.Options) {
-				o.BearerAuthTokenProvider = bearer.TokenProviderFunc(func(_ context.Context) (bearer.Token, error) {
-					return bearer.Token{Value: tokenVal}, nil
-				})
-				o.AuthSchemePreference = []string{"smithy.api#httpBearerAuth"}
-			})
-		}
-	}
-
-	probeCtx, cancel := context.WithTimeout(ctx, BedrockProbeTimeout)
-	defer cancel()
-
-	awsCfg, err := awsconfig.LoadDefaultConfig(probeCtx, loadOpts...)
-	if err != nil {
-		cr.Error = "AWS 配置加载失败: " + err.Error()
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, 0, cr.Error)
-		s.handleProviderFailure(provider, maxFailures, cr)
-		return cr
-	}
-
-	// ===== 连通性检测：ListFoundationModels =====
-	if checkMode == "connectivity" || checkMode == "both" {
-		start := time.Now()
-		bedrockCtrl := bedrock.NewFromConfig(awsCfg, ctrlOpts...)
-		out, err := bedrockCtrl.ListFoundationModels(probeCtx, &bedrock.ListFoundationModelsInput{
-			ByInferenceType: bedrocktypes.InferenceTypeOnDemand,
-		})
-		elapsed := int(time.Since(start).Milliseconds())
-		cr.ResponseTime = elapsed
-
-		if err != nil {
-			cr.Error = err.Error()
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, elapsed, cr.Error)
-			s.handleProviderFailure(provider, maxFailures, cr)
-			return cr
-		}
-
-		_ = out // model count available at out.ModelSummaries if needed
-		cr.ResponseTime = elapsed
-		s.finalizeProviderSuccess(provider, cr)
-
-		if checkMode == "connectivity" {
-			cr.Success = true
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, elapsed, "")
-			return cr
-		}
-	}
-
-	// ===== 转发检测：Converse API =====
-	if checkMode == "model_forward" || checkMode == "both" {
-		testModel := provider.TestModel
-		if testModel == "" {
-			// 从该 provider 的模型表取第一个启用的模型
-			providerID := provider.ID
-			filter := repository.ModelListFilter{ProviderID: &providerID}
-			models, _, _ := s.modelRepo.List(filter, 0, 1)
-			if len(models) > 0 {
-				testModel = bedrockModelID(models[0].Name)
-			}
-		}
-		if testModel == "" {
-			// 无模型可测，跳过转发检测视为通过
-			cr.Success = true
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, "no model to test, skipped")
-			return cr
-		}
-
-		start := time.Now()
-		runtime := bedrockruntime.NewFromConfig(awsCfg, runtimeOpts...)
-		userMsg := "hi"
-		maxTokens := BedrockProbeMaxTokens
-		_, err := runtime.Converse(probeCtx, &bedrockruntime.ConverseInput{
-			ModelId: &testModel,
-			Messages: []bedrockruntimetypes.Message{
-				{
-					Role: bedrockruntimetypes.ConversationRoleUser,
-					Content: []bedrockruntimetypes.ContentBlock{
-						&bedrockruntimetypes.ContentBlockMemberText{
-							Value: bedrockruntimetypes.ContentBlockMemberText{Value: userMsg}.Value,
-						},
-					},
-				},
-			},
-			InferenceConfig: &bedrockruntimetypes.InferenceConfiguration{MaxTokens: &maxTokens},
-		})
-		elapsed := int(time.Since(start).Milliseconds())
-		cr.ResponseTime += elapsed
-
-		if err != nil {
-			cr.Error = "model forward: " + err.Error()
-			s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, cr.ResponseTime, cr.Error)
-			s.handleProviderFailure(provider, maxFailures, cr)
-			return cr
-		}
-	}
-
-	cr.Success = true
-	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, cr.ResponseTime, "")
-	s.finalizeProviderSuccess(provider, cr)
-	return cr
 }
 
 // bedrockModelID 从模型名称中提取实际的 Bedrock model ID。
@@ -1494,157 +854,8 @@ func regionFromBedrockEndpoint(endpoint string) string {
 	return ""
 }
 
-// checkConnectivity 连通性检测：GET {endpoint}/models
-func (s *HealthCheckService) checkConnectivity(ctx context.Context, provider *model.Provider, apiKey string) (bool, int, string) {
-	endpoint := strings.TrimRight(provider.Endpoint, "/") + "/models"
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			Proxy: nil,
-		},
-	}
-
-	start := time.Now()
-	req, _ := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := client.Do(req)
-	elapsed := int(time.Since(start).Milliseconds())
-
-	if err != nil {
-		return false, elapsed, fmt.Sprintf("connection failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return false, elapsed, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncateStr(string(body), 200))
-	}
-
-	return true, elapsed, ""
-}
-
-// checkModelForward 模型转发检测：按模型类型选择对应探针接口
-func (s *HealthCheckService) checkModelForward(ctx context.Context, provider *model.Provider, apiKey string) (bool, int, string) {
-	// 确定测试模型：优先使用渠道的 test_model
-	testModel := provider.TestModel
-	testModelType := "chat" // 默认 chat
-	if testModel == "" {
-		// 从 models 表取第一个属于该渠道且启用的模型
-		providerID := provider.ID
-		filter := repository.ModelListFilter{ProviderID: &providerID}
-		models, _, _ := s.modelRepo.List(filter, 0, 1)
-		if len(models) > 0 {
-			testModel = models[0].Name
-			testModelType = models[0].ModelType
-		}
-	}
-	if testModel == "" {
-		// 无模型可测，视为通过
-		return false, 0, "no model to test, skipped"
-	}
-
-	success, skipped, elapsed, errMsg := ProbeModelForward(ctx, provider.Endpoint, testModel, apiKey, testModelType)
-	if skipped {
-		return false, elapsed, "no model to test, skipped"
-	}
-	if !success && errMsg != "" {
-		return false, elapsed, "model forward " + errMsg
-	}
-	return success, elapsed, errMsg
-}
-
-// CheckOneByID 通过 ID 查找渠道并检测
-func (s *HealthCheckService) CheckOneByID(ctx context.Context, id uuid.UUID) (*CheckResult, error) {
-	provider, err := s.providerRepo.GetByID(id)
-	if err != nil {
-		return nil, fmt.Errorf("provider not found")
-	}
-
-	config, _ := s.healthRepo.GetConfig()
-	maxFailures := model.DefaultFailureThreshold
-	checkMode := "connectivity"
-	if config != nil {
-		if config.FailureThreshold > 0 {
-			maxFailures = config.FailureThreshold
-		}
-		if config.CheckMode != "" {
-			checkMode = config.CheckMode
-		}
-	}
-
-	return s.CheckOne(ctx, provider, maxFailures, checkMode), nil
-}
-
-// finalizeProviderSuccess 渠道检测成功收尾：更新耗时、清失败计数；
-// 若此前被自动禁用（status=3）则立即恢复并刷新 snapshot（连通探针较稳，一次成功即可恢复）。
-func (s *HealthCheckService) finalizeProviderSuccess(provider *model.Provider, cr *CheckResult) {
-	s.providerRepo.UpdateResponseTime(provider.ID, cr.ResponseTime)
-	s.providerRepo.ResetFailures(provider.ID)
-	if provider.Status != model.ProviderStatusAutoDisabled {
-		return
-	}
-	if err := s.providerRepo.AutoEnable(provider.ID); err != nil {
-		slog.Error("provider auto-recovery: failed to re-enable",
-			"provider_id", provider.ID, "error", err)
-		return
-	}
-	cr.AutoReenabled = true
-	provider.Enabled = true
-	provider.Status = model.ProviderStatusEnabled
-	slog.Warn("provider auto-recovery: re-enabled after successful health check",
-		"provider_id", provider.ID, "provider_name", provider.Name)
-	// 请求刷新 Redis snapshot（合并去抖），让 gateway 立即感知渠道恢复
-	s.scheduleSnapshotRefresh(context.Background())
-}
-
-// handleProviderFailure 处理渠道检测失败。
-//
-// 语义与 handleModelCheckFailure 对齐：
-//   - 已处于自动禁用态（status=3）的渠道：幂等短路，失败不再累加计数、不再重复禁用；
-//   - 临时性失败（429/5xx/超时/网络/上游限流）：不计入连续失败、不自动禁用；
-//   - 确定性失败（4xx/凭证解密失败等）：累加连续失败，达到阈值才自动禁用。
-func (s *HealthCheckService) handleProviderFailure(provider *model.Provider, maxFailures int, cr *CheckResult) {
-	if provider == nil {
-		return
-	}
-	if provider.Status == model.ProviderStatusAutoDisabled {
-		// 已自动禁用：继续检测只为自动恢复，失败无需再记账（避免 consecutive_failures 无限增长）
-		return
-	}
-	if classifyProbeFailure(cr.Error) == probeFailureTransient {
-		slog.Warn("provider check: transient failure, skip auto-disable",
-			"provider_id", provider.ID, "provider_name", provider.Name, "error", cr.Error)
-		return
-	}
-
-	newCount, err := s.providerRepo.IncrementFailures(provider.ID)
-	if err != nil {
-		slog.Error("failed to increment failures", "provider_id", provider.ID, "error", err)
-		return
-	}
-
-	if newCount >= maxFailures {
-		slog.Warn("auto-disabling provider due to consecutive failures",
-			"provider_id", provider.ID,
-			"failures", newCount,
-			"threshold", maxFailures,
-		)
-		if err := s.providerRepo.AutoDisable(provider.ID); err != nil {
-			slog.Error("failed to auto-disable provider", "provider_id", provider.ID, "error", err)
-			return
-		}
-		cr.AutoDisabled = true
-	}
-}
-
 // RunNow 手动触发一次检测（异步，兼容旧调用）
 func (s *HealthCheckService) RunNow() {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		s.CheckAll(ctx)
-	}()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -1658,106 +869,6 @@ func (s *HealthCheckService) RunNow() {
 			s.invalidateGroupTimelineCache()
 		}()
 	}
-}
-
-// runLoop 定时执行健康检测（config 驱动模式）
-func (s *HealthCheckService) runLoop(ctx context.Context, config *model.HealthCheckConfig) {
-	ticker := time.NewTicker(time.Duration(config.IntervalSeconds) * time.Second)
-	defer ticker.Stop()
-
-	// 首次立即执行一轮
-	s.runBackgroundCheck()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			// 每次重新读取配置（支持动态调整间隔）
-			newConfig, err := s.healthRepo.GetConfig()
-			if err != nil || !newConfig.Enabled {
-				s.mu.Lock()
-				s.running = false
-				s.mu.Unlock()
-				return
-			}
-			s.runBackgroundCheck()
-		}
-	}
-}
-
-// checkModels 检测所有启用的模型（保留原有功能）
-func (s *HealthCheckService) checkModels(client *http.Client, config *model.HealthCheckConfig) {
-	filter := &repository.ModelListFilter{}
-	models, _, err := s.modelRepo.List(*filter, 0, 1000)
-	if err != nil {
-		slog.Error("health check: failed to list models", "error", err)
-		return
-	}
-
-	for _, m := range models {
-		if m.Enabled == nil || !*m.Enabled {
-			continue
-		}
-		if strings.Contains(strings.ToLower(m.ModelType), "audio") {
-			continue
-		}
-		if m.Provider.ID == uuid.Nil {
-			continue
-		}
-		s.checkSingleModel(client, &m, config)
-	}
-}
-
-// checkSingleModel 检测单个模型
-func (s *HealthCheckService) checkSingleModel(client *http.Client, m *model.Model, config *model.HealthCheckConfig) {
-	provider := &m.Provider
-	if provider.ID == uuid.Nil || !provider.Enabled {
-		return
-	}
-
-	credJSON, err := crypto.Decrypt(provider.EncryptedCredentials)
-	if err != nil {
-		s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, false, 0, "decrypt provider credentials failed")
-		return
-	}
-
-	apiKey := extractAPIKey(credJSON)
-
-	modelName := m.UpstreamName()
-	success, skipped, elapsed, errMsg := ProbeModelForward(context.Background(), provider.Endpoint, modelName, apiKey, m.ModelType)
-	if skipped {
-		s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, true, elapsed, "skipped")
-		return
-	}
-	if !success {
-		s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, false, elapsed, errMsg)
-		s.handleModelFailure("model", m.ID, config)
-		return
-	}
-
-	s.recordLog("model", m.ID, m.Name, provider.ID, provider.Name, true, elapsed, "")
-}
-
-// handleModelFailure 处理模型失败（基于日志记录的连续失败判断）
-func (s *HealthCheckService) handleModelFailure(targetType string, targetID uuid.UUID, config *model.HealthCheckConfig) {
-	failures, err := s.healthRepo.CountConsecutiveFailures(targetType, targetID)
-	if err != nil {
-		return
-	}
-
-	if failures < config.FailureThreshold {
-		return
-	}
-
-	if config.FailureAction == "alert_only" {
-		slog.Warn("health check threshold reached (alert_only)", "type", targetType, "id", targetID, "failures", failures)
-		return
-	}
-
-	slog.Warn("auto-disabling model due to health check failures", "id", targetID, "failures", failures)
-	enabled := false
-	s.modelRepo.UpdateEnabled(targetID, &enabled)
 }
 
 // recordLog 记录检测日志
@@ -2184,40 +1295,4 @@ func extractErrMsg(body []byte) string {
 		return resp.Error.Message
 	}
 	return truncateStr(string(body), 150)
-}
-
-// checkNativeProtocolProvider 对原生协议渠道（anthropic / gemini）做模型前向探测。
-//
-// 通用探针走 /chat/completions，这两类渠道必然 404，会被误判成「连续失败」后自动禁用。
-// 探针按各家原生协议发最小请求，成功/失败仍走统一的 handleProviderFailure 计数，
-// 因此只有真实故障才会触发禁用。
-func (s *HealthCheckService) checkNativeProtocolProvider(
-	ctx context.Context, provider *model.Provider, credJSON string, maxFailures int, cr *CheckResult,
-	protocol string,
-	probe func(ctx context.Context, endpoint, apiKey, model string) (bool, int, string),
-) *CheckResult {
-	apiKey := extractAPIKey(credJSON)
-	testModel := strings.TrimSpace(provider.TestModel)
-	if testModel == "" {
-		// 没配 test_model 时无法构造原生请求，跳过且不计失败（与 azure 分支语义一致）。
-		cr.Success = true
-		msg := "skipped: " + protocol + " forward requires test_model"
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, 0, msg)
-		return cr
-	}
-
-	ok, elapsed, msg := probe(ctx, provider.Endpoint, apiKey, testModel)
-	cr.ResponseTime = elapsed
-	if !ok {
-		cr.Error = msg
-		s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, false, elapsed, msg)
-		s.handleProviderFailure(provider, maxFailures, cr)
-		return cr
-	}
-
-	cr.Success = true
-	cr.Message = msg
-	s.recordLog("provider", provider.ID, provider.Name, provider.ID, provider.Name, true, elapsed, msg)
-	s.finalizeProviderSuccess(provider, cr)
-	return cr
 }

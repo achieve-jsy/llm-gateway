@@ -93,13 +93,6 @@ func seedDefaultConfig(t *testing.T, db *gorm.DB) *model.HealthCheckConfig {
 	cfg := &model.HealthCheckConfig{
 		ID:                            uuid.New(), // SQLite 不会自动生成 UUID，需显式设置
 		Enabled:                       false,      // 测试中不启动后台 goroutine
-		IntervalSeconds:               300,
-		FailureThreshold:              3,
-		FailureAction:                 "auto_disable",
-		CheckProviders:                true,
-		CheckModels:                   true,
-		CheckMode:                     "connectivity",
-		TimeoutSeconds:                15,
 		ModelCheckEnabled:             true,
 		ModelCheckIntervalSeconds:     300,
 		ModelCheckFailureThreshold:    3,
@@ -147,30 +140,22 @@ func TestGetConfig_Success(t *testing.T) {
 
 	var resp struct {
 		Data struct {
-			Enabled                    bool   `json:"enabled"`
-			IntervalSeconds            int    `json:"interval_seconds"`
-			IntervalMinutes            int    `json:"interval_minutes"`
-			FailureThreshold           int    `json:"max_failures"`
-			CheckMode                  string `json:"check_mode"`
-			ModelCheckEnabled          bool   `json:"model_check_enabled"`
-			ModelCheckIntervalSeconds  int    `json:"model_check_interval_seconds"`
-			ModelCheckIntervalMinutes  int    `json:"model_check_interval_minutes"`
-			ModelCheckFailureThreshold int    `json:"model_check_failure_threshold"`
-			ModelRecoveryEnabled       bool   `json:"model_recovery_enabled"`
-			ModelRecoverySuccessThreshold int `json:"model_recovery_success_threshold"`
-			GroupCheckEnabled          bool   `json:"group_check_enabled"`
-			GroupCheckIntervalSeconds  int    `json:"group_check_interval_seconds"`
-			GroupCheckIntervalMinutes  int    `json:"group_check_interval_minutes"`
+			Enabled                       bool `json:"enabled"`
+			ModelCheckEnabled             bool `json:"model_check_enabled"`
+			ModelCheckIntervalSeconds     int  `json:"model_check_interval_seconds"`
+			ModelCheckIntervalMinutes     int  `json:"model_check_interval_minutes"`
+			ModelCheckFailureThreshold    int  `json:"model_check_failure_threshold"`
+			ModelRecoveryEnabled          bool `json:"model_recovery_enabled"`
+			ModelRecoverySuccessThreshold int  `json:"model_recovery_success_threshold"`
+			GroupCheckEnabled             bool `json:"group_check_enabled"`
+			GroupCheckIntervalSeconds     int  `json:"group_check_interval_seconds"`
+			GroupCheckIntervalMinutes     int  `json:"group_check_interval_minutes"`
 		} `json:"data"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 
 	assert.Equal(t, false, resp.Data.Enabled)
-	assert.Equal(t, 300, resp.Data.IntervalSeconds)
-	assert.Equal(t, 5, resp.Data.IntervalMinutes)
-	assert.Equal(t, 3, resp.Data.FailureThreshold)
-	assert.Equal(t, "connectivity", resp.Data.CheckMode)
 	assert.Equal(t, true, resp.Data.ModelCheckEnabled)
 	assert.Equal(t, 300, resp.Data.ModelCheckIntervalSeconds)
 	assert.Equal(t, 5, resp.Data.ModelCheckIntervalMinutes)
@@ -187,11 +172,6 @@ func TestGetConfig_DefaultValuesForZeroFields(t *testing.T) {
 	r, db := setupHealthCheckHandler(t)
 	cfg := &model.HealthCheckConfig{
 		Enabled:                       false,
-		IntervalSeconds:               60,
-		FailureThreshold:              2,
-		FailureAction:                 "alert_only",
-		CheckMode:                     "model_forward",
-		TimeoutSeconds:                10,
 		ModelCheckEnabled:             true,
 		ModelCheckIntervalSeconds:     0, // zero → 应兜底 300
 		ModelCheckFailureThreshold:    0, // zero → 应兜底 3
@@ -243,11 +223,6 @@ func TestUpdateConfig_AllFields(t *testing.T) {
 
 	body := `{
 		"enabled": false,
-		"interval_seconds": 120,
-		"max_failures": 5,
-		"failure_action": "alert_only",
-		"check_mode": "both",
-		"timeout_seconds": 30,
 		"model_check_enabled": false,
 		"model_check_interval_seconds": 180,
 		"model_check_failure_threshold": 5,
@@ -262,34 +237,22 @@ func TestUpdateConfig_AllFields(t *testing.T) {
 
 	var resp struct {
 		Data struct {
-			Enabled                     bool   `json:"enabled"`
-			IntervalSeconds             int    `json:"interval_seconds"`
-			IntervalMinutes             int    `json:"interval_minutes"`
-			FailureThreshold            int    `json:"max_failures"`
-			FailureAction               string `json:"failure_action"`
-			CheckMode                   string `json:"check_mode"`
-			TimeoutSeconds              int    `json:"timeout_seconds"`
-			ModelCheckEnabled           bool   `json:"model_check_enabled"`
-			ModelCheckIntervalSeconds   int    `json:"model_check_interval_seconds"`
-			ModelCheckIntervalMinutes   int    `json:"model_check_interval_minutes"`
-			ModelCheckFailureThreshold  int    `json:"model_check_failure_threshold"`
-			ModelRecoveryEnabled        bool   `json:"model_recovery_enabled"`
+			Enabled                       bool `json:"enabled"`
+			ModelCheckEnabled             bool `json:"model_check_enabled"`
+			ModelCheckIntervalSeconds     int  `json:"model_check_interval_seconds"`
+			ModelCheckIntervalMinutes     int  `json:"model_check_interval_minutes"`
+			ModelCheckFailureThreshold    int  `json:"model_check_failure_threshold"`
+			ModelRecoveryEnabled          bool `json:"model_recovery_enabled"`
 			ModelRecoverySuccessThreshold int  `json:"model_recovery_success_threshold"`
-			GroupCheckEnabled           bool   `json:"group_check_enabled"`
-			GroupCheckIntervalSeconds   int    `json:"group_check_interval_seconds"`
-			GroupCheckIntervalMinutes   int    `json:"group_check_interval_minutes"`
+			GroupCheckEnabled             bool `json:"group_check_enabled"`
+			GroupCheckIntervalSeconds     int  `json:"group_check_interval_seconds"`
+			GroupCheckIntervalMinutes     int  `json:"group_check_interval_minutes"`
 		} `json:"data"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 
 	assert.Equal(t, false, resp.Data.Enabled)
-	assert.Equal(t, 120, resp.Data.IntervalSeconds)
-	assert.Equal(t, 2, resp.Data.IntervalMinutes)
-	assert.Equal(t, 5, resp.Data.FailureThreshold)
-	assert.Equal(t, "alert_only", resp.Data.FailureAction)
-	assert.Equal(t, "both", resp.Data.CheckMode)
-	assert.Equal(t, 30, resp.Data.TimeoutSeconds)
 	assert.Equal(t, false, resp.Data.ModelCheckEnabled)
 	assert.Equal(t, 180, resp.Data.ModelCheckIntervalSeconds)
 	assert.Equal(t, 3, resp.Data.ModelCheckIntervalMinutes)
@@ -299,28 +262,6 @@ func TestUpdateConfig_AllFields(t *testing.T) {
 	assert.Equal(t, false, resp.Data.GroupCheckEnabled)
 	assert.Equal(t, 180, resp.Data.GroupCheckIntervalSeconds)
 	assert.Equal(t, 3, resp.Data.GroupCheckIntervalMinutes)
-}
-
-func TestUpdateConfig_IntervalMinutes(t *testing.T) {
-	// interval_minutes 应被转换为 seconds
-	r, db := setupHealthCheckHandler(t)
-	seedDefaultConfig(t, db)
-
-	body := `{"interval_minutes": 3}`
-	w := doHealthRequest(r, "PUT", "/api/v1/health-check/config", body)
-	assertHealthStatus(t, w, http.StatusOK)
-
-	var resp struct {
-		Data struct {
-			IntervalSeconds int `json:"interval_seconds"`
-			IntervalMinutes int `json:"interval_minutes"`
-		} `json:"data"`
-	}
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err)
-
-	assert.Equal(t, 180, resp.Data.IntervalSeconds)
-	assert.Equal(t, 3, resp.Data.IntervalMinutes)
 }
 
 func TestUpdateConfig_ModelCheckIntervalMinutes(t *testing.T) {
@@ -365,48 +306,6 @@ func TestUpdateConfig_GroupCheckIntervalMinutes(t *testing.T) {
 	assert.Equal(t, 3, resp.Data.GroupCheckIntervalMinutes)
 }
 
-func TestUpdateConfig_MaxFailuresAlias(t *testing.T) {
-	// max_failures 是 failure_threshold 的别名，应正确映射
-	r, db := setupHealthCheckHandler(t)
-	seedDefaultConfig(t, db)
-
-	body := `{"max_failures": 10}`
-	w := doHealthRequest(r, "PUT", "/api/v1/health-check/config", body)
-	assertHealthStatus(t, w, http.StatusOK)
-
-	var resp struct {
-		Data struct {
-			FailureThreshold int `json:"max_failures"`
-		} `json:"data"`
-	}
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err)
-
-	assert.Equal(t, 10, resp.Data.FailureThreshold)
-}
-
-// ===================== UpdateConfig 最小间隔校验 =====================
-
-func TestUpdateConfig_ClampIntervalSecondsBelowMin(t *testing.T) {
-	r, db := setupHealthCheckHandler(t)
-	seedDefaultConfig(t, db)
-
-	// 设置 10 秒 → 应被 clamp 到 60 秒
-	body := `{"interval_seconds": 10}`
-	w := doHealthRequest(r, "PUT", "/api/v1/health-check/config", body)
-	assertHealthStatus(t, w, http.StatusOK)
-
-	var resp struct {
-		Data struct {
-			IntervalSeconds int `json:"interval_seconds"`
-		} `json:"data"`
-	}
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err)
-
-	assert.Equal(t, 60, resp.Data.IntervalSeconds, "interval_seconds < 60 should be clamped to 60")
-}
-
 func TestUpdateConfig_ClampModelCheckIntervalBelowMin(t *testing.T) {
 	r, db := setupHealthCheckHandler(t)
 	seedDefaultConfig(t, db)
@@ -444,53 +343,6 @@ func TestUpdateConfig_ClampGroupCheckIntervalBelowMin(t *testing.T) {
 
 	assert.Equal(t, 60, resp.Data.GroupCheckIntervalSeconds, "group_check_interval_seconds < 60 should be clamped to 60")
 }
-
-func TestUpdateConfig_ClampIntervalMinutesBelowMin(t *testing.T) {
-	// interval_minutes=1 → 60 秒 → 不应被 clamp（60 是合法值）
-	// interval_minutes=0 → 0 秒 → 会被 clamp 到 60
-	r, db := setupHealthCheckHandler(t)
-	seedDefaultConfig(t, db)
-
-	body := `{"interval_minutes": 0}`
-	w := doHealthRequest(r, "PUT", "/api/v1/health-check/config", body)
-	assertHealthStatus(t, w, http.StatusOK)
-
-	var resp struct {
-		Data struct {
-			IntervalSeconds int `json:"interval_seconds"`
-		} `json:"data"`
-	}
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err)
-
-	assert.Equal(t, 60, resp.Data.IntervalSeconds, "interval_minutes=0 → 0s → clamped to 60")
-}
-
-func TestUpdateConfig_IntervalAtExactly60(t *testing.T) {
-	// 60 秒是合法的最小值，不应被 clamp
-	r, db := setupHealthCheckHandler(t)
-	seedDefaultConfig(t, db)
-
-	body := `{"interval_seconds": 60, "model_check_interval_seconds": 60, "group_check_interval_seconds": 60}`
-	w := doHealthRequest(r, "PUT", "/api/v1/health-check/config", body)
-	assertHealthStatus(t, w, http.StatusOK)
-
-	var resp struct {
-		Data struct {
-			IntervalSeconds           int `json:"interval_seconds"`
-			ModelCheckIntervalSeconds int `json:"model_check_interval_seconds"`
-			GroupCheckIntervalSeconds int `json:"group_check_interval_seconds"`
-		} `json:"data"`
-	}
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err)
-
-	assert.Equal(t, 60, resp.Data.IntervalSeconds)
-	assert.Equal(t, 60, resp.Data.ModelCheckIntervalSeconds)
-	assert.Equal(t, 60, resp.Data.GroupCheckIntervalSeconds)
-}
-
-// ===================== UpdateConfig 边界/错误测试 =====================
 
 func TestUpdateConfig_InvalidJSON(t *testing.T) {
 	r, db := setupHealthCheckHandler(t)

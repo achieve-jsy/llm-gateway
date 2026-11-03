@@ -174,13 +174,6 @@ func (e *healthCheckTestEnv) seedConfig(t *testing.T, failureThreshold, recovery
 	cfg := &model.HealthCheckConfig{
 		ID:                            uuid.New(),
 		Enabled:                       false, // 不启动后台调度
-		IntervalSeconds:               300,
-		FailureThreshold:              3,
-		FailureAction:                 "auto_disable",
-		CheckProviders:                true,
-		CheckModels:                   true,
-		CheckMode:                     "connectivity",
-		TimeoutSeconds:                15,
 		ModelCheckEnabled:             true,
 		ModelCheckIntervalSeconds:     300,
 		ModelCheckFailureThreshold:    failureThreshold,
@@ -523,49 +516,6 @@ func TestHandleModelCheckFailureDeterministicDisablesAtThreshold(t *testing.T) {
 		require.NotNil(t, got.Enabled)
 		assert.False(t, *got.Enabled)
 		assert.Equal(t, 1, snap.count(), "自动禁用应请求一次快照重建")
-	})
-}
-
-// TestHandleProviderFailureSemantics 渠道侧失败处理：幂等短路 + 临时性失败不自动禁用
-func TestHandleProviderFailureSemantics(t *testing.T) {
-	t.Run("已自动禁用渠道幂等短路", func(t *testing.T) {
-		env := newHealthCheckTestEnv(t, nil)
-		p := env.seedProvider(t, "p1", "http://127.0.0.1:1", model.ProviderStatusAutoDisabled, 44445)
-		cr := &CheckResult{ProviderID: p.ID, ProviderName: p.Name, Error: "HTTP 404: Model not exist."}
-
-		env.svc.handleProviderFailure(p, 3, cr)
-
-		assert.False(t, cr.AutoDisabled)
-		got := env.reloadProvider(t, p.ID)
-		assert.Equal(t, 44445, got.ConsecutiveFailures, "不得重复累加")
-		assert.Equal(t, model.ProviderStatusAutoDisabled, got.Status)
-	})
-
-	t.Run("临时性失败不累加", func(t *testing.T) {
-		env := newHealthCheckTestEnv(t, nil)
-		p := env.seedProvider(t, "p1", "http://127.0.0.1:1", model.ProviderStatusEnabled, 0)
-		cr := &CheckResult{ProviderID: p.ID, ProviderName: p.Name, Error: "HTTP 429: quota exhausted"}
-
-		env.svc.handleProviderFailure(p, 1, cr)
-
-		assert.False(t, cr.AutoDisabled)
-		got := env.reloadProvider(t, p.ID)
-		assert.Equal(t, 0, got.ConsecutiveFailures, "临时性失败不计入连续失败")
-		assert.Equal(t, model.ProviderStatusEnabled, got.Status)
-	})
-
-	t.Run("确定性失败达阈值自动禁用", func(t *testing.T) {
-		env := newHealthCheckTestEnv(t, nil)
-		p := env.seedProvider(t, "p1", "http://127.0.0.1:1", model.ProviderStatusEnabled, 2)
-		cr := &CheckResult{ProviderID: p.ID, ProviderName: p.Name, Error: "HTTP 403: access denied"}
-
-		env.svc.handleProviderFailure(p, 3, cr)
-
-		assert.True(t, cr.AutoDisabled)
-		got := env.reloadProvider(t, p.ID)
-		assert.Equal(t, 3, got.ConsecutiveFailures)
-		assert.Equal(t, model.ProviderStatusAutoDisabled, got.Status)
-		assert.False(t, got.Enabled)
 	})
 }
 

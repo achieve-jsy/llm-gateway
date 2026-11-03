@@ -8,17 +8,15 @@ import (
 
 // HealthCheckConfig 健康检测策略配置
 type HealthCheckConfig struct {
-	ID               uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	Enabled          bool      `gorm:"not null;default:false" json:"enabled"`
-	IntervalSeconds  int       `gorm:"not null;default:300" json:"interval_seconds"`
-	FailureThreshold int       `gorm:"not null;default:3" json:"failure_threshold"`
-	FailureAction    string    `gorm:"type:varchar(20);not null;default:'auto_disable'" json:"failure_action"`
-	CheckProviders   bool      `gorm:"not null;default:true" json:"check_providers"`
-	CheckModels      bool      `gorm:"not null;default:true" json:"check_models"`
-	CheckMode        string    `gorm:"type:varchar(20);not null;default:'connectivity'" json:"check_mode"`
-	TimeoutSeconds   int       `gorm:"not null;default:15" json:"timeout_seconds"`
+	ID      uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	Enabled bool      `gorm:"not null;default:false" json:"enabled"`
 
-	// 模型检测独立配置（与渠道检测解耦）
+	// 渠道级检测已移除，以下列仍留在表里但不参与读写（避免一次不必要的迁移）：
+	// interval_seconds / failure_threshold / failure_action / check_providers /
+	// check_models / check_mode / timeout_seconds。
+	// 渠道是否可用现在由它下面的模型体现，渠道启用/禁用改由人工决定。
+
+	// 模型检测独立配置
 	ModelCheckEnabled          bool `gorm:"not null;default:true" json:"model_check_enabled"`
 	ModelCheckIntervalSeconds  int  `gorm:"not null;default:300" json:"model_check_interval_seconds"`
 	ModelCheckFailureThreshold int  `gorm:"not null;default:3" json:"model_check_failure_threshold"`
@@ -43,13 +41,10 @@ func (HealthCheckConfig) TableName() string { return "health_check_configs" }
 // 想调一个默认策略要改四五个地方，漏掉任何一处都会造成「配置写 5、代码按 3 跑」。
 // 统一到这里，其余地方只引用常量。
 const (
-	DefaultCheckIntervalSeconds           = 300
-	DefaultFailureThreshold               = 3
 	DefaultModelCheckIntervalSeconds      = 300
 	DefaultModelCheckFailureThreshold     = 3
 	DefaultGroupCheckIntervalSeconds      = 300
 	DefaultModelRecoverySuccessThreshold  = 2
-	DefaultTimeoutSeconds                 = 15
 )
 
 // ApplyDefaults 把零值字段补齐为默认值。
@@ -59,12 +54,6 @@ const (
 //
 // 注意：只补 <= 0 的字段，不覆盖任何显式配置。
 func (c *HealthCheckConfig) ApplyDefaults() {
-	if c.IntervalSeconds <= 0 {
-		c.IntervalSeconds = DefaultCheckIntervalSeconds
-	}
-	if c.FailureThreshold <= 0 {
-		c.FailureThreshold = DefaultFailureThreshold
-	}
 	if c.ModelCheckIntervalSeconds <= 0 {
 		c.ModelCheckIntervalSeconds = DefaultModelCheckIntervalSeconds
 	}
@@ -76,9 +65,6 @@ func (c *HealthCheckConfig) ApplyDefaults() {
 	}
 	if c.ModelRecoverySuccessThreshold <= 0 {
 		c.ModelRecoverySuccessThreshold = DefaultModelRecoverySuccessThreshold
-	}
-	if c.TimeoutSeconds <= 0 {
-		c.TimeoutSeconds = DefaultTimeoutSeconds
 	}
 }
 

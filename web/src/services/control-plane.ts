@@ -114,43 +114,6 @@ export async function testProvider(id: string, testChat?: boolean): Promise<Test
   return response.data.data
 }
 
-// ===================== 渠道健康检测 =====================
-
-/** 单个渠道检测结果 */
-export interface CheckResult {
-  provider_id: string
-  provider_name: string
-  success: boolean
-  response_time: number
-  error?: string
-  /** 成功时的语义说明（如景汐连通+鉴权） */
-  message?: string
-  auto_disabled: boolean
-  /** 本次是否因检测成功自动恢复（此前被健康检查自动禁用） */
-  auto_reenabled?: boolean
-}
-
-/** 批量检测汇总结果 */
-export interface CheckAllResult {
-  total: number
-  success: number
-  failed: number
-  auto_disabled: number
-  results: CheckResult[]
-}
-
-/** 批量检测所有启用渠道（超时设为3分钟） */
-export async function checkAllProviders(): Promise<CheckAllResult> {
-  const response = await http.post<ApiResponse<CheckAllResult>>('/api/v1/providers/check-all', undefined, { timeout: 180000 })
-  return response.data.data
-}
-
-/** 检测单个渠道 */
-export async function checkProvider(id: string): Promise<CheckResult> {
-  const response = await http.post<ApiResponse<CheckResult>>(`/api/v1/providers/${id}/check`)
-  return response.data.data
-}
-
 /** 健康检测配置 */
 export interface HealthCheckConfig {
   interval_minutes: number

@@ -1,9 +1,12 @@
 package service
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
+	"github.com/example/llm-gateway/internal/providers/kling"
+	"github.com/example/llm-gateway/internal/providers/vidu"
 	"github.com/google/uuid"
 )
 
@@ -41,7 +44,21 @@ type GroupModelInfo struct {
 	VideoSupportedAspectRatios []string `json:"video_supported_aspect_ratios,omitempty"`
 	VideoMinDurationSeconds    int      `json:"video_min_duration_seconds,omitempty"`
 	VideoMaxDurationSeconds    int      `json:"video_max_duration_seconds,omitempty"`
-	VideoAPIEndpoint           string   `json:"video_api_endpoint,omitempty"` // POST /v1/contents/generations/tasks
+	// VideoAPIEndpoint 组级**首选**提交端点（= VideoAPIEndpoints[0]）。
+	//
+	// 取值只有两个（见 MediaVideoEndpointUnified / MediaVideoEndpointSeedance）：
+	//   - 组内存在由通用 /v1/videos 承载的渠道成员 → "POST /v1/videos"；
+	//   - 否则（纯 Seedance 组，或渠道类型无法判定）→ "POST /v1/contents/generations/tasks"。
+	//
+	// 单值字段保持向后兼容：**既有 Seedance 消费方读到的值与改动前逐字一致**。
+	VideoAPIEndpoint string `json:"video_api_endpoint,omitempty"`
+	// VideoAPIEndpoints 组级**全部**可用提交端点（并集，首选排第一）。
+	//
+	// 混合组（既有 Seedance 又有 Kling/Vidu 成员）会同时给出两个端点 —— 这是唯一
+	// 诚实的表达：网关侧 /v1/videos 与 /v1/contents/generations/tasks 是两条并存链路，
+	// 组调度落到哪个成员的渠道，决定哪个端点真正可用。
+	// 单成员渠道的组只有 1 个元素（与 VideoAPIEndpoint 等值）。
+	VideoAPIEndpoints []string `json:"video_api_endpoints,omitempty"`
 }
 
 // GroupInfoRepo 抽象按需查询启用模型组（含成员）的能力。
@@ -229,12 +246,109 @@ func aggregateGroupModelInfo(members []*model.Model) GroupModelInfo {
 	return info
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// 视频组对外报的提交端点（Batch 3 · E1-补充定稿）
+//
+// 背景：网关侧有**两条并存**的视频提交链路（D1 决策：不互相顶替）：
+//   - Seedance 旧链路 `POST /v1/contents/generations/tasks`（既有生产唯一链路）；
+//   - 任务平台通用链路 `POST /v1/videos`（Kling/Vidu 经媒体适配器注册表接入）。
+//
+// 一个组可能同时含两类成员，**同一个字符串字段无法诚实表达**，因此：
+//   - `video_api_endpoint`（单值，保持不变）→ 报**首选**端点；
+//   - `video_api_endpoints`（新增数组）→ 报**全部**可用端点（并集，首选排第一）。
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const (
+	// MediaVideoEndpointUnified 通用视频任务端点（POST /v1/videos 三件套）。
+	//
+	// 由 gateway 的媒体适配器注册表承载（internal/providers/<vendor> 的
+	// MediaProviderType → core.MediaTaskProvider），当前为 kling / vidu。
+	MediaVideoEndpointUnified = "POST /v1/videos"
+	// MediaVideoEndpointSeedance Seedance 旧端点（POST /v1/contents/generations/tasks）。
+	//
+	// **必须保留**：既有 Seedance 消费方（前端/OpenCode 插件/脚本）按该值调用，
+	// 且网关的 /v1/videos 目前**没有** seedance 适配器，改报新端点会让这些组直接 501。
+	MediaVideoEndpointSeedance = "POST /v1/contents/generations/tasks"
+)
+
+// mediaVideoUnifiedProviderTypes 是「由通用 /v1/videos 承载」的渠道类型集合。
+//
+// 键取自各渠道包导出的 MediaProviderType 常量（**单一事实源**，避免控制面与
+// providers 包各写一份字面量而漂移）；取值大小写不敏感。
+//
+// 新增媒体渠道时**必须**同步这里，否则该渠道的组会被保守地报成 Seedance 旧端点。
+// 该漂移由 tests/controlplane/service/model_info_video_endpoint_test.go 的
+// 「静态漂移守卫」抓住：它扫描 internal/gateway/server/media_adapters.go 的
+// mediaAdapterBuilders 注册表，与本集合做双向对拍。
+var mediaVideoUnifiedProviderTypes = map[string]struct{}{
+	strings.ToLower(kling.MediaProviderType): {},
+	strings.ToLower(vidu.MediaProviderType):  {},
+}
+
+// MediaVideoUnifiedProviderTypes 返回走通用 /v1/videos 的渠道类型（排序后副本）。
+// 供漂移守卫与运维自检使用；不要在业务逻辑里遍历它（用 memberVideoAPIEndpoints）。
+func MediaVideoUnifiedProviderTypes() []string {
+	out := make([]string, 0, len(mediaVideoUnifiedProviderTypes))
+	for t := range mediaVideoUnifiedProviderTypes {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// memberVideoAPIEndpoints 返回单个成员渠道**可用**的视频提交端点。
+//
+// 判定依据是成员渠道的 provider type（`providers.type`，经 `Model.Provider` 预加载）。
+// **默认分支刻意报 Seedance 旧端点**：渠道类型未知/为空/未接线时保持改动前的行为。
+// 这个默认方向的代价是不对称的 —— 误报 /v1/videos 会让一个本来可用的 Seedance 组
+// 直接 501（硬故障），而误报旧端点最多是少报一个端点（软故障，且混合组仍会在
+// VideoAPIEndpoints 里给出并集）。
+func memberVideoAPIEndpoints(m *model.Model) []string {
+	if m != nil {
+		if _, ok := mediaVideoUnifiedProviderTypes[strings.ToLower(strings.TrimSpace(m.Provider.Type))]; ok {
+			return []string{MediaVideoEndpointUnified}
+		}
+	}
+	return []string{MediaVideoEndpointSeedance}
+}
+
+// groupVideoAPIEndpoints 汇总组内成员的可用提交端点：**并集**，首选端点排第一。
+//
+// 首选规则的唯一目的就是向后兼容：
+//   - 组内只有 Seedance 成员（或渠道类型无法判定）→ 与改动前**逐字一致**报旧端点；
+//   - 只要存在走通用端点的成员 → 首选 /v1/videos（新统一端点，带完整任务平台：
+//     CAS 状态机、超时清扫、记账、产物端点）。
+func groupVideoAPIEndpoints(members []*model.Model) []string {
+	unified, legacy := false, false
+	for _, m := range members {
+		for _, ep := range memberVideoAPIEndpoints(m) {
+			switch ep {
+			case MediaVideoEndpointUnified:
+				unified = true
+			case MediaVideoEndpointSeedance:
+				legacy = true
+			}
+		}
+	}
+	out := make([]string, 0, 2)
+	if unified {
+		out = append(out, MediaVideoEndpointUnified)
+	}
+	if legacy {
+		out = append(out, MediaVideoEndpointSeedance)
+	}
+	return out
+}
+
 // aggregateVideoCaps 视频能力保守聚合：分辨率/宽高比/场景取交集，时长取最窄区间。
 func aggregateVideoCaps(info *GroupModelInfo, members []*model.Model) {
 	if info == nil || len(members) == 0 {
 		return
 	}
-	info.VideoAPIEndpoint = "POST /v1/contents/generations/tasks"
+	info.VideoAPIEndpoints = groupVideoAPIEndpoints(members)
+	if len(info.VideoAPIEndpoints) > 0 {
+		info.VideoAPIEndpoint = info.VideoAPIEndpoints[0]
+	}
 
 	var res, ratios, actions []string
 	minDur, maxDur := 0, 0

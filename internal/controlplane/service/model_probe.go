@@ -53,13 +53,19 @@ func ProbeModelForward(ctx context.Context, endpoint, modelName, apiKey, modelTy
 
 // ─── 通用探针：Chat / Completion / Reasoning ──────────────────────────────
 
+// probeMaxTokens 是探针请求的输出上限。取 16 而不是更小的值，是因为部分
+// 上游对输出 token 设有下限：Bedrock 上的 kimi-k3 要求 max_output_tokens >= 16，
+// 传 10 会被拒绝（ValidationException: integer below minimum value, got 10）。
+// 16 同时满足其他模型 max_tokens 下界为 10 的要求，仍属极轻量请求。
+const probeMaxTokens = 16
+
 func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string) (bool, bool, int, string) {
 	chatEndpoint := strings.TrimRight(endpoint, "/") + "/chat/completions"
 
 	baseReq := map[string]interface{}{
 		"model":      modelName,
 		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens": 10,
+		"max_tokens": probeMaxTokens,
 	}
 	// 固定 temperature 模型（如 kimi-k3）优先注入 temperature；
 	// 「始终思考」模型（如 ZHIPU GLM-5.3）第一次探测就直接给 reasoning_effort，

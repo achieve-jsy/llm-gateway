@@ -154,7 +154,7 @@ func (s *GroupCheckService) CheckAll(ctx context.Context) *GroupCheckAllResult {
 	var wg sync.WaitGroup
 
 	// 所有模型组全量并发探测，消除 semaphore 排队导致的时序差异。
-	// 探针请求本身极轻量（max_tokens=5），不会对 Gateway 或上游产生显著压力。
+	// 探针请求本身极轻量（max_tokens=16），不会对 Gateway 或上游产生显著压力。
 	for i := range groups {
 		g := &groups[i]
 		result.Total++
@@ -271,7 +271,7 @@ func (s *GroupCheckService) buildProbeRequest(modelName, modelType string) (stri
 		return "/v1/chat/completions", map[string]interface{}{
 			"model":      modelName,
 			"messages":   []map[string]string{{"role": "user", "content": "健康检查"}},
-			"max_tokens": 10,
+			"max_tokens": probeMaxTokens,
 		}
 	}
 }

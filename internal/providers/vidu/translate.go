@@ -271,6 +271,18 @@ func profileForModel(model string) modelProfile {
 	return modelProfiles[familyUnlisted]
 }
 
+// knownModelFamilies 返回已在约束矩阵内的家族名（仅用于日志/排障，顺序稳定）。
+func knownModelFamilies() []string {
+	out := make([]string, 0, len(modelProfiles))
+	for family, profile := range modelProfiles {
+		if profile.supported {
+			out = append(out, string(family))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // normalizeReferenceModel 归一参考生视频使用的模型名。
 //
 // New API 的硬编码（`adaptor.go:124-129`）：参考图生视频只能用 **viduq2 基础模型**，
@@ -364,6 +376,13 @@ func buildSubmitPlan(req *core.MediaSubmitRequest) (*submitPlan, error) {
 	// （viduq2-pro 与 viduq2 同族），所以这一步对约束矩阵没有语义影响，只是让推导链更直白。
 	model = normalizeReferenceModel(action, model)
 	profile := profileForModel(model)
+	if !profile.supported {
+		// 未识别模型（如 vidu1.5 或将来新增的型号）：只做全局分辨率白名单与正整数时长校验，
+		// 不发明本地区间——在拿不到真凭据的当下，误杀合法取值的代价高于放行一次。
+		// 留一条 Debug 提示运维「这个型号绕过了约束矩阵」，便于后续补矩阵。
+		slog.Debug("vidu: 上游模型不在约束矩阵内，仅做通用校验",
+			"model", model, "known_families", knownModelFamilies())
+	}
 
 	// ③ vidu2.0 系列不支持纯文生：无图提前 400（任务书硬约束）。
 	if action == upstreamActionText2Video && !profile.supportsTextToVideo {

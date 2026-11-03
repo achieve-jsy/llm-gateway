@@ -78,6 +78,20 @@ func (p *CompatibleProvider) SetRequestMutator(mutator RequestMutator) {
 	p.requestMutator = mutator
 }
 
+// shouldDowngradeStructuredOutput reports whether a chat request should have its
+// response_format json_schema downgraded to json_object before forwarding. Generic
+// OpenAI-compatible providers serving DeepSeek models (and the native DeepSeek type)
+// may not support native json_schema structured output.
+func shouldDowngradeStructuredOutput(providerName, model string) bool {
+	switch strings.ToLower(strings.TrimSpace(providerName)) {
+	case "deepseek":
+		return true
+	case "litellm", "openai-compatible", "openai_compatible":
+		return providers.IsDeepSeekModel(model)
+	}
+	return false
+}
+
 func (p *CompatibleProvider) prepareRequest(req llmclient.Request) llmclient.Request {
 	if p.requestMutator != nil {
 		p.requestMutator(&req)
@@ -104,6 +118,10 @@ func (p *CompatibleProvider) ChatCompletion(ctx context.Context, req *core.ChatR
 		)
 		ctx = core.WithUpstreamProtocol(ctx, core.UpstreamProtocolResponsesBridge)
 		return providers.ChatViaResponses(ctx, p, req)
+	}
+	// DeepSeek 兼容上游不支持 response_format: json_schema,降级为 json_object。
+	if shouldDowngradeStructuredOutput(p.providerName, req.Model) {
+		providers.DowngradeJSONSchemaResponseFormat(req)
 	}
 	var resp core.ChatResponse
 	body, err := chatRequestBody(req)
@@ -147,6 +165,10 @@ func (p *CompatibleProvider) StreamChatCompletion(ctx context.Context, req *core
 		)
 		ctx = core.WithUpstreamProtocol(ctx, core.UpstreamProtocolResponsesBridge)
 		return providers.StreamChatViaResponses(ctx, p, streamReq, p.providerName)
+	}
+	// DeepSeek 兼容上游不支持 response_format: json_schema,降级为 json_object。
+	if shouldDowngradeStructuredOutput(p.providerName, streamReq.Model) {
+		providers.DowngradeJSONSchemaResponseFormat(streamReq)
 	}
 	body, err := chatRequestBody(streamReq)
 	if err != nil {

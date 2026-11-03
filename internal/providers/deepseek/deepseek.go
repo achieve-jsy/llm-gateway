@@ -76,7 +76,15 @@ func (p *Provider) setHeaders(req *http.Request) {
 // OpenAI-compatible chat extension. DeepSeek accepts reasoning_effort as a
 // top-level string, not "reasoning": {"effort": "..."}.
 func adaptChatRequest(req *core.ChatRequest) (any, error) {
-	if req == nil || req.Reasoning == nil || strings.TrimSpace(req.Reasoning.Effort) == "" {
+	if req == nil {
+		return nil, core.NewInvalidRequestError("chat request is required", nil)
+	}
+
+	// DeepSeek 只支持 response_format: {type: json_object},不支持 json_schema。
+	// 客户端 structured output 请求在此降级,避免上游返回不支持的错误。
+	providers.DowngradeJSONSchemaResponseFormat(req)
+
+	if req.Reasoning == nil || strings.TrimSpace(req.Reasoning.Effort) == "" {
 		return req, nil
 	}
 

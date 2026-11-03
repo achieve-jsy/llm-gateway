@@ -258,6 +258,14 @@ func (r *VideoTaskRepo) statsQueryScoped(start, end, userID, providerName, model
 }
 
 func (r *VideoTaskRepo) applyScope(query *gorm.DB, scope VideoTaskScope) *gorm.DB {
+	return applyMediaTaskScope(query, scope)
+}
+
+// applyMediaTaskScope 按角色限定 media_tasks 可见范围（仓储包内共用）。
+//
+// 提取为包级函数是为了让只读聚合仓储（media_task_stats_repo.go）复用**同一套**
+// 归属语义，而不是复制一份 —— 两份 scope 谓词漂移会导致看板数字与列表行数对不上。
+func applyMediaTaskScope(query *gorm.DB, scope VideoTaskScope) *gorm.DB {
 	if scope.IsGlobal {
 		return query
 	}

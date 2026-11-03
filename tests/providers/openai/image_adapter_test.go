@@ -15,13 +15,16 @@ import (
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/providers"
+	"github.com/example/llm-gateway/internal/providers/azure"
 	"github.com/example/llm-gateway/internal/providers/bailian"
 	"github.com/example/llm-gateway/internal/providers/cohere"
 	"github.com/example/llm-gateway/internal/providers/litellm"
 	"github.com/example/llm-gateway/internal/providers/minimax"
 	"github.com/example/llm-gateway/internal/providers/openai"
+	"github.com/example/llm-gateway/internal/providers/openrouter"
 	"github.com/example/llm-gateway/internal/providers/oracle"
 	"github.com/example/llm-gateway/internal/providers/vllm"
+	"github.com/example/llm-gateway/internal/providers/zai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,6 +54,50 @@ func TestB1_AnonymousEmbed_AutoGainsImageProvider(t *testing.T) {
 	imageProvider, ok := provider.(core.ImageProvider)
 	require.True(t, ok, "匿名内嵌 CompatibleProvider 的 provider 必须自动实现 core.ImageProvider")
 	require.NotNil(t, imageProvider)
+}
+
+// TestB1_AnonymousEmbedders_AllClasses 覆盖仓内**真实的**匿名内嵌者：
+// 它们不写任何委派代码也必须拿到图像能力（方法提升）。
+func TestB1_AnonymousEmbedders_AllClasses(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"created":1,"data":[{"b64_json":"cHJvbQ=="}]}`))
+	}))
+	defer server.Close()
+
+	tests := []struct {
+		name  string
+		build func(baseURL string) core.Provider
+	}{
+		{
+			name: "azure",
+			build: func(baseURL string) core.Provider {
+				return azure.New(providers.ProviderConfig{APIKey: "k", BaseURL: baseURL}, providers.ProviderOptions{})
+			},
+		},
+		{
+			name: "openrouter",
+			build: func(baseURL string) core.Provider {
+				return openrouter.New(providers.ProviderConfig{APIKey: "k", BaseURL: baseURL}, providers.ProviderOptions{})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := tt.build(server.URL + "/v1")
+			imageProvider, ok := provider.(core.ImageProvider)
+			require.True(t, ok, "%s 匿名内嵌 CompatibleProvider，必须自动满足 core.ImageProvider", tt.name)
+
+			// 不只是接口满足：真实调用要能打到 /images/generations 并回传 Raw。
+			resp, err := imageProvider.GenerateImage(context.Background(), &core.ImageGenerationRequest{
+				Model: "gpt-image-1", Prompt: "x",
+			})
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			assert.Equal(t, `{"created":1,"data":[{"b64_json":"cHJvbQ=="}]}`, string(resp.Raw))
+		})
+	}
 }
 
 // ── ② 命名字段：显式委派 ──────────────────────────────────────────────────────
@@ -102,6 +149,13 @@ func TestB1_NamedField_ExplicitDelegation(t *testing.T) {
 			desc: "命名字段 compatible + nativeClient + 并发信号量",
 			build: func(baseURL string) core.Provider {
 				return bailian.New(providers.ProviderConfig{APIKey: "k", BaseURL: baseURL}, providers.ProviderOptions{})
+			},
+		},
+		{
+			name: "zai",
+			desc: "命名字段 compatible（Z.ai 无图像端点时由上游 4xx 表达，不静默降级）",
+			build: func(baseURL string) core.Provider {
+				return zai.New(providers.ProviderConfig{APIKey: "k", BaseURL: baseURL}, providers.ProviderOptions{})
 			},
 		},
 	}

@@ -790,5 +790,114 @@
       "attachment_lifecycle": "上传时 feedback_id 为 NULL（孤儿）；提交反馈绑定后 feedback_id 指向该反馈；上传路径顺带删除 feedback_id IS NULL 且 created_at 早于 now()-24h 的孤儿（清理失败只记日志，不影响上传）",
       "attachment_bytes": "图片字节存 feedback_attachments.data（bytea），模型上 json:\"-\"；列表只 select 元数据列，任何 JSON 响应都不含 data 字段"
     }
+  },
+  "media_channels": {
+    "status": "骨架（A10 占位）：路由、字段清单、状态词表已按设计文档 §2.1/§3.3/§6.3 落定；示例与逐项错误码细节由 E 队补齐",
+    "design_doc": "docs/media-channels-integration-design.md",
+    "public_doc": "docs/media-api.md",
+    "base_prefix": "/v1",
+    "auth": "Bearer <api key>（沿用 /v1 鉴权链；任务查询与产物额外做归属校验）",
+    "routes": {
+      "POST /images/generations": {
+        "handler": "internal/gateway/handler/image_handler.go（B 队实现，A7 接缝已就位）",
+        "upstream": "OpenAI Images /v1/images/generations（gpt-image）",
+        "success_status": 200,
+        "request_content_type": "application/json",
+        "response_content_type": "application/json",
+        "response_note": "必须原样回写上游响应字节（b64 可达数十 MB），禁止重新序列化",
+        "request_fields": [
+          "model", "prompt", "n", "size", "quality", "background",
+          "moderation", "output_format", "output_compression", "user"
+        ]
+      },
+      "POST /images/edits": {
+        "handler": "internal/gateway/handler/image_handler.go（B 队实现，A7 接缝已就位）",
+        "upstream": "OpenAI Images /v1/images/edits（gpt-image）",
+        "success_status": 200,
+        "request_content_type": "multipart/form-data",
+        "response_content_type": "application/json",
+        "multipart_fields": {
+          "image": "可重复字段（image[]），至少 1 个；顺序语义化（首尾帧），网关重建 multipart 时必须保序并保留真实 filename",
+          "mask": "可选；缺省文件名 mask.png"
+        },
+        "request_fields": [
+          "model", "prompt", "n", "size", "quality", "background", "moderation",
+          "output_format", "output_compression", "input_fidelity", "response_format", "user"
+        ],
+        "multipart_only_fields": ["image[]", "mask"]
+      },
+      "POST /videos": {
+        "handler": "internal/gateway/handler/media_task_handler.go（C 队实现，A7 接缝已就位）",
+        "success_status": 200,
+        "request_content_type": "application/json",
+        "request_fields": [
+          "model", "prompt", "image", "duration", "resolution", "mode", "action", "aspect_ratio"
+        ],
+        "optional_headers": ["Idempotency-Key"],
+        "flow": "鉴权 → 组调度（组名→上游模型+渠道类型）→ PrepareAuthorizedGates（预算+请求配额+模型配额）→ 适配器 Submit → 同步写控制面 /internal/v1/media-tasks（写失败必须 5xx，禁止 fire-and-forget）"
+      },
+      "GET /videos/{task_id}": {
+        "handler": "internal/gateway/handler/media_task_handler.go（C 队实现，A7 接缝已就位）",
+        "success_status": 200,
+        "flow": "本地任务查询 → 归属校验 → 终态缓存直返 → 未终态则 adapter.Query(vendor_task_id) → 状态归一 → CAS 只前进 → completed 时记账一次",
+        "ownership_rule": "task_id 必须属于调用方 API Key/用户；跨 Key 读取一律返回 404（不是 403，避免任务探测）"
+      },
+      "GET /videos/{task_id}/content": {
+        "handler": "internal/gateway/handler/media_task_handler.go（C 队实现）",
+        "success_status": 302,
+        "note": "Phase 1-4 直跳上游产物 URL（credentialless）；Phase 5 改为网关代理"
+      }
+    },
+    "video_response_fields": [
+      "id", "object", "status", "model", "created_at", "progress", "error", "artifacts"
+    ],
+    "video_object_value": "video",
+    "status_enum": ["queued", "in_progress", "completed", "failed"],
+    "status_semantics": {
+      "vocabulary": "对外统一 OpenAI 词表；上游词表（Kling submitted/processing/succeed/failed、Vidu created/queueing/processing/success/failed）由适配器归一",
+      "ordering": "只允许前进：queued → in_progress → completed|failed，由 CAS 保证，终态不可回退",
+      "expired": "控制面超时 sweeper 的存储层状态 expired 对外必须归一为 failed（不记账），FailReason 说明超时",
+      "unknown_upstream_status": "上游未知状态词属于协议失败（适配器返回 error），既不得当 completed 也不得无限轮询",
+      "business_failure_vs_transport_error": "上游业务失败 → 用 status=failed + error 表达（不是 HTTP 5xx、不重试）；传输或协议失败 → 适配器返回 error，由 handler 映射为 5xx/重试并计入 poll_failures"
+    },
+    "error_codes": {
+      "400": ["invalid_request_error（不支持的参数，如 generations 的 response_format/style/seed，需给出替代建议）", "validation_error（渠道参数前置校验失败）"],
+      "402": ["media_pricing_missing（MEDIA_REQUIRE_PRICING=true 且该模型无媒体价）"],
+      "403": ["direct_model_not_allowed（图像/视频链路只接受模型组名，直连模型 ID 被拒）"],
+      "404": ["not_found_error（任务不存在，或不属于当前 Key/用户）"],
+      "501": ["not_implemented（provider 未实现可选媒体能力，见 core.ErrMediaNotSupported）"],
+      "502": ["upstream_error（上游不可达/响应非法）"],
+      "503": ["media_pricing_unavailable / billing_fact_store_backpressure"]
+    },
+    "id_contract": {
+      "public_task_id": "网关生成并由控制面持久化（media_tasks.task_id），对外只暴露它",
+      "vendor_task_id": "上游任务 id，存 media_tasks.vendor_task_id，禁止直接返回给客户端",
+      "adapter_contract": "core.MediaTaskProvider.Submit 返回上游 id；Query 的入参是上游 id"
+    },
+    "internal_api": {
+      "auth": "InternalAuth（X-Internal-Token）",
+      "routes": {
+        "POST /internal/v1/media-tasks": "创建（同步返回错误，网关必须感知失败）",
+        "GET /internal/v1/media-tasks/{id}": "查询（含归属字段）",
+        "PATCH /internal/v1/media-tasks/{id}": "CAS 更新状态/进度/用量",
+        "GET /internal/v1/media-tasks?sweep=1": "sweeper 拉取超时非终态任务"
+      },
+      "gateway_no_db": "gateway 禁止直连数据库，任务读写一律走上述内部 API（防护栏 A1）"
+    },
+    "billing": {
+      "mode": "事后记账（无预扣则无退款）",
+      "when": "仅在终态完成时记账一次；failed/expired 不记账",
+      "image": "优先 image token（usage.output_tokens 等）；退化 len(data) × per_image",
+      "video": "优先上游实际用量（Kling final_unit_deduction）；退化 duration × resolution 档位单价（Vidu）"
+    },
+    "unsupported_params": {
+      "generations": ["response_format（改用 output_format）", "style（仅 dall-e-3）", "seed"],
+      "behavior": "返回 400 而不是静默丢弃"
+    },
+    "tbd": [
+      "媒体单价的对外展示字段名（A1/E3 定稿后回填）",
+      "video create 的完整参数白名单与各渠道约束（D3 前置校验矩阵）",
+      "artifacts 字段在响应中的精确形状（E4 与 C5 对齐后回填示例）"
+    ]
   }
 }

@@ -5,8 +5,16 @@ type NotificationTypeMetadata struct {
 	Name             string   `json:"name"`
 	DisplayName      string   `json:"displayName"`
 	Description      string   `json:"description"`
+	Category         string   `json:"category"`
+	CategoryName     string   `json:"categoryName"`
 	DefaultVariables []string `json:"defaultVariables,omitempty"`
 	Channels         []string `json:"channels,omitempty"`
+}
+
+// NotificationCategoryMetadata 通知分类元数据
+type NotificationCategoryMetadata struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
 }
 
 // NotificationChannelMetadata 通知渠道元数据
@@ -17,15 +25,17 @@ type NotificationChannelMetadata struct {
 
 // NotificationMetadataResponse 元数据响应
 type NotificationMetadataResponse struct {
-	Types    []NotificationTypeMetadata    `json:"types"`
-	Channels []NotificationChannelMetadata `json:"channels"`
+	Types      []NotificationTypeMetadata      `json:"types"`
+	Categories []NotificationCategoryMetadata  `json:"categories"`
+	Channels   []NotificationChannelMetadata   `json:"channels"`
 }
 
 // GetNotificationMetadata 返回所有通知类型和渠道的元数据
 func GetNotificationMetadata() NotificationMetadataResponse {
 	return NotificationMetadataResponse{
-		Types:    getNotificationTypes(),
-		Channels: getNotificationChannels(),
+		Types:      getNotificationTypes(),
+		Categories: getNotificationCategories(),
+		Channels:   getNotificationChannels(),
 	}
 }
 
@@ -37,9 +47,20 @@ func getNotificationTypes() []NotificationTypeMetadata {
 			Name:             t.Name,
 			DisplayName:      t.DisplayName,
 			Description:      t.Description,
+			Category:         t.Category,
+			CategoryName:     t.CategoryName,
 			DefaultVariables: t.DefaultVariables,
 			Channels:         t.Channels,
 		})
+	}
+	return out
+}
+
+func getNotificationCategories() []NotificationCategoryMetadata {
+	regs := allNotificationCategories()
+	out := make([]NotificationCategoryMetadata, 0, len(regs))
+	for _, c := range regs {
+		out = append(out, NotificationCategoryMetadata{Name: c.Name, DisplayName: c.DisplayName})
 	}
 	return out
 }

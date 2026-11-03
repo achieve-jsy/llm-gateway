@@ -83,14 +83,20 @@ export interface NotificationChannelConfig {
   updated_at: string
 }
 
-// 通知配置元数据（类型定义 + 可用变量 + 支持渠道）
+// 通知配置元数据（类型定义 + 可用变量 + 支持渠道 + 业务域分类）
 export interface NotificationConfigMetadata {
   types: Array<{
     name: string
     displayName: string
     description: string
+    category: string
+    categoryName: string
     defaultVariables: string[]
     channels: string[]
+  }>
+  categories: Array<{
+    name: string
+    displayName: string
   }>
   channels: Array<{
     name: string

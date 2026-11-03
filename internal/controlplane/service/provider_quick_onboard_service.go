@@ -36,7 +36,7 @@ type QuickOnboardProviderInput struct {
 
 type QuickOnboardModelInput struct {
 	Name            string   `json:"name" binding:"required,max=200"`
-	ModelType       string   `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	ModelType       string   `json:"model_type" binding:"omitempty,oneof=chat image embedding embedding_vl rerank rerank_vl video"`
 	UpstreamModelID string   `json:"upstream_model_id" binding:"omitempty,max=200"`
 	Description     string   `json:"description" binding:"omitempty,max=500"`
 	ContextLength   *int     `json:"context_length" binding:"omitempty,min=0,max=10000000"`

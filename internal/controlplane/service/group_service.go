@@ -138,7 +138,7 @@ func (s *GroupService) GetFailoverDefaults() FailoverDefaults {
 type CreateGroupRequest struct {
 	Name                    string `json:"name" binding:"required,max=64"`
 	Description             string `json:"description"`
-	ModelType               string `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	ModelType               string `json:"model_type" binding:"omitempty,oneof=chat image embedding embedding_vl rerank rerank_vl video"`
 	Strategy                string `json:"strategy" binding:"required,oneof=round_robin priority weighted auto"`
 	MaxSwitches             *int   `json:"max_switches"`
 	SameModelRetries        *int   `json:"same_model_retries"`
@@ -151,7 +151,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name                    *string `json:"name"`
 	Description             *string `json:"description"`
-	ModelType               *string `json:"model_type" binding:"omitempty,oneof=chat embedding embedding_vl rerank rerank_vl video"`
+	ModelType               *string `json:"model_type" binding:"omitempty,oneof=chat image embedding embedding_vl rerank rerank_vl video"`
 	Strategy                *string `json:"strategy" binding:"omitempty,oneof=round_robin priority weighted auto"`
 	Enabled                 *bool   `json:"enabled"`
 	MaxSwitches             *int    `json:"max_switches"`

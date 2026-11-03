@@ -114,16 +114,18 @@ func TestAIAppHubSyncE2E(t *testing.T) {
 	t.Run("全量同步落库", func(t *testing.T) {
 		code, body := call(adminToken, `{"scope":"all"}`)
 		require.Equal(t, http.StatusOK, code, "%v", body)
-		require.Equal(t, float64(99), body["departments"])
-		require.Equal(t, float64(15), body["studios"])
+		// ponytail: 真实组织树会长大（曾 99 条，现 100 条），所以只钉下限 + 与库内行数自洽，
+		// 不把总数写死；真出问题（截断/空结果）这两条一样会红。
+		require.GreaterOrEqual(t, body["departments"], float64(90))
+		require.GreaterOrEqual(t, body["studios"], float64(10))
 		require.Equal(t, float64(2), body["hidden"])
 
 		var depts, studios, hidden int64
 		db.Table("ai_app_departments").Count(&depts)
 		db.Table("ai_app_studios").Count(&studios)
 		db.Table("ai_app_studios").Where("visible = ?", false).Count(&hidden)
-		require.Equal(t, int64(99), depts)
-		require.Equal(t, int64(15), studios)
+		require.Equal(t, int64(body["departments"].(float64)), depts, "落库部门数要与响应一致")
+		require.Equal(t, int64(body["studios"].(float64)), studios, "落库工作室数要与响应一致")
 		require.Equal(t, int64(2), hidden)
 
 		var renamed string

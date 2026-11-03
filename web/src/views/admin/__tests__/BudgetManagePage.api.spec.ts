@@ -701,6 +701,53 @@ describe('BudgetManagePage - API Integration Tests', () => {
       expect(wrapper.vm.tierBudgetItems[0].used_ratio).toBe(0.85)
     })
 
+    it('等级预算 API 真实聚合字段按 model_tier_id 合并配置并计算比例', async () => {
+      mockGetBudgetList.mockResolvedValue([
+        makeBudgetItem({ scope_type: 'studio', scope_id: 'studio-1', allocation_id: 'alloc-studio', label: 'Studio Alpha' }),
+      ])
+      mockListBudgetTierLimits.mockImplementation((allocationId: string) => {
+        if (allocationId === 'alloc-studio') {
+          return Promise.resolve([{
+            id: 'limit-1',
+            budget_allocation_id: 'alloc-studio',
+            model_tier_id: 'tier-premium',
+            model_tier_name: 'Premium',
+            period_type: 'monthly',
+            base_limit_usd: '1000.000000',
+            effective_limit_usd: '1000.000000',
+            enabled: true,
+          }])
+        }
+        return Promise.resolve([])
+      })
+      mockHttpGet.mockImplementation((url) => {
+        if (url === '/api/v1/budgets/tier-usage') {
+          return Promise.resolve({ data: { data: { items: [{
+            scope_type: 'studio',
+            scope_id: 'studio-1',
+            model_tier_id: 'tier-premium',
+            reported_cost_usd: '850.000000',
+            accounting_cost_usd: '0.000000',
+            request_count: 42,
+          }] } } })
+        }
+        return Promise.resolve({ data: {} })
+      })
+
+      const { wrapper } = await mountPage('admin')
+      await flushPromises()
+
+      expect(wrapper.vm.tierBudgetItems).toHaveLength(1)
+      expect(wrapper.vm.tierBudgetItems[0]).toMatchObject({
+        scope_id: 'studio-1',
+        model_tier_id: 'tier-premium',
+        tier_name: 'Premium',
+        amount_usd: 1000,
+        used_usd: 850,
+        used_ratio: 0.85,
+      })
+    })
+
     it('已配置等级子预算但暂无用量时仍显示配置标签', async () => {
       mockGetBudgetList.mockResolvedValue([
         makeBudgetItem({ scope_type: 'company', scope_id: 'GLOBAL', allocation_id: 'alloc-company' }),

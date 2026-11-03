@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -51,7 +52,9 @@ type HubSyncResult struct {
 	Departments int    `json:"departments"`
 	Studios     int    `json:"studios"`
 	Hidden      int    `json:"hidden"`
-	DurationMs  int64  `json:"duration_ms"`
+	// DeletedStudios 本次对账隐藏的工作室数（只有 scope=all 会变）。
+	DeletedStudios int   `json:"deleted_studios"`
+	DurationMs     int64 `json:"duration_ms"`
 }
 
 // SyncRules 业务规则：哪些部门不展示、哪些要改名。写死在代码里，
@@ -115,7 +118,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 	start := time.Now()
 	defer func() {
 		if err != nil {
-			s.markStatus(scope, "failed", err.Error())
+			s.markStatus(scope, "failed", err.Error(), 0)
 		}
 	}()
 
@@ -176,13 +179,28 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		}
 	}
 
-	s.markStatus(scope, "success", "")
+	// 全量同步收尾对账：EHR 里已经不存在的工作室隐藏。空结果代表上游异常
+	// （ehrclient 已把空 items 转成 ErrEmptyResult），绝不据此隐藏任何东西。
+	var deleted int64
+	if scope.Kind == ScopeAll && len(items) > 0 {
+		keep := make([]string, 0, len(items))
+		for _, it := range items {
+			keep = append(keep, it.ID)
+		}
+		deleted, err = s.repo.HideStudiosNotInDepartments(ctx, keep)
+		if err != nil {
+			return HubSyncResult{}, err
+		}
+	}
+
+	s.markStatus(scope, "success", "", int(deleted))
 	return HubSyncResult{
-		Scope:       string(scope.Kind),
-		Departments: len(targets),
-		Studios:     studios,
-		Hidden:      hidden,
-		DurationMs:  time.Since(start).Milliseconds(),
+		Scope:          string(scope.Kind),
+		Departments:    len(targets),
+		Studios:        studios,
+		Hidden:         hidden,
+		DeletedStudios: int(deleted),
+		DurationMs:     time.Since(start).Milliseconds(),
 	}, nil
 }
 
@@ -403,7 +421,7 @@ func isLeader(leaderPassport, passport string) bool {
 }
 
 // markStatus 记录最近一次同步结果，管理页据此展示"上次同步时间/结果"。
-func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string) {
+func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string, deleted int) {
 	if s.settings == nil {
 		return
 	}
@@ -415,6 +433,7 @@ func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string)
 	// 成功时显式清空：否则管理页会出现"成功但仍显示上次的错误"。
 	if errMsg == "" {
 		values["ai_app_hub.last_sync_error"] = ""
+		values["ai_app_hub.last_sync_deleted_studios"] = strconv.Itoa(deleted)
 	} else {
 		values["ai_app_hub.last_sync_error"] = truncateRunes(errMsg, 500)
 	}

@@ -81,3 +81,86 @@ func TestSyncAllKeepsManualVisibility(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, got.Visible, "运营改过的可见性不能被同步打回去")
 }
+
+func TestSyncAllHidesVanishedStudios(t *testing.T) {
+	db, settings := newAIHubTestDBWithSettings(t)
+	repo := repository.NewAIAppHubRepo(db)
+	ctx := context.Background()
+
+	first := service.NewAIAppHubSyncService(fakeFetcher{items: threeNodes()}, repo, settings, service.DefaultSyncRules())
+	_, err := first.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+
+	// 第二轮：战略发展中心从 EHR 消失（公共关系事业部本来就按规则隐藏，不参与计数）
+	second := service.NewAIAppHubSyncService(fakeFetcher{items: []ehrclient.Department{
+		{ID: pubDeptID, Name: "公共关系事业部", Type: 2, LeaderPassport: "fandongbo"},
+	}}, repo, settings, service.DefaultSyncRules())
+	got, err := second.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+	require.Equal(t, 1, got.DeletedStudios)
+
+	gone, err := repo.GetStudioByDepartmentID(ctx, xlabDeptID)
+	require.NoError(t, err)
+	require.False(t, gone.Visible, "EHR 撤销的事业部要隐藏")
+
+	status, err := settings.GetValue("ai_app_hub.last_sync_deleted_studios")
+	require.NoError(t, err)
+	require.Equal(t, "1", status)
+
+	// 幂等：同样的输入再跑一次，没有新行可隐藏
+	again, err := second.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+	require.Zero(t, again.DeletedStudios)
+}
+
+func TestSyncAllEmptyResultHidesNothing(t *testing.T) {
+	db, settings := newAIHubTestDBWithSettings(t)
+	repo := repository.NewAIAppHubRepo(db)
+	ctx := context.Background()
+	svc := service.NewAIAppHubSyncService(fakeFetcher{items: threeNodes()}, repo, settings, service.DefaultSyncRules())
+	_, err := svc.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+
+	empty := service.NewAIAppHubSyncService(fakeFetcher{items: nil}, repo, settings, service.DefaultSyncRules())
+	got, err := empty.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+	require.Zero(t, got.DeletedStudios, "空结果不得触发隐藏")
+
+	for _, id := range []string{pubDeptID, xlabDeptID} {
+		s, err := repo.GetStudioByDepartmentID(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, id != pubDeptID, s.Visible, "只有规则隐藏的公共关系事业部是 false")
+	}
+}
+
+func TestSyncNonAllScopeDoesNotHide(t *testing.T) {
+	db, settings := newAIHubTestDBWithSettings(t)
+	repo := repository.NewAIAppHubRepo(db)
+	ctx := context.Background()
+	svc := service.NewAIAppHubSyncService(fakeFetcher{items: threeNodes()}, repo, settings, service.DefaultSyncRules())
+	_, err := svc.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+
+	// 只同步 xlab 单部门：公共关系事业部不在 targets，但也绝不能因此被隐藏
+	got, err := svc.Sync(ctx, service.SyncScope{Kind: service.ScopeDepartment, ID: xlabDeptID})
+	require.NoError(t, err)
+	require.Zero(t, got.DeletedStudios)
+}
+
+func TestSyncDoesNotReviveManuallyHiddenStudio(t *testing.T) {
+	db, settings := newAIHubTestDBWithSettings(t)
+	repo := repository.NewAIAppHubRepo(db)
+	ctx := context.Background()
+	svc := service.NewAIAppHubSyncService(fakeFetcher{items: threeNodes()}, repo, settings, service.DefaultSyncRules())
+	_, err := svc.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+
+	require.NoError(t, db.Exec("UPDATE ai_app_studios SET visible = 0 WHERE department_id = ?", xlabDeptID).Error)
+
+	_, err = svc.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+	still, err := repo.GetStudioByDepartmentID(ctx, xlabDeptID)
+	require.NoError(t, err)
+	require.False(t, still.Visible, "同步不得把运营关闭的工作室改回可见")
+}
+

@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -41,21 +42,6 @@ func (r *countingRunner) firstScope() service.SyncScope {
 	return r.scopes[0]
 }
 
-func TestSyncCronRunsImmediatelyAndStopsOnCancel(t *testing.T) {
-	runner := &countingRunner{}
-	ctx, cancel := context.WithCancel(context.Background())
-
-	service.StartAIAppHubSyncCron(ctx, runner, 10*time.Millisecond)
-
-	require.Eventually(t, func() bool { return runner.count() >= 1 }, time.Second, 5*time.Millisecond)
-	require.Equal(t, service.ScopeAll, runner.firstScope().Kind, "定时任务跑全量")
-
-	cancel()
-	time.Sleep(30 * time.Millisecond)
-	stopped := runner.count()
-	time.Sleep(60 * time.Millisecond)
-	require.Equal(t, stopped, runner.count(), "取消后不再触发")
-}
 
 func TestLoadSyncScheduleDefaults(t *testing.T) {
 	env := map[string]string{}
@@ -143,4 +129,151 @@ func TestSyncStateStoreLockIsExclusiveAndOwnerScoped(t *testing.T) {
 	release()
 	_, third := store.TryLock(ctx)
 	require.True(t, third, "释放后可以重新获取")
+}
+type flakyRunner struct {
+	calls int
+	errs  []error // 按调用序号返回；耗尽后返回 nil
+}
+
+func (r *flakyRunner) Sync(context.Context, service.SyncScope) (service.HubSyncResult, error) {
+	r.calls++
+	if r.calls-1 < len(r.errs) && r.errs[r.calls-1] != nil {
+		return service.HubSyncResult{}, r.errs[r.calls-1]
+	}
+	return service.HubSyncResult{Scope: "all"}, nil
+}
+
+func syncScheduleForTest(t *testing.T) *service.SyncSchedule {
+	t.Helper()
+	sched, err := service.LoadSyncSchedule(func(k string) (string, bool) {
+		if k == "AI_APP_HUB_SYNC_CRON" {
+			return "0 3 * * *", true
+		}
+		return "", false
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sched)
+	return sched
+}
+
+func cronOptsForTest(t *testing.T, runner service.SyncRunner, now time.Time) (service.SyncCronOptions, *service.SyncStateStore) {
+	t.Helper()
+	store, _ := newSyncStateStoreForTest(t)
+	return service.SyncCronOptions{
+		Schedule: syncScheduleForTest(t),
+		State:    store,
+		Runner:   runner,
+		Attempts: 3,
+		Now:      func() time.Time { return now },
+		Sleep:    func(context.Context, time.Duration) error { return nil },
+	}, store
+}
+
+func TestRunSyncCycleRunsOnFirstStart(t *testing.T) {
+	runner := &flakyRunner{}
+	now := time.Date(2026, 11, 2, 10, 20, 0, 0, time.UTC)
+	opts, store := cronOptsForTest(t, runner, now)
+
+	ran, attempts, err := service.RunSyncCycle(context.Background(), opts)
+	require.NoError(t, err)
+	require.True(t, ran)
+	require.Equal(t, 1, attempts)
+	require.Equal(t, 1, runner.calls, "首次没有 last_success，立即跑一次")
+
+	_, ok, err := store.LastSuccess(context.Background())
+	require.NoError(t, err)
+	require.True(t, ok, "成功后才记账")
+
+	// 同一个周期内再 tick：不重复
+	ran, _, err = service.RunSyncCycle(context.Background(), opts)
+	require.NoError(t, err)
+	require.False(t, ran)
+	require.Equal(t, 1, runner.calls)
+}
+
+func TestRunSyncCycleCatchesUpAfterRestart(t *testing.T) {
+	runner := &flakyRunner{}
+	now := time.Date(2026, 11, 2, 10, 20, 0, 0, time.UTC)
+	opts, store := cronOptsForTest(t, runner, now)
+	require.NoError(t, store.MarkSuccess(context.Background(), time.Date(2026, 11, 1, 3, 0, 0, 0, time.UTC)))
+
+	ran, _, err := service.RunSyncCycle(context.Background(), opts)
+	require.NoError(t, err)
+	require.True(t, ran, "昨天成功后错过今天 03:00，起来要补跑")
+}
+
+func TestRunSyncCycleSkipsWhenLockHeld(t *testing.T) {
+	runner := &flakyRunner{}
+	now := time.Date(2026, 11, 2, 10, 20, 0, 0, time.UTC)
+	opts, store := cronOptsForTest(t, runner, now)
+	_, ok := store.TryLock(context.Background())
+	require.True(t, ok)
+
+	ran, _, err := service.RunSyncCycle(context.Background(), opts)
+	require.NoError(t, err)
+	require.False(t, ran)
+	require.Zero(t, runner.calls)
+}
+
+func TestRunSyncCycleRetriesThenSucceeds(t *testing.T) {
+	runner := &flakyRunner{errs: []error{errors.New("boom"), errors.New("boom")}}
+	now := time.Date(2026, 11, 2, 10, 20, 0, 0, time.UTC)
+	opts, store := cronOptsForTest(t, runner, now)
+
+	ran, attempts, err := service.RunSyncCycle(context.Background(), opts)
+	require.NoError(t, err)
+	require.True(t, ran)
+	require.Equal(t, 3, attempts)
+	require.Equal(t, 3, runner.calls)
+	_, ok, err := store.LastSuccess(context.Background())
+	require.NoError(t, err)
+	require.True(t, ok)
+}
+
+func TestRunSyncCycleGivesUpAndDoesNotMarkSuccess(t *testing.T) {
+	runner := &flakyRunner{errs: []error{errors.New("a"), errors.New("b"), errors.New("c")}}
+	now := time.Date(2026, 11, 2, 10, 20, 0, 0, time.UTC)
+	opts, store := cronOptsForTest(t, runner, now)
+
+	ran, attempts, err := service.RunSyncCycle(context.Background(), opts)
+	require.Error(t, err)
+	require.True(t, ran)
+	require.Equal(t, 3, attempts)
+	_, ok, err := store.LastSuccess(context.Background())
+	require.NoError(t, err)
+	require.False(t, ok, "失败不得记账，否则当天会静默漏跑")
+}
+
+func TestRunSyncCycleSkipsRetryWhenSyncInProgress(t *testing.T) {
+	runner := &flakyRunner{errs: []error{service.ErrSyncInProgress}}
+	now := time.Date(2026, 11, 2, 10, 20, 0, 0, time.UTC)
+	opts, store := cronOptsForTest(t, runner, now)
+
+	ran, _, err := service.RunSyncCycle(context.Background(), opts)
+	require.NoError(t, err, "手动触发正在进行不算失败")
+	require.False(t, ran)
+	require.Equal(t, 1, runner.calls, "不重试")
+	_, ok, _ := store.LastSuccess(context.Background())
+	require.False(t, ok)
+}
+
+func TestStartSyncCronTicksAndStopsOnCancel(t *testing.T) {
+	runner := &flakyRunner{}
+	now := time.Date(2026, 11, 2, 10, 20, 0, 0, time.UTC)
+	store, _ := newSyncStateStoreForTest(t)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	service.StartAIAppHubSyncCron(ctx, service.SyncCronOptions{
+		Schedule: syncScheduleForTest(t), State: store, Runner: runner,
+		Tick: 5 * time.Millisecond, Attempts: 1,
+		Now:   func() time.Time { return now },
+		Sleep: func(context.Context, time.Duration) error { return nil },
+	})
+	require.Eventually(t, func() bool { return runner.calls >= 1 }, time.Second, 5*time.Millisecond)
+
+	cancel()
+	time.Sleep(30 * time.Millisecond)
+	stopped := runner.calls
+	time.Sleep(60 * time.Millisecond)
+	require.Equal(t, stopped, runner.calls)
 }

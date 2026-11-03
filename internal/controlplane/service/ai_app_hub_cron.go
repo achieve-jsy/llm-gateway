@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -155,39 +156,143 @@ func envOr(getenv func(string) (string, bool), key, def string) string {
 	return def
 }
 
-// StartAIAppHubSyncCron 启动后台同步：先立即跑一次（冷启动补齐），之后按 interval 循环。
-//
-// 单次失败只记日志不退出——EHR 抖动不该让进程里的定时器停摆。
-func StartAIAppHubSyncCron(ctx context.Context, runner SyncRunner, interval time.Duration) {
-	if interval <= 0 {
-		interval = 6 * time.Hour
+// ---------- 调度周期 ----------
+
+const (
+	defaultSyncTick     = time.Minute
+	defaultSyncAttempts = 3
+)
+
+var defaultSyncBackoff = []time.Duration{30 * time.Second, 2 * time.Minute}
+
+// SyncCronOptions 定时同步的全部可调参数。零值可用：Tick/Attempts/Backoff/Now/Sleep
+// 都有默认值，测试只覆盖需要固定的那几个。
+type SyncCronOptions struct {
+	Schedule *SyncSchedule
+	State    *SyncStateStore
+	Runner   SyncRunner
+	Tick     time.Duration
+	Attempts int
+	Backoff  []time.Duration
+	Now      func() time.Time
+	Sleep    func(context.Context, time.Duration) error
+}
+
+func (o SyncCronOptions) withDefaults() SyncCronOptions {
+	if o.Tick <= 0 {
+		o.Tick = defaultSyncTick
 	}
+	if o.Attempts <= 0 {
+		o.Attempts = defaultSyncAttempts
+	}
+	if len(o.Backoff) == 0 {
+		o.Backoff = defaultSyncBackoff
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.Sleep == nil {
+		o.Sleep = sleepCtx
+	}
+	return o
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// RunSyncCycle 跑一轮：到点判定 → 抢 leader 锁 → 重试执行 → 成功后记账。
+//
+// 导出是为了让测试直接驱动一轮，不必依赖真实时钟。返回 ran=false 表示本轮没有执行
+// （未到点、锁被占、手动同步进行中），attempts 是实际尝试次数。
+func RunSyncCycle(ctx context.Context, opts SyncCronOptions) (ran bool, attempts int, err error) {
+	opts = opts.withDefaults()
+	if opts.Schedule == nil || opts.State == nil || opts.Runner == nil {
+		return false, 0, errors.New("sync cron: schedule/state/runner 都是必需的")
+	}
+
+	last, hasLast, err := opts.State.LastSuccess(ctx)
+	if err != nil {
+		slog.Warn("ai_app_hub_sync_last_success_read_failed", "error", err)
+		return false, 0, err
+	}
+	if hasLast && !opts.Schedule.IsDue(last, opts.Now()) {
+		return false, 0, nil
+	}
+
+	release, locked := opts.State.TryLock(ctx)
+	if !locked {
+		slog.Info("ai_app_hub_sync_cycle_skipped", "reason", "lock held")
+		return false, 0, nil
+	}
+	defer release()
+
+	for i := 1; i <= opts.Attempts; i++ {
+		_, err = opts.Runner.Sync(ctx, SyncScope{Kind: ScopeAll})
+		if err == nil {
+			if markErr := opts.State.MarkSuccess(ctx, opts.Now()); markErr != nil {
+				slog.Warn("ai_app_hub_sync_mark_success_failed", "error", markErr)
+			}
+			return true, i, nil
+		}
+		// 手动触发正在进行：不是失败，不重试也不记账。
+		if errors.Is(err, ErrSyncInProgress) {
+			slog.Info("ai_app_hub_sync_cycle_skipped", "reason", "sync in progress")
+			return false, i, nil
+		}
+		slog.Warn("ai_app_hub_sync_attempt_failed", "attempt", i, "error", err)
+		if i < opts.Attempts {
+			d := opts.Backoff[len(opts.Backoff)-1]
+			if i-1 < len(opts.Backoff) {
+				d = opts.Backoff[i-1]
+			}
+			if sleepErr := opts.Sleep(ctx, d); sleepErr != nil {
+				return true, i, sleepErr
+			}
+		}
+	}
+	return true, opts.Attempts, err
+}
+
+// StartAIAppHubSyncCron 起后台调度：启动先跑一轮（没有 last_success 时即冷启动补齐），
+// 之后每 Tick 判定一次。恢复不了的 panic 只记日志，不让定时器停摆。
+func StartAIAppHubSyncCron(ctx context.Context, opts SyncCronOptions) {
+	opts = opts.withDefaults()
 	go func() {
-		slog.Info("ai_app_hub_sync_cron_started", "interval", interval.String())
-		runAIAppHubSyncOnce(ctx, runner)
+		slog.Info("ai_app_hub_sync_cron_started", "tick", opts.Tick.String())
+		ticker := time.NewTicker(opts.Tick)
+		defer ticker.Stop()
+
+		runOnce := func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					slog.Error("ai_app_hub_sync_cron_panic", "panic", rec)
+				}
+			}()
+			ran, attempts, err := RunSyncCycle(ctx, opts)
+			slog.Info("ai_app_hub_sync_cycle",
+				"ran", ran, "attempts", attempts, "error", err)
+		}
+
+		runOnce()
 		for {
 			select {
 			case <-ctx.Done():
 				slog.Info("ai_app_hub_sync_cron_stopped")
 				return
-			case <-time.After(interval):
-				runAIAppHubSyncOnce(ctx, runner)
+			case <-ticker.C:
+				runOnce()
 			}
 		}
 	}()
-}
-
-func runAIAppHubSyncOnce(ctx context.Context, runner SyncRunner) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("ai_app_hub_sync_cron_panic", "panic", rec)
-		}
-	}()
-	result, err := runner.Sync(ctx, SyncScope{Kind: ScopeAll})
-	if err != nil {
-		slog.Error("ai_app_hub_sync_cron_failed", "error", err)
-		return
-	}
-	slog.Info("ai_app_hub_sync_cron_done",
-		"departments", result.Departments, "studios", result.Studios, "duration_ms", result.DurationMs)
 }

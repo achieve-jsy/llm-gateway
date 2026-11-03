@@ -68,8 +68,8 @@ export type InsightCardDrillPayload = Drill
 // ── model-hourly / model-users（后端已就绪，封装等待前端消费）─────────────
 
 export interface ModelHourlyParams {
-  start: string
-  end: string
+  from: string
+  to: string
   model_name?: string
   tier_name?: string
   group_by?: 'model' | 'tier'
@@ -107,8 +107,8 @@ export interface ModelHourlyResponse {
 }
 
 export interface ModelUsersParams {
-  start: string
-  end: string
+  from: string
+  to: string
   model_name?: string
   tier_name?: string
   dept_name?: string

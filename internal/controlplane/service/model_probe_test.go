@@ -380,6 +380,28 @@ func TestProbeChatCompletion_AlwaysThinkingModel_Alias(t *testing.T) {
 	assert.Equal(t, "low", lastReasoningEffort, "重试请求应注入 reasoning_effort=low")
 }
 
+// 探针的 max_tokens 必须 >= 上游下限。Bedrock 上的 kimi-k3 要求
+// max_output_tokens >= 16，传 10 会被判为 ValidationException 从而误禁用模型；
+// 其他模型的下界是 10。这条用例锁住传递链路，避免常量被改小后回归成误判。
+func TestProbeChatCompletionMaxTokensMeetsUpstreamLowerBound(t *testing.T) {
+	var gotMaxTokens float64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if v, ok := body["max_tokens"].(float64); ok {
+			gotMaxTokens = v
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+
+	success, skipped, _, errMsg := probeChatCompletion(context.Background(), srv.URL, "global.moonshotai.kimi-k3", "test-key")
+	assert.True(t, success, errMsg)
+	assert.False(t, skipped)
+	assert.GreaterOrEqual(t, gotMaxTokens, 16.0, "探针 max_tokens 必须 >= Bedrock kimi-k3 的下限 16")
+}
+
 func floatPtr(f float64) *float64 {
 	return &f
 }

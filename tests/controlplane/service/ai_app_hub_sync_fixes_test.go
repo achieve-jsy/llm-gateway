@@ -38,6 +38,29 @@ func TestSyncDepartmentKeepsExistingStudioID(t *testing.T) {
 	require.Equal(t, *before.StudioID, *after.StudioID)
 }
 
+// EHR 里有 parentId 为空的孤儿部门（杭州舰宇/杭州边翼（新）/暂存部门）：
+// 归属推不出来 → 不能静默丢掉，要计数（管理页能看到有 7 个部门不可见）。
+func TestSyncCountsOrphanDepartments(t *testing.T) {
+	db, settings := newAIHubTestDBWithSettings(t)
+	repo := repository.NewAIAppHubRepo(db)
+	ctx := context.Background()
+
+	f := &mutableFetcher{items: []ehrclient.Department{
+		{ID: xlabDeptID, Name: "战略发展中心", Type: 2},
+		{ID: "orphan", Name: "杭州舰宇", Type: 4}, // 没有 parentId
+		{ID: "orphan-child", Name: "至极", ParentID: "orphan", Type: 5},
+	}}
+	svc := service.NewAIAppHubSyncService(f, repo, settings, service.DefaultSyncRules())
+
+	got, err := svc.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+	require.Equal(t, 2, got.UnmappedDepartments, "孤儿部门自身 + 它的下级都算不出来归属")
+
+	orphan, err := repo.GetDepartment(ctx, "orphan-child")
+	require.NoError(t, err)
+	require.Nil(t, orphan.StudioID, "推不出归属时保持原值（NULL），不能瞎挂")
+}
+
 // I1：写库中途失败也要把状态记为 failed。
 func TestSyncMarksFailedWhenWriteFails(t *testing.T) {
 	db, settings := newAIHubTestDBWithSettings(t)

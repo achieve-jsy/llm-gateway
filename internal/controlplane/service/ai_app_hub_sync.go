@@ -405,7 +405,10 @@ func (s *AIAppHubSyncService) nearestStudioID(ctx context.Context, node ehrclien
 		}
 		parentID := normalizeParent(current.ParentID)
 		if parentID == "" {
-			return nil, true
+			// 链顶也不是事业部：EHR 里有这类孤儿部门（例如 杭州舰宇/杭州边翼（新）
+			// 的 parentId 是空的），它们挂在任何工作室下都无从推断 → 算"解析失败"，
+			// 由调用方保留原值、计数并打日志，别让它静默从聚合页消失。
+			return nil, false
 		}
 		parent, ok := byID[parentID]
 		if !ok {

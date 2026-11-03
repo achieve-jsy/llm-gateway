@@ -301,8 +301,8 @@ func TestMediaTaskDashboardService_AllKindArraysAligned(t *testing.T) {
 	if got := durationByKind["image"].SampleCount; got != 1 {
 		t.Errorf("image 耗时样本数 = %d，want 1", got)
 	}
-	if got := durationByKind["video"].P50Seconds; !secondsClose(got, 20) {
-		t.Errorf("video p50 = %v，want 20", got)
+	if got := durationByKind["video"].P50Seconds; got != 20 {
+		t.Errorf("video p50 = %v，want 20（分位值四舍五入到毫秒，必须无浮点尾差）", got)
 	}
 	legacy := durationByKind[""]
 	if legacy.SampleCount != 0 {
@@ -483,12 +483,6 @@ func anomalyOrder(d *service.MediaTaskDashboard) []string {
 		out = append(out, row.Kind)
 	}
 	return out
-}
-
-// secondsClose 容忍 SQLite julianday 的浮点尾差（微秒级，生产 PG 上为精确值）。
-func secondsClose(got, want float64) bool {
-	diff := got - want
-	return diff < 0.01 && diff > -0.01
 }
 
 func equalStrings(a, b []string) bool {

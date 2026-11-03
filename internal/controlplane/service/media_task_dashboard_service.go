@@ -1,6 +1,7 @@
 package service
 
 import (
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -184,9 +185,10 @@ func MediaTaskDashboardCaliberText() MediaTaskDashboardCaliber {
 			model.MediaTaskStatusFailed,
 			model.MediaTaskStatusExpired,
 		},
-		PercentileMethod: "nearest_rank（percentile_disc 语义，无线性插值）：第 k 位 = 升序第 ceil(p/100 × N) 个样本；分母 N = sample_count",
-		CostUnit:         "整数微美元（micro USD，1 USD = 1_000_000）；SUM 全程 int64，不做浮点换算",
-		LegacyKindNote:   "kind 为空串 = C1 扩列前创建的 legacy 行（全部是视频任务，刻意不回溯填充）；按 kind=image|video 过滤时这些行会被排除，看全量请不要传 kind",
+		PercentileMethod: "nearest_rank（percentile_disc 语义，无线性插值）：第 k 位 = 升序第 ceil(p/100 × N) 个样本；分母 N = sample_count；" +
+			"结果四舍五入到毫秒（3 位小数），避免浮点尾差被当成有效精度",
+		CostUnit:       "整数微美元（micro USD，1 USD = 1_000_000）；SUM 全程 int64，不做浮点换算",
+		LegacyKindNote: "kind 为空串 = C1 扩列前创建的 legacy 行（全部是视频任务，刻意不回溯填充）；按 kind=image|video 过滤时这些行会被排除，看全量请不要传 kind",
 		CompletedWithoutCostDefinition: "status = completed 且 COALESCE(cost_micro_usd, 0) = 0（含义：上游已产生费用但网关未记账 → 用量缺失或单价缺失）；" +
 			"口径刻意只含新链路 completed，不含 legacy succeeded —— 后者产生于成本列存在之前、成本恒为 0，纳入会形成永不消失的存量基线，把新增异常淹掉",
 		WindowNote: "任务按 created_at 归属窗口（半开区间 [start, end)）；上限 " + MediaTaskDashboardMaxRange + "，超限自动截断并在 window.clamped 标记",
@@ -405,15 +407,25 @@ func mergeDurationStats(kinds []string, durations []repository.MediaTaskDuration
 	for _, kind := range kinds {
 		row := byKind[kind] // 缺失时为零值（sample_count=0，分位全 0）
 		out = append(out, MediaTaskKindDuration{
-			Kind:                      kind,
-			SampleCount:               row.SampleCount,
-			P50Seconds:                row.P50Seconds,
-			P95Seconds:                row.P95Seconds,
-			P99Seconds:                row.P99Seconds,
+			Kind:        kind,
+			SampleCount: row.SampleCount,
+			// 四舍五入到毫秒：EXTRACT(EPOCH ...) 在不同 PG 版本/driver 下可能带回
+			// 浮点尾差（如 29.999998211860657），不处理会被前端当成有效精度显示。
+			P50Seconds:                roundToMillisecond(row.P50Seconds),
+			P95Seconds:                roundToMillisecond(row.P95Seconds),
+			P99Seconds:                roundToMillisecond(row.P99Seconds),
 			ExcludedMissingTimestamps: missingByKind[kind],
 		})
 	}
 	return out
+}
+
+// roundToMillisecond 把秒数四舍五入到毫秒（3 位小数）。
+func roundToMillisecond(seconds float64) float64 {
+	if seconds == 0 {
+		return 0
+	}
+	return math.Round(seconds*1000) / 1000
 }
 
 // mergeCostRows 把成本行对齐到统一的 kind 列表。

@@ -783,6 +783,27 @@ func (r *Router) GetProviderType(model string) string {
 	return r.lookup.GetProviderType(selector.QualifiedModel())
 }
 
+// ProviderForModel 返回「该模型最终落在哪个 provider 实例」——媒体链路（Batch 1 · B2）
+// 需要拿实例做可选能力断言（如 core.ImageProvider），而不是走 Router 的 chat 入口。
+//
+// providerHint 是调度得到的渠道类型（RouteDecision.ChannelType）；非空时优先按类型
+// 解析（避免同名模型在多个渠道下歧义）。解析失败返回 nil，调用方据此返回明确错误，
+// 不要自己猜渠道。
+func (r *Router) ProviderForModel(model, providerHint string) core.Provider {
+	if r == nil || r.lookup == nil || strings.TrimSpace(model) == "" {
+		return nil
+	}
+	if hint := strings.TrimSpace(providerHint); hint != "" {
+		if p := r.providerByTypeRegistry(hint); p != nil {
+			return p
+		}
+	}
+	if p, _, err := r.resolveProvider(context.Background(), model, ""); err == nil && p != nil {
+		return p
+	}
+	return r.providerByTypeRegistry(r.GetProviderType(model))
+}
+
 // GetProviderName returns the concrete configured provider instance name for
 // the given model selector. Returns empty string when unavailable.
 func (r *Router) GetProviderName(model string) string {

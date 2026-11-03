@@ -263,6 +263,16 @@ func (e *ResponsesInputElement) UnmarshalJSON(data []byte) error {
 		if v, ok := raw["output"]; ok {
 			e.Output = stringifyRawValue(v)
 		}
+	case "reasoning":
+		if v, ok := raw["summary"]; ok {
+			_ = json.Unmarshal(v, &e.Summary)
+		}
+		if v, ok := raw["content"]; ok {
+			trimmed := bytes.TrimSpace(v)
+			if len(trimmed) != 0 && !bytes.Equal(trimmed, []byte("null")) {
+				_ = json.Unmarshal(trimmed, &e.ReasoningContent)
+			}
+		}
 	default: // message (type="" or "message")
 		if v, ok := raw["role"]; ok {
 			_ = json.Unmarshal(v, &e.Role)
@@ -286,6 +296,9 @@ func (e *ResponsesInputElement) UnmarshalJSON(data []byte) error {
 		knownFields = append(knownFields, "call_id", "id", "name", "arguments", "status")
 	case "function_call_output":
 		knownFields = append(knownFields, "call_id", "status", "output")
+	case "reasoning":
+		// id/status 保留在 ExtraFields 中 round-trip；summary/content 由类型字段承载。
+		knownFields = append(knownFields, "summary", "content")
 	default:
 		knownFields = append(knownFields, "role", "status", "content")
 	}
@@ -327,6 +340,16 @@ func (e ResponsesInputElement) MarshalJSON() ([]byte, error) {
 			CallID: e.CallID,
 			Output: e.Output,
 			Status: e.Status,
+		}, e.ExtraFields)
+	case "reasoning":
+		return marshalWithUnknownJSONFields(struct {
+			Type    string                 `json:"type"`
+			Summary []ResponsesContentItem `json:"summary,omitempty"`
+			Content []ResponsesContentItem `json:"content,omitempty"`
+		}{
+			Type:    "reasoning",
+			Summary: e.Summary,
+			Content: e.ReasoningContent,
 		}, e.ExtraFields)
 	default: // message
 		type msg struct {

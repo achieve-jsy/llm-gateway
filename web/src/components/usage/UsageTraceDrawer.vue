@@ -460,7 +460,7 @@ const timelineStages = computed(() => {
 .up-tl-label { font-size: 11px; color: var(--el-text-color-secondary); font-weight: 600; }
 .up-tl-label-text { cursor: default; }
 .up-tl-ms    { font-size: 11px; color: var(--el-text-color-regular); font-family: var(--up-mono); }
-.up-tl-measured { font-size: 9px; color: var(--el-text-color-placeholder); margin-left: 2px; }
+.up-tl-measured { font-size: 10px; color: var(--el-text-color-placeholder); margin-left: 2px; }
 
 /* ── Tabs ── */
 .up-trace-tabs { margin-top: -8px; }

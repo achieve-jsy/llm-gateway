@@ -1951,7 +1951,7 @@ watch(currency, async () => {
 .ud-tl-failover-hint { font-size: 10px; color: var(--el-color-warning-dark-2); font-style: italic; }
 .ud-tl-label      { font-size: 11px; color: var(--el-text-color-secondary); font-weight: 600; }
 .ud-tl-label-text { cursor: default; }
-.ud-tl-measured   { display: block; font-size: 9px; color: var(--el-text-color-placeholder); font-style: italic; }
+.ud-tl-measured   { display: block; font-size: 10px; color: var(--el-text-color-placeholder); font-style: italic; }
 .ud-tl-ms         { font-size: 11px; color: var(--el-text-color-regular); font-family: var(--ud-mono); }
 .ud-tl-warn       { color: var(--el-color-warning); vertical-align: -2px; cursor: help; }
 

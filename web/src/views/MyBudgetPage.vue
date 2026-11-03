@@ -163,7 +163,7 @@
 
           <!-- 管理员：直接调额提示 -->
           <div v-if="authStore.isManager" class="mb-manager-hint">
-            <div class="mb-manager-hint-icon">⚡</div>
+            <div class="mb-manager-hint-icon"><el-icon :size="24"><Lightning /></el-icon></div>
             <div>
               <p class="mb-manager-hint-title">您可直接调整额度</p>
               <p class="mb-manager-hint-desc">
@@ -299,7 +299,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Refresh, Setting } from '@element-plus/icons-vue'
+import { Refresh, Setting, Lightning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { createExpansionRequest, decideExpansion, getMyBudget, getMyExpansionRequests } from '@/services/control-plane'
 import { useAuthStore } from '@/stores/auth'

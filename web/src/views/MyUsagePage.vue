@@ -74,7 +74,7 @@
     <!-- ═══════════════════════════════════════════
          Section 2: 💰 花费总览
     ═══════════════════════════════════════════ -->
-    <div class="mu-sec-label">💰 花费总览</div>
+    <div class="mu-sec-label"><el-icon style="vertical-align:middle"><Coin /></el-icon> 花费总览</div>
 
     <div class="mu-stats" v-loading="statsLoading">
       <!-- 总花费 -->
@@ -364,7 +364,7 @@
     <!-- ═══════════════════════════════════════════
          Section 5: ⚡ 效率洞察
     ═══════════════════════════════════════════ -->
-    <div class="mu-sec-label">⚡ 效率洞察</div>
+    <div class="mu-sec-label"><el-icon style="vertical-align:middle"><Lightning /></el-icon> 效率洞察</div>
     <div class="mu-efficiency-grid" v-loading="statsLoading">
       <!-- 平均响应时间 -->
       <div class="mu-eff-card">
@@ -486,7 +486,7 @@
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import {
   Refresh, Download, Histogram, Money, DataLine, Coin,
-  Close, Grid, Cpu, ArrowDown
+  Close, Grid, Cpu, ArrowDown, Lightning
 } from '@element-plus/icons-vue'
 import UsageRecordTable from '@/components/usage/UsageRecordTable.vue'
 import type { LogRow, TraceData } from '@/components/usage/UsageTraceDrawer.vue'
@@ -1594,7 +1594,7 @@ if (typeof MutationObserver !== 'undefined') {
   margin-top: 4px;
 }
 .mu-heatmap-label {
-  font-size: 9px; color: var(--mu-faint); text-align: center; line-height: 1.4;
+  font-size: 10px; color: var(--mu-faint); text-align: center; line-height: 1.4;
 }
 .mu-heatmap-empty { text-align: center; font-size: 12px; color: var(--mu-faint); padding: 24px 0 8px; }
 

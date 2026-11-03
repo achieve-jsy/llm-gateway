@@ -79,7 +79,7 @@
               <span class="ops-latency-value">{{ detail.latency_breakdown.response_ms }}ms</span>
             </div>
             <div class="ops-latency-item">
-              <span class="ops-latency-icon">⚡</span>
+              <span class="ops-latency-icon"><el-icon><Lightning /></el-icon></span>
               <span class="ops-latency-name">首字</span>
               <span class="ops-latency-value">{{ detail.latency_breakdown.ttft_ms }}ms</span>
             </div>
@@ -135,7 +135,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { ElMessage, ElButton, ElIcon } from 'element-plus'
-import { CopyDocument } from '@element-plus/icons-vue'
+import { CopyDocument, Lightning } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
 
 const props = defineProps<{

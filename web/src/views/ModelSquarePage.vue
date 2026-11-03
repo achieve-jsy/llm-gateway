@@ -112,7 +112,7 @@ onMounted(async () => {
   .el-icon { font-size: 14px; }
   &:hover { background: #229A94; }
   &.ok { background: #0EA371; }
-  &:focus-visible { outline: 2px solid #36B34E; outline-offset: 2px; }
+  &:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
 }
 
 @media (max-width: 640px) {

@@ -211,13 +211,13 @@ async function handleSubmit() {
 
 <style>
 /* 覆盖弹窗内全局绿色文字 */
-.el-dialog .el-form-item__label { color: #374151 !important; }
+.el-dialog .el-form-item__label { color: var(--el-text-color-regular) !important; }
 .el-dialog .el-input__inner,
 .el-dialog .el-textarea__inner,
-.el-dialog .el-select .el-input__inner { color: #1a1a1a !important; }
+.el-dialog .el-select .el-input__inner { color: var(--el-text-color-primary) !important; }
 .el-dialog .el-radio__label,
-.el-dialog .el-checkbox__label { color: #374151 !important; }
-.el-dialog .el-dialog__title { color: #1a1a1a !important; }
+.el-dialog .el-checkbox__label { color: var(--el-text-color-regular) !important; }
+.el-dialog .el-dialog__title { color: var(--el-text-color-primary) !important; }
 
 /* ByteMD 全屏时：把编辑器层叠到弹窗所有内容之上 */
 .bytemd-fullscreen.bytemd {

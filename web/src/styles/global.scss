@@ -755,6 +755,18 @@ html.dark ::-webkit-scrollbar-thumb {
   }
 }
 
+/* ===================== 全局 Focus Ring ===================== */
+/* 统一所有可交互元素的键盘焦点样式 — 品牌绿环 */
+*:focus-visible {
+  outline: 2px solid var(--el-color-primary, #36B34E);
+  outline-offset: 2px;
+}
+
+/* 鼠标点击不显示 focus ring，仅键盘导航 */
+*:focus:not(:focus-visible) {
+  outline: none;
+}
+
 /* ===================== Markdown 通用样式 ===================== */
 .md-content {
   font-size: 15px;

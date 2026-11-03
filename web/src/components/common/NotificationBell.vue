@@ -353,9 +353,9 @@ defineExpose({ refresh })
 </script>
 
 <style>
-.el-popover .item-title { color: #1a1a1a !important; }
-.el-popover .source-tab { color: #64748b; }
-.el-popover .source-tab.active { color: #1F8A3B !important; }
+.el-popover .item-title { color: var(--el-text-color-primary) !important; }
+.el-popover .source-tab { color: var(--el-text-color-secondary); }
+.el-popover .source-tab.active { color: var(--el-color-primary) !important; }
 </style>
 
 <style scoped>
@@ -400,22 +400,22 @@ defineExpose({ refresh })
   border-radius: 6px;
   font-size: 13px;
   font-weight: 500;
-  color: #94a3b8;
+  color: var(--el-text-color-placeholder);
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
 }
 .source-tab.active {
   background: #fff;
-  color: #1F8A3B;
+  color: var(--el-color-primary);
   font-weight: 600;
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
-.source-tab:hover:not(.active) { color: #475569; }
+.source-tab:hover:not(.active) { color: var(--el-text-color-secondary); }
 
 .source-badge {
   background: #36B34E;
-  color: #fff;
+  color: var(--el-bg-color);
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
@@ -441,7 +441,7 @@ defineExpose({ refresh })
   border: none;
   background: none;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--el-text-color-placeholder);
   cursor: pointer;
   position: relative;
   transition: color 0.15s;
@@ -451,7 +451,7 @@ defineExpose({ refresh })
   gap: 4px;
 }
 .pill-btn.active {
-  color: #1F8A3B;
+  color: var(--el-color-primary);
   font-weight: 600;
 }
 .pill-btn.active::after {
@@ -464,11 +464,11 @@ defineExpose({ refresh })
   background: #1F8A3B;
   border-radius: 1px;
 }
-.pill-btn:hover:not(.active) { color: #475569; }
+.pill-btn:hover:not(.active) { color: var(--el-text-color-secondary); }
 
 .pill-count {
   background: rgba(54,179,78,0.15);
-  color: #1F8A3B;
+  color: var(--el-color-primary);
   font-size: 10px;
   font-weight: 700;
   padding: 1px 5px;
@@ -513,13 +513,13 @@ defineExpose({ refresh })
 .item-header { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .item-category-icon { font-size: 12px; flex-shrink: 0; }
 .item-title {
-  font-size: 13px; font-weight: 600; color: #1a1a1a;
+  font-size: 13px; font-weight: 600; color: var(--el-text-color-primary);
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.item-time { font-size: 11px; color: #94a3b8; flex-shrink: 0; }
+.item-time { font-size: 11px; color: var(--el-text-color-placeholder); flex-shrink: 0; }
 
 .item-preview {
-  font-size: 12px; color: #64748b;
+  font-size: 12px; color: var(--el-text-color-secondary);
   margin-top: 3px; line-height: 1.5;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   cursor: pointer;
@@ -540,13 +540,13 @@ defineExpose({ refresh })
 .item-expanded-body::-webkit-scrollbar { width: 3px; }
 .item-expanded-body::-webkit-scrollbar-thumb { background: rgba(54,179,78,0.2); border-radius: 2px; }
 
-.item-full-content { font-size: 12px; color: #334155; line-height: 1.7; }
+.item-full-content { font-size: 12px; color: var(--el-text-color-regular); line-height: 1.7; }
 .item-full-content :deep(p)  { margin: 0 0 0.4em; }
-.item-full-content :deep(strong) { font-weight: 700; color: #1a1a1a; }
+.item-full-content :deep(strong) { font-weight: 700; color: var(--el-text-color-primary); }
 .item-full-content :deep(code) { background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
 .item-full-content :deep(h1),
 .item-full-content :deep(h2),
-.item-full-content :deep(h3) { color: #1a1a1a; margin: 0.5em 0 0.25em; font-size: 13px; }
+.item-full-content :deep(h3) { color: var(--el-text-color-primary); margin: 0.5em 0 0.25em; font-size: 13px; }
 .item-full-content :deep(ul),
 .item-full-content :deep(ol) { padding-left: 1.2em; margin: 0.25em 0; }
 

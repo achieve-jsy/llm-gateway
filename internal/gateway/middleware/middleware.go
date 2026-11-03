@@ -109,7 +109,6 @@ func Logger() gin.HandlerFunc {
 	}
 }
 
-
 // requestBodyLogLimit 是 debug 日志里保留的请求体字节上限（仅影响日志，不影响下游）。
 const requestBodyLogLimit int64 = 64 * 1024
 

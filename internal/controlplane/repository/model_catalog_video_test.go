@@ -50,10 +50,10 @@ func TestBatchUpsertVideoInput(t *testing.T) {
 
 	repo := NewModelCatalogRepo(db)
 	entry := &model.ModelCatalog{
-		Source:              "litellm",
-		SourceModelID:       "gemini/gemini-3-pro",
-		Mode:                "chat",
-		SupportsVideoInput:  true,
+		Source:             "litellm",
+		SourceModelID:      "gemini/gemini-3-pro",
+		Mode:               "chat",
+		SupportsVideoInput: true,
 	}
 	if err := repo.BatchUpsert([]*model.ModelCatalog{entry}); err != nil {
 		t.Fatalf("batch upsert: %v", err)

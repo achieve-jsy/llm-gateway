@@ -50,6 +50,7 @@ func TestUnsupportedContentPartErrorShape(t *testing.T) {
 		t.Fatalf("message = %q, want it to mention pdf", envelope.Error.Message)
 	}
 }
+
 // TestVideoInputNotSupportedRenders400 校验 UnifiedError 渲染：形态保持 OpenAI 兼容
 // （error.type/code/message），便于客户端按 code 分支处理。
 func TestVideoInputNotSupportedRenders400(t *testing.T) {

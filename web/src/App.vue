@@ -168,7 +168,6 @@ function handleUserCommand(command: string) {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-family: var(--font-family);
   overflow: hidden;
 }
 
@@ -183,26 +182,31 @@ function handleUserCommand(command: string) {
   border-radius: 8px;
   cursor: pointer;
   color: var(--el-text-color-secondary);
-  transition: background-color 0.2s;
+  transition: background-color 0.15s, color 0.15s;
   flex-shrink: 0;
 }
 
 .collapse-btn:hover {
   background-color: var(--el-fill-color);
-  color: #1E8C86;
+  color: #2563EB;
 }
 
 .sidebar-logo {
   height: 34px;
   width: 34px;
   object-fit: contain;
+  flex-shrink: 0;
 }
 
 .sidebar-title {
-  font-size: 18px;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-size: 17px;
   font-weight: 800;
-  color: #1E8C86;
-  letter-spacing: 1px;
+  color: #2563EB;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .user-info {
@@ -237,6 +241,4 @@ function handleUserCommand(command: string) {
   padding: 0;
   height: 100%;
 }
-
-
 </style>

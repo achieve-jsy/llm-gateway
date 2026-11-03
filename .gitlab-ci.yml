@@ -640,9 +640,10 @@ deploy-prod:
         export NGINX_SMOKE_URL='http://127.0.0.1:9080/health'
         # 可选：配置后用真实探针 Key 额外验证一次（默认用合成 Key 冒烟，不需要此变量）
         export AUTH_SMOKE_KEY='${PROD_AUTH_SMOKE_KEY:-}' AUTH_SMOKE_MODEL='${PROD_AUTH_SMOKE_MODEL:-}'
-        # 可逆脱敏：默认 detect（只观测、记 privacy_hits，不改写请求、不影响上游缓存）。
-        # 确认无异常后把 PROD_PRIVACY_MODE 设为 mask 即真改写；mask 需 /datalog/privacy-key 就位（蓝绿共用、0600、不进仓库）。
-        export PRIVACY_MODE='${PROD_PRIVACY_MODE:-detect}' PRIVACY_KEY_PATH='${PROD_PRIVACY_KEY_PATH:-/datalog/privacy-key}'
+        # 可逆脱敏：生产默认 mask（2026-10-30 上线）。要临时降级改 PROD_PRIVACY_MODE=detect/off 重跑。
+        # mask 依赖 /datalog/privacy-key（蓝绿共用、0600、不进仓库）；上限 32MB，超限 fail-closed 500。
+        export PRIVACY_MODE='${PROD_PRIVACY_MODE:-mask}' PRIVACY_KEY_PATH='${PROD_PRIVACY_KEY_PATH:-/datalog/privacy-key}'
+        export PRIVACY_MAX_INPUT_BYTES='${PROD_PRIVACY_MAX_INPUT_BYTES:-33554432}'
         export DATABASE_URL='${PROD_DATABASE_URL}'
         export REDIS_ADDR='${PROD_REDIS_ADDR}' REDIS_DB='${PROD_REDIS_DB}' REDIS_PASSWORD='${PROD_REDIS_PASSWORD}'
         export JWT_SECRET='${PROD_JWT_SECRET}'

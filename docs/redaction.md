@@ -211,11 +211,12 @@ chat 模型、模型组）→ 起假上游 → 起 control-plane → 起网关 �
 
 | 变量 | compose 透传 | 默认 | 说明 |
 |---|---|---|---|
-| `PRIVACY_MODE` | `PRIVACY_MODE: ${PRIVACY_MODE:-off}` | test/prod 部署为 `detect` | `off` 不启用 / `detect` 只观测 / `mask` 改写并还原 |
+| `PRIVACY_MODE` | `PRIVACY_MODE: ${PRIVACY_MODE:-off}` | test `detect` / prod `mask` | `off` 不启用 / `detect` 只观测 / `mask` 改写并还原 |
 | `PRIVACY_KEY_PATH` | `PRIVACY_KEY_PATH: ${PRIVACY_KEY_PATH:-}` | `/datalog/privacy-key` | 仅 `mask` 需要；`/datalog` 已 bind mount 进容器，蓝绿两色共用同一份 |
+| `PRIVACY_MAX_INPUT_BYTES` | `PRIVACY_MAX_INPUT_BYTES: ${...:-8388608}` | prod `33554432` | 单请求体上限，超限 fail-closed（500 `redaction_failed`）；实测 9MB 正常、36MB 被拒 |
 
-CI 侧用可覆盖变量做开关：`TEST_PRIVACY_MODE` / `PROD_PRIVACY_MODE`（缺省 `detect`），
-路径同理 `TEST_PRIVACY_KEY_PATH` / `PROD_PRIVACY_KEY_PATH`。
+CI 侧用可覆盖变量做开关：`TEST_PRIVACY_MODE` / `PROD_PRIVACY_MODE`（缺省 test `detect`、prod `mask`），
+路径同理 `TEST_PRIVACY_KEY_PATH` / `PROD_PRIVACY_KEY_PATH`，上限 `PROD_PRIVACY_MAX_INPUT_BYTES`。
 
 ### 8.1 开启 detect（默认，零行为变更）
 

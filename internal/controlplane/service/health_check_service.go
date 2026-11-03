@@ -783,6 +783,28 @@ func (s *HealthCheckService) doModelForwardCheck(m *model.Model) (bool, int, str
 			}
 			res := ProbeAzureChat(context.Background(), provider.Endpoint, apiKey, testModel)
 			return res.Success, res.ResponseTime, res.Message
+		case "anthropic":
+			apiKey := extractAPIKey(credJSON)
+			testModel := m.UpstreamName()
+			if testModel == "" {
+				testModel = provider.TestModel
+			}
+			if testModel == "" {
+				return true, 0, "skipped: anthropic forward requires test_model"
+			}
+			ok, elapsed, msg := ProbeAnthropicMessages(context.Background(), provider.Endpoint, apiKey, testModel)
+			return ok, elapsed, msg
+		case "gemini":
+			apiKey := extractAPIKey(credJSON)
+			testModel := m.UpstreamName()
+			if testModel == "" {
+				testModel = provider.TestModel
+			}
+			if testModel == "" {
+				return true, 0, "skipped: gemini forward requires test_model"
+			}
+			ok, elapsed, msg := ProbeGeminiGenerate(context.Background(), provider.Endpoint, apiKey, testModel)
+			return ok, elapsed, msg
 		default:
 			return true, 0, "skipped: unsupported provider type for auto-check"
 		}

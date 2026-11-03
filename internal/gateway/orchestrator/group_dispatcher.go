@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -96,6 +97,11 @@ func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *c
 			"group_name", modelName,
 			"error", err,
 		)
+		// 视频能力缺失是"请求与模型能力不匹配"（400），不能被吞成通用的
+		// "无可用模型"（503）——那会误导客户端去重试。
+		if errors.Is(err, scheduler.ErrNoVideoCapableModel) {
+			return nil, model.ErrVideoInputNotSupported
+		}
 		return nil, model.ErrNoAvailableModel
 	}
 

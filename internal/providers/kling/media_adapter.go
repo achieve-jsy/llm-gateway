@@ -176,6 +176,13 @@ func (a *adapter) Submit(ctx context.Context, req *core.MediaSubmitRequest) (*co
 	}
 
 	// 初始状态：上游一般回 submitted；缺省按 queued（core.MediaSubmitResult 注释）。
+	//
+	// ⚠️ 取舍：**未知**初始状态同样严格报错（与 Query 共用同一张表、同一条契约 2）。
+	// 代价是此时上游任务其实已经创建（可能已计费），错误会让上层按「提交失败」返回 5xx，
+	// 客户端重试会产生第二个上游任务。仍然选择严格的原因：Kling 的提交响应里
+	// task_status 恒为 submitted，出现未枚举值属于真正的协议异常，静默降级成 queued 会把
+	// 协议漂移藏起来；而重复计费由 handler 的「提交路径 WithNoRetry + Idempotency-Key 预占」
+	// 兜底（internal/gateway/handler/media_task_handler.go:360-372）。
 	status := core.MediaStatusQueued
 	if rawStatus := strings.TrimSpace(envelope.Data.TaskStatus); rawStatus != "" {
 		status, err = mapTaskStatus(rawStatus)

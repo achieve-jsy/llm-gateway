@@ -68,6 +68,10 @@ func (f *fakeScheduler) FailoverExcluding(_ string, _ []string, _ *core.ChatRequ
 	return nil, model.ErrNoOtherModelAvailable
 }
 
+func (f *fakeScheduler) FailoverExcludingVideo(_ string, _ []string, _ bool, _ *core.ChatRequest) (*scheduler.RouteDecision, error) {
+	return nil, model.ErrNoOtherModelAvailable
+}
+
 func (f *fakeScheduler) GetGroupConfig(_ string) *scheduler.GroupRoutingConfig {
 	return nil
 }
@@ -79,7 +83,7 @@ func (f *fakeScheduler) SetCooldown(_ string, _ time.Duration) {}
 func (f *fakeScheduler) PersistSticky(_ context.Context, _, _ string, _ *scheduler.RouteDecision) {
 }
 
-func (f *fakeScheduler) UpdateSticky(_ context.Context, _, _, _ string) {}
+func (f *fakeScheduler) UpdateSticky(_ context.Context, _, _, _, _ string) bool { return true }
 
 // newBindingServer 创建模拟控制面 binding API 的 httptest.Server。
 // keyGroups 是 map[keyID] -> []BoundGroup，模拟不同 key 的绑定关系。
@@ -214,6 +218,36 @@ func TestDispatch_UsableGroupsCeiling(t *testing.T) {
 				"test-key": {{ID: 2, Name: "g-other", Enabled: true}},
 			},
 			wantErr: model.ErrModelGroupUnavailable,
+		},
+		{
+			name:        "service key 天花板包含+binding包含→放行",
+			description: "Service Key 绑定 g-public，请求 g-public：天花板与绑定子集均通过，正常调度",
+			identity:    &model.UserIdentity{KeyID: "test-key", KeyType: "service", AccessAllGroups: false, UsableGroups: []string{"g-public", "g-controlled"}},
+			modelName:   "g-public",
+			bindGroups: map[string][]binding.BoundGroup{
+				"test-key": {{ID: 1, Name: "g-public", Enabled: true}},
+			},
+			wantErr: nil,
+		},
+		{
+			name:        "service key 天花板包含但binding不包含→403拦截",
+			description: "Service Key 仅绑定 g-public，请求天花板内但未绑定的 g-controlled：必须被 403 拦截，不能因天花板通过就放行",
+			identity:    &model.UserIdentity{KeyID: "test-key", KeyType: "service", AccessAllGroups: false, UsableGroups: []string{"g-public", "g-controlled"}},
+			modelName:   "g-controlled",
+			bindGroups: map[string][]binding.BoundGroup{
+				"test-key": {{ID: 1, Name: "g-public", Enabled: true}},
+			},
+			wantErr: model.ErrModelGroupUnauthorized,
+		},
+		{
+			name:        "service key binding禁用组→403拦截",
+			description: "Service Key 绑定记录存在但 Enabled=false，等效于未绑定，必须被 403 拦截",
+			identity:    &model.UserIdentity{KeyID: "test-key", KeyType: "service", AccessAllGroups: false, UsableGroups: []string{"g-public"}},
+			modelName:   "g-public",
+			bindGroups: map[string][]binding.BoundGroup{
+				"test-key": {{ID: 1, Name: "g-public", Enabled: false}},
+			},
+			wantErr: model.ErrModelGroupUnauthorized,
 		},
 	}
 

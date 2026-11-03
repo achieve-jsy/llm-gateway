@@ -54,6 +54,10 @@ func (f *fakeRerankScheduler) FailoverExcluding(_ string, _ []string, _ *core.Ch
 	return nil, model.ErrNoOtherModelAvailable
 }
 
+func (f *fakeRerankScheduler) FailoverExcludingVideo(_ string, _ []string, _ bool, _ *core.ChatRequest) (*scheduler.RouteDecision, error) {
+	return f.FailoverExcluding("", nil, nil)
+}
+
 func (f *fakeRerankScheduler) GetGroupConfig(_ string) *scheduler.GroupRoutingConfig {
 	return nil
 }

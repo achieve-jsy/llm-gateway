@@ -135,3 +135,27 @@ func TestFailoverStaysVideoCapable(t *testing.T) {
 		t.Fatalf("text failover = %q, want text-only", next.ModelName)
 	}
 }
+
+// TestFailoverExcludingVideoExplicitFlag 覆盖 /v1/responses 这类没有 ChatRequest 的
+// 调用路径：即便请求体里没有 core.Message，只要显式声明 needsVideo，failover
+// 也不得落到不支持视频的成员上。
+func TestFailoverExcludingVideoExplicitFlag(t *testing.T) {
+	rt := newVideoRouteTable()
+	hs := NewHealthStore(3, 3, 3, 30*time.Second)
+	fh := NewFailoverHandler(rt, hs, NewRouter(rt, hs))
+
+	// 文本请求（req=nil）显式要求视频能力：只剩 text-only 可用，必须报错而不是降级
+	_, err := fh.FailoverExcludingVideo("mixed-group", []string{"1"}, true, nil)
+	if !errors.Is(err, ErrNoVideoCapableModel) {
+		t.Fatalf("explicit video failover err = %v, want ErrNoVideoCapableModel", err)
+	}
+
+	// 不要求视频时允许回退到 text-only
+	decision, err := fh.FailoverExcludingVideo("mixed-group", []string{"1"}, false, nil)
+	if err != nil {
+		t.Fatalf("text failover err = %v, want nil", err)
+	}
+	if decision.ModelName != "text-only" {
+		t.Fatalf("text failover picked %q, want text-only", decision.ModelName)
+	}
+}

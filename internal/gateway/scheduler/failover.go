@@ -29,6 +29,13 @@ func (fh *FailoverHandler) Failover(groupName string, failedModelID string, req 
 // FailoverExcluding 排除多个已失败/已尝试的模型 ID 后选出下一个候选。
 // 用于多轮 failover 场景，确保每轮不会路由回已失败的节点。
 func (fh *FailoverHandler) FailoverExcluding(groupName string, excludeIDs []string, req *core.ChatRequest) (*RouteDecision, error) {
+	return fh.FailoverExcludingVideo(groupName, excludeIDs, req != nil && core.HasVideoContent(req.Messages), req)
+}
+
+// FailoverExcludingVideo 与 FailoverExcluding 相同，但由调用方显式给出
+// "这一轮请求是否必须支持视频"。/v1/responses 这类没有 core.ChatRequest 的
+// 协议用它把视频约束带进 failover。
+func (fh *FailoverHandler) FailoverExcludingVideo(groupName string, excludeIDs []string, needsVideo bool, req *core.ChatRequest) (*RouteDecision, error) {
 	group := fh.routeTable.Get(groupName)
 	if group == nil {
 		return nil, ErrGroupNotFound
@@ -53,7 +60,6 @@ func (fh *FailoverHandler) FailoverExcluding(groupName string, excludeIDs []stri
 
 	// 视频请求的 failover 同样只能落在声明支持视频的成员上：换到一个不支持视频的
 	// 成员会让视频被静默丢弃、模型凭空作答，比直接失败更糟。
-	needsVideo := req != nil && core.HasVideoContent(req.Messages)
 	healthyModels = filterVideoCapable(healthyModels, needsVideo)
 	if len(healthyModels) == 0 {
 		if needsVideo {

@@ -211,3 +211,54 @@ type ResponseDeleteResponse struct {
 	Object  string `json:"object"`
 	Deleted bool   `json:"deleted"`
 }
+
+// HasVideoInput 判断 Responses API 的 input 是否含视频片段。
+// 覆盖 {"type":"input_video",...}、{"type":"video_url","video_url":{...}} 以及
+// message 内层 content 里的同类片段；用于失败重试时保持"只能换到支持视频的成员"。
+func HasVideoInput(input any) bool {
+	switch v := input.(type) {
+	case []any:
+		for _, item := range v {
+			if hasVideoInResponsesItem(item) {
+				return true
+			}
+		}
+	case map[string]any:
+		return hasVideoInResponsesItem(v)
+	}
+	return false
+}
+
+func hasVideoInResponsesItem(item any) bool {
+	m, ok := item.(map[string]any)
+	if !ok {
+		return false
+	}
+	if isResponsesVideoType(m["type"]) || m["video_url"] != nil || m["input_video"] != nil {
+		return true
+	}
+	if content, ok := m["content"].([]any); ok {
+		for _, part := range content {
+			pm, ok := part.(map[string]any)
+			if !ok {
+				continue
+			}
+			if isResponsesVideoType(pm["type"]) || pm["video_url"] != nil || pm["input_video"] != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isResponsesVideoType(v any) bool {
+	s, ok := v.(string)
+	if !ok {
+		return false
+	}
+	switch s {
+	case "video_url", "input_video", "video":
+		return true
+	}
+	return false
+}

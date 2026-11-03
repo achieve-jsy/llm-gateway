@@ -28,9 +28,13 @@ func (s *videoSchedulerStub) Failover(string, string, *core.ChatRequest) (*sched
 func (s *videoSchedulerStub) FailoverExcluding(string, []string, *core.ChatRequest) (*scheduler.RouteDecision, error) {
 	return nil, errors.New("not implemented")
 }
+
+func (s *videoSchedulerStub) FailoverExcludingVideo(groupName string, ids []string, _ bool, req *core.ChatRequest) (*scheduler.RouteDecision, error) {
+	return s.FailoverExcluding(groupName, ids, req)
+}
 func (s *videoSchedulerStub) GetGroupConfig(string) *scheduler.GroupRoutingConfig { return nil }
 func (s *videoSchedulerStub) NotifyFailure(string)                                {}
-func (s *videoSchedulerStub) SetCooldown(string, time.Duration)                    {}
+func (s *videoSchedulerStub) SetCooldown(string, time.Duration)                   {}
 func (s *videoSchedulerStub) PersistSticky(context.Context, string, string, *scheduler.RouteDecision) {
 }
 func (s *videoSchedulerStub) UpdateSticky(context.Context, string, string, string, string) bool {

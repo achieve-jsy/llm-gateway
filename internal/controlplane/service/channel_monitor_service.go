@@ -9,6 +9,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -17,6 +18,8 @@ type ChannelMonitorService struct {
 	repo     *repository.ChannelMonitorRepo
 	runner   MonitorScheduler
 	settings SettingsReader
+	// opsAlertSender 探活失败时联动 webhook 运维告警（nil 表示未装配）。
+	opsAlertSender *OpsAlertSender
 }
 
 // SettingsReader reads settings from the key-value store.
@@ -37,6 +40,11 @@ func (s *ChannelMonitorService) SetRunner(runner MonitorScheduler) {
 // SetSettingsReader sets the settings reader for feature flags.
 func (s *ChannelMonitorService) SetSettingsReader(sr SettingsReader) {
 	s.settings = sr
+}
+
+// SetOpsAlertSender 注入运维告警发送器，探活失败时联动 webhook 告警。
+func (s *ChannelMonitorService) SetOpsAlertSender(sender *OpsAlertSender) {
+	s.opsAlertSender = sender
 }
 
 // ── CRUD ────────────────────────────────────────────────────────────────────────
@@ -253,6 +261,23 @@ func (s *ChannelMonitorService) RunCheck(ctx context.Context, monitorID int64) (
 			Message:       truncateMessage(result.Message),
 			CheckedAt:     result.CheckedAt,
 		})
+	}
+
+	// 任一模型探活失败/错误即触发运维告警（degraded 仅慢速不告警）。
+	if s.opsAlertSender != nil && monitorHasAnyFailure(results) {
+		failures := 0
+		firstErr := ""
+		for _, r := range results {
+			if r.Status == MonitorStatusFailed || r.Status == MonitorStatusError {
+				failures++
+				if firstErr == "" && r.Message != "" {
+					firstErr = r.Message
+				}
+			}
+		}
+		s.opsAlertSender.NotifyChannelDown(ctx,
+			"channel_monitor", view.Provider, uuid.Nil, view.Name, view.ID,
+			failures, len(results), firstErr)
 	}
 
 	if err := s.repo.InsertHistoryBatch(historyRows); err != nil {
@@ -584,4 +609,15 @@ func truncateMessage(msg string) string {
 		return msg[:monitorMessageMaxBytes]
 	}
 	return msg
+}
+
+// monitorHasAnyFailure 判定一次检测是否存在失败模型：任一模型 failed/error 即视为渠道异常
+//（degraded 仅慢速，不算故障，不触发告警）。
+func monitorHasAnyFailure(results []ChannelCheckResult) bool {
+	for _, r := range results {
+		if r.Status == MonitorStatusFailed || r.Status == MonitorStatusError {
+			return true
+		}
+	}
+	return false
 }

@@ -62,6 +62,7 @@ type HealthCheckService struct {
 
 	modelStatusLogSvc *ModelStatusLogService    // 模型状态变更日志服务
 	snapshotter       *ProviderSnapshotRefresher // 自动禁用/恢复后刷新 Redis snapshot
+	opsAlertSender    *OpsAlertSender           // 运维告警发送器（自动禁用/恢复 → webhook）
 
 	mu                   sync.Mutex
 	cancel               context.CancelFunc
@@ -100,6 +101,11 @@ func (s *HealthCheckService) SetModelStatusLogService(svc *ModelStatusLogService
 // SetSnapshotRefresher 注入 provider snapshot 刷新器，自动禁用/恢复后同步通知 gateway
 func (s *HealthCheckService) SetSnapshotRefresher(snapshotter *ProviderSnapshotRefresher) {
 	s.snapshotter = snapshotter
+}
+
+// SetOpsAlertSender 注入运维告警发送器，自动禁用/恢复时联动 webhook 告警
+func (s *HealthCheckService) SetOpsAlertSender(sender *OpsAlertSender) {
+	s.opsAlertSender = sender
 }
 
 // GetConfig 获取配置
@@ -1265,6 +1271,7 @@ func (s *HealthCheckService) finalizeProviderSuccess(provider *model.Provider, c
 	provider.Status = model.ProviderStatusEnabled
 	slog.Warn("provider auto-recovery: re-enabled after successful health check",
 		"provider_id", provider.ID, "provider_name", provider.Name)
+	s.maybeAlertProviderRecovered(provider)
 	if s.snapshotter != nil {
 		go s.snapshotter.RefreshAvailableSnapshot(context.Background())
 	}
@@ -1288,8 +1295,28 @@ func (s *HealthCheckService) handleProviderFailure(id uuid.UUID, maxFailures int
 			slog.Error("failed to auto-disable provider", "provider_id", id, "error", err)
 		} else {
 			cr.AutoDisabled = true
+			s.maybeAlertProviderDown(cr, newCount, maxFailures)
 		}
 	}
+}
+
+// maybeAlertProviderDown 自动禁用成功后联动运维告警（决策与发送分离，便于单测）。
+func (s *HealthCheckService) maybeAlertProviderDown(cr *CheckResult, failures, threshold int) {
+	if s.opsAlertSender == nil {
+		return
+	}
+	s.opsAlertSender.NotifyChannelDown(context.Background(),
+		"provider_health", cr.ProviderName, cr.ProviderID, "", 0,
+		failures, threshold, cr.Error)
+}
+
+// maybeAlertProviderRecovered 自动恢复成功后联动运维告警（info）。
+func (s *HealthCheckService) maybeAlertProviderRecovered(provider *model.Provider) {
+	if s.opsAlertSender == nil {
+		return
+	}
+	s.opsAlertSender.NotifyChannelRecovered(context.Background(),
+		"provider_health", provider.Name, provider.ID, "", 0)
 }
 
 // RunNow 手动触发一次检测（异步，兼容旧调用）

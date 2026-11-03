@@ -477,6 +477,33 @@ func TestAppError(t *testing.T) {
 	}
 }
 
+// ── Ops alert trigger decision tests ───────────────────────────────────────────
+
+func TestMonitorHasAnyFailure(t *testing.T) {
+	ok := func(status string) ChannelCheckResult {
+		return ChannelCheckResult{Model: "m", Status: status}
+	}
+	tests := []struct {
+		name    string
+		results []ChannelCheckResult
+		want    bool
+	}{
+		{"single failed", []ChannelCheckResult{ok(MonitorStatusFailed)}, true},
+		{"single error", []ChannelCheckResult{ok(MonitorStatusError)}, true},
+		{"one failed among operational", []ChannelCheckResult{ok(MonitorStatusOperational), ok(MonitorStatusFailed), ok(MonitorStatusOperational)}, true},
+		{"degraded only", []ChannelCheckResult{ok(MonitorStatusDegraded), ok(MonitorStatusOperational)}, false},
+		{"all operational", []ChannelCheckResult{ok(MonitorStatusOperational), ok(MonitorStatusOperational)}, false},
+		{"empty", []ChannelCheckResult{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := monitorHasAnyFailure(tt.results); got != tt.want {
+				t.Errorf("monitorHasAnyFailure() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // ── Build base body tests ──────────────────────────────────────────────────────
 
 func TestBuildBaseBody(t *testing.T) {

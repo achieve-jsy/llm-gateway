@@ -337,6 +337,50 @@ func TestRenderTemplates_PlatformRiskTemplate(t *testing.T) {
 	}
 }
 
+// TestRenderTemplates_BudgetAlertPeriodLabel 验证：budget_alert 模板按 PeriodType
+// 动态渲染周期措辞（monthly→本月、weekly→本周、daily→今日），不再硬编码"本月"。
+func TestRenderTemplates_BudgetAlertPeriodLabel(t *testing.T) {
+	settingsRepo := newMockSettingsRepo()
+	mgr := &notificationManager{
+		configRepo:   nil,
+		settingsRepo: settingsRepo,
+		logger:       slog.Default(),
+	}
+
+	params := map[string]interface{}{
+		"ScopeType":  "studio",
+		"ScopeID":    "studio-001",
+		"Threshold":  "80",
+		"UsedUSD":    "800.00",
+		"AmountUSD":  "1000.00",
+	}
+
+	cases := []struct {
+		periodType string
+		want       string
+		notWant    []string
+	}{
+		{"monthly", "本月", []string{"今日", "本周"}},
+		{"weekly", "本周", []string{"今日", "本月"}},
+		{"daily", "今日", []string{"本周", "本月"}},
+	}
+	for _, c := range cases {
+		params["PeriodType"] = c.periodType
+		_, body, err := mgr.renderTemplates("", "", "budget_alert", params)
+		if err != nil {
+			t.Fatalf("renderTemplates(%s) failed: %v", c.periodType, err)
+		}
+		if !strings.Contains(body, c.want) {
+			t.Errorf("PeriodType=%s: body should contain %q, got: %s", c.periodType, c.want, body)
+		}
+		for _, nw := range c.notWant {
+			if strings.Contains(body, nw) {
+				t.Errorf("PeriodType=%s: body should NOT contain %q, got: %s", c.periodType, nw, body)
+			}
+		}
+	}
+}
+
 func TestRenderTemplates_InvalidTemplate(t *testing.T) {
 	settingsRepo := newMockSettingsRepo()
 	mgr := &notificationManager{
@@ -350,6 +394,114 @@ func TestRenderTemplates_InvalidTemplate(t *testing.T) {
 	_, _, err := mgr.renderTemplates(invalidSubject, "valid", "test_type", nil)
 	if err == nil {
 		t.Error("renderTemplates should fail with invalid template syntax")
+	}
+}
+
+func TestRenderTemplates_OpsAlertTemplates(t *testing.T) {
+	settingsRepo := newMockSettingsRepo()
+	mgr := &notificationManager{
+		configRepo:   nil,
+		settingsRepo: settingsRepo,
+		logger:       slog.Default(),
+	}
+
+	t.Run(model.NotificationTypeOpsChannelDown, func(t *testing.T) {
+		params := map[string]interface{}{
+			"Source":       "provider_health",
+			"ProviderName": "OpenAI",
+			"ProviderID":   "abc-123",
+			"Failures":     3,
+			"Threshold":    3,
+			"Error":        "conn refused",
+		}
+		subject, body, err := mgr.renderTemplates("", "", model.NotificationTypeOpsChannelDown, params)
+		if err != nil {
+			t.Fatalf("renderTemplates failed: %v", err)
+		}
+		if !strings.Contains(subject, "渠道探活失败") {
+			t.Errorf("subject should contain '渠道探活失败', got: %s", subject)
+		}
+		if !strings.Contains(subject, "OpenAI") {
+			t.Errorf("subject should contain provider name, got: %s", subject)
+		}
+		if !strings.Contains(body, "provider_health") {
+			t.Errorf("body should contain source, got: %s", body)
+		}
+		if !strings.Contains(body, "abc-123") {
+			t.Errorf("body should contain provider id, got: %s", body)
+		}
+		if !strings.Contains(body, "conn refused") {
+			t.Errorf("body should contain error, got: %s", body)
+		}
+	})
+
+	t.Run(model.NotificationTypeOpsChannelRecovered, func(t *testing.T) {
+		params := map[string]interface{}{
+			"Source":       "provider_health",
+			"ProviderName": "OpenAI",
+			"ProviderID":   "abc-123",
+		}
+		subject, body, err := mgr.renderTemplates("", "", model.NotificationTypeOpsChannelRecovered, params)
+		if err != nil {
+			t.Fatalf("renderTemplates failed: %v", err)
+		}
+		if !strings.Contains(subject, "渠道已恢复") {
+			t.Errorf("subject should contain '渠道已恢复', got: %s", subject)
+		}
+		if !strings.Contains(body, "已恢复") {
+			t.Errorf("body should mention recovery, got: %s", body)
+		}
+	})
+
+	t.Run(model.NotificationTypeOpsDeliveryFailed, func(t *testing.T) {
+		params := map[string]interface{}{
+			"Type":     "budget_alert",
+			"Title":    "预算告警",
+			"Reason":   "max attempts exceeded (deadletter)",
+			"Attempts": 5,
+		}
+		subject, body, err := mgr.renderTemplates("", "", model.NotificationTypeOpsDeliveryFailed, params)
+		if err != nil {
+			t.Fatalf("renderTemplates failed: %v", err)
+		}
+		if !strings.Contains(subject, "通知投递失败") {
+			t.Errorf("subject should contain '通知投递失败', got: %s", subject)
+		}
+		if !strings.Contains(body, "budget_alert") {
+			t.Errorf("body should contain type, got: %s", body)
+		}
+		if !strings.Contains(body, "死信") {
+			t.Errorf("body should mention deadletter, got: %s", body)
+		}
+	})
+
+	t.Run("missing optional fields render empty", func(t *testing.T) {
+		// 所有可选字段缺失时模板不应报错，也不应渲染 <no value>
+		_, body, err := mgr.renderTemplates("", "", model.NotificationTypeOpsChannelDown,
+			map[string]interface{}{"Source": "channel_monitor"})
+		if err != nil {
+			t.Fatalf("renderTemplates failed: %v", err)
+		}
+		if strings.Contains(body, "<no value>") {
+			t.Errorf("body should not contain '<no value>', got: %s", body)
+		}
+	})
+}
+
+func TestNotificationRegistry_OpsAlertTypesRegistered(t *testing.T) {
+	for _, name := range []string{
+		model.NotificationTypeOpsChannelDown,
+		model.NotificationTypeOpsChannelRecovered,
+		model.NotificationTypeOpsDeliveryFailed,
+	} {
+		def, ok := FindNotificationTypeDef(name)
+		if !ok {
+			t.Errorf("FindNotificationTypeDef(%q) should find the type", name)
+			continue
+		}
+		if len(def.Channels) == 0 {
+			t.Errorf("type %q should declare channels", name)
+		}
 	}
 }
 

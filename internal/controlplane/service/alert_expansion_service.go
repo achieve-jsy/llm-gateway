@@ -30,6 +30,8 @@ type budgetAllocReader interface {
 type alertRecordStore interface {
 	ExistsForPeriod(context.Context, repository.AlertDimension) (bool, error)
 	Create(a *model.BudgetAlertRecord) error
+	// DeleteByDimensionAndThreshold 发送失败时回滚指定档位的去重记录，使下次评估可重试。
+	DeleteByDimensionAndThreshold(context.Context, repository.AlertDimension, int) error
 	FindOwnersByBudgetScope(scopeType, scopeID string) ([]repository.AlertOwnerRow, error)
 }
 
@@ -166,11 +168,8 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 	usedUSD := s.readDimensionUsedFromRedis(ctx, scopeType, scopeID, period, dimensionType, modelTierID, len(details) == 0)
 	ratio := usedUSD / limitUSD
 
-	thresholds := []int{model.AlertThreshold80}
-	// 等级维度对所有 scope 同时评估 80%/100%；总预算保留 legacy 规则。
-	if dimensionType == budgetdomain.DimensionTier || scopeType == model.BudgetScopeDeptService {
-		thresholds = append(thresholds, model.AlertThreshold100)
-	}
+	// 所有 scope/维度统一评估 80% 预警 + 100% 满额（预算用尽即拦截），满额告警升级为 critical。
+	thresholds := []int{model.AlertThreshold80, model.AlertThreshold100}
 
 	for _, threshold := range thresholds {
 		target := float64(threshold) / 100.0
@@ -178,7 +177,7 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 			continue
 		}
 		// 去重：已发过此 period+threshold 的告警则跳过
-		exists, err := s.alertRepo.ExistsForPeriod(ctx, repository.AlertDimension{
+		dim := repository.AlertDimension{
 			ScopeType: scopeType, ScopeID: scopeID, PeriodType: periodType,
 			Period: period, Threshold: threshold, DimensionType: dimensionType,
 			ModelTierID: func() *uuid.UUID {
@@ -188,7 +187,8 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 				id, _ := uuid.Parse(modelTierID)
 				return &id
 			}(),
-		})
+		}
+		exists, err := s.alertRepo.ExistsForPeriod(ctx, dim)
 		if err != nil || exists {
 			continue
 		}
@@ -206,21 +206,24 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 				}
 				return "total"
 			}(),
-			ModelTierID: func() *uuid.UUID {
-				if dimensionType != budgetdomain.DimensionTier {
-					return nil
-				}
-				id, _ := uuid.Parse(modelTierID)
-				return &id
-			}(),
-			NotifiedAt: time.Now(),
+			ModelTierID: dim.ModelTierID,
+			NotifiedAt:  time.Now(),
 		}); err != nil {
 			slog.Error("budget_alert: failed to create alert record", "error", err)
 			continue
 		}
 
 		// 通道 1（解耦的 Notifier：站内信 + 邮件 + ...）
-		s.sendNotifications(ctx, scopeType, scopeID, threshold, usedUSD, limitUSD)
+		sent, ownerCount := s.sendNotifications(ctx, scopeType, scopeID, string(periodType), threshold, usedUSD, limitUSD)
+		// 有负责人但全部入队失败：回滚去重记录，否则该告警被永久吞掉且无重试。
+		if sent == 0 && ownerCount > 0 {
+			slog.Warn("budget_alert: all notifications failed to enqueue, rolling back dedupe",
+				"scope_type", scopeType, "scope_id", scopeID, "threshold", threshold)
+			if err := s.alertRepo.DeleteByDimensionAndThreshold(ctx, dim, threshold); err != nil {
+				slog.Error("budget_alert: failed to rollback alert record", "error", err)
+			}
+			continue
+		}
 
 		slog.Info("budget_alert: sent", "scope_type", scopeType, "scope_id", scopeID,
 			"threshold", threshold, "ratio", ratio)
@@ -228,9 +231,11 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 }
 
 // sendNotifications 向每个负责人各发一条 Notification，由注入的 Notifier 决定走哪些通道。
-func (s *BudgetAlertService) sendNotifications(ctx context.Context, scopeType, scopeID string, threshold int, usedUSD, amountUSD float64) {
+// 返回成功入队数 sent 与负责人总数 ownerCount：调用方据此判断"有负责人但全部发送失败"，
+// 以便回滚去重记录、下次评估重试。
+func (s *BudgetAlertService) sendNotifications(ctx context.Context, scopeType, scopeID, periodType string, threshold int, usedUSD, amountUSD float64) (sent, ownerCount int) {
 	if s.notifier == nil {
-		return
+		return 0, 0
 	}
 
 	level := model.NotificationLevelWarning
@@ -240,20 +245,20 @@ func (s *BudgetAlertService) sendNotifications(ctx context.Context, scopeType, s
 
 	// 文案模板驱动：标题/正文由模板渲染，这里只传结构化业务变量。
 	data := map[string]interface{}{
-		"ScopeType": scopeType,
-		"ScopeID":   scopeID,
-		"Threshold": threshold,
-		"UsedUSD":   fmt.Sprintf("%.2f", usedUSD),
-		"AmountUSD": fmt.Sprintf("%.2f", amountUSD),
+		"ScopeType":  scopeType,
+		"ScopeID":    scopeID,
+		"PeriodType": periodType,
+		"Threshold":  threshold,
+		"UsedUSD":    fmt.Sprintf("%.2f", usedUSD),
+		"AmountUSD":  fmt.Sprintf("%.2f", amountUSD),
 	}
 
 	owners, err := s.alertRepo.FindOwnersByBudgetScope(scopeType, scopeID)
 	if err != nil {
 		slog.Warn("budget_alert: failed to find owners", "error", err)
-		return
+		return 0, 0
 	}
 
-	sent := 0
 	for _, owner := range owners {
 		ownerUUID, err := uuid.Parse(owner.UserID)
 		if err != nil {
@@ -278,6 +283,7 @@ func (s *BudgetAlertService) sendNotifications(ctx context.Context, scopeType, s
 	slog.Info("budget_alert: notifications sent",
 		"scope_type", scopeType, "scope_id", scopeID,
 		"threshold", threshold, "sent", sent)
+	return sent, len(owners)
 }
 
 // readUsedFromRedis 从 Redis 读取已用量（与 budget_service.readUsedFromRedis 同源）。

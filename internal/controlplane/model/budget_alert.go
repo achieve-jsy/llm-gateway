@@ -10,7 +10,7 @@ import (
 // 告警阈值档位
 const (
 	AlertThreshold80  = 80  // 80% 预警
-	AlertThreshold100 = 100 // 100% 满额（程序服务额外标红）
+	AlertThreshold100 = 100 // 100% 满额（预算用尽，触发拦截级告警）
 )
 
 // BudgetAlertRecord 告警去重表。

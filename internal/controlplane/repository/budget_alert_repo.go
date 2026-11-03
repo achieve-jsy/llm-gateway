@@ -73,6 +73,21 @@ func (r *BudgetAlertRepo) DeleteByDimension(ctx context.Context, d AlertDimensio
 	return query.Delete(&model.BudgetAlertRecord{}).Error
 }
 
+// DeleteByDimensionAndThreshold 删除某对象/周期/档位的去重记录（发送失败回滚用）。
+// 比 DeleteByDimension 多匹配 threshold，避免回滚 80% 时误删同周期的 100% 记录。
+func (r *BudgetAlertRepo) DeleteByDimensionAndThreshold(ctx context.Context, d AlertDimension, threshold int) error {
+	query := r.db.WithContext(ctx).Where(
+		"scope_type = ? AND scope_id = ? AND period_type = ? AND period = ? AND dimension_type = ? AND threshold = ?",
+		d.ScopeType, d.ScopeID, d.PeriodType, d.Period, d.DimensionType, threshold,
+	)
+	if d.ModelTierID == nil {
+		query = query.Where("model_tier_id IS NULL")
+	} else {
+		query = query.Where("model_tier_id = ?", *d.ModelTierID)
+	}
+	return query.Delete(&model.BudgetAlertRecord{}).Error
+}
+
 // FindOwnersByBudgetScope 查询某 scope 的告警接收人列表，用于站内信定向投递。
 // 规则：
 //   - company        → 全局 admin

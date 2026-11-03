@@ -14,7 +14,7 @@ var DefaultTemplates = map[string]struct {
 	// 预算相关
 	model.NotificationTypeBudgetAlert: {
 		Subject: "预算告警：{{.ScopeType}} 用量已达 {{.Threshold}}%",
-		Body:    "**{{.ScopeType}}**（ID: {{.ScopeID}}）本月预算用量已达 **{{.Threshold}}%**（${{.UsedUSD}} / ${{.AmountUSD}} USD），请及时关注并考虑扩容申请。\n\n- 已用：${{.UsedUSD}} USD\n- 总额：${{.AmountUSD}} USD\n- 告警档位：{{.Threshold}}%\n\n> 告警不等于拦截，预算真正用尽时才会触发拦截。",
+		Body:    "**{{.ScopeType}}**（ID: {{.ScopeID}}）{{if eq .PeriodType \"daily\"}}今日{{else if eq .PeriodType \"weekly\"}}本周{{else}}本月{{end}}预算用量已达 **{{.Threshold}}%**（${{.UsedUSD}} / ${{.AmountUSD}} USD），请及时关注并考虑扩容申请。\n\n- 已用：${{.UsedUSD}} USD\n- 总额：${{.AmountUSD}} USD\n- 告警档位：{{.Threshold}}%\n\n> 告警不等于拦截，预算真正用尽时才会触发拦截。",
 	},
 	model.NotificationTypeBudgetOwnerAttention: {
 		Subject: "预算负责人处理提醒",
@@ -40,7 +40,7 @@ var DefaultTemplates = map[string]struct {
 	},
 	model.NotificationTypeExpansionApproved: {
 		Subject: "扩容申请已批准并生效",
-		Body:    "扩容申请已批准并生效\n\n{{if .ExpansionID}}申请ID: {{.ExpansionID}}\n{{end}}{{if .Reason}}原因: {{.Reason}}\n{{end}}时间: {{.Timestamp}}",
+		Body:    "扩容申请已批准并生效\n\n{{if .ExpansionID}}申请ID: {{.ExpansionID}}\n{{end}}{{if .Reason}}原因: {{.Reason}}\n{{end}}{{if .AmountUSD}}批准金额: ${{.AmountUSD}} USD\n{{end}}时间: {{.Timestamp}}",
 	},
 	model.NotificationTypeExpansionRejected: {
 		Subject: "扩容申请已驳回",
@@ -84,7 +84,7 @@ var DefaultTemplates = map[string]struct {
 	},
 	model.NotificationTypePlatformRiskPeriodHealth: {
 		Subject: "⚠️ 周期健康告警：{{.PeriodKey}} 预算 key 缺失",
-		Body:    "**周期健康检查失败**\n\n- 周期 key：{{.PeriodKey}}\n- 检查时间：{{.Timestamp}}\n\nRedis 中未找到当前周期的预算计数器，可能影响预算控制。\n\n> 告警冷却时间：{{.Cooldown}}",
+		Body:    "**周期健康检查失败**\n\n- 周期 key：{{.PeriodKey}}\n- 缺失作用域：{{.MissingScopes}}\n- 检查时间：{{.Timestamp}}\n\n以下作用域当前周期的预算计数器未写入 Redis，可能影响预算控制。\n\n> 告警冷却时间：{{.Cooldown}}",
 	},
 	model.NotificationTypePlatformRiskRedisHealth: {
 		Subject: "🔥 Redis 健康告警：连接异常",
@@ -95,5 +95,19 @@ var DefaultTemplates = map[string]struct {
 	model.NotificationTypeSystemStartup: {
 		Subject: "系统启动",
 		Body:    "系统已启动\n\n{{if .Version}}版本: {{.Version}}\n{{end}}{{if .StartedAt}}启动时间: {{.StartedAt}}\n{{end}}时间: {{.Timestamp}}",
+	},
+
+	// 运维告警（系统级，UserID=Nil，实际只送达 webhook）
+	model.NotificationTypeOpsChannelDown: {
+		Subject: "🚨 渠道探活失败{{if .ProviderName}}：{{.ProviderName}}{{end}}{{if .MonitorName}} / {{.MonitorName}}{{end}}",
+		Body:    "**渠道探活失败**\n\n- 来源：{{.Source}}\n{{if .ProviderName}}- 渠道：{{.ProviderName}}\n{{end}}{{if .ProviderID}}- ProviderID：{{.ProviderID}}\n{{end}}{{if .MonitorName}}- 监控：{{.MonitorName}}\n{{end}}{{if .MonitorID}}- MonitorID：{{.MonitorID}}\n{{end}}{{if .Failures}}- 连续失败：{{.Failures}} 次（阈值 {{.Threshold}}）\n{{end}}{{if .Error}}- 错误：{{.Error}}\n{{end}}时间：{{.Timestamp}}\n\n请立即检查上游渠道连通性与凭据配置。",
+	},
+	model.NotificationTypeOpsChannelRecovered: {
+		Subject: "✅ 渠道已恢复{{if .ProviderName}}：{{.ProviderName}}{{end}}{{if .MonitorName}} / {{.MonitorName}}{{end}}",
+		Body:    "**渠道已恢复**\n\n- 来源：{{.Source}}\n{{if .ProviderName}}- 渠道：{{.ProviderName}}\n{{end}}{{if .ProviderID}}- ProviderID：{{.ProviderID}}\n{{end}}{{if .MonitorName}}- 监控：{{.MonitorName}}\n{{end}}{{if .MonitorID}}- MonitorID：{{.MonitorID}}\n{{end}}时间：{{.Timestamp}}\n\n自动禁用/失败状态已恢复，流量已重新接入。",
+	},
+	model.NotificationTypeOpsDeliveryFailed: {
+		Subject: "🔥 通知投递失败：{{.Type}}",
+		Body:    "**通知投递失败**\n\n- 通知类型：{{.Type}}\n{{if .Title}}- 标题：{{.Title}}\n{{end}}- 失败原因：{{.Reason}}\n- 重试次数：{{.Attempts}}\n- 时间：{{.Timestamp}}\n\n通知已转入死信队列，请检查 webhook 端点 / 邮件网关配置。",
 	},
 }

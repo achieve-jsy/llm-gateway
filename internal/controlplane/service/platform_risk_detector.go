@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/example/llm-gateway/internal/budgetperiod"
@@ -32,6 +33,8 @@ type PlatformRiskDetector struct {
 	notifier     Notifier
 	logger       *slog.Logger
 	stopCh       chan struct{}
+	// lastPoolTimeouts 记录上次采样的连接池等待超时累计值，仅检测器单 goroutine 访问。
+	lastPoolTimeouts uint32
 }
 
 func NewPlatformRiskDetector(
@@ -53,7 +56,12 @@ func NewPlatformRiskDetector(
 }
 
 func (d *PlatformRiskDetector) Start() {
+	// 先建立连接池等待超时基线：Timeouts 是单调累计值，基线之前的历史不算本周期告警。
+	d.lastPoolTimeouts = d.rdb.PoolStats().Timeouts
 	d.logger.Info("starting platform risk detector", "interval", riskDetectorInterval)
+
+	// 启动立即先跑一次，消除首检 5 分钟冷启动盲区（进程刚启动的故障不可感知）。
+	d.checkAll()
 
 	ticker := time.NewTicker(riskDetectorInterval)
 	defer ticker.Stop()
@@ -119,36 +127,68 @@ func (d *PlatformRiskDetector) checkCounterIntegrity(ctx context.Context) {
 func (d *PlatformRiskDetector) checkPeriodHealth(ctx context.Context) {
 	d.logger.Debug("checking period health")
 
-	now := time.Now()
-	// 对 daily/weekly/monthly 三种周期都检查 budget key 是否存在
-	periodTypes := []budgetdomain.PeriodType{
-		budgetdomain.PeriodDaily,
-		budgetdomain.PeriodWeekly,
-		budgetdomain.PeriodMonthly,
+	// 预算计数器按作用域存储（budget:v2:used:<scopeType>:<scopeID>:<windowKey>），不存在单一周期级 key。
+	// 周期健康只能遍历启用预算的真实作用域，检查各自当前周期的计数器 key 是否已写入。
+	var allocs []cpmodel.BudgetAllocation
+	if err := d.db.WithContext(ctx).Where("enabled = ?", true).Find(&allocs).Error; err != nil {
+		d.logger.Error("period health: load budget allocations failed", "error", err)
+		return
+	}
+	if len(allocs) == 0 {
+		return
 	}
 
-	for _, pt := range periodTypes {
+	now := time.Now()
+	type scopeCheck struct {
+		periodKey string // pt:windowKey，如 daily:2026-08-03
+		label     string // 作用域标识，如 dept_daily:xxx
+		key       string // 真实 Redis key
+	}
+	var checks []scopeCheck
+	collect := func(scopeType, scopeID string, pt budgetdomain.PeriodType, enabled bool) {
+		if !enabled {
+			return
+		}
 		window, err := budgetperiod.Resolve(now, pt, d.periodConfig)
 		if err != nil {
 			d.logger.Error("resolve period window failed", "period_type", pt, "error", err)
-			continue
+			return
 		}
+		checks = append(checks, scopeCheck{
+			periodKey: fmt.Sprintf("%s:%s", pt, window.Key),
+			label:     fmt.Sprintf("%s:%s", scopeType, scopeID),
+			key:       fmt.Sprintf("budget:v2:used:%s:%s:%s", scopeType, scopeID, window.Key),
+		})
+	}
 
-		periodKey := fmt.Sprintf("%s:%s", pt, window.Key)
-		budgetKey := fmt.Sprintf("budget:v2:used:%s", periodKey)
+	for _, a := range allocs {
+		collect(a.ScopeType, a.ScopeID, budgetdomain.PeriodDaily, a.DailyAmountUSD >= 0)
+		collect(a.ScopeType, a.ScopeID, budgetdomain.PeriodWeekly, a.WeeklyAmountUSD >= 0)
+		collect(a.ScopeType, a.ScopeID, budgetdomain.PeriodMonthly, a.AmountUSD >= 0)
+	}
+	if len(checks) == 0 {
+		return
+	}
 
-		exists, err := d.rdb.Exists(ctx, budgetKey).Result()
-		if err != nil {
-			d.logger.Error("redis exists failed", "key", budgetKey, "error", err)
-			continue
+	pipe := d.rdb.TxPipeline()
+	cmds := make([]*redis.IntCmd, len(checks))
+	for i, c := range checks {
+		cmds[i] = pipe.Exists(ctx, c.key)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		d.logger.Error("period health: redis exists batch failed", "error", err)
+		return
+	}
+
+	// 按周期窗口聚合缺失作用域，每个周期独立去重，避免单 scope 缺失误伤整个周期。
+	missing := map[string][]string{}
+	for i, c := range checks {
+		if cmds[i].Val() == 0 {
+			missing[c.periodKey] = append(missing[c.periodKey], c.label)
 		}
-
-		if exists == 0 {
-			d.logger.Warn("period budget key missing", "key", budgetKey)
-			d.sendPeriodHealthAlert(ctx, periodKey)
-		} else {
-			d.logger.Debug("period health OK", "key", budgetKey)
-		}
+	}
+	for periodKey, scopes := range missing {
+		d.sendPeriodHealthAlert(ctx, periodKey, scopes)
 	}
 }
 
@@ -166,15 +206,19 @@ func (d *PlatformRiskDetector) checkRedisHealth(ctx context.Context) {
 	}
 
 	stats := d.rdb.PoolStats()
-	if stats.IdleConns == 0 && stats.TotalConns > 0 {
-		d.logger.Warn("Redis connection pool exhausted",
+	// IdleConns==0 是高负载健康池的正常瞬时状态，不能当耗尽信号。
+	// 用「本周期内是否发生连接等待超时」判定池耗尽：Timeouts 单调累计，取与上次采样的增量。
+	if stats.Timeouts > d.lastPoolTimeouts {
+		d.lastPoolTimeouts = stats.Timeouts
+		d.logger.Warn("Redis connection pool wait timeout",
 			"total", stats.TotalConns,
 			"idle", stats.IdleConns,
-			"stale", stats.StaleConns,
+			"timeouts", stats.Timeouts,
 		)
-		d.sendRedisHealthAlert(ctx, fmt.Errorf("connection pool exhausted"))
+		d.sendRedisHealthAlert(ctx, fmt.Errorf("connection pool wait timeout: %d (累计)", stats.Timeouts))
 		return
 	}
+	d.lastPoolTimeouts = stats.Timeouts
 
 	d.logger.Debug("Redis health OK", "latency_ms", latency.Milliseconds())
 }
@@ -190,12 +234,19 @@ func (d *PlatformRiskDetector) sendCounterIntegrityAlert(ctx context.Context, vi
 	}, dedupeKey)
 }
 
-func (d *PlatformRiskDetector) sendPeriodHealthAlert(ctx context.Context, periodKey string) {
+func (d *PlatformRiskDetector) sendPeriodHealthAlert(ctx context.Context, periodKey string, missingScopes []string) {
 	dedupeKey := fmt.Sprintf("platform_risk:period_health:%s", periodKey)
 
+	// 限制 scope 明细条数，避免大量缺失时通知文本爆炸；统计仍保留总数。
+	scopes := missingScopes
+	if len(scopes) > 10 {
+		scopes = append(scopes[:10], fmt.Sprintf("等 %d 个", len(missingScopes)))
+	}
+
 	d.sendNotification(ctx, cpmodel.NotificationTypePlatformRiskPeriodHealth, cpmodel.NotificationLevelWarning, map[string]interface{}{
-		"PeriodKey": periodKey,
-		"Cooldown":  riskDetectorDedupeCooldown.String(),
+		"PeriodKey":     periodKey,
+		"MissingScopes": strings.Join(scopes, ", "),
+		"Cooldown":      riskDetectorDedupeCooldown.String(),
 	}, dedupeKey)
 }
 

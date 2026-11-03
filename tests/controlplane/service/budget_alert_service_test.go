@@ -35,6 +35,8 @@ func (f *fakeAllocReader) GetAllocation(_, _ string) (*model.BudgetAllocation, e
 type fakeAlertStore struct {
 	existsResult   map[string]bool
 	createdRecords []*model.BudgetAlertRecord
+	deletedDims    []repository.AlertDimension
+	deletedErrs    error
 	createErr      error
 	ownersResult   map[string][]repository.AlertOwnerRow
 	ownersErr      error
@@ -70,6 +72,14 @@ func (f *fakeAlertStore) Create(a *model.BudgetAlertRecord) error {
 		return f.createErr
 	}
 	f.createdRecords = append(f.createdRecords, a)
+	return nil
+}
+
+func (f *fakeAlertStore) DeleteByDimensionAndThreshold(_ context.Context, d repository.AlertDimension, _ int) error {
+	if f.deletedErrs != nil {
+		return f.deletedErrs
+	}
+	f.deletedDims = append(f.deletedDims, d)
 	return nil
 }
 
@@ -248,6 +258,38 @@ func TestEvaluateAndAlert_DeptServiceOnly80TriggersAt80(t *testing.T) {
 	assert.Equal(t, 80, alertStore.createdRecords[0].Threshold)
 }
 
+// TestEvaluateAndAlert_AllScopesGetHundredAtFullUsage 验证：非 dept_service 作用域
+// 用量 ≥100% 时同样触发 80% 和 100% 双档（不再只覆盖 tier/dept_service）。
+func TestEvaluateAndAlert_AllScopesGetHundredAtFullUsage(t *testing.T) {
+	scopeType, scopeID := "studio", "studio-001"
+	alloc := &model.BudgetAllocation{ScopeType: scopeType, ScopeID: scopeID, AmountUSD: 1000}
+	alertStore := newFakeAlertStore()
+	alertStore.ownersResult[scopeType+":"+scopeID] = []repository.AlertOwnerRow{
+		{UserID: uuid.New().String()},
+	}
+	notifWriter := &fakeNotificationWriter{}
+	rdb := newAlertRedis(t, scopeType, scopeID, 1000)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
+
+	svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
+
+	require.Len(t, alertStore.createdRecords, 2, "满额应触发 80% 和 100% 两档")
+	thresholds := map[int]bool{}
+	for _, r := range alertStore.createdRecords {
+		thresholds[r.Threshold] = true
+	}
+	assert.True(t, thresholds[80])
+	assert.True(t, thresholds[100])
+
+	require.Len(t, notifWriter.createdNotifications, 2)
+	levels := map[string]bool{}
+	for _, n := range notifWriter.createdNotifications {
+		levels[n.Level] = true
+	}
+	assert.True(t, levels[model.NotificationLevelWarning], "应有 warning（80%）")
+	assert.True(t, levels[model.NotificationLevelCritical], "满额应有 critical（100%）")
+}
+
 func TestEvaluateTierAlert_UsesTemporaryEffectiveLimitAndTwoThresholds(t *testing.T) {
 	scopeType, scopeID := "member", "u-1"
 	allocationID, tierID := uuid.New(), uuid.New()
@@ -346,7 +388,53 @@ func TestEvaluateAndAlert_WebhookFailureIsNonFatal(t *testing.T) {
 	assert.Len(t, alertStore.createdRecords, 1)
 }
 
-// TestEvaluateAndAlert_NoNotificationRepo 验证：未注入 NotificationRepo 时不 panic。
+// TestEvaluateAndAlert_AllSendsFailRollsBackDedupe 验证：有负责人但通知全部入队失败时，
+// 回滚去重记录，使下次评估能重试，告警不会被永久吞掉。
+func TestEvaluateAndAlert_AllSendsFailRollsBackDedupe(t *testing.T) {
+	scopeType, scopeID := "dept_daily", "dept-001"
+	alloc := &model.BudgetAllocation{ScopeType: scopeType, ScopeID: scopeID, AmountUSD: 1000}
+	alertStore := newFakeAlertStore()
+	alertStore.ownersResult[scopeType+":"+scopeID] = []repository.AlertOwnerRow{
+		{UserID: uuid.New().String()},
+	}
+	notifWriter := &fakeNotificationWriter{createErr: errors.New("outbox write failed")}
+	rdb := newAlertRedis(t, scopeType, scopeID, 900)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
+
+	assert.NotPanics(t, func() {
+		svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
+	})
+
+	assert.Empty(t, notifWriter.createdNotifications, "全部入队失败不应残留通知")
+	require.Len(t, alertStore.createdRecords, 1, "去重记录应先行写入")
+	require.Len(t, alertStore.deletedDims, 1, "全部发送失败应回滚去重记录")
+	assert.Equal(t, 80, alertStore.deletedDims[0].Threshold)
+}
+
+// TestEvaluateAndAlert_RollbackKeepsSucceededThreshold 验证：80% 发送失败回滚时
+// 不误删同周期已成功的 100% 档位记录（回滚按档位精确删除）。
+func TestEvaluateAndAlert_RollbackKeepsSucceededThreshold(t *testing.T) {
+	scopeType, scopeID := "dept_service", "svc-001"
+	alloc := &model.BudgetAllocation{ScopeType: scopeType, ScopeID: scopeID, AmountUSD: 200}
+	alertStore := newFakeAlertStore()
+	alertStore.ownersResult[scopeType+":"+scopeID] = []repository.AlertOwnerRow{
+		{UserID: uuid.New().String()},
+	}
+	// 模拟 100% 档已成功发送并留存去重记录
+	period := time.Now().Format("2006-01")
+	alertStore.existsResult[scopeType+":"+scopeID+":"+period+":"+string(rune(100))] = true
+
+	notifWriter := &fakeNotificationWriter{createErr: errors.New("outbox write failed")}
+	rdb := newAlertRedis(t, scopeType, scopeID, 210)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
+
+	svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
+
+	require.Len(t, alertStore.createdRecords, 1, "仅 80% 档新建去重记录")
+	assert.Equal(t, 80, alertStore.createdRecords[0].Threshold)
+	require.Len(t, alertStore.deletedDims, 1)
+	assert.Equal(t, 80, alertStore.deletedDims[0].Threshold, "回滚应精确命中 80% 档")
+}
 func TestEvaluateAndAlert_NoNotificationRepo(t *testing.T) {
 	scopeType, scopeID := "dept_daily", "dept-001"
 	alloc := &model.BudgetAllocation{ScopeType: scopeType, ScopeID: scopeID, AmountUSD: 1000}

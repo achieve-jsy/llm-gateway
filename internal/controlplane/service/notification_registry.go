@@ -29,7 +29,7 @@ var notificationRegistry = []NotificationTypeDef{
 		Name:             model.NotificationTypeBudgetAlert,
 		DisplayName:      "预算告警",
 		Description:      "预算使用率超过阈值告警",
-		DefaultVariables: []string{"ScopeType", "ScopeID", "Threshold", "UsedUSD", "AmountUSD"},
+		DefaultVariables: []string{"ScopeType", "ScopeID", "PeriodType", "Threshold", "UsedUSD", "AmountUSD"},
 		Channels:         []string{ChannelInapp, ChannelEmail, ChannelWebhook},
 	},
 	{
@@ -147,7 +147,7 @@ var notificationRegistry = []NotificationTypeDef{
 		Name:             model.NotificationTypePlatformRiskPeriodHealth,
 		DisplayName:      "周期健康",
 		Description:      "预算周期健康检查异常告警",
-		DefaultVariables: []string{"PeriodKey", "Cooldown"},
+		DefaultVariables: []string{"PeriodKey", "MissingScopes", "Cooldown"},
 		Channels:         []string{ChannelInapp, ChannelEmail, ChannelWebhook},
 	},
 	{
@@ -164,6 +164,29 @@ var notificationRegistry = []NotificationTypeDef{
 		DisplayName:      "系统启动",
 		Description:      "系统启动通知",
 		DefaultVariables: []string{"Version", "StartedAt"},
+		Channels:         []string{ChannelInapp, ChannelEmail, ChannelWebhook},
+	},
+
+	// 运维告警（系统级，UserID=Nil，实际只送达 webhook）
+	{
+		Name:             model.NotificationTypeOpsChannelDown,
+		DisplayName:      "渠道探活失败",
+		Description:      "上游渠道/模型探活失败（health check 自动禁用或 monitor 检测失败）",
+		DefaultVariables: []string{"Source", "ProviderName", "ProviderID", "MonitorName", "MonitorID", "Failures", "Threshold", "Error"},
+		Channels:         []string{ChannelInapp, ChannelEmail, ChannelWebhook},
+	},
+	{
+		Name:             model.NotificationTypeOpsChannelRecovered,
+		DisplayName:      "渠道恢复",
+		Description:      "自动禁用渠道检测成功恢复",
+		DefaultVariables: []string{"Source", "ProviderName", "ProviderID", "MonitorName", "MonitorID"},
+		Channels:         []string{ChannelInapp, ChannelEmail, ChannelWebhook},
+	},
+	{
+		Name:             model.NotificationTypeOpsDeliveryFailed,
+		DisplayName:      "通知投递失败",
+		Description:      "通知投递重试耗尽转入死信队列",
+		DefaultVariables: []string{"Type", "Title", "Reason", "Attempts"},
 		Channels:         []string{ChannelInapp, ChannelEmail, ChannelWebhook},
 	},
 }

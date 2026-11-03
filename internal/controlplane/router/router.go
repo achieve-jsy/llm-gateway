@@ -243,12 +243,17 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	// lifecycleObserver 保留真实 notifier（其 RetryPending 需实际分发）。
 	consumerNotifier := service.NewOutboxNotifier(db)
 	budgetAlertSvc.SetNotifier(consumerNotifier)
+	// 运维告警发送器：渠道探活失败/恢复、通知投递死信都走 outbox 入队（~1ms），
+	// 由上方 worker 真实分发到 webhook（系统告警 UserID=Nil，webhook 是唯一实际送达渠道）。
+	opsAlertSender := service.NewOpsAlertSender(consumerNotifier)
+	healthCheckSvc.SetOpsAlertSender(opsAlertSender)
 	expansionRepo := repository.NewExpansionRepo(db)
 	approvalPoolResolver := service.NewDatabaseApprovalPoolResolver(db)
 	budgetOwnerResolver := service.NewDatabaseBudgetOwnerResolver(db, approvalPoolResolver)
 	lifecycleObserver := service.NewBudgetLifecycleNotificationObserver(
 		db, expansionRepo, budgetOwnerResolver, notifier,
 	)
+	lifecycleObserver.SetOpsAlertSender(opsAlertSender)
 	budgetLifecycleExecutor := service.NewBudgetLifecycleExecutor(
 		budgetTierRepo, budgetRepo, budgetTierRepo, budgetSnapshotPublisher, lifecycleObserver,
 	)
@@ -441,6 +446,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	channelMonitorRepo := repository.NewChannelMonitorRepo(db)
 	channelMonitorSvc := service.NewChannelMonitorService(channelMonitorRepo)
 	channelMonitorSvc.SetSettingsReader(settingsRepo)
+	channelMonitorSvc.SetOpsAlertSender(opsAlertSender)
 	channelMonitorHandler := handler.NewChannelMonitorHandler(channelMonitorSvc)
 	channelMonitorUserHandler := handler.NewChannelMonitorUserHandler(channelMonitorSvc)
 

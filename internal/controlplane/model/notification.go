@@ -97,6 +97,11 @@ const (
 	NotificationTypePlatformRiskCounterIntegrity = "platform_risk_counter_integrity"
 	NotificationTypePlatformRiskPeriodHealth     = "platform_risk_period_health"
 	NotificationTypePlatformRiskRedisHealth      = "platform_risk_redis_health"
+
+	// 运维告警（系统级，UserID=Nil，实际只送达 webhook）
+	NotificationTypeOpsChannelDown      = "ops_channel_down"
+	NotificationTypeOpsChannelRecovered = "ops_channel_recovered"
+	NotificationTypeOpsDeliveryFailed   = "ops_delivery_failed"
 )
 
 // 通知级别常量（与 Announcement.Level 对齐）

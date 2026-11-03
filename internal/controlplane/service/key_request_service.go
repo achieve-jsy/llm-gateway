@@ -189,7 +189,7 @@ func (s *KeyRequestService) Decide(
 		if err := s.repo.Approve(requestID, approverID, createdKeyID, approverName, comment); err != nil {
 			return err
 		}
-		s.notifyRequesterApproved(req, false)
+		s.notifyRequesterApproved(req, createdKeyID, false)
 		return nil
 	}
 	if action == model.ExpansionActionReject {
@@ -360,14 +360,14 @@ func (s *KeyRequestService) BatchApprovePendingForDept(ctx context.Context, dept
 		}
 		item.Status = "approved"
 		item.CreatedKeyID = createdKeyID.String()
-		item.Notified = s.notifyRequesterApproved(&req, true)
+		item.Notified = s.notifyRequesterApproved(&req, createdKeyID, true)
 		out.Success++
 		out.Items = append(out.Items, item)
 	}
 	return out, nil
 }
 
-func (s *KeyRequestService) notifyRequesterApproved(req *model.KeyRequest, auto bool) bool {
+func (s *KeyRequestService) notifyRequesterApproved(req *model.KeyRequest, createdKeyID uuid.UUID, auto bool) bool {
 	if s.notifier == nil || req == nil {
 		return false
 	}
@@ -376,14 +376,19 @@ func (s *KeyRequestService) notifyRequesterApproved(req *model.KeyRequest, auto 
 	if auto {
 		content = fmt.Sprintf("负责人已关闭 Key 审批，你的「%s」申请已自动通过，Key 已创建，可在「我的密钥」中查看。", req.KeyName)
 	}
+	data := map[string]interface{}{}
+	if createdKeyID != uuid.Nil {
+		data["KeyID"] = createdKeyID.String()
+	}
 	n := &model.Notification{
-		UserID:  req.RequesterID,
-		Type:    model.NotificationTypeKeyRequestApproved,
-		Level:   model.NotificationLevelInfo,
-		Title:   title,
-		Content: content,
-		RefType: "key_request",
-		RefID:   req.ID.String(),
+		UserID:       req.RequesterID,
+		Type:         model.NotificationTypeKeyRequestApproved,
+		Level:        model.NotificationLevelInfo,
+		Title:        title,
+		Content:      content,
+		RefType:      "key_request",
+		RefID:        req.ID.String(),
+		TemplateData: data,
 	}
 	if err := s.notifier.Create(n); err != nil {
 		slog.Warn("key request: notify requester failed",

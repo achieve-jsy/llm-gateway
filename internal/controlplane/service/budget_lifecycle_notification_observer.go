@@ -21,6 +21,8 @@ type BudgetLifecycleNotificationObserver struct {
 	owners     LifecycleOwnerResolver
 	notifier   Notifier
 	leaseOwner string
+	// opsSender 投递死信时联动 webhook 运维告警（nil 表示未装配）。
+	opsSender *OpsAlertSender
 }
 
 var _ BudgetLifecycleObserver = (*BudgetLifecycleNotificationObserver)(nil)
@@ -69,6 +71,12 @@ func (o *BudgetLifecycleNotificationObserver) RetryPending(ctx context.Context, 
 	}
 	for _, row := range rows {
 		if _, ok := deadlettered[row.ID]; ok {
+			if o.opsSender != nil {
+				// 在 tx 提交后发，避免嵌套事务；去重键按被死信行的 Type 聚合，
+				// 同小时重复死信只发一次（outbox OnConflict(dedupe_key) 拦截）。
+				o.opsSender.NotifyDeliveryFailed(ctx, row.Type, row.Title,
+					"max attempts exceeded (deadletter)", row.Attempts)
+			}
 			continue
 		}
 		notification := &model.Notification{
@@ -100,6 +108,11 @@ func NewBudgetLifecycleNotificationObserver(
 	return &BudgetLifecycleNotificationObserver{
 		db: db, expansions: expansions, owners: owners, notifier: notifier, leaseOwner: uuid.NewString(),
 	}
+}
+
+// SetOpsAlertSender 注入运维告警发送器，投递死信时联动 webhook 告警。
+func (o *BudgetLifecycleNotificationObserver) SetOpsAlertSender(sender *OpsAlertSender) {
+	o.opsSender = sender
 }
 
 func (o *BudgetLifecycleNotificationObserver) OnOverrideExpired(

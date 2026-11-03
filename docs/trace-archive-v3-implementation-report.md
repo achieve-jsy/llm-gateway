@@ -421,3 +421,93 @@ viper 对未知 key 不报错 → **全部走代码默认值**。`archive.read.e
 > **关键提醒**：第 5 步需要一个真实的离机备份通道。在它建立之前，门闸⑥ 会一直挡住置空，
 > `/data` 不会有任何缓解。**这个通道本身可能就是最长的一条关键路径，需要尽早决策。**
 
+---
+
+## 9. `/data` 腾挪可行性（2026-09-21，用户提议「把 /data 一部分迁到 /datalog」）
+
+### 9.1 物理事实
+
+**没有闲置盘**：`sda` 60G（`/`、`/boot`）、`sdb` 350G（`/data`）、`sdc` 600G（`/datalog`），全部已挂载。
+`/data` 上非 PG 内容只有 155M（web 108M + litellm 47M）——**没有可搬走的他物**。
+
+```
+两盘合计容量  991G
+已用          515G（/ 23G + /data 299G + /datalog 193G）
+空闲          476G  → 按 11G/天 计，合并看约 43 天
+```
+
+**空间总量是够的。问题是分布：增长最快的 PG（11G/天）落在最小的盘（350G）上，而 600G 盘上放着 189G 静态数据。**
+所以在两盘之间搬数据本身不产生空间，但**放对位置能把 4 天变成约 27 天**。
+
+### 9.2 `/datalog/archive` 的 189G 不是垃圾，是唯一副本
+
+```
+/datalog/archive/call_traces/  9 个 gzip jsonl，共 189G，mtime 2026-09-08 ~ 09-09
+  body-0/1/2.jsonl.gz、body-recent-2/3.jsonl.gz、body-r3-new.jsonl.gz …
+```
+
+这是 **09-08/09 导出的 call_traces 正文**。而 PG 里**只有 09-10 之后的正文**（更早的天正文数为 0）
+—— 即这 189G 极可能是那些历史天的**唯一副本，不可删除**。但它可以搬家（静态只读数据）。
+
+> **兼容性缺口（需单独处理）**：v3 代码读不了这个旧格式——目录是 `body-N.jsonl.gz`，
+> 没有 `index.jsonl` / `manifest.json` / `_SUCCESS`，且 root 是 `/datalog/archive`
+> 而非默认的 `/datalog/llm-gateway-archive`。**历史正文还在，但新代码读不出来。**
+
+### 9.3 已验证的技术前提：`SET TABLESPACE` 会连 TOAST 一起搬
+
+在测试环境 PG 18.4 上实测（1 GB 规模）：
+
+```
+搬迁前 | probe            tablespace=pg_default  size=592 kB
+搬迁前 | pg_toast_326439  tablespace=pg_default  size=1016 MB
+ALTER TABLE probe SET TABLESPACE ts_probe;   → Time: 4201 ms   (≈245 MB/s)
+搬迁后 | probe            tablespace=ts_probe   size=592 kB
+搬迁后 | pg_toast_326439  tablespace=ts_probe   size=1016 MB
+物理路径 | probe -> pg_tblspc/326437/PG_18_.../336448
+物理路径 | pg_toast_326439 -> pg_tblspc/326437/PG_18_.../336449    数据完好 rows=10000
+```
+
+**TOAST 确实跟着走**（这是方案可行的前提——TOAST 占 `call_traces` 286G 里的 280G）。
+按 245 MB/s 外推，286 GB ≈ **20 分钟**。
+
+### 9.4 搬迁方案与账（不删任何数据）
+
+| 步骤 | /data 可用 | /datalog 可用 |
+|---|---|---|
+| 现在 | 43G | 368G |
+| ① `call_traces`（286G）`SET TABLESPACE` 到 /datalog | **331G** | 111G |
+| ② 189G 旧归档 rsync 到 /data | **142G**（放新归档） | **300G**（PG 增长） |
+
+**最终：PG 增长落在 /datalog 的 300G 上 → 约 27 天**（只做 ① 则 111G → 10 天）。
+
+### 9.5 代价与风险
+
+1. **20 分钟 `call_traces` 的 ACCESS EXCLUSIVE 锁**。影响面已查证——trace 写入是
+   **非阻塞 + 过载丢弃**设计（`trace_event.go:109-112`：「优先非阻塞快速路径…trace 数据非关键路径，
+   不无限阻塞请求」）→ **不会阻塞用户请求**，代价是丢失约 20 分钟的 trace 数据。可接受。
+2. **⚠️ 最大障碍：生产 PG 容器没有挂 `/datalog`。**
+   ```
+   bind /opt/1panel/apps/postgresql/postgresql/data -> /var/lib/postgresql
+   ```
+   只挂了数据目录。把 tablespace 放到 `/var/lib/postgresql/ts_x` 实际落在 `/opt/1panel/...`（在 `/` 上，仅 32G 空闲），
+   **不是 /datalog**。要落到 /datalog 必须**给该容器加 bind mount 并重启 PG 容器**。
+   而该容器由 **1Panel 管理**（`createdBy=Apps`，compose project `postgresql`），
+   **在 1Panel 之外改挂载有被覆盖或管理冲突的风险。**
+3. 索引不跟着搬：`call_traces_pkey` 456M + `idx_call_traces_ts` 114M 留在 /data（量级可忽略）。
+4. 搬 189G 需 rsync + 校验后再删源（无停机）。
+
+### 9.6 诚实结论
+
+**这是买时间，不是解决问题**——11G/天照旧，27 天后仍会写满。
+且它并不比「直接把归档功能跑起来」更接近目标：**归档 + 置空 + VACUUM 会真正释放约 280 GB。**
+
+两条路线对比：
+
+| | 搬迁腾挪 | 手工/正式跑归档 |
+|---|---|---|
+| 收益 | 4 天 → 27 天 | 释放约 280 GB，可重复 |
+| 主要风险 | 改 1Panel 管理的容器挂载；20 分钟锁 | 需接受 `require_offhost_copy=false`（唯一副本在 /datalog） |
+| 依赖 | 1Panel 容器配置可改 | 迁移 + 可运行的归档进程 |
+| 是否解决根因 | 否 | 是 |
+
+

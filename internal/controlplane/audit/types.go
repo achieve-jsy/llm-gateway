@@ -98,6 +98,14 @@ const (
 	ActionEmailAlert    Action = "email.send_alert"
 	ActionWebhookAlert  Action = "webhook.send_alert"
 
+	// 通知配置审计
+	ActionNotificationChannelRulesUpdate Action = "notification_channel_rules.update"
+	ActionNotificationConfigUpdate       Action = "notification_config.update"
+	ActionNotificationConfigTest         Action = "notification_config.test"
+	ActionWebhookTargetCreate            Action = "webhook_target.create"
+	ActionWebhookTargetUpdate            Action = "webhook_target.update"
+	ActionWebhookTargetDelete            Action = "webhook_target.delete"
+
 	// v0.15 配额审计
 	ActionQuotaDefaultUpdate    Action = "quota.default.update"
 	ActionQuotaUserUpdate       Action = "quota.user.update"
@@ -126,6 +134,9 @@ const (
 	ResourceEmployee     Resource = "employee"
 	ResourceEmail        Resource = "email"
 	ResourceWebhook      Resource = "webhook"
+	ResourceNotificationChannelRules Resource = "notification_channel_rules"
+	ResourceNotificationConfig       Resource = "notification_config"
+	ResourceWebhookTarget            Resource = "webhook_target"
 	ResourceQuota        Resource = "quota"
 	ResourceUnknown      Resource = "unknown"
 )

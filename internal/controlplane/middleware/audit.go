@@ -111,6 +111,14 @@ var auditRouteMap = map[string]routeAction{
 	"POST:/api/v1/notifications/:id/read": {audit.Action("notification.read"), audit.ResourceUser},
 	"POST:/api/v1/notifications/read-all": {audit.Action("notification.read_all"), audit.ResourceUser},
 
+	// ── Notification configs ───────────────────────────────────────
+	"PUT:/api/v1/settings/notification-channels":              {audit.ActionNotificationChannelRulesUpdate, audit.ResourceNotificationChannelRules},
+	"PUT:/api/v1/notification-configs/:type/:channel":         {audit.ActionNotificationConfigUpdate, audit.ResourceNotificationConfig},
+	"POST:/api/v1/notification-configs/:type/:channel/test":   {audit.ActionNotificationConfigTest, audit.ResourceNotificationConfig},
+	"POST:/api/v1/notification-configs/:type/webhook/targets": {audit.ActionWebhookTargetCreate, audit.ResourceWebhookTarget},
+	"PUT:/api/v1/notification-configs/:type/webhook/targets/:id":  {audit.ActionWebhookTargetUpdate, audit.ResourceWebhookTarget},
+	"DELETE:/api/v1/notification-configs/:type/webhook/targets/:id": {audit.ActionWebhookTargetDelete, audit.ResourceWebhookTarget},
+
 	// ── Service Keys ───────────────────────────────────────────────
 	"POST:/api/v1/service-keys":                   {audit.ActionServiceKeyCreate, audit.ResourceServiceKey},
 	"PATCH:/api/v1/service-keys/:id/status":       {audit.ActionServiceKeyToggle, audit.ResourceServiceKey},
@@ -583,6 +591,10 @@ func inferResourceID(c *gin.Context) string {
 		return id
 	}
 	if id := c.Param("eid"); id != "" {
+		return id
+	}
+	// 通知配置类路由使用 :type 标识被改动的通知类型（仅 notification-configs 用该参数）
+	if id := c.Param("type"); id != "" {
 		return id
 	}
 	return ""

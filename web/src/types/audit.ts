@@ -122,6 +122,12 @@ export const AUDIT_ACTIONS = [
   // 通知
   { value: 'notification.read', label: '通知已读' },
   { value: 'notification.read_all', label: '全部已读' },
+  { value: 'notification_channel_rules.update', label: '通知规则更新' },
+  { value: 'notification_config.update', label: '通知配置更新' },
+  { value: 'notification_config.test', label: '通知配置测试' },
+  { value: 'webhook_target.create', label: 'Webhook 端点创建' },
+  { value: 'webhook_target.update', label: 'Webhook 端点更新' },
+  { value: 'webhook_target.delete', label: 'Webhook 端点删除' },
   // 设置
   { value: 'settings.update', label: '系统设置更新' },
   { value: 'settings.test_webhook', label: 'Webhook 测试' },
@@ -165,5 +171,9 @@ export const RESOURCE_TYPES = [
   { value: 'department', label: '部门' },
   { value: 'role', label: '角色' },
   { value: 'email', label: '邮件' },
+  { value: 'webhook', label: 'Webhook' },
+  { value: 'notification_channel_rules', label: '通知规则' },
+  { value: 'notification_config', label: '通知配置' },
+  { value: 'webhook_target', label: 'Webhook 端点' },
   { value: 'unknown', label: '其他' },
 ]

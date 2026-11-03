@@ -566,6 +566,60 @@ lead 复核结论（不照单全收）：
   并导致 Kling 静默失效** —— 已作为接缝契约的注意事项登记（见
   `internal/providers/media_adapter.go` 的注释）。
 
+### E-dash（媒体看板后端 API）合并记录 + 🔴 上线顺序硬依赖的取证（第 12 轮）
+
+**交付**：`feat/media-e3`，基线 `8a12bb91` → 4 个提交，9 个文件全部落在
+`internal/controlplane/**` 与 `tests/controlplane/**`。新端点
+`GET /api/v1/ops/media-tasks/dashboard`（`JWTAuth` + `rbac.PermUsageViewScoped`，
+注册于 `internal/controlplane/router/router.go:719`）。**已合并。**
+
+lead 复核：
+- 边界 9 个文件 ✓；`make build`=0；`make test` **50 包 0 FAIL**；lint **精确基线 125**，新文件 0 命中。
+- 独立复验它的「裸表名 0 处需要改」结论：`grep -rnE "(FROM|INTO|UPDATE|JOIN|Table\()\s*\"?video_tasks" internal/controlplane/` → **空** ✓。
+  新 SQL 走 `r.db.Model(&model.VideoTask{})`（经 `TableName()` 落 `media_tasks`）与
+  `r.db.Table("(?) AS d", inner)`，无裸表名 ✓。路由守卫与相邻媒体统计端点
+  （`/video/tasks/stats/*`）**同一枚** `PermUsageViewScoped` ✓ —— 保持一致性，不改成 admin-only。
+- 它**独立复现并证明了同一个 `keyactivity` flaky**（import 闭包与本任务改动不相交、单跑 30 次通过），
+  与 lead 第 11 轮的诊断互相印证。
+
+#### 🔴 上线顺序硬依赖（lead 用生产库只读取证，必须写进部署清单）
+
+| 依赖 | 生产库现状（实测） | 影响 |
+|---|---|---|
+| `media_tasks` 表 | ❌ **不存在**（只有 `video_tasks` / `video_task_events`） | 看板主查询直接 `relation "media_tasks" does not exist` |
+| `call_logs.call_type` | ❌ **不存在** | 「无价拒绝」子查询直接报错 |
+| `call_logs.status` / `usage_missing` / `budget_block_code` / `inbound_endpoint` / `ts` | ✅ 均存在 | 无价拒绝的其余判据可用 |
+
+**结论**：看板（以及整个媒体任务链路）**必须等待执行迁移落地后才能上线**。生产库仍停在
+`video_tasks`，说明 C1 的改名迁移与 A11 的 `call_type` 迁移都**尚未执行**。
+🔴 其中 **A11 是本项目最重的一次迁移**（`call_logs` = 1033 万行 / 13 GB，实测目标行仅 2,699，
+`SELECT` 耗时 33.9s）→ **必须在低峰窗口执行**。因此**看板的上线时点由 A11 决定**，
+部署清单应把「A11 完成」列为看板可用性的前置条件。
+
+#### 「无价拒绝」指标的判据与可得性（E-dash 的调研，lead 采信并记录证据链）
+
+该指标**不在 `media_tasks`**（被拒请求在提交上游前就被拦下，根本没有任务行）。真实来源是
+`call_logs` 的无价留痕：网关 `/v1` 整组挂了 `middleware.UsageCollectorWithRedis`
+（`internal/gateway/server/router.go:291`）且**无条件 Emit**；collector 读到
+`CtxKeyMediaPricingMissing` 标记就强制 `usage_missing=true`
+（`usage_collector.go`），所以被拒请求**同样落一行**。判据 = `status=402` ∧ `usage_missing`
+∧ `COALESCE(budget_block_code,'')=''`（排除预算/配额闸门的 402）∧ 入站端点属于媒体**创建**端点。
+分组用 `by_call_type` 而非 `kind`（拒绝发生在任务创建前，没有 kind）。
+**该判据字符串随响应下发**（`anomalies.pricing_missing_rejections.criteria`），运维不必读源码。
+
+#### 需要 lead 决策的两点（已决）
+
+1. **`call_logs` 的 90d 窗口索引 → 本轮不加迁移，延后决策。** 理由：
+   (a) 端点仅管理面可见（`JWTAuth` + RBAC），默认窗口 24h，前端默认请用 24h/7d；
+   (b) **目前连测量都做不到**——`call_type` 列还不存在，EXPLAIN 直接报错，所以**没有成本证据**就加索引
+   是不负责任的；
+   (c) `call_logs` 是 1033 万行 / 13 GB 热表，加索引必须 `CONCURRENTLY`（不能进事务、失败留 invalid 索引），
+   代价高，**应与 A11 的迁移窗口合并安排**，而不是单独插入；
+   (d) 生产库已有 5 个待执行迁移，其中 A11 已是重项。
+   → 待 A11 落地、看板有真实流量后再测量并决策；届时已备好候选 DDL（部分索引）。
+2. **鉴权守卫 → 采用 `PermUsageViewScoped`**（与既有媒体任务统计系列一致）。改成纯运维面
+   `PermOpsView` 只需改 router 一行，但会造成同一系列端点权限不一致，不做。
+
 ## 3. 批次与依赖图
 
 ```mermaid

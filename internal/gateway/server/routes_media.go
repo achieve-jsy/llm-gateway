@@ -130,7 +130,21 @@ func newMediaDeps(
 //     deps.GroupDispatch 做「组名 → 上游模型」改写（B2）；直连模型 ID 返回 403；
 //   - 不支持的参数（generations 的 response_format / style）返回 400 并提示替代项（B5）。
 func registerMediaImageRoutes(deps MediaDeps) {
-	// TODO(B 队 · B2/B3): 见上方待注册清单与约束。
+	if deps.V1 == nil {
+		return
+	}
+	imageHandler := handler.NewImageHandler(
+		handler.WithImageGroupDispatcher(deps.GroupDispatch),
+		handler.WithImageModelResolver(handler.RouterImageModelResolver(deps.RouterGetter)),
+	)
+	// 挂在 deps.V1 上，沿用既有中间件链（Auth / BodyBudgetLimiter / BillingFactGuard /
+	// TraceCapture / UsageCollector / OrgCheck）：不另建路由组，避免绕开鉴权与埋点。
+	//
+	// TraceCapture 的采集路径白名单（middleware.traceCapturePaths）**不含** /v1/images/*：
+	// multipart 与 base64 正文一律不落 call_traces（B4）；DEBUG 级 RequestBodyLogger
+	// 也对本路径跳过（见 middleware/middleware.go）。
+	deps.V1.POST("/images/generations", imageHandler.HandleImageGeneration)
+	deps.V1.POST("/images/edits", imageHandler.HandleImageEdit)
 }
 
 // registerMediaTaskRoutes 注册「任务平台链路」路由（设计文档 §2.1、§6.3）。

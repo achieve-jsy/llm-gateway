@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/example/llm-gateway/internal/providers/openai"
 )
 
 // runCheckForModel sends an HTTPS request (with challenge prompt) to the target
@@ -208,14 +210,19 @@ func buildOpenAIBody(apiMode, modelName string, challenge monitorChallenge) map[
 			"max_output_tokens": monitorChallengeMaxTokens,
 		}
 	}
-	return map[string]interface{}{
+	body := map[string]interface{}{
 		"model": modelName,
 		"messages": []map[string]string{
 			{"role": "user", "content": challenge.Prompt},
 		},
-		"max_tokens":  monitorChallengeMaxTokens,
-		"temperature": 0,
+		"max_tokens": monitorChallengeMaxTokens,
 	}
+	if temp := openai.FixedTemperatureForModel(modelName); temp != nil {
+		body["temperature"] = *temp
+	} else {
+		body["temperature"] = 0
+	}
+	return body
 }
 
 func buildAnthropicBody(modelName string, challenge monitorChallenge) map[string]interface{} {

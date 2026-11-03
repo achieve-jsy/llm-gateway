@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -99,6 +100,20 @@ func probeChatCompletion(ctx context.Context, endpoint, modelName, apiKey string
 			return true, false, t, ""
 		}
 		return false, false, t, retryErr
+	}
+
+	// 某些模型要求固定 temperature（如 kimi-k3 要求 0.6），
+	// 探测请求未带 temperature 时会被拒绝，提取要求值后重试。
+	if strings.Contains(lower, "invalid temperature") && strings.Contains(lower, "only") {
+		if tempVal := ExtractRequiredTemperature(lower); tempVal != nil {
+			retryReq := cloneProbeRequest(baseReq)
+			retryReq["temperature"] = *tempVal
+			ok, t, retryErr := doProbeRequest(ctx, chatEndpoint, apiKey, retryReq, false)
+			if ok {
+				return true, false, t, ""
+			}
+			return false, false, t, retryErr
+		}
 	}
 
 	return false, false, elapsed, errMsg
@@ -307,4 +322,25 @@ func truncateProbeString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// ExtractRequiredTemperature 从错误信息中提取模型要求的固定 temperature 值。
+// 匹配 "only 0.6 is allowed" 这类模式，返回 float64 指针。
+func ExtractRequiredTemperature(lower string) *float64 {
+	idx := strings.Index(lower, "only ")
+	if idx == -1 {
+		return nil
+	}
+	rest := lower[idx+5:]
+	end := strings.IndexFunc(rest, func(r rune) bool {
+		return (r < '0' || r > '9') && r != '.'
+	})
+	if end == -1 {
+		end = len(rest)
+	}
+	val, err := strconv.ParseFloat(rest[:end], 64)
+	if err != nil || end == 0 {
+		return nil
+	}
+	return &val
 }

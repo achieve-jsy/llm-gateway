@@ -285,6 +285,25 @@
 
 ---
 
+### Batch 1 派发记录（2026-10-16 第 4 轮）
+
+**基线**：`ae6a2dc4`（Batch 0 最终 HEAD，33 提交 / 71 文件 / +9458 −54）。三个工作区均由该 commit 分叉，且已核验都带上了 Batch 0 全部成果（`media_pricing_gate.go`、2 条 `call_type` 迁移、§0.2 文档）。
+
+| 队伍 | 工作区 / 分支 | 范围 | agent id |
+|---|---|---|---|
+| **B 队**（图像同步链路） | `.worktrees/media-b` / `feat/media-b` | B1–B7（含 B7 failover 门控，**独占**） | `c8bc71d6` |
+| **C1 队**（任务平台·控制面） | `.worktrees/media-c1` / `feat/media-c1` | C1+C1-补充（扩列+改名迁移）、C2（repo/service/CAS/超时扫描）、C3 控制面侧、C7 的 sweeper（控制面 cron） | `f4c5d678` |
+| **C2 队**（任务平台·网关侧） | `.worktrees/media-c2` / `feat/media-c2` | C3b（网关 client）、C4（registry 接线）、C5（`/v1/videos` 三件套）、C6（归属+幂等）、C7 网关侧（状态映射/轮询策略）、C8（终态记账） | `d1bf8f65` |
+
+**为什么把 C 拆成两队**：C 队原 8 项 ≈ 9–11 人日，单 agent 会话过载易掉质量；拆开后按**文件所有权**切分（C1 只动 `internal/controlplane/**` + `atlas-migrations/**`；C2 只动 `internal/gateway/**`）→ 零文件重叠，可真正并行。
+
+**父 agent 本轮拍板的两个决策（已冻结进任务书）**：
+
+- **D5：既有内部 API 路径保持不变，只扩展 payload，不新建 `/internal/v1/media/tasks`。** 依据：`/internal/v1/video/tasks` 系列**已经存在**（`internal/controlplane/router/router.go:891-894` 的 POST / PATCH `:id` / PATCH `:id/status` / GET `:id/provider-type`），且网关侧已有客户端 `internal/gateway/infra/video_task_client.go`。control-plane 与 gateway 是**两个进程、可能分批部署**，改路径会引入滚动窗口不兼容；**HTTP 路径名与数据库表名解耦**（表仍按决策 D 改名为 `media_tasks`，Go 侧 `TableName()` 是唯一改名触点、结构体名保持 `VideoTask` 以避免全仓重命名 churn）。
+- **D6：C7 的「sweeper」落在控制面 cron，不在网关。** 依据：网关**不直连数据库**（防护栏 A1），无法扫描超时任务；网关侧只做「每次 retrieve 时的轮询策略与失败分类」。任务书已按此切分，避免两队都去实现后台扫描。
+
+**冻结的内部 API 契约（两队按同一份实现，禁止单方面改）**：`POST /internal/v1/video/tasks` 增量字段 `kind/action/vendor_task_id/progress/idempotency_key/private_data/dept_id/studio_id`，且 **`(api_key_id, idempotency_key)` 命中时返回 200 + 既有任务、不新建不打上游**（新建 201）；`PATCH /internal/v1/video/tasks/:id` 增量 `status/progress/usage/cost_micro_usd/billed_at/poll_failures/vendor_task_id/expected_status`（**CAS**，状态只能 `queued→in_progress→completed|failed|expired` 前进）响应 `{updated,task}`；`GET /internal/v1/video/tasks/:id` 取单条全量；既有 `PATCH /:id/status` 与 `GET /:id/provider-type` 必须保持向后兼容。金额用 **`cost_micro_usd` 整数微美元**避免浮点。
+
 ## 3. 批次与依赖图
 
 ```mermaid

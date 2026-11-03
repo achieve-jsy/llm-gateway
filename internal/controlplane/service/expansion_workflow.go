@@ -92,11 +92,13 @@ type NotifyOwnerInput struct {
 }
 
 type ActorScope struct {
-	UserID    string
-	Role      string
-	IsGlobal  bool
-	DeptIDs   []string
-	StudioIDs []string
+	UserID       string
+	Role         string
+	IsGlobal     bool
+	DeptIDs      []string
+	StudioIDs    []string
+	Roles        []string // 用户真实持有的角色集合（dept_admin / studio_admin / admin）
+	DeptAdminIDs []string // dept_admin 直接管辖的部门 SSO ID，用于 dept 级范围过滤（不含工作室展开）
 }
 
 type expansionApprovalAllocationStore interface {
@@ -353,7 +355,7 @@ func (s *ExpansionService) assertCanDecideInTx(
 
 func enqueueExpansionNotificationInTx(tx *gorm.DB, request *model.ExpansionRequest, userID uuid.UUID, event, title, content string) error {
 	return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "dedupe_key"}}, DoNothing: true}).Create(&model.NotificationOutbox{
-		ID: uuid.New(), DedupeKey: "expansion:" + request.ID.String() + ":" + event + ":" + userID.String(),
+		ID: uuid.New(), DedupeKey: "expansion:" + request.ID.String() + ":" + request.CurrentLevel + ":" + event + ":" + userID.String(),
 		UserID: userID, Type: event, Level: model.NotificationLevelInfo, Title: title, Content: content,
 		RefType: "expansion_request", RefID: request.ID.String(), Status: "pending", NextAttempt: time.Now().UTC(),
 	}).Error
@@ -528,6 +530,25 @@ func (s *ExpansionService) applyNonApprovalDecision(
 			ApproverID: &actorID, Action: input.Action, Comment: input.Comment,
 		}); err != nil {
 			return err
+		}
+		if input.Action == model.ExpansionActionEscalate && s.approvalPool != nil {
+			resolver, ok := s.approvalPool.(interface {
+				ResolveInTx(context.Context, *gorm.DB, *model.ExpansionRequest) ([]uuid.UUID, error)
+			})
+			if !ok {
+				return fmt.Errorf("approval pool resolver is not transaction-bound")
+			}
+			platformRequest := *request
+			platformRequest.CurrentLevel = model.ExpansionLevelPlatform
+			recipients, err := resolver.ResolveInTx(ctx, tx, &platformRequest)
+			if err != nil {
+				return err
+			}
+			for _, recipient := range recipients {
+				if err := enqueueExpansionNotificationInTx(tx, &platformRequest, recipient, model.NotificationTypeExpansionSubmitted, "新的平台级扩容审批申请", request.Reason); err != nil {
+					return err
+				}
+			}
 		}
 		event, title := model.NotificationTypeExpansionDecision, "扩容申请状态更新"
 		if input.Action == model.ExpansionActionReject {
@@ -726,7 +747,7 @@ func (s *ExpansionService) Reprecheck(ctx context.Context, actor ActorScope, req
 		return nil, err
 	}
 	err = s.repo.WithLockedRequest(ctx, id, func(tx *gorm.DB, request *model.ExpansionRequest) error {
-		if err := s.validateActorScope(ctx, actor, request.ScopeType, request.ScopeID); err != nil {
+		if err := s.validateExpansionRequestScope(ctx, actor, request); err != nil {
 			return err
 		}
 		if request.Status != model.ExpansionStatusPending &&
@@ -804,7 +825,7 @@ func (s *ExpansionService) GetDetail(
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateActorScope(ctx, actor, request.ScopeType, request.ScopeID); err != nil {
+	if err := s.validateExpansionRequestScope(ctx, actor, request); err != nil {
 		return nil, err
 	}
 	live, err := s.Precheck(ctx, actorForDetail(actor, request), precheckInputFromRequest(request))
@@ -921,10 +942,33 @@ func (s *ExpansionService) AssertActorCanAccessRequest(ctx context.Context, acto
 	if err != nil {
 		return err
 	}
-	return s.validateActorScope(ctx, actor, request.ScopeType, request.ScopeID)
+	return s.validateExpansionRequestScope(ctx, actor, request)
 }
 
-func (s *ExpansionService) validateActorScope(ctx context.Context, actor ActorScope, scopeType, scopeID string) error {
+func (s *ExpansionService) validateExpansionRequestScope(ctx context.Context, actor ActorScope, request *model.ExpansionRequest) error {
+	if request == nil {
+		return ErrExpansionForbidden
+	}
+	if actor.IsGlobal || actor.Role == "admin" {
+		return nil
+	}
+	if actor.Role == "user" {
+		if request.ScopeType == model.BudgetScopeMember && request.ScopeID == actor.UserID {
+			return nil
+		}
+		return ErrExpansionForbidden
+	}
+	deptIDs := actor.DeptIDs
+	if request.CurrentLevel == model.ExpansionLevelDept {
+		deptIDs = actor.DeptAdminIDs
+		if len(deptIDs) == 0 && len(actor.Roles) == 0 {
+			deptIDs = actor.DeptIDs
+		}
+	}
+	return s.validateActorScopeWithDeptIDs(ctx, actor, deptIDs, request.ScopeType, request.ScopeID)
+}
+
+func (s *ExpansionService) validateActorScopeWithDeptIDs(ctx context.Context, actor ActorScope, deptIDs []string, scopeType, scopeID string) error {
 	if actor.IsGlobal || actor.Role == "admin" {
 		return nil
 	}
@@ -940,35 +984,31 @@ func (s *ExpansionService) validateActorScope(ctx context.Context, actor ActorSc
 			return nil
 		}
 	case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
-		if containsString(actor.DeptIDs, scopeID) {
+		if containsString(deptIDs, scopeID) {
 			return nil
 		}
 	case model.BudgetScopeMember:
 		if scopeID == actor.UserID {
 			return nil
 		}
-		if s.budgetSvc != nil {
-			for _, deptID := range actor.DeptIDs {
-				memberIDs, err := s.budgetSvc.ListMemberIDsByDeptID(deptID)
-				if err != nil {
-					return err
-				}
-				if containsString(memberIDs, scopeID) {
-					return nil
-				}
+		for _, deptID := range deptIDs {
+			memberIDs, err := s.listMemberIDsByDeptID(deptID)
+			if err != nil {
+				return err
+			}
+			if containsString(memberIDs, scopeID) {
+				return nil
 			}
 		}
 	}
 	return ErrExpansionForbidden
 }
 
-func actorForDetail(actor ActorScope, request *model.ExpansionRequest) ActorScope {
-	if actor.Role != "user" {
-		return ActorScope{
-			UserID: actor.UserID, Role: roleForRequest(request), IsGlobal: actor.IsGlobal,
-			DeptIDs: actor.DeptIDs, StudioIDs: actor.StudioIDs,
-		}
-	}
+func (s *ExpansionService) validateActorScope(ctx context.Context, actor ActorScope, scopeType, scopeID string) error {
+	return s.validateActorScopeWithDeptIDs(ctx, actor, actor.DeptIDs, scopeType, scopeID)
+}
+
+func actorForDetail(actor ActorScope, _ *model.ExpansionRequest) ActorScope {
 	return actor
 }
 

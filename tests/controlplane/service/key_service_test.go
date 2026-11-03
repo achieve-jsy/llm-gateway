@@ -69,6 +69,66 @@ func TestKeyServiceErrors(t *testing.T) {
 	})
 }
 
+func TestKeyService_DeleteKeyForApprovalRemovesKeyAndInvalidatesCache(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+uuid.NewString()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE api_keys (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL,
+		name TEXT NOT NULL,
+		key_hash TEXT NOT NULL,
+		encrypted_key TEXT NOT NULL,
+		key_prefix TEXT NOT NULL,
+		key_hint TEXT NOT NULL,
+		enabled BOOLEAN NOT NULL,
+		log_enabled BOOLEAN NOT NULL,
+		access_all_groups BOOLEAN NOT NULL,
+		bypass_org_check BOOLEAN NOT NULL,
+		user_name TEXT,
+		dept_id TEXT,
+		dept_name TEXT,
+		studio_id TEXT,
+		studio_name TEXT,
+		key_type TEXT NOT NULL,
+		purpose TEXT,
+		created_by TEXT,
+		ip_allowlist TEXT,
+		quota_rpm INTEGER,
+		quota_max_concurrency INTEGER,
+		created_at DATETIME,
+		updated_at DATETIME,
+		last_used_at DATETIME,
+		expires_at DATETIME
+	)`).Error)
+
+	key := &model.ApiKey{
+		ID:           uuid.New(),
+		UserID:       uuid.New(),
+		Name:         "approval-rollback",
+		KeyHash:      "approval-rollback-hash",
+		EncryptedKey: "encrypted",
+		KeyPrefix:    "sk-",
+		KeyHint:      "back",
+		Enabled:      true,
+		KeyType:      model.KeyTypePersonal,
+	}
+	repo := repository.NewKeyRepo(db)
+	require.NoError(t, repo.Create(key))
+
+	publisher := &fakeEventPublisher{}
+	svc := service.NewKeyService(repo, nil, publisher)
+
+	require.NoError(t, svc.DeleteKeyForApproval(context.Background(), key.ID))
+
+	_, err = repo.FindByID(key.ID)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	require.Equal(t, []string{key.KeyHash}, publisher.invalidatedHashes)
+	require.Len(t, publisher.published, 1)
+	require.Equal(t, event.KeyDeleted, publisher.published[0].eventType)
+	require.Equal(t, "api_key", publisher.published[0].resourceType)
+	require.Equal(t, key.ID, publisher.published[0].resourceID)
+}
+
 func TestVerifyResult_Structure(t *testing.T) {
 	t.Run("VerifyResult字段正确", func(t *testing.T) {
 		keyID := uuid.New()

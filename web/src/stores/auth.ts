@@ -5,7 +5,7 @@ import { refreshOnce } from '@/services/tokenRefresh'
 import type { User, DeptStatus } from '@/types/auth'
 
 // org 角色（来自 user_roles 表）
-interface OrgRole {
+export interface OrgRole {
   role: string
   scope_type: string
   scope_id: string
@@ -124,6 +124,24 @@ export const useAuthStore = defineStore('auth', () => {
   // 角色权限 computed（基于 effectiveRole，包含 org 层角色）
   const isAdmin = computed(() => effectiveRole.value === 'admin')
   const isManager = computed(() => ['admin', 'studio_admin', 'dept_admin'].includes(effectiveRole.value || ''))
+  const departmentAdminRoles = computed(() => orgRoles.value.filter(item => item.role === 'dept_admin'))
+  const studioAdminRoles = computed(() => orgRoles.value.filter(item => item.role === 'studio_admin'))
+  const hasMultipleApprovalRoles = computed(() =>
+    departmentAdminRoles.value.length + studioAdminRoles.value.length > 1,
+  )
+  const approvalRoleSummary = computed(() => {
+    const parts: string[] = []
+    if (departmentAdminRoles.value.length > 0) {
+      parts.push(`部门负责人：${departmentAdminRoles.value.length} 个部门`)
+    }
+    if (studioAdminRoles.value.length > 0) {
+      parts.push(`工作室负责人：${studioAdminRoles.value.length} 个工作室`)
+    }
+    if (effectiveRole.value === 'admin' || orgRoles.value.some(item => item.role === 'admin')) {
+      parts.push('平台管理员')
+    }
+    return parts.length > 0 ? parts.join('；') : '普通用户'
+  })
 
   if (accessToken.value) {
     scheduleRefresh(accessToken.value, refresh)
@@ -236,6 +254,7 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     accessToken, refreshTokenValue, user, role, orgRoles, effectiveRole, orgRolesLoaded,
     isLoggedIn, isAdmin, isManager, userName, departmentName, deptStatus, isBootstrapAdmin,
+    departmentAdminRoles, studioAdminRoles, hasMultipleApprovalRoles, approvalRoleSummary,
     setAuth, handleCallback, refresh, handleLogout, fetchOrgRoles, ensureOrgRoles, refreshDeptStatus,
   }
 })

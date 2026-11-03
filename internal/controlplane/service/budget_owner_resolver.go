@@ -84,7 +84,7 @@ func (r *DatabaseApprovalPoolResolver) roleRecipients(ctx context.Context, role,
 	query := r.db.WithContext(ctx).Table("user_roles").
 		Where("role = ?", role)
 	if scopeID != "" {
-		query = query.Where("scope_id::text = ?", scopeID)
+		query = query.Where("CAST(scope_id AS TEXT) = ?", scopeID)
 	}
 	if err := query.Distinct("user_id").Pluck("user_id", &rawIDs).Error; err != nil {
 		return nil, err

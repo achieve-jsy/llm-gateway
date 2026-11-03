@@ -1,7 +1,10 @@
 package rbac
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/example/llm-gateway/internal/orgservice/repository"
 	"github.com/gin-gonic/gin"
@@ -41,21 +44,46 @@ func (ch *Checker) buildActor(c *gin.Context) Actor {
 		switch r.Role {
 		case "admin":
 			// user_roles 中存在 admin 记录 → 全局权限
-			return Actor{UserID: userID, IsGlobal: true}
+			return Actor{UserID: userID, IsGlobal: true, Roles: []string{"admin"}}
 		case "studio_admin":
 			actor.StudioIDs = appendUniq(actor.StudioIDs, r.ScopeID)
+			actor.Roles = appendUniq(actor.Roles, "studio_admin")
 		case "dept_admin":
 			actor.DeptIDs = appendUniq(actor.DeptIDs, r.ScopeID)
+			actor.DeptAdminIDs = appendUniq(actor.DeptAdminIDs, r.ScopeID)
+			actor.ApprovalDeptIDs = appendUniq(actor.ApprovalDeptIDs, r.ScopeID)
+			actor.Roles = appendUniq(actor.Roles, "dept_admin")
 		}
 	}
 
 	// studio_admin 管辖工作室下的所有部门 SSO dept_id 预展开到 DeptIDs，
 	// actor.DeptIDs 统一存储 SSO dept_id，与 usage_daily.dept_id / user_roles.scope_id 一致
 	if len(actor.StudioIDs) > 0 {
-		studioDeptIDs, _ := ch.userOrgRepo.ListDeptIDsByStudioIDs(actor.StudioIDs)
-		for _, id := range studioDeptIDs {
-			actor.DeptIDs = appendUniq(actor.DeptIDs, id)
+		requestCtx := context.Background()
+		if c.Request != nil {
+			requestCtx = c.Request.Context()
 		}
+		var scopeErrors []string
+		studioDeptIDs, resolveErr := ch.userOrgRepo.ListDeptIDsByStudioIDs(actor.StudioIDs)
+		if resolveErr != nil {
+			slog.WarnContext(requestCtx, "failed to expand studio departments", "user_id", userID, "studio_ids", actor.StudioIDs, "error", resolveErr)
+			scopeErrors = append(scopeErrors, "studio_departments")
+		} else {
+			for _, id := range studioDeptIDs {
+				actor.DeptIDs = appendUniq(actor.DeptIDs, id)
+			}
+		}
+
+		approvalDeptIDs, approvalErr := ch.userOrgRepo.ListSSODeptIDsByStudioIDs(actor.StudioIDs)
+		if approvalErr != nil {
+			slog.WarnContext(requestCtx, "failed to expand approval departments", "user_id", userID, "studio_ids", actor.StudioIDs, "error", approvalErr)
+			scopeErrors = append(scopeErrors, "approval_departments")
+		} else {
+			for _, id := range approvalDeptIDs {
+				actor.ApprovalDeptIDs = appendUniq(actor.ApprovalDeptIDs, id)
+			}
+		}
+		actor.ScopeError = strings.Join(scopeErrors, ",")
 	}
 
 	return actor
@@ -94,6 +122,9 @@ func (ch *Checker) Guard(perm Permission) gin.HandlerFunc {
 			allowed = actor.IsGlobal
 		}
 
+		if entry.Constraint != ScopeAny && RejectScopeUnavailable(c, actor) {
+			return
+		}
 		if !allowed {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"code":    "org.forbidden",
@@ -103,6 +134,19 @@ func (ch *Checker) Guard(perm Permission) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// RejectScopeUnavailable 统一阻断依赖组织范围的操作。
+// 工作室负责人范围由多个组织表共同展开；任一展开失败时不能使用残缺范围做审批或管理决策。
+func RejectScopeUnavailable(c *gin.Context, actor Actor) bool {
+	if actor.ScopeError == "" {
+		return false
+	}
+	c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+		"code":    "org.scope_unavailable",
+		"message": "审批范围暂时不可用，请稍后重试",
+	})
+	return true
 }
 
 func appendUniq(slice []string, s string) []string {

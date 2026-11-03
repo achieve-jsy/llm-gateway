@@ -38,7 +38,7 @@ vi.mock('@/components/expansion/ExpansionCreateForm.vue', () => ({
   default: {
     name: 'ExpansionCreateForm',
     template: '<div data-test="create-form">{{ initialScopeType }} {{ initialScopeId }} {{ fixedManagerScope ? managerScopeLabel : "" }}</div>',
-    props: ['modelValue', 'initialScopeType', 'initialScopeId', 'fixedManagerScope', 'managerScopeLabel'],
+    props: ['modelValue', 'initialScopeType', 'initialScopeId', 'fixedManagerScope', 'managerScopeLabel', 'managerScopeOptions'],
   },
 }))
 
@@ -254,6 +254,47 @@ describe('ExpansionRequestPage', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-test="create-form"]').text()).toContain('studio studio-1 互娱事业部')
+  })
+
+  it('部门与工作室负责人同时存在时展示合并审批范围，并只请求一次后端待办', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const auth = useAuthStore()
+    auth.effectiveRole = 'studio_admin'
+    auth.user = { id: 'dual-role-1', name: '多角色负责人', email: 'dual@example.com' } as never
+    auth.orgRoles = [
+      { role: 'dept_admin', scope_type: 'dept', scope_id: 'dept-a' },
+      { role: 'studio_admin', scope_type: 'studio', scope_id: 'studio-a' },
+    ]
+
+    const wrapper = mount(ExpansionRequestPage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('多角色负责人')
+    expect(wrapper.text()).toContain('合并处理部门与工作室待办')
+    expect(mockGetPendingExpansions).toHaveBeenCalledTimes(1)
+  })
+
+  it('多个直接管辖部门不默认选择第一个，并传递全部可选申请对象', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const auth = useAuthStore()
+    auth.effectiveRole = 'dept_admin'
+    auth.user = { id: 'multi-dept-1', name: '多部门负责人', email: 'dept@example.com' } as never
+    auth.orgRoles = [
+      { role: 'dept_admin', scope_type: 'dept', scope_id: 'dept-a' },
+      { role: 'dept_admin', scope_type: 'dept', scope_id: 'dept-b' },
+    ]
+
+    const wrapper = mount(ExpansionRequestPage, { global: { plugins: [pinia, ElementPlus] } })
+    await flushPromises()
+    const form = wrapper.findComponent({ name: 'ExpansionCreateForm' })
+
+    expect(form.props('initialScopeId')).toBe('')
+    expect(form.props('managerScopeOptions')).toEqual([
+      { scopeType: 'dept_daily', scopeId: 'dept-a', label: '部门 dept-a' },
+      { scopeType: 'dept_daily', scopeId: 'dept-b', label: '部门 dept-b' },
+    ])
   })
 
   it('批量批准只提交已选择且可审批的行', async () => {

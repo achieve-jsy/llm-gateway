@@ -8,6 +8,7 @@ import (
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -26,6 +27,12 @@ type KeyServiceInterface interface {
 	ListAvailableGroups(ctx context.Context) ([]service.AvailableGroupItem, error)
 	UpdateAccessAllGroups(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error)
 	UpdateLogEnabled(ctx context.Context, userID, keyID uuid.UUID, value bool) (*model.ApiKey, error)
+}
+
+// KeyCreationPolicyChecker 提供部门 Key 创建审批策略。
+// 直建 Key 的授权必须在服务端执行，前端的策略查询只用于引导交互。
+type KeyCreationPolicyChecker interface {
+	RequiresApproval(ctx context.Context, deptID string) (bool, error)
 }
 
 type CreateKeyResponse struct {
@@ -71,14 +78,47 @@ type KeyDetailResponse struct {
 }
 
 type KeyHandler struct {
-	svc KeyServiceInterface
+	svc           KeyServiceInterface
+	policyChecker KeyCreationPolicyChecker
+	rbac          *rbac.Checker
 }
 
-func NewKeyHandler(svc KeyServiceInterface) *KeyHandler {
-	return &KeyHandler{svc: svc}
+func NewKeyHandler(svc KeyServiceInterface, policyChecker KeyCreationPolicyChecker, rbacChecker *rbac.Checker) *KeyHandler {
+	return &KeyHandler{svc: svc, policyChecker: policyChecker, rbac: rbacChecker}
 }
 
 func (h *KeyHandler) CreateKey(c *gin.Context) {
+	if h.rbac != nil {
+		h.rbac.BuildAndInjectActor(c)
+		actor := rbac.GetActor(c)
+		if rbac.RejectScopeUnavailable(c, actor) {
+			return
+		}
+		if h.policyChecker != nil {
+			requiresApproval, err := h.policyChecker.RequiresApproval(c.Request.Context(), c.GetString("dept_id"))
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": gin.H{
+						"type":    "internal_error",
+						"message": "failed to check key creation policy",
+						"code":    CodeInternalError,
+					},
+				})
+				return
+			}
+			if requiresApproval && !actor.IsManager() {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error": gin.H{
+						"type":    "forbidden",
+						"message": "当前部门创建 Key 需要审批，请通过 Key 申请提交",
+						"code":    "key_creation_requires_approval",
+					},
+				})
+				return
+			}
+		}
+	}
+
 	userIDStr := c.GetString("user_id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {

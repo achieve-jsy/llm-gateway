@@ -1,6 +1,7 @@
 package rbac_test
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -22,6 +23,7 @@ func openCheckerTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, db.Exec(`CREATE TABLE user_roles (id integer primary key autoincrement, user_id text, role text, scope_type text, scope_id text, granted_by text, actor_id text, created_at datetime)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE users (id text primary key, role text)`).Error)
 	require.NoError(t, db.Exec(`CREATE TABLE dev_users (id text primary key, role text)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE departments (id text primary key, dept_id text, studio_id text)`).Error)
 	return db
 }
 
@@ -97,4 +99,82 @@ func TestBuildActor_ClaimAdminCannotEscalateDeptAdmin(t *testing.T) {
 
 	require.False(t, actor.IsGlobal)
 	require.Equal(t, []string{"dept-a"}, actor.DeptIDs)
+}
+
+func TestBuildActor_MultipleRolesKeepsRolesAndExpandsStudioDepartments(t *testing.T) {
+	ch := newChecker(t, func(db *gorm.DB) {
+		require.NoError(t, db.Exec(`
+			INSERT INTO departments (id, dept_id, studio_id) VALUES
+			('dept-row-own', 'dept-own', 'studio-a'),
+			('dept-row-peer', 'dept-peer', 'studio-a'),
+			('dept-row-other', 'dept-other', 'studio-b')
+		`).Error)
+		require.NoError(t, db.Exec(`
+			INSERT INTO user_roles (user_id, role, scope_type, scope_id, granted_by) VALUES
+			('u-manager', 'dept_admin', 'dept', 'dept-own', 'admin'),
+			('u-manager', 'studio_admin', 'studio', 'studio-a', 'admin')
+		`).Error)
+	})
+
+	actor := buildActor(t, ch, "u-manager", "")
+
+	require.False(t, actor.IsGlobal)
+	require.ElementsMatch(t, []string{"dept_admin", "studio_admin"}, actor.Roles)
+	require.Equal(t, []string{"dept-own"}, actor.DeptAdminIDs)
+	require.ElementsMatch(t, []string{"dept-own", "dept-peer", "dept-row-own", "dept-row-peer"}, actor.DeptIDs)
+	require.Equal(t, []string{"studio-a"}, actor.StudioIDs)
+	require.ElementsMatch(t, []string{"dept-own", "dept-peer"}, actor.ApprovalDeptIDs)
+}
+
+// 工作室范围展开失败时，不能只保留部门负责人范围继续进行审批。
+// 否则同一用户的审批能力会在基础组织数据异常时被悄悄缩小，形成不完整的授权判断。
+func TestGuard_StudioScopeResolutionFailureBlocksScopedOperation(t *testing.T) {
+	db := openCheckerTestDB(t)
+	require.NoError(t, db.Exec(`
+		INSERT INTO user_roles (user_id, role, scope_type, scope_id, granted_by) VALUES
+		('u-manager', 'dept_admin', 'dept', 'dept-own', 'admin'),
+		('u-manager', 'studio_admin', 'studio', 'studio-a', 'admin')
+	`).Error)
+	require.NoError(t, db.Exec(`DROP TABLE departments`).Error)
+
+	checker := rbac.NewChecker(repository.NewRoleRepo(db), repository.NewUserOrgRepo(db))
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("user_id", "u-manager")
+	})
+	router.GET("/pending", checker.Guard(rbac.PermKeyRequestApprove), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/pending", nil))
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.JSONEq(t, `{"code":"org.scope_unavailable","message":"审批范围暂时不可用，请稍后重试"}`, w.Body.String())
+}
+
+// 范围展开错误必须先于角色不足处理。否则工作室负责人访问平台级路由时会得到 403，
+// 并掩盖组织范围数据不可用这个需要重试的真实状态。
+func TestGuard_StudioScopeResolutionFailureBlocksGlobalOperation(t *testing.T) {
+	db := openCheckerTestDB(t)
+	require.NoError(t, db.Exec(`
+		INSERT INTO user_roles (user_id, role, scope_type, scope_id, granted_by) VALUES
+		('u-studio-manager', 'studio_admin', 'studio', 'studio-a', 'admin')
+	`).Error)
+	require.NoError(t, db.Exec(`DROP TABLE departments`).Error)
+
+	checker := rbac.NewChecker(repository.NewRoleRepo(db), repository.NewUserOrgRepo(db))
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("user_id", "u-studio-manager")
+	})
+	router.GET("/global", checker.Guard(rbac.PermUsageViewAll), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/global", nil))
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.JSONEq(t, `{"code":"org.scope_unavailable","message":"审批范围暂时不可用，请稍后重试"}`, w.Body.String())
 }

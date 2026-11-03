@@ -45,8 +45,8 @@
         </el-table-column>
         <el-table-column label="状态" width="88">
           <template #default="{ row }">
-            <el-tag :type="row.status === 'approved' ? 'success' : 'danger'" size="small">
-              {{ row.status === 'approved' ? '已通过' : '失败' }}
+            <el-tag :type="row.status === 'approved' ? 'success' : row.status === 'skipped' ? 'info' : 'danger'" size="small">
+              {{ row.status === 'approved' ? '已通过' : row.status === 'skipped' ? '已跳过' : '失败' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -60,6 +60,7 @@
         <el-table-column label="说明" min-width="120" show-overflow-tooltip>
           <template #default="{ row }">
             <span v-if="row.error" class="error-text">{{ row.error }}</span>
+            <span v-else-if="row.status === 'skipped'" class="text-muted">已由其他审批流程处理</span>
             <span v-else class="text-muted">Key 已创建</span>
           </template>
         </el-table-column>

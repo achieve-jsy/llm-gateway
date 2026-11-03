@@ -71,9 +71,17 @@ func (r *UserOrgRepo) GetDeptBySSO(ssoID string) (*model.OrgDepartment, error) {
 	return &dept, nil
 }
 
-
 // ListDeptIDsByStudioIDs 查询属于指定工作室集合的所有 dept_id（用于角色列表过滤）
-// 同时返回 dept_id（SSO EhrDeptID）和 id::text（UUID PK），以兼容 call_logs 两种格式
+// 同时返回 dept_id（SSO EhrDeptID）和部门主键文本，以兼容 call_logs 两种格式
+func (r *UserOrgRepo) ListSSODeptIDsByStudioIDs(studioIDs []string) ([]string, error) {
+	if len(studioIDs) == 0 {
+		return nil, nil
+	}
+	var ids []string
+	err := r.db.Raw(`SELECT dept_id FROM departments WHERE CAST(studio_id AS TEXT) IN ?`, studioIDs).Scan(&ids).Error
+	return ids, err
+}
+
 func (r *UserOrgRepo) ListDeptIDsByStudioIDs(studioIDs []string) ([]string, error) {
 	if len(studioIDs) == 0 {
 		return nil, nil
@@ -83,7 +91,7 @@ func (r *UserOrgRepo) ListDeptIDsByStudioIDs(studioIDs []string) ([]string, erro
 		UUIDID string `gorm:"column:uuid_id"`
 	}
 	err := r.db.Raw(
-		`SELECT dept_id, id::text AS uuid_id FROM departments WHERE studio_id::text IN ?`,
+		`SELECT dept_id, CAST(id AS TEXT) AS uuid_id FROM departments WHERE CAST(studio_id AS TEXT) IN ?`,
 		studioIDs,
 	).Scan(&rows).Error
 	if err != nil {

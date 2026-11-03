@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -355,7 +356,14 @@ type ExpansionService struct {
 	approvalPool      ApprovalPoolResolver
 	snapshotPublisher BudgetConfigPublisher
 	notifier          Notifier
+	memberResolver    MemberByDeptResolver
 	clock             func() time.Time
+}
+
+// MemberByDeptResolver 解析某部门（SSO dept_id）下的成员 ID 列表。
+// 生产环境由 *BudgetService 提供；测试可注入纯内存实现，避免依赖 PG 方言。
+type MemberByDeptResolver interface {
+	ListMemberIDsByDeptID(deptID string) ([]string, error)
 }
 
 type LegacyExpansionQuotaWriter interface {
@@ -740,7 +748,80 @@ func (s *ExpansionService) ListPendingScopedFiltered(ctx context.Context, level 
 	return s.repo.ListPendingForApproverScopedFiltered(level, deptIDs, studioIDs, memberIDs, filter)
 }
 
-// ListSteps 查询某扩容申请的审批流水。
+// ListPendingForActorScopedFiltered 按 actor 的真实角色集合聚合待审列表。
+// 与 ListPendingScopedFiltered 的单 level 语义不同：一个用户可能同时是部门负责人与工作室负责人，
+// 需要同时看到 dept 级成员申请与 studio 级（部门/工作室）申请。
+//
+//   - admin            → platform 级（全部范围）
+//   - dept_admin       → dept 级（按 dept_admin 直管部门过滤成员申请）
+//   - studio_admin     → studio 级（按管辖部门 + 工作室过滤）
+//   - dept+studio 双角色 → dept 级与 studio 级取并集去重
+func (s *ExpansionService) ListPendingForActorScopedFiltered(ctx context.Context, actor ActorScope, filter repository.ExpansionListFilter) ([]model.ExpansionRequest, error) {
+	if actor.IsGlobal || containsString(actor.Roles, "admin") {
+		return s.repo.ListPendingForApproverScopedFiltered(model.ExpansionLevelPlatform, nil, nil, nil, filter)
+	}
+
+	// 先按角色展开需要哪些审批级别；无角色信息时回退到兼容行为。
+	levels := make([]string, 0, 2)
+	hasDept := containsString(actor.Roles, "dept_admin")
+	hasStudio := containsString(actor.Roles, "studio_admin")
+	if !hasDept && !hasStudio {
+		// 兼容旧的单角色 ActorScope：有工作室 => studio，否则 dept。
+		if len(actor.StudioIDs) > 0 {
+			hasStudio = true
+		} else if len(actor.DeptIDs) > 0 {
+			hasDept = true
+		}
+	}
+	if hasDept {
+		levels = append(levels, model.ExpansionLevelDept)
+	}
+	if hasStudio {
+		levels = append(levels, model.ExpansionLevelStudio)
+	}
+	if len(levels) == 0 {
+		return []model.ExpansionRequest{}, nil
+	}
+
+	seen := map[string]bool{}
+	result := make([]model.ExpansionRequest, 0)
+	for _, level := range levels {
+		switch level {
+		case model.ExpansionLevelDept:
+			// dept 级精确限定在 dept_admin 直管部门，避免工作室展开部门越权。
+			deptAdminIDs := actor.DeptAdminIDs
+			// 兼容旧的 ActorScope 构造方：旧调用方只有 DeptIDs，且没有 Roles/DeptAdminIDs。
+			// 只有在明确没有 studio_admin 角色时才回退，避免把工作室展开部门当成 dept_admin 直管范围。
+			if len(deptAdminIDs) == 0 && !hasStudio {
+				deptAdminIDs = actor.DeptIDs
+			}
+			memberIDs, err := s.memberIDsForDeptIDs(deptAdminIDs)
+			if err != nil {
+				return nil, err
+			}
+			items, err := s.repo.ListPendingForApproverScopedFiltered(level, deptAdminIDs, nil, memberIDs, filter)
+			if err != nil {
+				return nil, err
+			}
+			result = appendUniqueRequests(result, items, seen)
+		case model.ExpansionLevelStudio:
+			items, err := s.repo.ListPendingForApproverScopedFiltered(level, actor.DeptIDs, actor.StudioIDs, nil, filter)
+			if err != nil {
+				return nil, err
+			}
+			result = appendUniqueRequests(result, items, seen)
+		}
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID.String() < result[j].ID.String()
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
+	return result, nil
+}
+
+// ListSteps 查询某扩容申请的审批流水.
 func (s *ExpansionService) ListSteps(ctx context.Context, requestID string) ([]model.ExpansionApprovalStep, error) {
 	return s.repo.ListSteps(requestID)
 }
@@ -751,7 +832,7 @@ func (s *ExpansionService) ListStepsScoped(ctx context.Context, actor ActorScope
 		return nil, err
 	}
 	if request.RequesterID.String() != actor.UserID {
-		if err := s.validateActorScope(ctx, actor, request.ScopeType, request.ScopeID); err != nil {
+		if err := s.validateExpansionRequestScope(ctx, actor, request); err != nil {
 			return nil, err
 		}
 		if actor.Role == "user" {
@@ -789,18 +870,30 @@ func (s *ExpansionService) canApproveExpansion(req *model.ExpansionRequest, isGl
 }
 
 func (s *ExpansionService) memberIDsForDeptIDs(deptIDs []string) ([]string, error) {
-	if s.budgetSvc == nil {
+	if s.memberResolver == nil && s.budgetSvc == nil {
 		return nil, nil
 	}
 	ids := make([]string, 0)
 	for _, deptID := range deptIDs {
-		memberIDs, err := s.budgetSvc.ListMemberIDsByDeptID(deptID)
+		memberIDs, err := s.listMemberIDsByDeptID(deptID)
 		if err != nil {
 			return nil, err
 		}
 		ids = append(ids, memberIDs...)
 	}
 	return ids, nil
+}
+
+func (s *ExpansionService) listMemberIDsByDeptID(deptID string) ([]string, error) {
+	if s.memberResolver != nil {
+		return s.memberResolver.ListMemberIDsByDeptID(deptID)
+	}
+	return s.budgetSvc.ListMemberIDsByDeptID(deptID)
+}
+
+// SetMemberResolver 注入成员解析器（用于测试或替换默认查询实现）。
+func (s *ExpansionService) SetMemberResolver(resolver MemberByDeptResolver) {
+	s.memberResolver = resolver
 }
 
 func containsString(items []string, target string) bool {
@@ -810,4 +903,17 @@ func containsString(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// appendUniqueRequests 按 request.ID 去重追加，避免多级别聚合时重复。
+func appendUniqueRequests(dst []model.ExpansionRequest, items []model.ExpansionRequest, seen map[string]bool) []model.ExpansionRequest {
+	for _, item := range items {
+		key := item.ID.String()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		dst = append(dst, item)
+	}
+	return dst
 }

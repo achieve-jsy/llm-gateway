@@ -62,7 +62,7 @@ const (
 
 	// ── feat/key-approval: Key 创建申请与审批 ──────────────────────────────────
 	PermKeyRequestApprove   Permission = "key_request:approve"    // 部门负责人审批 Key 申请
-	PermKeyRequestSetPolicy Permission = "key_request:set_policy" // 设置部门 Key 创建策略（dept_admin / admin）
+	PermKeyRequestSetPolicy Permission = "key_request:set_policy" // 设置部门 Key 创建策略（直接 dept_admin / admin；handler 按直接部门校验）
 
 	// ── v0.15 四层配额体系 ──────────────────────────────────────────────────
 	PermQuotaDefaultSet    Permission = "quota:default:set"     // 修改两套全局默认（admin）

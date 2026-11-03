@@ -36,6 +36,9 @@ func NewExpansionHandler(svc *service.ExpansionService, rbacChecker *rbac.Checke
 func (h *ExpansionHandler) Create(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
 
 	var req struct {
 		ScopeType             string                     `json:"scope_type" binding:"required"`
@@ -223,6 +226,9 @@ func isMissingBudgetAllocation(err error) bool {
 // Precheck POST /api/v1/expansion-requests/precheck
 func (h *ExpansionHandler) Precheck(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
+	if rbac.RejectScopeUnavailable(c, rbac.GetActor(c)) {
+		return
+	}
 	var req service.PrecheckInput
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "INVALID_EXPANSION_INPUT", "message": err.Error()})
@@ -249,6 +255,7 @@ func expansionActor(actor rbac.Actor) service.ActorScope {
 	return service.ActorScope{
 		UserID: actor.UserID, Role: role, IsGlobal: actor.IsGlobal,
 		DeptIDs: actor.DeptIDs, StudioIDs: actor.StudioIDs,
+		Roles: actor.Roles, DeptAdminIDs: actor.DeptAdminIDs,
 	}
 }
 
@@ -366,6 +373,9 @@ func writeExpansionDecisionError(c *gin.Context, err error) {
 func (h *ExpansionHandler) Decide(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
 
 	requestID := c.Param("id")
 	var req struct {
@@ -408,7 +418,11 @@ func (h *ExpansionHandler) Decide(c *gin.Context) {
 
 func (h *ExpansionHandler) Get(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
-	detail, err := h.svc.GetDetail(c.Request.Context(), expansionActor(rbac.GetActor(c)), c.Param("id"))
+	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
+	detail, err := h.svc.GetDetail(c.Request.Context(), expansionActor(actor), c.Param("id"))
 	if err != nil {
 		writeExpansionWorkflowError(c, err)
 		return
@@ -438,7 +452,11 @@ func (h *ExpansionHandler) Update(c *gin.Context) {
 
 func (h *ExpansionHandler) Reprecheck(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
-	result, err := h.svc.Reprecheck(c.Request.Context(), expansionActor(rbac.GetActor(c)), c.Param("id"))
+	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
+	result, err := h.svc.Reprecheck(c.Request.Context(), expansionActor(actor), c.Param("id"))
 	if err != nil {
 		writeExpansionWorkflowError(c, err)
 		return
@@ -448,12 +466,16 @@ func (h *ExpansionHandler) Reprecheck(c *gin.Context) {
 
 func (h *ExpansionHandler) NotifyOwner(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
 	var req service.NotifyOwnerInput
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "INVALID_EXPANSION_INPUT", "message": err.Error()})
 		return
 	}
-	if err := h.svc.NotifyOwner(c.Request.Context(), expansionActor(rbac.GetActor(c)), req); err != nil {
+	if err := h.svc.NotifyOwner(c.Request.Context(), expansionActor(actor), req); err != nil {
 		writeExpansionWorkflowError(c, err)
 		return
 	}
@@ -478,19 +500,15 @@ func (h *ExpansionHandler) ListMine(c *gin.Context) {
 func (h *ExpansionHandler) ListPending(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
 	if !actor.IsManager() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
 		return
 	}
 
-	level := model.ExpansionLevelDept
-	if actor.IsGlobal {
-		level = model.ExpansionLevelPlatform
-	} else if len(actor.StudioIDs) > 0 {
-		level = model.ExpansionLevelStudio
-	}
-
-	items, err := h.svc.ListPendingScopedFiltered(c.Request.Context(), level, actor.IsGlobal, actor.DeptIDs, actor.StudioIDs, expansionListFilter(c))
+	items, err := h.svc.ListPendingForActorScopedFiltered(c.Request.Context(), expansionActor(actor), expansionListFilter(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
@@ -549,6 +567,9 @@ func (h *ExpansionHandler) enrichExpansionList(c *gin.Context, items []model.Exp
 func (h *ExpansionHandler) BatchDecide(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
 	if !actor.IsManager() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "需要管理员权限"})
 		return
@@ -599,8 +620,12 @@ func (h *ExpansionHandler) BatchDecide(c *gin.Context) {
 // 查询某扩容申请的审批流水。
 func (h *ExpansionHandler) ListSteps(c *gin.Context) {
 	h.rbac.BuildAndInjectActor(c)
+	actor := rbac.GetActor(c)
+	if rbac.RejectScopeUnavailable(c, actor) {
+		return
+	}
 	requestID := c.Param("id")
-	steps, err := h.svc.ListStepsScoped(c.Request.Context(), expansionActor(rbac.GetActor(c)), requestID)
+	steps, err := h.svc.ListStepsScoped(c.Request.Context(), expansionActor(actor), requestID)
 	if err != nil {
 		writeExpansionWorkflowError(c, err)
 		return

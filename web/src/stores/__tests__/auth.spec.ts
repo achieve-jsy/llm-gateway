@@ -43,4 +43,20 @@ describe('auth store startup restore', () => {
     expect(localStorage.getItem('refresh_token')).toBeNull()
     expect(localStorage.getItem('save_user')).toBeNull()
   })
+
+  it('summarizes every directly assigned approval role instead of only the effective role', async () => {
+    const { useAuthStore } = await import('../auth')
+    const auth = useAuthStore()
+    auth.orgRoles = [
+      { role: 'dept_admin', scope_type: 'dept', scope_id: 'dept-a' },
+      { role: 'dept_admin', scope_type: 'dept', scope_id: 'dept-b' },
+      { role: 'studio_admin', scope_type: 'studio', scope_id: 'studio-a' },
+      { role: 'studio_admin', scope_type: 'studio', scope_id: 'studio-b' },
+    ]
+
+    expect(auth.departmentAdminRoles).toHaveLength(2)
+    expect(auth.studioAdminRoles).toHaveLength(2)
+    expect(auth.hasMultipleApprovalRoles).toBe(true)
+    expect(auth.approvalRoleSummary).toBe('部门负责人：2 个部门；工作室负责人：2 个工作室')
+  })
 })

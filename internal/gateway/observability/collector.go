@@ -327,6 +327,13 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 		event.Stream, _ = b.(bool)
 	}
 
+	// 媒体用量（图像/视频链路在终态写入；未写则保持零值 → 走 token 口径）
+	if v, ok := ctx.Get(CtxKeyMediaUsage); ok {
+		if media, ok := v.(core.MediaCostInput); ok {
+			event.Media = media
+		}
+	}
+
 	// failover 标记
 	if b, ok := ctx.Get("failover_used"); ok {
 		event.FailoverUsed, _ = b.(bool)
@@ -651,6 +658,26 @@ func (e *UsageEvent) EstimateCost(pricing PricingResolver) {
 		return
 	}
 
+	// 媒体成本计算路径：按张 / 秒 / 次计费，与 token 口径互斥优先。
+	if e.Media.HasUsage() {
+		if inputCost, outputCost, missing := estimateMediaCostBuckets(e.Media, &p); !missing {
+			e.EstCostUSD = inputCost + outputCost
+			e.InputCostUSD = inputCost
+			e.OutputCostUSD = outputCost
+			// 媒体请求本来就没有 token 用量，NewUsageEvent 的 token 兜底会把它标成
+			// usage_missing；这里已经有真实媒体用量与单价，必须纠正回来。
+			e.UsageMissing = false
+			return
+		}
+		// 媒体口径无价（含单价为 0/NULL）时**绝不静默记 0 元**：
+		// 只有「token 价确实为正 + 本次确实有 token 用量」才允许回退 token 口径，
+		// 否则一律标记 usage_missing，交给准入层的无价策略处理。
+		if !hasPositiveTokenPrice(&p) || !hasTokenUsage(e) {
+			e.UsageMissing = true
+			return
+		}
+	}
+
 	in := core.CostInput{
 		PromptTokens:     e.PromptTokens,
 		CachedTokens:     e.CachedTokens,
@@ -686,6 +713,27 @@ func (e *UsageEvent) EstimateCost(pricing PricingResolver) {
 			e.CacheReadCostUSD = perM(e.CachedTokens, *p.InputPerMtok)
 		}
 	}
+}
+
+// hasPositiveTokenPrice 判定模型是否配了正 token 价。
+// 只看指针非 nil 是不够的：catalog 里 token 价列是 0 占位（如 dall-e-3 的
+// input_price_per_million = 0），当成有价会重新引入静默 0 元。
+func hasPositiveTokenPrice(p *core.ModelPricing) bool {
+	if p == nil {
+		return false
+	}
+	if p.InputPerMtok != nil && *p.InputPerMtok > 0 {
+		return true
+	}
+	if p.OutputPerMtok != nil && *p.OutputPerMtok > 0 {
+		return true
+	}
+	return false
+}
+
+// hasTokenUsage 本次请求是否真的带有 token 用量。
+func hasTokenUsage(e *UsageEvent) bool {
+	return e.PromptTokens > 0 || e.CachedTokens > 0 || e.CacheWriteTokens > 0 || e.CompletionTokens > 0
 }
 
 // BatchWriter 批量写入器

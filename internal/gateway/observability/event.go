@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/budget"
 	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	"github.com/google/uuid"
@@ -48,6 +49,10 @@ type UsageEvent struct {
 
 	// Rerank 用量
 	SearchUnits float64 // Cohere 按 search_units 计费，默认 1
+
+	// 媒体用量（图像张数 / 秒数 / 次数）。由媒体链路通过 CtxKeyMediaUsage 写入，
+	// 零值 = 本次不是媒体请求（或还没拿到终态用量）。
+	Media core.MediaCostInput
 
 	// 状态与耗时
 	Status          int

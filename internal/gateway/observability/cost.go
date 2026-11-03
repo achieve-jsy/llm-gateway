@@ -153,3 +153,96 @@ func applyTier(p *core.ModelPricing, totalPrompt int, inP, outP float64) (float6
 func perM(tokens int, pricePerMtok float64) float64 {
 	return float64(tokens) / 1e6 * pricePerMtok
 }
+
+// CtxKeyMediaUsage 是媒体链路写入媒体用量的 gin context key。
+//
+// 图像/视频处理链在拿到上游终态用量后写入（失败/超时不写）：
+//
+//	c.Set(observability.CtxKeyMediaUsage, core.MediaCostInput{Images: len(data)})
+//
+// 采集器 NewUsageEvent 读取它并交给 EstimateMediaCost，按「每张/每秒/每次」
+// 的媒体口径计价，而不是按 token 口径。
+const CtxKeyMediaUsage = "media_usage"
+
+// EstimateMediaCost 按媒体口径计算成本（单位 USD）。
+//
+// 计价桶（一个用量维度对应一个单价字段）：
+//
+//	Images            × PerImage（缺失时回退 InputPerImage，见下）
+//	InputImages       × InputPerImage
+//	InputSeconds      × PerSecondInput
+//	OutputSeconds     × PerSecondOutput
+//	Requests          × PerRequest
+//	InputImageTokens  × InputPerImageToken
+//	OutputImageTokens × OutputPerImageToken
+//
+// 图像张数的回退：LiteLLM 对部分图像模型把「每张价」放在 input_cost_per_image
+// （例如 dall-e-3 只有 input_cost_per_image = 0.04，imagen 才是 output_cost_per_image），
+// 因此 Images 桶优先用 PerImage，缺失/非正时回退 InputPerImage；InputImages 桶
+// 只用 InputPerImage，不做反向回退，避免把生成价重复算到输入图上。
+//
+// 无价语义（修复"静默 0 元"）：
+//   - 某个桶有用量、但对应单价缺失或 <= 0 → 整体 missing=true、cost=0；
+//     绝不能因为「字段存在」（例如 LiteLLM 用 0.0 占位、或 DB 里存了 0）
+//     就当作有价；
+//   - 所有桶都没有用量 → 同样 missing=true：拿不到用量时不能当作免费。
+//
+// 注意：本函数只处理媒体口径，不改变 EstimateCost 的 token 语义。
+func EstimateMediaCost(in core.MediaCostInput, p *core.ModelPricing) (cost float64, missing bool) {
+	inputCost, outputCost, missing := estimateMediaCostBuckets(in, p)
+	return inputCost + outputCost, missing
+}
+
+// estimateMediaCostBuckets 与 EstimateMediaCost 同口径，额外拆出输入/输出分项，
+// 供埋点写 InputCostUSD / OutputCostUSD（前端成本分析）。
+func estimateMediaCostBuckets(in core.MediaCostInput, p *core.ModelPricing) (inputCost, outputCost float64, missing bool) {
+	if p == nil {
+		return 0, 0, true
+	}
+	buckets := []struct {
+		units float64
+		price *float64
+		input bool
+	}{
+		{float64(in.Images), imageCountPrice(p), false},
+		{float64(in.InputImages), p.InputPerImage, true},
+		{in.InputSeconds, p.PerSecondInput, true},
+		{in.OutputSeconds, p.PerSecondOutput, false},
+		{float64(in.Requests), p.PerRequest, true},
+		{float64(in.InputImageTokens), p.InputPerImageToken, true},
+		{float64(in.OutputImageTokens), p.OutputPerImageToken, false},
+	}
+	used := false
+	for _, bucket := range buckets {
+		if bucket.units <= 0 {
+			continue
+		}
+		if bucket.price == nil || *bucket.price <= 0 {
+			return 0, 0, true
+		}
+		amount := bucket.units * *bucket.price
+		if bucket.input {
+			inputCost += amount
+		} else {
+			outputCost += amount
+		}
+		used = true
+	}
+	if !used {
+		return 0, 0, true
+	}
+	return inputCost, outputCost, false
+}
+
+// imageCountPrice 返回「每张生成图」的单价：优先 output（per_image），
+// 缺失或非正时回退 input（input_cost_per_image）—— LiteLLM 对 dall-e-3 等
+// 模型就是只给 input_cost_per_image。
+func imageCountPrice(p *core.ModelPricing) *float64 {
+	if p.PerImage != nil && *p.PerImage > 0 {
+		return p.PerImage
+	}
+	if p.InputPerImage != nil && *p.InputPerImage > 0 {
+		return p.InputPerImage
+	}
+	return nil
+}

@@ -5,6 +5,9 @@ stages:
   - verify
 
 variables:
+  REGISTRY: "192.0.2.10:5000"
+  GATEWAY_IMAGE: "${REGISTRY}/llm-gateway"
+  CONTROL_PLANE_IMAGE: "${REGISTRY}/llm-control-plane"
   TEST_HOST: "192.0.2.10"
   TEST_USER: "hgf"
   TEST_PATH: "/opt/llm-gateway"
@@ -24,7 +27,7 @@ workflow:
 # ─── Test Stage ─────────────────────────────────────────────────────────────
 test:
   stage: test
-  image: 192.0.2.10:5000/golang:1.26-alpine
+  image: ${REGISTRY}/golang:1.26-alpine
   tags: [go]
   variables:
     GOPROXY: "https://goproxy.cn,direct"
@@ -51,26 +54,16 @@ test:
 build-gateway-test:
   <<: *build_template
   script:
-    - echo "Building llm-gateway:${IMAGE_TAG} (staging) ..."
-    - docker build --build-arg APP_ENV=staging -f deploy/docker/gateway.Dockerfile -t llm-gateway:${IMAGE_TAG} .
-    - docker save llm-gateway:${IMAGE_TAG} | gzip > gateway.tar.gz
-    - ls -lh gateway.tar.gz
-  artifacts:
-    paths: [gateway.tar.gz]
-    expire_in: 2 hours
+    - docker build --build-arg APP_ENV=staging -f deploy/docker/gateway.Dockerfile -t ${GATEWAY_IMAGE}:${IMAGE_TAG} .
+    - docker push ${GATEWAY_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc/
 
 build-control-plane-test:
   <<: *build_template
   script:
-    - echo "Building llm-control-plane:${IMAGE_TAG} (staging) ..."
-    - docker build --build-arg APP_ENV=staging -f deploy/docker/control-plane.Dockerfile -t llm-control-plane:${IMAGE_TAG} .
-    - docker save llm-control-plane:${IMAGE_TAG} | gzip > control-plane.tar.gz
-    - ls -lh control-plane.tar.gz
-  artifacts:
-    paths: [control-plane.tar.gz]
-    expire_in: 2 hours
+    - docker build --build-arg APP_ENV=staging -f deploy/docker/control-plane.Dockerfile -t ${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .
+    - docker push ${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc/
 
@@ -92,26 +85,16 @@ build-web-test:
 build-gateway-prod:
   <<: *build_template
   script:
-    - echo "Building llm-gateway:${IMAGE_TAG} (prod) ..."
-    - docker build --build-arg APP_ENV=prod -f deploy/docker/gateway.Dockerfile -t llm-gateway:${IMAGE_TAG} .
-    - docker save llm-gateway:${IMAGE_TAG} | gzip > gateway.tar.gz
-    - ls -lh gateway.tar.gz
-  artifacts:
-    paths: [gateway.tar.gz]
-    expire_in: 2 hours
+    - docker build --build-arg APP_ENV=prod -f deploy/docker/gateway.Dockerfile -t ${GATEWAY_IMAGE}:${IMAGE_TAG} .
+    - docker push ${GATEWAY_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 build-control-plane-prod:
   <<: *build_template
   script:
-    - echo "Building llm-control-plane:${IMAGE_TAG} (prod) ..."
-    - docker build --build-arg APP_ENV=prod -f deploy/docker/control-plane.Dockerfile -t llm-control-plane:${IMAGE_TAG} .
-    - docker save llm-control-plane:${IMAGE_TAG} | gzip > control-plane.tar.gz
-    - ls -lh control-plane.tar.gz
-  artifacts:
-    paths: [control-plane.tar.gz]
-    expire_in: 2 hours
+    - docker build --build-arg APP_ENV=prod -f deploy/docker/control-plane.Dockerfile -t ${CONTROL_PLANE_IMAGE}:${IMAGE_TAG} .
+    - docker push ${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
@@ -133,7 +116,7 @@ build-web-prod:
 # ─── Deploy Test (192.0.2.10) ─────────────────────────────────────────────
 deploy-test:
   stage: deploy
-  image: 192.0.2.10:5000/deploy-tools:latest
+  image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   variables:
     GATEWAY_PORT: "4010"
@@ -144,8 +127,6 @@ deploy-test:
       IMAGE_TAG="$CI_COMMIT_TAG"
       echo "=== Deploying ${IMAGE_TAG} to ${TEST_HOST} (test) ==="
 
-      scp ${SSH_OPTS} gateway.tar.gz control-plane.tar.gz ${TEST_USER}@${TEST_HOST}:/tmp/
-
       ssh ${SSH_OPTS} ${TEST_USER}@${TEST_HOST} "mkdir -p ${TEST_PATH}"
       scp ${SSH_OPTS} docker-compose.yml ${TEST_USER}@${TEST_HOST}:${TEST_PATH}/
 
@@ -153,12 +134,11 @@ deploy-test:
         set -e
         cd ${TEST_PATH}
 
-        echo "Loading images..."
-        docker load < /tmp/gateway.tar.gz
-        docker load < /tmp/control-plane.tar.gz
-        rm -f /tmp/gateway.tar.gz /tmp/control-plane.tar.gz
+        docker pull ${GATEWAY_IMAGE}:${IMAGE_TAG}
+        docker pull ${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
 
         export IMAGE_TAG="${IMAGE_TAG}"
+        export REGISTRY="${REGISTRY}"
         export GATEWAY_PORT="${GATEWAY_PORT}"
         export CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT}"
         export GATEWAY_HOST="0.0.0.0"
@@ -171,16 +151,14 @@ deploy-test:
   environment:
     name: test
     url: http://192.0.2.10:4010
-  dependencies:
-    - build-gateway-test
-    - build-control-plane-test
+  dependencies: []
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc/
       when: on_success
 
 deploy-web-test:
   stage: deploy
-  image: 192.0.2.10:5000/deploy-tools:latest
+  image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   variables:
     WEB_DIR: "/opt/llm-gateway/web-dist"
@@ -200,25 +178,27 @@ deploy-web-test:
 # ─── Deploy Prod (占位，脚本待配置) ──────────────────────────────────────────
 deploy-prod:
   stage: deploy
-  image: 192.0.2.10:5000/deploy-tools:latest
+  image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   script:
-    - echo "TODO - 生产部署脚本待配置"
-    - echo "IMAGE_TAG=$CI_COMMIT_TAG"
-    - echo "TARGET=${PROD_HOST}:${PROD_PATH}"
+    - |
+      IMAGE_TAG="$CI_COMMIT_TAG"
+      echo "TODO - 生产部署脚本待配置"
+      echo "镜像已推送至 registry:"
+      echo "  ${GATEWAY_IMAGE}:${IMAGE_TAG}"
+      echo "  ${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}"
+      echo "部署目标: ${PROD_HOST}:${PROD_PATH}"
   environment:
     name: production
     url: http://192.0.2.10
-  dependencies:
-    - build-gateway-prod
-    - build-control-plane-prod
+  dependencies: []
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
       when: manual
 
 deploy-web-prod:
   stage: deploy
-  image: 192.0.2.10:5000/deploy-tools:latest
+  image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   variables:
     WEB_DIR: "/var/www/aimeter/dist"
@@ -233,7 +213,7 @@ deploy-web-prod:
 # ─── Verify Stage ───────────────────────────────────────────────────────────
 verify-test:
   stage: verify
-  image: 192.0.2.10:5000/deploy-tools:latest
+  image: ${REGISTRY}/deploy-tools:latest
   tags: [deploy]
   script:
     - sleep 10

@@ -26,7 +26,7 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/gateway.Dockerfile
-    image: llm-gateway:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-192.0.2.10:5000}/llm-gateway:${IMAGE_TAG:-latest}
     container_name: llm-gw-gateway
     restart: unless-stopped
     ports:
@@ -58,7 +58,7 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/control-plane.Dockerfile
-    image: llm-control-plane:${IMAGE_TAG:-latest}
+    image: ${REGISTRY:-192.0.2.10:5000}/llm-control-plane:${IMAGE_TAG:-latest}
     container_name: llm-gw-control-plane
     restart: unless-stopped
     ports:

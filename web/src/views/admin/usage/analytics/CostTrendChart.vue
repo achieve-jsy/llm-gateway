@@ -1,6 +1,7 @@
 <template>
   <div class="chart-box tall">
     <canvas ref="canvasRef" />
+    <div v-if="empty" class="empty">暂无数据</div>
   </div>
 </template>
 
@@ -25,6 +26,7 @@ const props = defineProps<{
 }>()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+const empty = ref(true)
 let chart: Chart | null = null
 
 const TIER_HEX: Record<string, string> = {
@@ -110,9 +112,10 @@ function render() {
   }
 
   if (datasets.length <= 1) {
-    canvas.parentElement!.innerHTML = '<div class="meta" style="padding:60px;text-align:center;color:var(--el-text-color-secondary)">暂无数据</div>'
+    empty.value = true
     return
   }
+  empty.value = false
 
   chart = new Chart(canvas, {
     type: 'bar',
@@ -155,4 +158,10 @@ onUnmounted(destroy)
 
 <style scoped>
 .chart-box.tall { height: 260px; position: relative; }
+.chart-box.tall canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.chart-box.tall .empty {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--el-text-color-secondary); font-size: 13px;
+}
 </style>

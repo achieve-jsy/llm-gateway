@@ -269,15 +269,15 @@ const userRows = ref<ModelUserDayRow[] | null>(null)
 const usersSummary = ref<ModelUsersSummary | null>(null)
 
 function hourlyParams(start: string, end: string) {
-  const p: Record<string, string> = { start, end, group_by: 'model' }
+  const p: Record<string, string> = { from: start, to: end, group_by: 'model' }
   if (filterModel.value) p.model_name = filterModel.value
   if (filterTier.value) p.tier_name = filterTier.value
   return p
 }
 function usersParams(group_by: string, period: string, start?: string, end?: string) {
   const p: Record<string, string> = {
-    start: start || dateRange.value[0],
-    end: end || dateRange.value[1],
+    from: start || dateRange.value[0],
+    to: end || dateRange.value[1],
     group_by,
     period,
   }

@@ -327,14 +327,19 @@ func (r *ModelRepo) GetByIDs(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error
 	return m, nil
 }
 
-// GetByIDsWithCatalog 批量按主键查询模型并预加载 Catalog（含能力位），
+// GetByIDsWithCatalog 批量按主键查询模型并预加载 Catalog（含能力位）与 Provider（含渠道类型），
 // 供模型能力（model_info）聚合使用。
+//
+// 为什么要一起预加载 Provider：视频组对外报哪个提交端点取决于**成员渠道类型**
+// （见 service.memberVideoAPIEndpoints），Provider.Type 不预加载就恒为空串 →
+// 所有视频组都会被保守地报成 Seedance 旧端点（Kling/Vidu 组报错端点）。
+// 代价是每次多一条 `SELECT * FROM providers WHERE id IN (...)`，与调用频次同量级。
 func (r *ModelRepo) GetByIDsWithCatalog(ids []uuid.UUID) (map[uuid.UUID]*model.Model, error) {
 	if len(ids) == 0 {
 		return map[uuid.UUID]*model.Model{}, nil
 	}
 	var results []model.Model
-	err := r.db.Preload("Catalog").Where("id IN ?", ids).Find(&results).Error
+	err := r.db.Preload("Catalog").Preload("Provider").Where("id IN ?", ids).Find(&results).Error
 	if err != nil {
 		return nil, err
 	}

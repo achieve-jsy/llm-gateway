@@ -199,7 +199,8 @@ func TestEvaluateAndAlert_Exactly80Percent(t *testing.T) {
 	assert.Equal(t, model.NotificationTypeBudgetAlert, n.Type)
 	assert.Equal(t, model.NotificationLevelWarning, n.Level, "80% 告警应为 warning")
 	assert.Equal(t, ownerID, n.UserID, "通知应发给对应负责人")
-	assert.Contains(t, n.Title, "80%")
+	assert.Equal(t, 80, n.TemplateData["Threshold"], "80% 告警阈值应传入 TemplateData")
+	assert.Contains(t, n.TemplateData["ScopeID"], "dept-001")
 }
 
 // TestEvaluateAndAlert_DeptServiceHasTwoThresholds 验证：dept_service scope

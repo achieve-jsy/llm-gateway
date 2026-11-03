@@ -49,6 +49,25 @@ func (s *Scanner) emitAlert(ctx context.Context, eventType string, row CallLogRo
 
 	title, body := FormatNotification(eventType, keyName, row.UserAgent, row.IPAddress, row.TS, detail)
 	level := EventLevel(eventType)
+	data := map[string]interface{}{
+		"EventType":   eventType,
+		"KeyName":     keyName,
+		"UserAgent":   row.UserAgent,
+		"IPAddress":   row.IPAddress,
+		"Timestamp":   row.TS.Format("2006-01-02 15:04:05"),
+		"Detail":      detail,
+		"DormantDays": ParseDormantDays(detail),
+	}
+	if count, mean := ParseSpikeDetail(detail); count > 0 || mean > 0 {
+		data["Count"] = count
+		data["Mean"] = fmt.Sprintf("%.1f", mean)
+	}
+	if d, ok := s.notifier.(DataNotifier); ok {
+		if err := d.NotifyWithData(userUUID, title, body, level, "api_key", row.KeyID, data); err != nil {
+			slog.Warn("key_activity: notify failed", "user_id", row.UserID, "event", eventType, "error", err)
+		}
+		return
+	}
 	if err := s.notifier.Notify(userUUID, title, body, level, "api_key", row.KeyID); err != nil {
 		slog.Warn("key_activity: notify failed", "user_id", row.UserID, "event", eventType, "error", err)
 	}

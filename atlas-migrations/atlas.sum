@@ -1,4 +1,4 @@
-h1:cCj1mUGHNaI45zf/zlsC/IXUyi0cLnJ5wMF0txT3vxI=
+h1:cpoofMdXcW4CvRNE+tUv+cac8NKMNQzU4fjdwKGQtg4=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -50,3 +50,6 @@ h1:cCj1mUGHNaI45zf/zlsC/IXUyi0cLnJ5wMF0txT3vxI=
 20260730163001_seed_notification_channel_configs.sql h1:Im8qo31bQBRViPdDAIZVkDcYIR8QHjF4/pMtXFNFzIo=
 20260803000001_add_notification_delivery_details.sql h1:3jhU8x7fq6ti+qoMFbbUI7XdHra6KM1XzrVvEFakCY0=
 20260803000002_add_notification_webhook_targets.sql h1:kFFuM4q9goXJl7hPmffdDO6jlW3F6aMWGdwuPMPjThM=
+20260804000000_add_outbox_template_data.sql h1:YAReWFCcw2zRT+jYreL06bTbH7mR4MlRh7MqDtyq+9Y=
+20260804000001_seed_notification_templates.sql h1:xNI85q8cNMtkZo0/cLlEI0uC36pLawaF4t+MkLH52ac=
+20260804010000_seed_system_alert_email_templates.sql h1:YtaHVZPkiE6rUIYe+mix/xHweF9LLVH6WYNsZ79yhvw=

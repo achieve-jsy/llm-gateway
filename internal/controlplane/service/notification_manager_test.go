@@ -56,9 +56,11 @@ func TestRenderTemplates_WithDefaultTemplates(t *testing.T) {
 
 	// 测试预算告警默认模板
 	params := map[string]interface{}{
-		"BudgetName":   "测试预算",
-		"CurrentUsage": "95%",
-		"Threshold":    "90%",
+		"ScopeType": "项目",
+		"ScopeID":   "scope-001",
+		"Threshold": "90",
+		"UsedUSD":   "9500.00",
+		"AmountUSD": "10000.00",
 	}
 
 	subject, body, err := mgr.renderTemplates("", "", model.NotificationTypeBudgetAlert, params)
@@ -70,16 +72,16 @@ func TestRenderTemplates_WithDefaultTemplates(t *testing.T) {
 		t.Errorf("subject should contain '预算告警', got: %s", subject)
 	}
 
-	if !strings.Contains(body, "测试预算") {
-		t.Errorf("body should contain '测试预算', got: %s", body)
-	}
-
-	if !strings.Contains(body, "95%") {
-		t.Errorf("body should contain '95%%', got: %s", body)
+	if !strings.Contains(body, "9500.00") {
+		t.Errorf("body should contain '9500.00', got: %s", body)
 	}
 
 	if !strings.Contains(body, "90%") {
 		t.Errorf("body should contain '90%%', got: %s", body)
+	}
+
+	if !strings.Contains(body, "scope-001") {
+		t.Errorf("body should contain 'scope-001', got: %s", body)
 	}
 }
 
@@ -210,26 +212,25 @@ func TestRenderTemplates_ExpansionTemplates(t *testing.T) {
 				"Applicant":   "张三",
 				"Reason":      "业务增长",
 			},
-			expectInSub: "扩容申请",
+			expectInSub: "扩容审批申请",
 			expectInBod: "EXP-001",
 		},
 		{
 			notifType: model.NotificationTypeExpansionApproved,
 			params: map[string]interface{}{
 				"ExpansionID": "EXP-002",
-				"Approver":    "李四",
+				"Reason":      "业务增长",
 			},
-			expectInSub: "扩容审批通过",
+			expectInSub: "已批准并生效",
 			expectInBod: "EXP-002",
 		},
 		{
 			notifType: model.NotificationTypeExpansionRejected,
 			params: map[string]interface{}{
 				"ExpansionID": "EXP-003",
-				"Approver":    "王五",
 				"Reason":      "预算不足",
 			},
-			expectInSub: "扩容审批拒绝",
+			expectInSub: "已驳回",
 			expectInBod: "预算不足",
 		},
 		{
@@ -238,7 +239,7 @@ func TestRenderTemplates_ExpansionTemplates(t *testing.T) {
 				"ExpansionID": "EXP-004",
 				"Error":       "执行超时",
 			},
-			expectInSub: "扩容执行失败",
+			expectInSub: "生效失败",
 			expectInBod: "执行超时",
 		},
 	}
@@ -270,9 +271,11 @@ func TestRenderTemplates_KeyActivityTemplate(t *testing.T) {
 	}
 
 	params := map[string]interface{}{
-		"KeyID":    "KEY-123",
-		"Activity": "异常调用",
-		"Detail":   "过去1小时调用量激增",
+		"EventType":  "new_source",
+		"KeyName":    "KEY-123",
+		"UserAgent":  "Chrome/120",
+		"IPAddress":  "1.2.3.4",
+		"Detail":     "过去1小时调用量激增",
 	}
 
 	subject, body, err := mgr.renderTemplates("", "", model.NotificationTypeKeyActivity, params)
@@ -280,20 +283,20 @@ func TestRenderTemplates_KeyActivityTemplate(t *testing.T) {
 		t.Fatalf("renderTemplates failed: %v", err)
 	}
 
-	if !strings.Contains(subject, "密钥活动异常") {
-		t.Errorf("subject should contain '密钥活动异常', got: %s", subject)
+	if !strings.Contains(subject, "Key 新设备使用提醒") {
+		t.Errorf("subject should contain 'Key 新设备使用提醒', got: %s", subject)
 	}
 
 	if !strings.Contains(body, "KEY-123") {
 		t.Errorf("body should contain 'KEY-123', got: %s", body)
 	}
 
-	if !strings.Contains(body, "异常调用") {
-		t.Errorf("body should contain '异常调用', got: %s", body)
+	if !strings.Contains(body, "1.2.3.4") {
+		t.Errorf("body should contain '1.2.3.4', got: %s", body)
 	}
 
-	if !strings.Contains(body, "过去1小时调用量激增") {
-		t.Errorf("body should contain detail, got: %s", body)
+	if !strings.Contains(body, "Chrome/120") {
+		t.Errorf("body should contain 'Chrome/120', got: %s", body)
 	}
 }
 
@@ -306,10 +309,10 @@ func TestRenderTemplates_PlatformRiskTemplate(t *testing.T) {
 	}
 
 	params := map[string]interface{}{
-		"RiskType": "counter_integrity",
-		"Counter":  "test_counter",
-		"Expected": "100",
-		"Actual":   "50",
+		"Violations": "100",
+		"SourceRows": "1000",
+		"KeysWritten": "50",
+		"Cooldown":   "30m0s",
 	}
 
 	subject, body, err := mgr.renderTemplates("", "", "platform_risk_counter_integrity", params)
@@ -317,16 +320,16 @@ func TestRenderTemplates_PlatformRiskTemplate(t *testing.T) {
 		t.Fatalf("renderTemplates failed: %v", err)
 	}
 
-	if !strings.Contains(subject, "平台风险") {
-		t.Errorf("subject should contain '平台风险', got: %s", subject)
-	}
-
-	if !strings.Contains(body, "test_counter") {
-		t.Errorf("body should contain 'test_counter', got: %s", body)
+	if !strings.Contains(subject, "计数器完整性告警") {
+		t.Errorf("subject should contain '计数器完整性告警', got: %s", subject)
 	}
 
 	if !strings.Contains(body, "100") {
 		t.Errorf("body should contain '100', got: %s", body)
+	}
+
+	if !strings.Contains(body, "1000") {
+		t.Errorf("body should contain '1000', got: %s", body)
 	}
 
 	if !strings.Contains(body, "50") {

@@ -238,16 +238,14 @@ func (s *BudgetAlertService) sendNotifications(ctx context.Context, scopeType, s
 		level = model.NotificationLevelCritical
 	}
 
-	title := fmt.Sprintf("预算告警：%s 用量已达 %d%%", scopeType, threshold)
-	content := fmt.Sprintf(
-		"**%s**（ID: %s）本月预算用量已达 **%d%%**（$%.2f / $%.2f USD），请及时关注并考虑扩容申请。\n\n"+
-			"- 已用：$%.2f USD\n"+
-			"- 总额：$%.2f USD\n"+
-			"- 告警档位：%d%%\n\n"+
-			"> 告警不等于拦截，预算真正用尽时才会触发拦截。",
-		scopeType, scopeID, threshold, usedUSD, amountUSD,
-		usedUSD, amountUSD, threshold,
-	)
+	// 文案模板驱动：标题/正文由模板渲染，这里只传结构化业务变量。
+	data := map[string]interface{}{
+		"ScopeType": scopeType,
+		"ScopeID":   scopeID,
+		"Threshold": threshold,
+		"UsedUSD":   fmt.Sprintf("%.2f", usedUSD),
+		"AmountUSD": fmt.Sprintf("%.2f", amountUSD),
+	}
 
 	owners, err := s.alertRepo.FindOwnersByBudgetScope(scopeType, scopeID)
 	if err != nil {
@@ -265,10 +263,10 @@ func (s *BudgetAlertService) sendNotifications(ctx context.Context, scopeType, s
 			UserID:  ownerUUID,
 			Type:    model.NotificationTypeBudgetAlert,
 			Level:   level,
-			Title:   title,
-			Content: content,
+			Title:   "预算告警",
 			RefType: "budget_scope",
 			RefID:   scopeType + ":" + scopeID,
+			TemplateData: data,
 		}
 		if err := s.notifier.Notify(ctx, n); err != nil {
 			slog.Warn("budget_alert: notify failed",
@@ -443,7 +441,12 @@ func (s *ExpansionService) CreateRequestAdvanced(ctx context.Context, input Crea
 			return err
 		}
 		for _, recipient := range recipients {
-			if err := enqueueExpansionNotificationInTx(tx, request, recipient, model.NotificationTypeExpansionSubmitted, "新的扩容审批申请", request.Reason); err != nil {
+			if err := enqueueExpansionNotificationInTx(tx, request, recipient, model.NotificationTypeExpansionSubmitted, "新的扩容审批申请", request.Reason,
+				map[string]interface{}{
+					"ExpansionID": request.ID.String(),
+					"Reason":      request.Reason,
+					"AmountUSD":   fmt.Sprintf("%.2f", request.RequestedAmount),
+				}); err != nil {
 				return err
 			}
 		}
@@ -469,7 +472,12 @@ func (s *ExpansionService) notifyExpansionSubmitted(ctx context.Context, request
 		notification := &model.Notification{
 			UserID: recipient, Type: model.NotificationTypeExpansionSubmitted,
 			Level: model.NotificationLevelInfo, Title: "新的扩容审批申请",
-			Content: request.Reason, RefType: "expansion_request", RefID: request.ID.String(),
+			RefType: "expansion_request", RefID: request.ID.String(),
+			TemplateData: map[string]interface{}{
+				"ExpansionID": request.ID.String(),
+				"Reason":      request.Reason,
+				"AmountUSD":   fmt.Sprintf("%.2f", request.RequestedAmount),
+			},
 		}
 		for attempt := 0; attempt < 3; attempt++ {
 			if s.notifier.Notify(ctx, notification) == nil {

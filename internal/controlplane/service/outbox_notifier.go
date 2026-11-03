@@ -38,7 +38,8 @@ func (o *outboxNotifier) Notify(ctx context.Context, n *model.Notification) erro
 		UserID: n.UserID, Type: n.Type, Level: n.Level,
 		Title: n.Title, Content: n.Content,
 		RefType: n.RefType, RefID: n.RefID,
-		Status: "pending", NextAttempt: time.Now().UTC(),
+		TemplateData: n.TemplateData,
+		Status:       "pending", NextAttempt: time.Now().UTC(),
 	}
 	return o.db.WithContext(ctx).
 		Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "dedupe_key"}}, DoNothing: true}).

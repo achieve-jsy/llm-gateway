@@ -381,6 +381,8 @@ func NewUnifiedNotifier(
 }
 
 // dispatchInapp 站内信：仅受 rules 总开关控制，写入 notifications 表。
+// 入库前按默认模板渲染 subject/body（站内信无 config，用 DefaultTemplates → n.Title/Content 兜底），
+// 保证三渠道内容一致。渲染失败回退 n.Title/n.Content。
 func (m *notificationManager) dispatchInapp(ctx context.Context, n *model.Notification) error {
 	if !m.channelEnabled(ctx, n.Type, "inapp") {
 		return nil
@@ -390,6 +392,9 @@ func (m *notificationManager) dispatchInapp(ctx context.Context, n *model.Notifi
 	}
 	if n.DedupeKey != "" && m.inappDelivered(ctx, n) {
 		return nil
+	}
+	if subject, body, err := m.renderForChannel(nil, n); err == nil {
+		n.Title, n.Content = subject, body
 	}
 	return m.inappRepo.Create(n)
 }
@@ -562,25 +567,50 @@ func (m *notificationManager) emailGlobalEnabled(ctx context.Context) bool {
 	return strings.EqualFold(enabled, "true")
 }
 
-// renderNotificationTemplates 用 config 模板渲染通知；无自定义模板时直接用 Notification 的标题/内容。
+// renderNotificationTemplates 用 config 模板渲染通知；无自定义模板时回退到 DefaultTemplates / Notification 标题内容。
 func (m *notificationManager) renderNotificationTemplates(cfg model.NotificationChannelConfig, n *model.Notification) (string, string, error) {
-	subject := n.Title
-	body := n.Content
+	return m.renderForChannel(&cfg, n)
+}
+
+// renderForChannel 渲染通知内容。优先级：
+//  1. cfg 的 subject/body 模板（DB，可编辑）
+//  2. DefaultTemplates[n.Type]（站内信默认 + seed 来源 + 兜底），仅当消费者传入了 TemplateData
+//     才启用——避免把迁移前已在 outbox 里渲染好的中文内容用缺变量的模板重新渲染成 <no value>
+//  3. n.Title / n.Content（消费者简短默认，最后兜底）
+func (m *notificationManager) renderForChannel(cfg *model.NotificationChannelConfig, n *model.Notification) (string, string, error) {
+	subject, body := n.Title, n.Content
+	subjectTpl, bodyTpl := "", ""
+	if cfg != nil {
+		if cfg.SubjectTemplate != nil {
+			subjectTpl = *cfg.SubjectTemplate
+		}
+		if cfg.BodyTemplate != nil {
+			bodyTpl = *cfg.BodyTemplate
+		}
+	}
+	if def, ok := DefaultTemplates[n.Type]; ok && len(n.TemplateData) > 0 {
+		if subjectTpl == "" {
+			subjectTpl = def.Subject
+		}
+		if bodyTpl == "" {
+			bodyTpl = def.Body
+		}
+	}
 	var err error
-	if cfg.SubjectTemplate != nil && *cfg.SubjectTemplate != "" {
-		if subject, err = m.renderTemplateString(*cfg.SubjectTemplate, n); err != nil {
+	if subjectTpl != "" {
+		if subject, err = m.renderTemplateString(subjectTpl, n); err != nil {
 			return "", "", err
 		}
 	}
-	if cfg.BodyTemplate != nil && *cfg.BodyTemplate != "" {
-		if body, err = m.renderTemplateString(*cfg.BodyTemplate, n); err != nil {
+	if bodyTpl != "" {
+		if body, err = m.renderTemplateString(bodyTpl, n); err != nil {
 			return "", "", err
 		}
 	}
 	return subject, body, nil
 }
 
-// renderTemplateString 以 Notification 字段为变量渲染单个模板。
+// renderTemplateString 以 Notification 字段 + TemplateData 业务变量渲染单个模板。
 func (m *notificationManager) renderTemplateString(tpl string, n *model.Notification) (string, error) {
 	data := map[string]interface{}{
 		"Title": n.Title, "Content": n.Content, "Level": n.Level,
@@ -588,7 +618,10 @@ func (m *notificationManager) renderTemplateString(tpl string, n *model.Notifica
 		"Timestamp":        time.Now().Format("2006-01-02 15:04:05"),
 		"NotificationType": n.Type,
 	}
-	tmpl, err := template.New("render").Parse(tpl)
+	for k, v := range n.TemplateData {
+		data[k] = v
+	}
+	tmpl, err := template.New("render").Option("missingkey=zero").Parse(tpl)
 	if err != nil {
 		return "", err
 	}

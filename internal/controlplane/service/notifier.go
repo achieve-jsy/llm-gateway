@@ -184,6 +184,11 @@ func NewKeyActivityNotifierAdapter(n Notifier) keyactivity.Notifier {
 }
 
 func (a *KeyActivityNotifierAdapter) Notify(userUUID uuid.UUID, title, body, level, refType, refID string) error {
+	return a.NotifyWithData(userUUID, title, body, level, refType, refID, nil)
+}
+
+// NotifyWithData 实现 keyactivity.DataNotifier：把结构化业务变量一并传给通知管线（模板渲染用）。
+func (a *KeyActivityNotifierAdapter) NotifyWithData(userUUID uuid.UUID, title, body, level, refType, refID string, data map[string]interface{}) error {
 	return a.inner.Notify(context.Background(), &model.Notification{
 		UserID:  userUUID,
 		Type:    model.NotificationTypeKeyActivity,
@@ -192,5 +197,6 @@ func (a *KeyActivityNotifierAdapter) Notify(userUUID uuid.UUID, title, body, lev
 		Content: body,
 		RefType: refType,
 		RefID:   refID,
+		TemplateData: data,
 	})
 }

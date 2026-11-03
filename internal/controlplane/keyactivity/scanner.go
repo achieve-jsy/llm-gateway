@@ -43,6 +43,12 @@ type Notifier interface {
 	Notify(userUUID uuid.UUID, title, body, level, refType, refID string) error
 }
 
+// DataNotifier 可选接口：携带结构化业务变量（模板渲染用）。实现 Notifier 的同时实现它，
+// 则 emitAlert 会走 NotifyWithData 把变量传给通知管线；未实现则回退扁平 Notify。
+type DataNotifier interface {
+	NotifyWithData(userUUID uuid.UUID, title, body, level, refType, refID string, data map[string]interface{}) error
+}
+
 // KeyLookup 查询 api_keys 表（返回 name 和 user_id）
 type KeyLookup interface {
 	FindKeyByID(keyIDStr string) (string, uuid.UUID, error)

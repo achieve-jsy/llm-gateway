@@ -351,11 +351,12 @@ func (s *ExpansionService) assertCanDecideInTx(
 	return ErrNotInApprovalPool
 }
 
-func enqueueExpansionNotificationInTx(tx *gorm.DB, request *model.ExpansionRequest, userID uuid.UUID, event, title, content string) error {
+func enqueueExpansionNotificationInTx(tx *gorm.DB, request *model.ExpansionRequest, userID uuid.UUID, event, title, content string, data map[string]interface{}) error {
 	return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "dedupe_key"}}, DoNothing: true}).Create(&model.NotificationOutbox{
 		ID: uuid.New(), DedupeKey: "expansion:" + request.ID.String() + ":" + event + ":" + userID.String(),
 		UserID: userID, Type: event, Level: model.NotificationLevelInfo, Title: title, Content: content,
 		RefType: "expansion_request", RefID: request.ID.String(), Status: "pending", NextAttempt: time.Now().UTC(),
+		TemplateData: data,
 	}).Error
 }
 
@@ -407,7 +408,8 @@ func (s *ExpansionService) rejectInTx(ctx context.Context, tx *gorm.DB, request 
 	}); err != nil {
 		return err
 	}
-	return enqueueExpansionNotificationInTx(tx, request, request.RequesterID, model.NotificationTypeExpansionRejected, "扩容申请已驳回", comment)
+	return enqueueExpansionNotificationInTx(tx, request, request.RequesterID, model.NotificationTypeExpansionRejected, "扩容申请已驳回", comment,
+		map[string]interface{}{"ExpansionID": request.ID.String(), "Reason": comment})
 }
 
 func (s *ExpansionService) DecideWorkflow(
@@ -536,7 +538,8 @@ func (s *ExpansionService) applyNonApprovalDecision(
 		if input.Action == model.ExpansionActionEscalate {
 			title = "扩容申请已升级审批"
 		}
-		return enqueueExpansionNotificationInTx(tx, request, request.RequesterID, event, title, input.Comment)
+		return enqueueExpansionNotificationInTx(tx, request, request.RequesterID, event, title, input.Comment,
+			map[string]interface{}{"ExpansionID": request.ID.String(), "Decision": input.Action, "Reason": input.Comment})
 	})
 	if stale {
 		return nil, ErrPrecheckStale
@@ -683,7 +686,8 @@ func (s *ExpansionService) approveWorkflow(
 		}); err != nil {
 			return err
 		}
-		if err := enqueueExpansionNotificationInTx(tx, request, request.RequesterID, model.NotificationTypeExpansionApproved, "扩容申请已批准并生效", request.Reason); err != nil {
+		if err := enqueueExpansionNotificationInTx(tx, request, request.RequesterID, model.NotificationTypeExpansionApproved, "扩容申请已批准并生效", request.Reason,
+			map[string]interface{}{"ExpansionID": request.ID.String(), "Reason": request.Reason, "AmountUSD": fmt.Sprintf("%.2f", request.RequestedAmount)}); err != nil {
 			return err
 		}
 		result.TargetType, result.TargetID, result.AppliedAt, result.SyncStatus = targetType, targetID, now, "pending"
@@ -707,7 +711,8 @@ func (s *ExpansionService) approveWorkflow(
 				if updateErr := tx.WithContext(ctx).Model(&model.ExpansionRequest{}).Where("id = ?", requestID).Update("sync_status", "failed").Error; updateErr != nil {
 					return updateErr
 				}
-				return enqueueExpansionNotificationInTx(tx, candidate, candidate.RequesterID, model.NotificationTypeExpansionApplyFailed, "扩容申请生效失败", err.Error())
+				return enqueueExpansionNotificationInTx(tx, candidate, candidate.RequesterID, model.NotificationTypeExpansionApplyFailed, "扩容申请生效失败", err.Error(),
+					map[string]interface{}{"ExpansionID": candidate.ID.String(), "Error": err.Error()})
 			})
 			result.SyncStatus = "failed"
 			recordExpansionApply(ctx, string(candidate.DimensionType), string(candidate.DurationType), "sync_failed")
@@ -871,10 +876,12 @@ func (s *ExpansionService) NotifyOwner(
 		return err
 	}
 	for _, recipient := range recipients {
+		message := strings.TrimSpace(input.Message)
 		if err := s.notifier.Notify(ctx, &model.Notification{
 			UserID: recipient, Type: model.NotificationTypeBudgetOwnerAttention, Level: model.NotificationLevelWarning,
-			Title: "预算负责人处理提醒", Content: strings.TrimSpace(input.Message),
+			Title: "预算负责人处理提醒",
 			RefType: "budget_scope", RefID: input.ScopeType + ":" + input.ScopeID,
+			TemplateData: map[string]interface{}{"Message": message},
 		}); err != nil {
 			return err
 		}
@@ -906,8 +913,13 @@ func (s *ExpansionService) notifyDecisionResult(ctx context.Context, requestID u
 		content += "：" + strings.TrimSpace(detail)
 	}
 	notification := &model.Notification{
-		UserID: request.RequesterID, Type: "expansion_result", Level: level,
+		UserID: request.RequesterID, Type: model.NotificationTypeExpansionDecision, Level: level,
 		Title: title, Content: content, RefType: "expansion_request", RefID: request.ID.String(),
+		TemplateData: map[string]interface{}{
+			"ExpansionID": request.ID.String(),
+			"Decision":    action,
+			"Reason":      detail,
+		},
 	}
 	for attempt := 0; attempt < 3; attempt++ {
 		if s.notifier.Notify(ctx, notification) == nil {
@@ -1030,8 +1042,9 @@ func (s *ExpansionService) notifyApprovalPoolEmpty(ctx context.Context, request 
 	for _, recipient := range recipients {
 		_ = s.notifier.Notify(ctx, &model.Notification{
 			UserID: recipient, Type: model.NotificationTypeApprovalPoolEmpty, Level: model.NotificationLevelWarning,
-			Title: "扩容审批池为空", Content: "请补充当前作用域的有效负责人。",
+			Title:   "扩容审批池为空",
 			RefType: "expansion_request", RefID: request.ID.String(),
+			TemplateData: map[string]interface{}{"ExpansionID": request.ID.String()},
 		})
 	}
 }

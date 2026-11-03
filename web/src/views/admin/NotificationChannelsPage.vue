@@ -165,7 +165,7 @@
 
         <el-form-item label="主题模板">
           <el-input v-model="editForm.subject_template" type="textarea" :rows="2" />
-          <div class="template-hint">可用变量: {{ TEMPLATE_VARIABLES.join(', ') || '—' }}</div>
+          <div class="template-hint">可用变量: {{ dialogVariables.join(', ') || '—' }}</div>
         </el-form-item>
 
         <el-form-item label="正文模板">
@@ -211,12 +211,6 @@ import type {
 
 const settingsStore = useSettingsStore()
 
-// 模板可用变量：与后端真实渲染（service.renderTemplateString 注入的 Notification 字段）一致。
-// 不要在此混入 registry 的业务变量（scope_id/percentage 等）——那些不会被渲染，会造成误导。
-const TEMPLATE_VARIABLES = [
-  'Title', 'Content', 'Level', 'NotificationType', 'RefType', 'RefID', 'Timestamp',
-]
-
 const loading = ref(false)
 const saving = ref(false)
 const savingCell = ref('')
@@ -249,6 +243,16 @@ let targetKeySeq = 0
 const emailEnabled = computed(() => settingsStore.systemSettings.email_enabled)
 
 const typeRows = computed(() => metadata.value?.types ?? [])
+
+// 对话框可用变量提示：通用注入变量 + 当前类型的 registry 业务变量（DefaultVariables）。
+// 与后端真实渲染（service.renderForChannel 注入 TemplateData + Notification 字段）保持一致。
+const dialogVariables = computed(() => {
+  const generic = ['Title', 'Content', 'Level', 'NotificationType', 'RefType', 'RefID', 'Timestamp']
+  const type = editForm.value.notification_type
+  const def = metadata.value?.types.find((t) => t.name === type)
+  if (!def || !def.defaultVariables?.length) return generic
+  return [...def.defaultVariables, ...generic]
+})
 
 async function refresh() {
   loading.value = true

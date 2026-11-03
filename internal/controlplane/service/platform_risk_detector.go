@@ -182,71 +182,41 @@ func (d *PlatformRiskDetector) checkRedisHealth(ctx context.Context) {
 func (d *PlatformRiskDetector) sendCounterIntegrityAlert(ctx context.Context, violations int, result *RebuildV2Result) {
 	dedupeKey := fmt.Sprintf("platform_risk:counter_integrity:%s", time.Now().Format("2006-01-02-15"))
 
-	title := fmt.Sprintf("🚨 计数器完整性告警：发现 %d 个异常", violations)
-	content := fmt.Sprintf(
-		"**计数器完整性检查失败**\n\n"+
-			"- 异常计数器数量：%d\n"+
-			"- 检查时间：%s\n"+
-			"- 数据来源行数：%d\n"+
-			"- 写入 key 数量：%d\n\n"+
-			"请立即检查 Redis 计数器状态，必要时执行重建。\n\n"+
-			"> 告警冷却时间：%v",
-		violations,
-		time.Now().Format("2006-01-02 15:04:05"),
-		result.SourceRows,
-		result.KeysWritten,
-		riskDetectorDedupeCooldown,
-	)
-
-	d.sendNotification(ctx, cpmodel.NotificationTypePlatformRiskCounterIntegrity, cpmodel.NotificationLevelCritical, title, content, dedupeKey)
+	d.sendNotification(ctx, cpmodel.NotificationTypePlatformRiskCounterIntegrity, cpmodel.NotificationLevelCritical, map[string]interface{}{
+		"Violations": violations,
+		"SourceRows": result.SourceRows,
+		"KeysWritten": result.KeysWritten,
+		"Cooldown":   riskDetectorDedupeCooldown.String(),
+	}, dedupeKey)
 }
 
 func (d *PlatformRiskDetector) sendPeriodHealthAlert(ctx context.Context, periodKey string) {
 	dedupeKey := fmt.Sprintf("platform_risk:period_health:%s", periodKey)
 
-	title := fmt.Sprintf("⚠️ 周期健康告警：%s 预算 key 缺失", periodKey)
-	content := fmt.Sprintf(
-		"**周期健康检查失败**\n\n"+
-			"- 周期 key：%s\n"+
-			"- 检查时间：%s\n\n"+
-			"Redis 中未找到当前周期的预算计数器，可能影响预算控制。\n\n"+
-			"> 告警冷却时间：%v",
-		periodKey,
-		time.Now().Format("2006-01-02 15:04:05"),
-		riskDetectorDedupeCooldown,
-	)
-
-	d.sendNotification(ctx, cpmodel.NotificationTypePlatformRiskPeriodHealth, cpmodel.NotificationLevelWarning, title, content, dedupeKey)
+	d.sendNotification(ctx, cpmodel.NotificationTypePlatformRiskPeriodHealth, cpmodel.NotificationLevelWarning, map[string]interface{}{
+		"PeriodKey": periodKey,
+		"Cooldown":  riskDetectorDedupeCooldown.String(),
+	}, dedupeKey)
 }
 
 func (d *PlatformRiskDetector) sendRedisHealthAlert(ctx context.Context, err error) {
 	dedupeKey := fmt.Sprintf("platform_risk:redis_health:%s", time.Now().Format("2006-01-02-15"))
 
-	title := "🔥 Redis 健康告警：连接异常"
-	content := fmt.Sprintf(
-		"**Redis 健康检查失败**\n\n"+
-			"- 错误信息：%s\n"+
-			"- 检查时间：%s\n\n"+
-			"Redis 连接异常可能影响预算控制、限流等核心功能。\n\n"+
-			"> 告警冷却时间：%v",
-		err.Error(),
-		time.Now().Format("2006-01-02 15:04:05"),
-		riskDetectorDedupeCooldown,
-	)
-
-	d.sendNotification(ctx, cpmodel.NotificationTypePlatformRiskRedisHealth, cpmodel.NotificationLevelCritical, title, content, dedupeKey)
+	d.sendNotification(ctx, cpmodel.NotificationTypePlatformRiskRedisHealth, cpmodel.NotificationLevelCritical, map[string]interface{}{
+		"Message":  err.Error(),
+		"Cooldown": riskDetectorDedupeCooldown.String(),
+	}, dedupeKey)
 }
 
-func (d *PlatformRiskDetector) sendNotification(ctx context.Context, notifType, level, title, content, dedupeKey string) {
+func (d *PlatformRiskDetector) sendNotification(ctx context.Context, notifType, level string, data map[string]interface{}, dedupeKey string) {
 	notification := &cpmodel.Notification{
 		ID:        uuid.New(),
 		UserID:    uuid.Nil, // 系统通知
 		Type:      notifType,
 		Level:     level,
-		Title:     title,
-		Content:   content,
 		DedupeKey: dedupeKey,
 		CreatedAt: time.Now(),
+		TemplateData: data,
 	}
 
 	if err := d.notifier.Notify(ctx, notification); err != nil {

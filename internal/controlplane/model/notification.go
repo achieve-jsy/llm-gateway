@@ -23,6 +23,11 @@ type Notification struct {
 	IsRead    bool       `gorm:"not null;default:false;index:idx_notifications_user_unread" json:"is_read"`
 	ReadAt    *time.Time `gorm:"type:timestamptz" json:"read_at,omitempty"`
 	CreatedAt time.Time  `gorm:"not null;autoCreateTime" json:"created_at"`
+
+	// TemplateData 渲染模板用的业务变量（如 ScopeType/Threshold/UsedUSD）。
+	// 不落库：notifications 表只存渲染后的 Title/Content。outbox 出队后渲染需要它，
+	// 因此 NotificationOutbox 单独承载 JSON 列；此处仅进程内传递。
+	TemplateData map[string]interface{} `gorm:"-" json:"template_data,omitempty"`
 }
 
 type NotificationDelivery struct {

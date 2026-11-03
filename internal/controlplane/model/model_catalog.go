@@ -24,30 +24,41 @@ import (
 //   - SQLite 测试库不识别 gen_random_uuid()，因此在 repo Upsert/Create 时仍由 Go 侧
 //     主动生成 ID，避免依赖 PG 端 default。
 type ModelCatalog struct {
-	ID                              uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	Source                          string     `gorm:"type:varchar(50);not null;uniqueIndex:idx_catalog_source_id" json:"source"`
-	SourceModelID                   string     `gorm:"type:varchar(200);not null;uniqueIndex:idx_catalog_source_id" json:"source_model_id"`
-	DisplayName                     string     `gorm:"type:varchar(200)" json:"display_name"`
-	Provider                        string     `gorm:"type:varchar(50);index:idx_catalog_provider" json:"provider"`
-	Mode                            string     `gorm:"type:varchar(30)" json:"mode"`
-	ContextLength                   int64      `gorm:"default:0" json:"context_length"`
-	MaxOutputTokens                 int64      `gorm:"default:0" json:"max_output_tokens"`
-	InputPricePerMillion            float64    `gorm:"type:decimal(14,6);default:0" json:"input_price_per_million"`
-	OutputPricePerMillion           float64    `gorm:"type:decimal(14,6);default:0" json:"output_price_per_million"`
-	CacheReadPrice                  *float64   `gorm:"type:decimal(14,6)" json:"cache_read_price,omitempty"`
-	CacheWritePrice                 *float64   `gorm:"type:decimal(14,6)" json:"cache_write_price,omitempty"`
-	TierThreshold                   *int64     `json:"tier_threshold,omitempty"`
-	InputPriceAboveTier             *float64   `gorm:"type:decimal(14,6)" json:"input_price_above_tier,omitempty"`
-	OutputPriceAboveTier            *float64   `gorm:"type:decimal(14,6)" json:"output_price_above_tier,omitempty"`
+	ID                    uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	Source                string    `gorm:"type:varchar(50);not null;uniqueIndex:idx_catalog_source_id" json:"source"`
+	SourceModelID         string    `gorm:"type:varchar(200);not null;uniqueIndex:idx_catalog_source_id" json:"source_model_id"`
+	DisplayName           string    `gorm:"type:varchar(200)" json:"display_name"`
+	Provider              string    `gorm:"type:varchar(50);index:idx_catalog_provider" json:"provider"`
+	Mode                  string    `gorm:"type:varchar(30)" json:"mode"`
+	ContextLength         int64     `gorm:"default:0" json:"context_length"`
+	MaxOutputTokens       int64     `gorm:"default:0" json:"max_output_tokens"`
+	InputPricePerMillion  float64   `gorm:"type:decimal(14,6);default:0" json:"input_price_per_million"`
+	OutputPricePerMillion float64   `gorm:"type:decimal(14,6);default:0" json:"output_price_per_million"`
+	CacheReadPrice        *float64  `gorm:"type:decimal(14,6)" json:"cache_read_price,omitempty"`
+	CacheWritePrice       *float64  `gorm:"type:decimal(14,6)" json:"cache_write_price,omitempty"`
+	TierThreshold         *int64    `json:"tier_threshold,omitempty"`
+	InputPriceAboveTier   *float64  `gorm:"type:decimal(14,6)" json:"input_price_above_tier,omitempty"`
+	OutputPriceAboveTier  *float64  `gorm:"type:decimal(14,6)" json:"output_price_above_tier,omitempty"`
 	// 媒体价（对应 core.ModelPricing 既有的 per_image / input_per_image /
 	// per_second_input / per_second_output / per_request 字段族）。
 	// 单位是「每张 / 每秒 / 每次」的美元原值，**不经过 tokenPriceScale 缩放**；
 	// 可空：NULL = 无价（区别于 token 价列的 0 占位），供计价层判定 usage_missing。
-	PerImage                        *float64   `gorm:"type:decimal(18,8)" json:"per_image,omitempty"`
-	InputPerImage                   *float64   `gorm:"type:decimal(18,8)" json:"input_per_image,omitempty"`
-	PerSecondInput                  *float64   `gorm:"type:decimal(18,8)" json:"per_second_input,omitempty"`
-	PerSecondOutput                 *float64   `gorm:"type:decimal(18,8)" json:"per_second_output,omitempty"`
-	PerRequest                      *float64   `gorm:"type:decimal(18,8)" json:"per_request,omitempty"`
+	PerImage        *float64 `gorm:"type:decimal(18,8)" json:"per_image,omitempty"`
+	InputPerImage   *float64 `gorm:"type:decimal(18,8)" json:"input_per_image,omitempty"`
+	PerSecondInput  *float64 `gorm:"type:decimal(18,8)" json:"per_second_input,omitempty"`
+	PerSecondOutput *float64 `gorm:"type:decimal(18,8)" json:"per_second_output,omitempty"`
+	PerRequest      *float64 `gorm:"type:decimal(18,8)" json:"per_request,omitempty"`
+	// 媒体补充维度（单位与 per-image 不同，既有字段族无法表达）：
+	// 图像 token / 像素 / 视频 token / 字符。均为美元原值、可空，NULL = 无价。
+	// 消费状态：per_image_token 已参与成本计算；per_pixel / per_video_token /
+	// per_character_input 目前只解析入库（见迁移文件注释）。
+	InputPerImageToken              *float64   `gorm:"type:decimal(18,8)" json:"input_per_image_token,omitempty"`
+	OutputPerImageToken             *float64   `gorm:"type:decimal(18,8)" json:"output_per_image_token,omitempty"`
+	InputPerPixel                   *float64   `gorm:"type:decimal(18,8)" json:"input_per_pixel,omitempty"`
+	OutputPerPixel                  *float64   `gorm:"type:decimal(18,8)" json:"output_per_pixel,omitempty"`
+	InputPerVideoToken              *float64   `gorm:"type:decimal(18,8)" json:"input_per_video_token,omitempty"`
+	OutputPerVideoToken             *float64   `gorm:"type:decimal(18,8)" json:"output_per_video_token,omitempty"`
+	PerCharacterInput               *float64   `gorm:"type:decimal(18,8)" json:"per_character_input,omitempty"`
 	SupportsFunctionCalling         bool       `gorm:"default:false" json:"supports_function_calling"`
 	SupportsVision                  bool       `gorm:"default:false" json:"supports_vision"`
 	SupportsPromptCaching           bool       `gorm:"default:false" json:"supports_prompt_caching"`

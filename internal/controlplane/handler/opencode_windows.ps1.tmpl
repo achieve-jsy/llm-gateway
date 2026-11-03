@@ -90,9 +90,16 @@ if (-not (Test-Path $configDir)) {
 # 只能当「确认是 V2」的正向信号，不能反推。
 $ocMajor = ""
 $ocCmd = Get-Command opencode -ErrorAction SilentlyContinue
-if ($ocCmd) {
+$ocBin = if ($ocCmd) { $ocCmd.Source } else { $null }
+# curl 安装的 V2 落在 %USERPROFILE%\.opencode\bin，非登录会话里可能不在 PATH。
+if (-not $ocBin) {
+    foreach ($candidate in @("$env:USERPROFILE\.opencode\bin\opencode.exe", "$env:USERPROFILE\.opencode\bin\opencode")) {
+        if (Test-Path $candidate) { $ocBin = $candidate; break }
+    }
+}
+if ($ocBin) {
     try {
-        $ocVer = (& $ocCmd.Source --version 2>$null) -join " "
+        $ocVer = (& $ocBin --version 2>$null) -join " "
         if ($ocVer -match '(\d+)\.\d+\.\d+') { $ocMajor = $Matches[1] }
     } catch {}
 }
@@ -116,7 +123,7 @@ if ($isV2) {
     Write-Ok "检测到 OpenCode $ocVerLabel — V2 模式（写入原生 V2 配置 + 静态模型清单）"
 } else {
     Write-Ok "检测到 OpenCode $ocVerLabel — V1 模式（下发发现插件，模型动态发现）"
-    if (-not $ocCmd) {
+    if (-not $ocBin) {
         Write-Warn "未找到 opencode 命令；若你用的是 OpenCode 2，请安装后重新执行本脚本"
     }
 }
@@ -364,14 +371,19 @@ try {
 
         # 本地文件插件已下发到 plugin 目录（opencode 自动加载），移除 plugin 数组里旧的
         # npm 引用，避免重复加载或联网安装旧版本。
-        if ($cfg.PSObject.Properties['plugin']) {
+        # 老版本写 plugin，新版本读 plugins，两套都要清，否则仍会重复加载。
+        foreach ($key in @('plugin', 'plugins')) {
+            if (-not $cfg.PSObject.Properties[$key]) { continue }
             $kept = @()
-            foreach ($p in @($cfg.plugin)) {
-                $name = if ($p -is [System.Array] -and $p.Count -gt 0) { $p[0] } else { $p }
-                if ($name -ne $DISCOVERY_PLUGIN) { $kept += ,$p }
+            foreach ($p in @($cfg.$key)) {
+                $name = if ($p -is [System.Array] -and $p.Count -gt 0) { $p[0] } elseif ($p.PSObject.Properties['package']) { $p.package } else { $p }
+                if ([string]$name -ne $DISCOVERY_PLUGIN) { $kept += ,$p }
             }
-            if ($kept.Count -gt 0) { $cfg.plugin = $kept }
-            else { $cfg.PSObject.Properties.Remove('plugin') }
+            if ($kept.Count -gt 0) {
+                $cfg | Add-Member -NotePropertyName $key -NotePropertyValue $kept -Force
+            } else {
+                $cfg.PSObject.Properties.Remove($key)
+            }
         }
         $resultPlugin = if ($pluginInstalled) { "已下载到 $PLUGIN_FILE" } else { "下载失败（请确认可访问 $PLUGIN_URL）" }
     }

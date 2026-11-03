@@ -318,6 +318,14 @@ OpenCode 2 对插件做了不兼容改造（新 `@opencode/plugin` API），**V1
 
 V2 的代价是**快照**：网关后台新增模型/改能力后，V2 用户需重跑一次配置脚本；V1 用户仍是动态的。要让 V2 也动态，需要把插件移植到 `@opencode/plugin`（`Plugin.define` + `ctx.provider.transform`），目前未做。
 
+已知降级：`/v1/models` 可达但 `/v1/model/info` 失败时，脚本只能把 `/v1/models` 里的全部模型写进 V2 `models` ——
+`chat` / `embedding` 的判定信息只在 `model_info.mode` 里，拿不到就没法过滤，所以 embedding 模型也会出现在列表里
+（V1 插件在同样场景下同样过滤不了）。网关不可达或 Key 看不到任何模型时则明确失败：非零退出、不写配置、回调 `failed`。
+本地 `opencode.json` 不是合法 JSON 时同样直接失败（不猜、不覆盖），避免把用户其它 provider/plugin 清掉。
+
+回归测试见 `tests/controlplane/handler/opencode_config_*_test.go`：假网关 + 假 HOME 真跑一遍脚本再断言落盘结果，
+缺 bash / python3 / pwsh 时自动跳过。
+
 ---
 
 ## 7. 构建与发布

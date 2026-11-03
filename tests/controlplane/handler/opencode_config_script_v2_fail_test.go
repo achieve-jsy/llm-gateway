@@ -86,3 +86,43 @@ func TestMacScript_V2EmptyModelList(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "失败时不应生成配置文件")
 	assert.Contains(t, gw.callbackStatuses(), "failed")
 }
+
+// TestMacScript_InvalidExistingConfig 测什么：本地 opencode.json 不是合法 JSON 时
+// 不能"当成空配置"继续写（那会把用户的其它 provider/plugin 全清掉）。
+// 期望：非零退出、文件逐字节不变、回调 failed；V1/V2 两个分支行为一致。
+func TestMacScript_InvalidExistingConfig(t *testing.T) {
+	gw := newFakeGateway(t)
+	f := tokenFixture{BaseURL: gw.BaseURL(), APIKey: "sk-test"}
+	r, _ := newScriptEngine(t, f)
+	code, script := fetchScript(t, r, "mac", "")
+	require.Equal(t, 200, code)
+
+	cases := []struct {
+		name    string
+		version string
+	}{
+		{"V1 分支", "1.19.5"},
+		{"V2 分支", "2.0.3"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			configDir := filepath.Join(home, ".config", "opencode")
+			require.NoError(t, os.MkdirAll(configDir, 0o755))
+			broken := []byte("{\"provider\": {oops}\n")
+			configPath := filepath.Join(configDir, "opencode.json")
+			require.NoError(t, os.WriteFile(configPath, broken, 0o644))
+
+			binDir := writeFakeOpencode(t, home, c.version)
+
+			out, exitCode := runMacScript(t, script, home, binDir)
+			require.NotEqual(t, 0, exitCode, "坏配置必须失败退出，输出:\n%s", out)
+
+			after, err := os.ReadFile(configPath)
+			require.NoError(t, err)
+			assert.Equal(t, broken, after, "失败时不能改动用户配置")
+			assert.Contains(t, gw.callbackStatuses(), "failed")
+		})
+	}
+}

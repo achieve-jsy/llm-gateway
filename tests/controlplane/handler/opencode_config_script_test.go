@@ -28,9 +28,11 @@ func TestGetScript_RendersBothVersionBranches(t *testing.T) {
 		name         string
 		osType       string
 		v1BranchMark string
+		v2BranchMark string
 	}{
-		{"mac 脚本", "mac", "MODE=\"v1\""},
-		{"windows 脚本", "windows", "$MODE = \"v1\""},
+		// V1/V2 各取一个只在对应分支出现的骨架标记，避免断言"providers"这种两处都有的词
+		{"mac 脚本", "mac", "MODE=\"v1\"", "isinstance(cfg.get(\"providers\")"},
+		{"windows 脚本", "windows", "$MODE = \"v1\"", "PSObject.Properties['providers']"},
 	}
 
 	f := testTokenFixture()
@@ -44,8 +46,8 @@ func TestGetScript_RendersBothVersionBranches(t *testing.T) {
 			// V1 分支标记 + V1 专属配置节
 			assert.Contains(t, body, c.v1BranchMark)
 			assert.Contains(t, body, "modelsDiscovery")
-			// V2 分支：原生 providers 形状
-			assert.Contains(t, body, "providers")
+			// V2 分支：原生 providers 形状（标记只在 V2 分支里出现）
+			assert.Contains(t, body, c.v2BranchMark)
 			assert.Contains(t, body, "aisdk:@ai-sdk/openai-compatible")
 			// 注入值（不能出现未渲染的占位符）
 			assert.Contains(t, body, f.BaseURL)

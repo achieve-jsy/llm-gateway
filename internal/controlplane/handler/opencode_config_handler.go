@@ -555,8 +555,10 @@ if os.path.exists(config_path):
     try:
         with open(config_path) as f:
             cfg = json.load(f)
-    except json.JSONDecodeError:
-        cfg = {}
+    except json.JSONDecodeError as e:
+        # 配置不是合法 JSON：不猜、也不覆盖，直接失败让用户先修好文件。
+        print(f"RESULT_PARSE_ERROR={e}")
+        raise SystemExit(1)
 
 if not isinstance(cfg.get("providers"), dict):
     cfg["providers"] = {}
@@ -619,14 +621,15 @@ discovery_plugin = "$DISCOVERY_PLUGIN"
 supplier_name    = "$SUPPLIER_NAME"
 
 # 读取现有配置
+# 解析失败不能当成空配置继续写：那会清掉用户其它的 provider/plugin。
+cfg = {}
 if os.path.exists(config_path):
     with open(config_path) as f:
         try:
             cfg = json.load(f)
-        except json.JSONDecodeError:
-            cfg = {}
-else:
-    cfg = {}
+        except json.JSONDecodeError as e:
+            print(f"RESULT_PARSE_ERROR={e}")
+            raise SystemExit(1)
 
 providers = cfg.setdefault("provider", {})
 
@@ -655,17 +658,26 @@ providers[target_id] = {
 
 # 本地文件插件已下发到 plugin 目录（opencode 自动加载），移除 plugin 数组里旧的
 # npm 引用，避免重复加载或联网安装旧版本（旧版默认会同步所有渠道）。
-plugins = cfg.get("plugin", [])
-kept = []
-for p in plugins:
-    name = p[0] if isinstance(p, list) and p else p
-    if name == discovery_plugin:
+# 老版本写 plugin 数组，新版本读 plugins，两套都清掉，否则仍会重复加载。
+for key in ("plugin", "plugins"):
+    entries = cfg.get(key)
+    if not isinstance(entries, list):
         continue
-    kept.append(p)
-if kept:
-    cfg["plugin"] = kept
-elif "plugin" in cfg:
-    del cfg["plugin"]
+    kept = []
+    for p in entries:
+        if isinstance(p, list) and p:
+            name = p[0]
+        elif isinstance(p, dict):
+            name = p.get("package")
+        else:
+            name = p
+        if name == discovery_plugin:
+            continue
+        kept.append(p)
+    if kept:
+        cfg[key] = kept
+    else:
+        cfg.pop(key, None)
 
 with open(config_path, "w") as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)

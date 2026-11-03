@@ -27,11 +27,9 @@ type CatalogServiceInterface interface {
 	GetBySourceModelID(source, sourceModelID string) (*model.ModelCatalog, error)
 	TriggerAsyncSync(ctx context.Context)
 	IsSyncing() bool
-	ComputePriceDiff(ctx context.Context) ([]service.PriceDiffEntry, error)
-	ApplyPriceDiff(ctx context.Context, ids []uuid.UUID) (int, error)
 	AutoBind(ctx context.Context) (*service.AutoBindResult, error)
 	// BindingStats 返回 catalog 总数 + 本地 model 绑定分布，
-	// 让前端在 diff 为空时能区分 "目录空 / 未绑定 / 全部一致" 这几种语义。
+	// 让前端能区分 "目录空 / 未绑定 / 全部一致" 这几种语义。
 	BindingStats(ctx context.Context) (*service.BindingStats, error)
 	// SyncStatus 给前端轮询同步任务的实时状态：
 	// 是否在跑、上次开始/结束、耗时、来源（remote/bundled）、错误、目录总数。
@@ -44,8 +42,6 @@ type CatalogServiceInterface interface {
 //	GET  /api/v1/model-catalog/by-source?source_model_id=…&source=litellm
 //	GET  /api/v1/model-catalog/:id  （UUID 主键）
 //	POST /api/v1/model-catalog/sync
-//	GET  /api/v1/model-catalog/diff
-//	POST /api/v1/model-catalog/apply-diff   body: {"model_ids":[...]}
 //
 // Detail 路由方案说明：source_model_id 含 '/'，路径参数会被 Gin router 误识别为分隔符，
 // 因此保留 :id（UUID）路径参数 + 新增 /by-source query 入口。Frontend 可按需调用任一。
@@ -125,44 +121,6 @@ func (h *CatalogHandler) Sync(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"data": gin.H{"message": "catalog sync triggered", "syncing": true}})
 }
 
-// Diff GET /api/v1/model-catalog/diff
-func (h *CatalogHandler) Diff(c *gin.Context) {
-	diffs, err := h.svc.ComputePriceDiff(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "compute diff failed", "code": CodeInternalError}})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": diffs, "total": len(diffs)})
-}
-
-// ApplyDiff POST /api/v1/model-catalog/apply-diff
-type applyDiffInput struct {
-	ModelIDs []string `json:"model_ids" binding:"required,min=1"`
-}
-
-func (h *CatalogHandler) ApplyDiff(c *gin.Context) {
-	var input applyDiffInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": CodeBadRequest}})
-		return
-	}
-	ids := make([]uuid.UUID, 0, len(input.ModelIDs))
-	for _, raw := range input.ModelIDs {
-		uid, err := uuid.Parse(raw)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "invalid model_id: " + raw, "code": CodeBadRequest}})
-			return
-		}
-		ids = append(ids, uid)
-	}
-	updated, err := h.svc.ApplyPriceDiff(c.Request.Context(), ids)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": err.Error(), "code": CodeInternalError}})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{"updated": updated, "skipped": 0, "failed_ids": []string{}}})
-}
-
 // AutoBind POST /api/v1/model-catalog/auto-bind
 //
 // 用本地 model 的 name / upstream_model_id（大小写不敏感）严格等于 catalog.source_model_id
@@ -211,10 +169,7 @@ func (h *CatalogHandler) SyncStatus(c *gin.Context) {
 //	catalog_total == 0  → 目录空，提示先去同步；
 //	model_total   == 0  → 还没注册本地模型，提示去模型管理；
 //	unbound_count > 0   → 提示点「智能绑定」；
-//	bound_count   > 0
-//	  且 diff 为空      → 已绑定模型与目录完全一致，无需处理。
-//
-// 不掺 diff 行数，diff 仍单独走 /diff 接口（一个接口一件事）。
+//	bound_count   > 0   → 已绑定模型与目录完全一致，无需处理。
 func (h *CatalogHandler) BindingStats(c *gin.Context) {
 	stats, err := h.svc.BindingStats(c.Request.Context())
 	if err != nil {

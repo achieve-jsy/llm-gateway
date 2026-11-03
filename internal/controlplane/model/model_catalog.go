@@ -34,6 +34,10 @@ type ModelCatalog struct {
 	OutputPricePerMillion           float64    `gorm:"type:decimal(14,6);default:0" json:"output_price_per_million"`
 	CacheReadPrice                  *float64   `gorm:"type:decimal(14,6)" json:"cache_read_price,omitempty"`
 	CacheWritePrice                 *float64   `gorm:"type:decimal(14,6)" json:"cache_write_price,omitempty"`
+	// ReasoningPrice USD per 1M reasoning tokens (from LiteLLM output_cost_per_reasoning_token)
+	ReasoningPrice                  *float64   `gorm:"type:decimal(14,6)" json:"reasoning_price,omitempty"`
+	// CachedPrice USD per 1M cached read tokens (from LiteLLM cache_read_input_token_cost)
+	CachedPrice                     *float64   `gorm:"type:decimal(14,6)" json:"cached_price,omitempty"`
 	TierThreshold                   *int64     `json:"tier_threshold,omitempty"`
 	InputPriceAboveTier             *float64   `gorm:"type:decimal(14,6)" json:"input_price_above_tier,omitempty"`
 	OutputPriceAboveTier            *float64   `gorm:"type:decimal(14,6)" json:"output_price_above_tier,omitempty"`

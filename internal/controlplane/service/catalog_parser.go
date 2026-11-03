@@ -25,6 +25,8 @@ type ModelCatalogParsed struct {
 	OutputPricePerMillion           float64
 	CacheReadPrice                  *float64
 	CacheWritePrice                 *float64
+	ReasoningPrice                  *float64
+	CachedPrice                     *float64
 	TierThreshold                   *int64
 	InputPriceAboveTier             *float64
 	OutputPriceAboveTier            *float64
@@ -111,10 +113,15 @@ func parseOne(sourceID string, payload json.RawMessage) (*ModelCatalogParsed, er
 	if v, ok := floatField(m, "cache_read_input_token_cost"); ok {
 		scaled := v * tokenPriceScale
 		entry.CacheReadPrice = &scaled
+		entry.CachedPrice = &scaled
 	}
 	if v, ok := floatField(m, "cache_creation_input_token_cost"); ok {
 		scaled := v * tokenPriceScale
 		entry.CacheWritePrice = &scaled
+	}
+	if v, ok := floatField(m, "output_cost_per_reasoning_token"); ok {
+		scaled := v * tokenPriceScale
+		entry.ReasoningPrice = &scaled
 	}
 
 	// 阶梯定价：扫一遍 keys

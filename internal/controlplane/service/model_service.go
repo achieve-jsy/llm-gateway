@@ -82,9 +82,10 @@ func (s *ModelService) publishEvent(eventType event.ChangeEventType, resourceTyp
 // 字段语义：
 //   - 必填：Name、ProviderID、ModelType
 //   - 可选标量字段（UpstreamModelID/Description）：未传按 ""
-//   - 可选数值字段（ContextLength/MaxOutputTokens/InputPrice/OutputPrice/Weight）：
+//   - 可选数值字段（ContextLength/MaxOutputTokens/InputPrice/OutputPrice/Weight/ReasoningPrice/CachedPrice）：
 //     指针类型用于区分 "未传" 与 "传零值"；未传时落 DB 列默认值
 //     （context_length=0/max_output_tokens=0/input_price=0/output_price=0/weight=1）
+//   - PriceMode：未传默认 "catalog"；ReasoningPrice/CachedPrice 未传时为 nil
 type CreateModelInput struct {
 	Name            string   `json:"name" binding:"required,max=200"`
 	ProviderID      string   `json:"provider_id" binding:"required,uuid"`
@@ -95,6 +96,9 @@ type CreateModelInput struct {
 	MaxOutputTokens *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
 	InputPrice      *float64 `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
+	PriceMode       string   `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	ReasoningPrice  *float64 `json:"reasoning_price" binding:"omitempty,min=0"`
+	CachedPrice     *float64 `json:"cached_price" binding:"omitempty,min=0"`
 	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
 }
 
@@ -142,6 +146,23 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 		m.Weight = *input.Weight
 	} else {
 		m.Weight = 1
+	}
+
+	// PriceMode 默认 catalog
+	if input.PriceMode == "" {
+		m.PriceMode = model.PriceModeCatalog
+	} else {
+		m.PriceMode = input.PriceMode
+	}
+	if input.ReasoningPrice != nil {
+		m.ReasoningPrice = input.ReasoningPrice
+	}
+	if input.CachedPrice != nil {
+		m.CachedPrice = input.CachedPrice
+	}
+
+	if err := m.Validate(); err != nil {
+		return nil, err
 	}
 
 	if err := s.modelRepo.Create(m); err != nil {
@@ -203,6 +224,9 @@ type UpdateModelInput struct {
 	MaxOutputTokens *int     `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
 	InputPrice      *float64 `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice     *float64 `json:"output_price" binding:"omitempty,min=0"`
+	PriceMode       *string  `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
+	ReasoningPrice  *float64 `json:"reasoning_price" binding:"omitempty,min=0"`
+	CachedPrice     *float64 `json:"cached_price" binding:"omitempty,min=0"`
 	Weight          *int     `json:"weight" binding:"omitempty,min=0,max=9999"`
 }
 
@@ -270,6 +294,27 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 	}
 	if input.Weight != nil {
 		m.Weight = *input.Weight
+	}
+
+	// PriceMode 切换处理
+	if input.PriceMode != nil && *input.PriceMode != m.PriceMode {
+		oldMode := m.PriceMode
+		m.PriceMode = *input.PriceMode
+		// manual → catalog：清理 reasoning/cached 价格（它们应来自 catalog 同步）
+		if oldMode == model.PriceModeManual && *input.PriceMode == model.PriceModeCatalog {
+			m.ReasoningPrice = nil
+			m.CachedPrice = nil
+		}
+	}
+	if input.ReasoningPrice != nil {
+		m.ReasoningPrice = input.ReasoningPrice
+	}
+	if input.CachedPrice != nil {
+		m.CachedPrice = input.CachedPrice
+	}
+
+	if err := m.Validate(); err != nil {
+		return nil, err
 	}
 
 	if err := s.modelRepo.Update(m); err != nil {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/errormap"
+	"github.com/example/llm-gateway/internal/gateway/middleware"
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/providers"
 	"github.com/gin-gonic/gin"
@@ -136,14 +137,24 @@ func (o *ChatOrchestrator) Chat(ctx context.Context, req *core.ChatRequest) (*co
 	)
 	span.SetStatus(codes.Ok, "")
 
-	// 将 provider 名、token 用量写回 Gin context 供 Logger 使用
+	// 将 model、provider、token 用量写回 Gin context 供 UsageCollector / Logger 使用
 	if gc := ginContextFrom(ctx); gc != nil {
+		gc.Set(string(middleware.ModelKey), req.Model)
+		gc.Set(string(middleware.PromptTokensKey), resp.Usage.PromptTokens)
+		gc.Set(string(middleware.CompletionTokensKey), resp.Usage.CompletionTokens)
+		gc.Set(string(middleware.IsStreamKey), false)
+		gc.Set(string(middleware.DurationKey), int(elapsed.Milliseconds()))
 		if resp.Model != "" {
-			gc.Set("routed_model", resp.Model)
+			gc.Set(string(middleware.ProviderModelIDKey), resp.Model)
 		}
-		gc.Set("prompt_tokens", resp.Usage.PromptTokens)
-		gc.Set("completion_tokens", resp.Usage.CompletionTokens)
-		gc.Set("stream", false)
+
+		// 存储请求消息和响应文本供 call_payloads 收集
+		gc.Set(string(middleware.MessagesKey), req.Messages)
+		if len(resp.Choices) > 0 {
+			if contentStr, ok := resp.Choices[0].Message.Content.(string); ok {
+				gc.Set(string(middleware.ResponseTextKey), contentStr)
+			}
+		}
 	}
 
 	slog.DebugContext(ctx, "upstream_call_done",

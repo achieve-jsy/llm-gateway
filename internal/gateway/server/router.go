@@ -32,6 +32,7 @@ func Setup(
 	controlPlaneURL, internalToken string,
 	sch *scheduler.Scheduler,
 	nameCache *cache.GroupNameCache,
+	usageEventCh chan<- *infra.UsageEvent,
 ) *gin.Engine {
 	// 获取初始 router 用于 models/health/passthrough 等（不需要热更新的场景）
 	router := routerGetter()
@@ -90,6 +91,9 @@ func Setup(
 	// OpenAI 兼容接口（需 API Key 认证）
 	v1 := r.Group("/v1")
 	v1.Use(middleware.AuthMiddleware(authClient))
+	if usageEventCh != nil {
+		v1.Use(middleware.NewUsageCollector(usageEventCh).Handler())
+	}
 	v1.Use(guard.Handler())
 	{
 		// Models

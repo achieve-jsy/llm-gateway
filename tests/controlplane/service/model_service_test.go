@@ -344,7 +344,7 @@ func TestUpdateModel_Scenarios(t *testing.T) {
 			description: "名称不重复时应更新成功",
 			setupMR: func(mr *fakeModelRepoForModelSvc) {
 				mr.getByIDFunc = func(_ uuid.UUID) (*model.Model, error) {
-					return &model.Model{ID: modelID, Name: "old", ProviderID: providerID}, nil
+					return &model.Model{ID: modelID, Name: "old", ProviderID: providerID, PriceMode: model.PriceModeCatalog}, nil
 				}
 				mr.existsByNameExclFunc = func(_ string, _ uuid.UUID, _ uuid.UUID) (bool, error) { return false, nil }
 			},
@@ -357,7 +357,7 @@ func TestUpdateModel_Scenarios(t *testing.T) {
 			description: "更新模型名与同 provider 下其他模型重名时应返回 ErrModelNameExists",
 			setupMR: func(mr *fakeModelRepoForModelSvc) {
 				mr.getByIDFunc = func(_ uuid.UUID) (*model.Model, error) {
-					return &model.Model{ID: modelID, Name: "old", ProviderID: providerID}, nil
+					return &model.Model{ID: modelID, Name: "old", ProviderID: providerID, PriceMode: model.PriceModeCatalog}, nil
 				}
 				mr.existsByNameExclFunc = func(_ string, _ uuid.UUID, _ uuid.UUID) (bool, error) { return true, nil }
 			},
@@ -477,6 +477,237 @@ func TestCheckModelName_Scenarios(t *testing.T) {
 			avail, err := svc.CheckModelName(tt.modelName, providerID)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantAvail, avail)
+		})
+	}
+}
+
+func strPtr(v string) *string { return &v }
+
+func TestCreateModel_PriceModeValidation(t *testing.T) {
+	providerID := uuid.New()
+
+	tests := []struct {
+		name        string
+		description string
+		input       service.CreateModelInput
+		setupMR     func(mr *fakeModelRepoForModelSvc)
+		setupPR     func(pr *fakeProviderRepoForModelSvc)
+		wantErr     bool
+		wantErrMsg  string
+		wantMode    string
+	}{
+		{
+			name:        "创建manual模式且价格有效",
+			description: "PriceMode=manual 且 InputPrice>0 OutputPrice>0 应创建成功",
+			input: service.CreateModelInput{
+				Name: "manual-model", ProviderID: providerID.String(), ModelType: "chat",
+				PriceMode: "manual", InputPrice: floatPtr(1.0), OutputPrice: floatPtr(2.0),
+			},
+			setupMR: func(mr *fakeModelRepoForModelSvc) {},
+			setupPR: func(pr *fakeProviderRepoForModelSvc) {
+				pr.getByIDFunc = func(_ uuid.UUID) (*model.Provider, error) {
+					return &model.Provider{ID: providerID, Enabled: true}, nil
+				}
+			},
+			wantErr:    false,
+			wantMode:   "manual",
+		},
+		{
+			name:        "创建manual模式缺input_price",
+			description: "PriceMode=manual 但 InputPrice 未设置应报错",
+			input: service.CreateModelInput{
+				Name: "no-input-price", ProviderID: providerID.String(), ModelType: "chat",
+				PriceMode: "manual", OutputPrice: floatPtr(2.0),
+			},
+			setupMR: func(mr *fakeModelRepoForModelSvc) {},
+			setupPR: func(pr *fakeProviderRepoForModelSvc) {
+				pr.getByIDFunc = func(_ uuid.UUID) (*model.Provider, error) {
+					return &model.Provider{ID: providerID, Enabled: true}, nil
+				}
+			},
+			wantErr:    true,
+			wantErrMsg: "manual mode requires input_price > 0",
+		},
+		{
+			name:        "创建manual模式缺output_price",
+			description: "PriceMode=manual 但 OutputPrice 未设置应报错",
+			input: service.CreateModelInput{
+				Name: "no-output-price", ProviderID: providerID.String(), ModelType: "chat",
+				PriceMode: "manual", InputPrice: floatPtr(1.0),
+			},
+			setupMR: func(mr *fakeModelRepoForModelSvc) {},
+			setupPR: func(pr *fakeProviderRepoForModelSvc) {
+				pr.getByIDFunc = func(_ uuid.UUID) (*model.Provider, error) {
+					return &model.Provider{ID: providerID, Enabled: true}, nil
+				}
+			},
+			wantErr:    true,
+			wantErrMsg: "manual mode requires output_price > 0",
+		},
+		{
+			name:        "创建catalog模式默认值",
+			description: "PriceMode 为空串时应默认为 catalog",
+			input: service.CreateModelInput{
+				Name: "catalog-default", ProviderID: providerID.String(), ModelType: "chat",
+				PriceMode: "",
+			},
+			setupMR: func(mr *fakeModelRepoForModelSvc) {},
+			setupPR: func(pr *fakeProviderRepoForModelSvc) {
+				pr.getByIDFunc = func(_ uuid.UUID) (*model.Provider, error) {
+					return &model.Provider{ID: providerID, Enabled: true}, nil
+				}
+			},
+			wantErr:  false,
+			wantMode: "catalog",
+		},
+		{
+			name:        "创建时reasoning/cached价格可选",
+			description: "catalog 模式下可附带 reasoning_price 和 cached_price",
+			input: service.CreateModelInput{
+				Name: "with-extras", ProviderID: providerID.String(), ModelType: "chat",
+				PriceMode: "catalog", ReasoningPrice: floatPtr(3.0), CachedPrice: floatPtr(1.5),
+			},
+			setupMR: func(mr *fakeModelRepoForModelSvc) {},
+			setupPR: func(pr *fakeProviderRepoForModelSvc) {
+				pr.getByIDFunc = func(_ uuid.UUID) (*model.Provider, error) {
+					return &model.Provider{ID: providerID, Enabled: true}, nil
+				}
+			},
+			wantErr:  false,
+			wantMode: "catalog",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mr := &fakeModelRepoForModelSvc{}
+			pr := &fakeProviderRepoForModelSvc{}
+			tt.setupMR(mr)
+			tt.setupPR(pr)
+			svc := service.NewModelService(mr, pr, nil)
+
+			result, err := svc.CreateModel(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrMsg)
+				assert.Nil(t, result)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				assert.Equal(t, tt.wantMode, result.PriceMode)
+				if tt.input.ReasoningPrice != nil {
+					assert.Equal(t, *tt.input.ReasoningPrice, *result.ReasoningPrice)
+				}
+				if tt.input.CachedPrice != nil {
+					assert.Equal(t, *tt.input.CachedPrice, *result.CachedPrice)
+				}
+			}
+		})
+	}
+}
+
+func TestUpdateModel_PriceModeSwitch(t *testing.T) {
+	modelID := uuid.New()
+	providerID := uuid.New()
+
+	tests := []struct {
+		name        string
+		description string
+		existing    *model.Model
+		input       service.UpdateModelInput
+		setupMR     func(mr *fakeModelRepoForModelSvc)
+		setupPR     func(pr *fakeProviderRepoForModelSvc)
+		wantErr     bool
+		wantErrMsg  string
+		wantMode    string
+		wantCheck   func(t *testing.T, result *model.Model)
+	}{
+		{
+			name:        "catalog→manual切换需校验input/output_price",
+			description: "从 catalog 切到 manual 但未设价格应报错",
+			existing: &model.Model{
+				ID: modelID, Name: "test", ProviderID: providerID,
+				PriceMode: "catalog", InputPrice: 0, OutputPrice: 0,
+			},
+			input:   service.UpdateModelInput{PriceMode: strPtr("manual")},
+			setupMR: func(mr *fakeModelRepoForModelSvc) {},
+			setupPR: func(pr *fakeProviderRepoForModelSvc) {},
+			wantErr:    true,
+			wantErrMsg: "manual mode requires input_price > 0",
+		},
+		{
+			name:        "catalog→manual切换携带有效价格",
+			description: "从 catalog 切到 manual 且同时设置有效价格应成功",
+			existing: &model.Model{
+				ID: modelID, Name: "test", ProviderID: providerID,
+				PriceMode: "catalog", InputPrice: 0, OutputPrice: 0,
+			},
+			input: service.UpdateModelInput{
+				PriceMode: strPtr("manual"), InputPrice: floatPtr(1.5), OutputPrice: floatPtr(3.0),
+			},
+			setupMR: func(mr *fakeModelRepoForModelSvc) {},
+			setupPR: func(pr *fakeProviderRepoForModelSvc) {},
+			wantErr:  false,
+			wantMode: "manual",
+		},
+		{
+			name:        "manual→catalog切换清除reasoning/cached",
+			description: "从 manual 切到 catalog 时应清空 ReasoningPrice 和 CachedPrice",
+			existing: &model.Model{
+				ID: modelID, Name: "test", ProviderID: providerID,
+				PriceMode: "manual", InputPrice: 1.0, OutputPrice: 2.0,
+				ReasoningPrice: floatPtr(5.0), CachedPrice: floatPtr(2.5),
+			},
+			input:   service.UpdateModelInput{PriceMode: strPtr("catalog")},
+			setupMR: func(mr *fakeModelRepoForModelSvc) {},
+			setupPR: func(pr *fakeProviderRepoForModelSvc) {},
+			wantErr:  false,
+			wantMode: "catalog",
+			wantCheck: func(t *testing.T, result *model.Model) {
+				assert.Nil(t, result.ReasoningPrice, "manual→catalog 应清空 ReasoningPrice")
+				assert.Nil(t, result.CachedPrice, "manual→catalog 应清空 CachedPrice")
+			},
+		},
+		{
+			name:        "price_mode不传时保持原值",
+			description: "不传 PriceMode 时 model 应保持原有 price_mode",
+			existing: &model.Model{
+				ID: modelID, Name: "test", ProviderID: providerID,
+				PriceMode: "manual", InputPrice: 1.0, OutputPrice: 2.0,
+			},
+			input:   service.UpdateModelInput{Name: "new-name"},
+			setupMR: func(mr *fakeModelRepoForModelSvc) {},
+			setupPR: func(pr *fakeProviderRepoForModelSvc) {},
+			wantErr:  false,
+			wantMode: "manual",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mr := &fakeModelRepoForModelSvc{}
+			pr := &fakeProviderRepoForModelSvc{}
+			mr.getByIDFunc = func(_ uuid.UUID) (*model.Model, error) {
+				clone := *tt.existing
+				return &clone, nil
+			}
+			tt.setupMR(mr)
+			tt.setupPR(pr)
+			svc := service.NewModelService(mr, pr, nil)
+
+			result, err := svc.UpdateModel(modelID, tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrMsg)
+				assert.Nil(t, result)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				assert.Equal(t, tt.wantMode, result.PriceMode)
+				if tt.wantCheck != nil {
+					tt.wantCheck(t, result)
+				}
+			}
 		})
 	}
 }

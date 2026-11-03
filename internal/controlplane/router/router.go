@@ -61,6 +61,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	// 初始化依赖
 	providerRepo := repository.NewProviderRepo(db)
 	modelRepo := repository.NewModelRepo(db)
+	pricingSvc := service.NewPricingService(modelRepo)
 	defRepo := repository.NewProviderDefinitionRepo(db)
 	modelTagRepo := repository.NewModelTagRepo(db)
 	announcementRepo := repository.NewAnnouncementRepo(db)
@@ -126,6 +127,7 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 
 	keyHandler := handler.NewKeyHandler(keySvc)
 	settingsHandler := handler.NewSettingsHandler(settingsSvc)
+	pricingHandler := handler.NewPricingHandler(pricingSvc, modelRepo)
 	opencodeConfigHandler := handler.NewOpencodeConfigHandler(rdb, settingsSvc)
 
 	// 模型 Catalog（D1: LiteLLM 单源；D3: bundled fallback；D4: 启动异步首刷 + 24h cron + 手动）
@@ -265,8 +267,6 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		adminGroup.GET("/keys/:id/opencode-config/status", opencodeConfigHandler.GetStatus)
 		adminGroup.GET("/model-catalog/by-source", catalogHandler.GetBySource)
 		adminGroup.POST("/model-catalog/sync", catalogHandler.Sync)
-		adminGroup.GET("/model-catalog/diff", catalogHandler.Diff)
-		adminGroup.POST("/model-catalog/apply-diff", catalogHandler.ApplyDiff)
 		adminGroup.POST("/model-catalog/auto-bind", catalogHandler.AutoBind)
 		adminGroup.GET("/model-catalog/binding-stats", catalogHandler.BindingStats)
 		adminGroup.GET("/model-catalog/sync-status", catalogHandler.SyncStatus)
@@ -318,6 +318,7 @@ internalGroup.GET("/models/available", internalHandler.ListAvailableModels)
 	internalGroup.POST("/auth/verify-key", keyHandler.VerifyKey)
 	internalGroup.GET("/keys/:id/groups", internalHandler.GetKeyGroups)
 	internalGroup.GET("/groups/model-info", modelInfoHandler.GetGroupModelInfo)
+	internalGroup.GET("/pricing", pricingHandler.GetAllPricing)
 	}
 
 	return r

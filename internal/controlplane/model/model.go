@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +31,9 @@ type Model struct {
 	MaxOutputTokens     int        `gorm:"default:0" json:"max_output_tokens"`
 	InputPrice          float64    `gorm:"type:decimal(14,6);default:0" json:"input_price"`
 	OutputPrice         float64    `gorm:"type:decimal(14,6);default:0" json:"output_price"`
+	PriceMode           string     `gorm:"type:varchar(20);not null;default:catalog" json:"price_mode"`
+	ReasoningPrice      *float64   `gorm:"type:decimal(14,6)" json:"reasoning_price,omitempty"`
+	CachedPrice         *float64   `gorm:"type:decimal(14,6)" json:"cached_price,omitempty"`
 	Weight              int        `gorm:"not null;default:1" json:"weight"`
 	CatalogID           *uuid.UUID `gorm:"type:uuid;index:idx_models_catalog_id" json:"catalog_id,omitempty"`
 	CtxOverridden       bool       `gorm:"not null;default:false" json:"ctx_overridden"`
@@ -47,4 +51,19 @@ type Model struct {
 
 func (Model) TableName() string {
 	return "models"
+}
+
+func (m *Model) Validate() error {
+	if m.PriceMode != PriceModeCatalog && m.PriceMode != PriceModeManual {
+		return fmt.Errorf("price_mode must be 'catalog' or 'manual'")
+	}
+	if m.PriceMode == PriceModeManual {
+		if m.InputPrice <= 0 {
+			return fmt.Errorf("manual mode requires input_price > 0")
+		}
+		if m.OutputPrice <= 0 {
+			return fmt.Errorf("manual mode requires output_price > 0")
+		}
+	}
+	return nil
 }

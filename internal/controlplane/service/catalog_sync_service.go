@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -325,6 +324,8 @@ func parsedToModel(p *ModelCatalogParsed, source string, syncedAt time.Time) *mo
 		OutputPricePerMillion:           p.OutputPricePerMillion,
 		CacheReadPrice:                  p.CacheReadPrice,
 		CacheWritePrice:                 p.CacheWritePrice,
+		ReasoningPrice:                  p.ReasoningPrice,
+		CachedPrice:                     p.CachedPrice,
 		TierThreshold:                   p.TierThreshold,
 		InputPriceAboveTier:             p.InputPriceAboveTier,
 		OutputPriceAboveTier:            p.OutputPriceAboveTier,
@@ -392,161 +393,6 @@ func (s *CatalogSyncService) ApplyAutoUpdates(ctx context.Context) (int, error) 
 			}
 			updated++
 		}
-	}
-	return updated, nil
-}
-
-// PriceDiffEntry 给 admin 看哪些 model 的价格和 catalog 不一致。
-//
-// 字段名严格对齐 contracts.json -> /api/v1/model-catalog/diff 的 response_item_fields，
-// 前端 web/src/types/catalog.ts PriceDiffEntry 也据此生成。
-type PriceDiffEntry struct {
-	ModelID                uuid.UUID  `json:"model_id"`
-	ModelName              string     `json:"model_name"`
-	CatalogID              uuid.UUID  `json:"catalog_id"`
-	CatalogSourceModelID   string     `json:"catalog_source_model_id"`
-	LocalInputPrice        float64    `json:"local_input_price"`
-	LocalOutputPrice       float64    `json:"local_output_price"`
-	CatalogInputPrice      float64    `json:"catalog_input_price"`
-	CatalogOutputPrice     float64    `json:"catalog_output_price"`
-	IsOverridden           bool       `json:"is_overridden"`
-	InputDeltaPct          float64    `json:"input_delta_pct"`
-	OutputDeltaPct         float64    `json:"output_delta_pct"`
-	CatalogDeprecationDate *time.Time `json:"catalog_deprecation_date"`
-}
-
-// ComputePriceDiff 仅返回与 catalog 有实际差异的 model：价格不一致 或 catalog 已标记 deprecation_date。
-//
-// 与 contracts.json $comment_diff_filter 对齐：无差异时 data 为空数组。
-func (s *CatalogSyncService) ComputePriceDiff(ctx context.Context) ([]PriceDiffEntry, error) {
-	if s.modelRepo == nil {
-		return nil, errors.New("model repo not configured")
-	}
-	models, err := s.modelRepo.ListByCatalogID()
-	if err != nil {
-		return nil, fmt.Errorf("list models with catalog_id: %w", err)
-	}
-
-	catalogIDs := make([]uuid.UUID, 0, len(models))
-	for i := range models {
-		if models[i].CatalogID != nil {
-			catalogIDs = append(catalogIDs, *models[i].CatalogID)
-		}
-	}
-	catalogMap, err := s.repo.GetByIDs(catalogIDs)
-	if err != nil {
-		return nil, fmt.Errorf("batch fetch catalogs: %w", err)
-	}
-
-	out := make([]PriceDiffEntry, 0, len(models))
-	for i := range models {
-		m := models[i]
-		if m.CatalogID == nil {
-			continue
-		}
-		cat := catalogMap[*m.CatalogID]
-		if cat == nil {
-			continue
-		}
-		priceMismatch := !floatEqual(m.InputPrice, cat.InputPricePerMillion) ||
-			!floatEqual(m.OutputPrice, cat.OutputPricePerMillion)
-		// 过滤掉无任何差异的 model（既无价差也无 deprecation 提醒）。
-		if !priceMismatch && cat.DeprecationDate == nil {
-			continue
-		}
-		// is_overridden 语义："admin 曾经主动设定过价格，现在与目录不一致"。
-		//
-		// 区分两种"价格不一致"场景：
-		//   - local = $0/$0 → 从未设置，属于"价格未设"，应提示"未设 → 跟随"
-		//   - local > 0 但与 catalog 不同 → admin 之前 apply 过、后来 catalog 又更新了，
-		//     属于真正的"已脱离目录"（主动背离），显示"已脱离目录"标签
-		//
-		// 不引入新 DB 列（price_overridden），用 local>0 作为"曾经设置过"的代理。
-		// 如果后续需要精确追踪每一次手动改价，再加 price_overridden boolean 列。
-		priceWasSet := m.InputPrice > 0 || m.OutputPrice > 0
-		out = append(out, PriceDiffEntry{
-			ModelID:                m.ID,
-			ModelName:              m.Name,
-			CatalogID:              cat.ID,
-			CatalogSourceModelID:   cat.SourceModelID,
-			LocalInputPrice:        m.InputPrice,
-			LocalOutputPrice:       m.OutputPrice,
-			CatalogInputPrice:      cat.InputPricePerMillion,
-			CatalogOutputPrice:     cat.OutputPricePerMillion,
-			IsOverridden:           priceMismatch && priceWasSet,
-			InputDeltaPct:          deltaPct(m.InputPrice, cat.InputPricePerMillion),
-			OutputDeltaPct:         deltaPct(m.OutputPrice, cat.OutputPricePerMillion),
-			CatalogDeprecationDate: cat.DeprecationDate,
-		})
-	}
-	return out, nil
-}
-
-// deltaPct 以 from 为基准计算到 to 的相对变化百分比，from==0 时返回 0 避免 NaN/Inf。
-// 结果保留 2 位小数，便于前端直接展示。
-func deltaPct(from, to float64) float64 {
-	if from == 0 {
-		return 0
-	}
-	pct := (to - from) / from * 100
-	// 截断到 2 位小数。
-	return math.Round(pct*100) / 100
-}
-
-func floatEqual(a, b float64) bool {
-	const eps = 1e-9
-	d := a - b
-	if d < 0 {
-		d = -d
-	}
-	return d < eps
-}
-
-// ApplyPriceDiff 把传入 model_ids 的 input_price/output_price 同步为 catalog 当前值。
-//
-// 容错：任意一个 ID 找不到就立即返回错误（不做"部分成功"，admin 一目了然）。
-func (s *CatalogSyncService) ApplyPriceDiff(ctx context.Context, ids []uuid.UUID) (int, error) {
-	if s.modelRepo == nil {
-		return 0, errors.New("model repo not configured")
-	}
-	if len(ids) == 0 {
-		return 0, errors.New("no model ids provided")
-	}
-
-	modelMap, err := s.modelRepo.GetByIDs(ids)
-	if err != nil {
-		return 0, fmt.Errorf("batch fetch models: %w", err)
-	}
-
-	catalogIDs := make([]uuid.UUID, 0, len(ids))
-	for _, id := range ids {
-		m := modelMap[id]
-		if m == nil {
-			return 0, fmt.Errorf("model %s not found", id)
-		}
-		if m.CatalogID == nil {
-			return 0, fmt.Errorf("model %s has no catalog link", id)
-		}
-		catalogIDs = append(catalogIDs, *m.CatalogID)
-	}
-	catalogMap, err := s.repo.GetByIDs(catalogIDs)
-	if err != nil {
-		return 0, fmt.Errorf("batch fetch catalogs: %w", err)
-	}
-
-	updated := 0
-	for _, id := range ids {
-		m := modelMap[id]
-		cat := catalogMap[*m.CatalogID]
-		if cat == nil {
-			return updated, fmt.Errorf("catalog for model %s not found", id)
-		}
-		m.InputPrice = cat.InputPricePerMillion
-		m.OutputPrice = cat.OutputPricePerMillion
-		if err := s.modelRepo.Update(m); err != nil {
-			return updated, fmt.Errorf("update model %s: %w", id, err)
-		}
-		updated++
 	}
 	return updated, nil
 }
@@ -744,7 +590,7 @@ func (s *CatalogSyncService) AutoBind(ctx context.Context) (*AutoBindResult, err
 //   - BoundCount   > 0
 //     且 diff 为空          → 已绑定的模型与目录完全一致，无差异需要处理。
 //
-// 不掺 diff 行数：diff 仍走 ComputePriceDiff，避免一个接口承担过多语义。
+// 不掺 diff 行数：避免一个接口承担过多语义。
 type BindingStats struct {
 	CatalogTotal int64 `json:"catalog_total"`
 	ModelTotal   int64 `json:"model_total"`

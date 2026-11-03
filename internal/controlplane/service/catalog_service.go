@@ -9,9 +9,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// CatalogService 是 handler 接到的"门面"，把 search / lookup / sync / diff 集中暴露。
+// CatalogService 是 handler 接到的"门面"，把 search / lookup / sync 集中暴露。
 //
-// 它内部组合 ModelCatalogRepo（读写） + CatalogSyncService（远程同步 + diff 计算），
+// 它内部组合 ModelCatalogRepo（读写） + CatalogSyncService，
 // 让 handler 只依赖一个接口、一个对象。
 type CatalogService struct {
 	repo     *repository.ModelCatalogRepo
@@ -63,14 +63,6 @@ func (s *CatalogService) SyncStatus(ctx context.Context) (*SyncStatus, error) {
 	return s.syncSvc.SyncStatus(ctx)
 }
 
-func (s *CatalogService) ComputePriceDiff(ctx context.Context) ([]PriceDiffEntry, error) {
-	return s.syncSvc.ComputePriceDiff(ctx)
-}
-
-func (s *CatalogService) ApplyPriceDiff(ctx context.Context, ids []uuid.UUID) (int, error) {
-	return s.syncSvc.ApplyPriceDiff(ctx, ids)
-}
-
 // AutoBind 将本地未绑定 model 按 name/upstream_model_id 严格同名匹配到 catalog 条目，
 // 唯一命中直接绑定，多重命中作为候选返回让 admin 选。
 func (s *CatalogService) AutoBind(ctx context.Context) (*AutoBindResult, error) {
@@ -78,7 +70,7 @@ func (s *CatalogService) AutoBind(ctx context.Context) (*AutoBindResult, error) 
 }
 
 // BindingStats 返回 catalog 条目总数与本地模型的绑定分布，供前端 CatalogSyncPage
-// 在 diff 为空时做空状态语义判定（目录空 / 本地无 model / 未绑定 / 全部绑定）。
+// 做空状态语义判定（目录空 / 本地无 model / 未绑定 / 全部绑定）。
 func (s *CatalogService) BindingStats(ctx context.Context) (*BindingStats, error) {
 	return s.syncSvc.BindingStats(ctx)
 }

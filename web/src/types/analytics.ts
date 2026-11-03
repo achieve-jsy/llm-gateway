@@ -39,6 +39,10 @@ export interface InsightMetrics {
   budget_pct: number
   high_tier_pct: number
   cache_rate: number
+  /** 区间预算(美元,折算后);未配置时为 0 */
+  budget?: number
+  /** 预算是否已配置;false 时前端显示「未配置」且 verdict 不判超支 */
+  budget_configured?: boolean
 }
 
 /** 洞察响应 */

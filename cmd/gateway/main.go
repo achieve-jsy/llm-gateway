@@ -26,7 +26,6 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/config"
 	"github.com/example/llm-gateway/internal/gateway/infra"
-	"github.com/example/llm-gateway/internal/protocol"
 	"github.com/example/llm-gateway/internal/gateway/loader"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	gatewaymodel "github.com/example/llm-gateway/internal/gateway/model"
@@ -36,6 +35,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/redact"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
 	"github.com/example/llm-gateway/internal/gateway/server"
+	"github.com/example/llm-gateway/internal/protocol"
 	ta "github.com/example/llm-gateway/internal/tracearchive"
 
 	// Register all GoModel provider adapters.
@@ -100,6 +100,12 @@ func main() {
 		PerKey:      cfg.Protocol.PerKey,
 		PerEntry:    cfg.Protocol.PerEntry,
 	})
+	// 必须在这里失败退出：LoadPolicy 出错时返回 nil，而 nil policy 会让
+	// nativeRelayEnabled 恒 false —— 原生旁路整体静默关闭，日志里一个字都没有。
+	// 下面的 redactEngine 初始化会重用 err，检查一漏就再也发现不了。
+	if err != nil {
+		log.Fatalf("failed to load protocol policy: %v", err)
+	}
 
 	// 按配置覆盖 call_traces 正文裁剪上限（默认不截断文本上下文，供用量/语义分析报告使用）
 	middleware.SetTraceSanitizeLimits(middleware.TraceSanitizeLimits{

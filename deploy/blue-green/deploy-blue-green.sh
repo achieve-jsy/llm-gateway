@@ -447,6 +447,19 @@ stop_env() {
     local timeout="${2:-600}"
     log "Stopping ${color} environment (timeout ${timeout}s)..."
     docker compose -f "${DEPLOY_DIR}/docker-compose.${color}.yml" -p "llm-${color}" down --timeout "$timeout"
+
+    # compose down 只删「属于本 project」的容器（靠 com.docker.compose.project label 识别）。
+    # 历史上手工创建、或被旧脚本用别的 project 名创建的同名容器没有这些 label，会被静默跳过，
+    # 随后 up 时撞名失败：Container name "/llm-<color>-gateway" is already in use。
+    # 这里按固定容器名兜底删除，保证 start_env 能创建成功。
+    # 只动目标颜色的容器（此时流量还在对端颜色上），不碰 active 环境。
+    local c
+    for c in "llm-$color-gateway" "llm-$color-control-plane"; do
+        if docker ps -a --format '{{.Names}}' | grep -qx "$c"; then
+            log "  removing leftover container $c (outside compose project)"
+            docker rm -f "$c" >/dev/null 2>&1 || true
+        fi
+    done
 }
 
 # 下线首次迁移前的旧（非蓝绿）容器，按名字停止并删除

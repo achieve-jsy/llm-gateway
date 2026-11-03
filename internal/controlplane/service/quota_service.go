@@ -369,7 +369,7 @@ func (s *QuotaService) buildSnapshot(ctx context.Context) (*QuotaSnapshotData, e
 	}
 	// 加载当前生效的豁免
 	var exemptions []corequota.QuotaExemption
-	if err := s.db.WithContext(ctx).Where("expires_at > ?", time.Now()).Find(&exemptions).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("expires_at > ?", time.Now().UTC()).Find(&exemptions).Error; err != nil {
 		return nil, fmt.Errorf("load exemptions: %w", err)
 	}
 	snap.Exemptions = make([]QuotaExemptionEntry, 0, len(exemptions))

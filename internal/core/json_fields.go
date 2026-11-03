@@ -112,6 +112,42 @@ func (fields UnknownJSONFields) Lookup(key string) json.RawMessage {
 	return nil
 }
 
+// Delete removes the specified key from the unknown fields.
+func (fields *UnknownJSONFields) Delete(key string) {
+	if fields.IsEmpty() {
+		return
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(fields.raw))
+	tok, err := dec.Token()
+	if err != nil || tok.(json.Delim) != '{' {
+		return
+	}
+
+	remaining := make(map[string]json.RawMessage)
+	for dec.More() {
+		keyToken, err := dec.Token()
+		if err != nil {
+			return
+		}
+		fieldName := keyToken.(string)
+
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return
+		}
+		if fieldName != key {
+			remaining[fieldName] = value
+		}
+	}
+
+	if len(remaining) == 0 {
+		fields.raw = json.RawMessage("{}")
+		return
+	}
+	*fields = UnknownJSONFieldsFromMap(remaining)
+}
+
 // IsEmpty reports whether the container has no stored fields.
 func (fields UnknownJSONFields) IsEmpty() bool {
 	trimmed := bytes.TrimSpace(fields.raw)

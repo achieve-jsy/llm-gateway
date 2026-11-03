@@ -28,6 +28,13 @@
 
 所有价格字段使用 **USD per 1,000,000 tokens**，与 LiteLLM Catalog 一致。
 
+**口径澄清（媒体计费）**：per-1M-tokens 只约束 **token 类**价格字段（`*_price_per_million`、
+`input_per_mtok`/`output_per_mtok`、缓存与阶梯价）。**媒体类**价格不折算成 token 价，直接复用
+`core.ModelPricing` 既有的非 token 字段族：per-image（`PerImage`/`InputPerImage`）、
+per-second（`PerSecondInput`/`PerSecondOutput`）、per-request（`PerRequest`），单位为
+**USD per 张 / 秒 / 次**的原值，落在 `model_catalog` 对应的同名列上。因此媒体计费与
+本条铁律不冲突，后来者**不要**把媒体单价换算成每百万 token 的等价价。
+
 ## 数据库铁律
 
 ### D1: 迁移文件只增不改

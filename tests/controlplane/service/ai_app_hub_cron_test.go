@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,4 +105,42 @@ func TestLoadSyncScheduleFallsBackOnBadTimezone(t *testing.T) {
 	s, err := service.LoadSyncSchedule(func(k string) (string, bool) { v, ok := env[k]; return v, ok })
 	require.NoError(t, err)
 	require.NotNil(t, s, "时区坏掉不能阻止调度启动，回退 time.Local")
+}
+func newSyncStateStoreForTest(t *testing.T) (*service.SyncStateStore, *miniredis.Miniredis) {
+	t.Helper()
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(mr.Close)
+	return service.NewSyncStateStore(redis.NewClient(&redis.Options{Addr: mr.Addr()})), mr
+}
+
+func TestSyncStateStoreLastSuccessRoundTrip(t *testing.T) {
+	store, _ := newSyncStateStoreForTest(t)
+	ctx := context.Background()
+
+	_, ok, err := store.LastSuccess(ctx)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	want := time.Date(2026, 11, 2, 3, 0, 0, 0, time.UTC)
+	require.NoError(t, store.MarkSuccess(ctx, want))
+
+	got, ok, err := store.LastSuccess(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.WithinDuration(t, want, got, time.Second)
+}
+
+func TestSyncStateStoreLockIsExclusiveAndOwnerScoped(t *testing.T) {
+	store, _ := newSyncStateStoreForTest(t)
+	ctx := context.Background()
+
+	release, ok := store.TryLock(ctx)
+	require.True(t, ok)
+	_, second := store.TryLock(ctx)
+	require.False(t, second, "同一时刻只允许一个持有者")
+
+	release()
+	_, third := store.TryLock(ctx)
+	require.True(t, third, "释放后可以重新获取")
 }

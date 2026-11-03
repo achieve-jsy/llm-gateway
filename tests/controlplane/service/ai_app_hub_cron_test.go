@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -131,17 +132,19 @@ func TestSyncStateStoreLockIsExclusiveAndOwnerScoped(t *testing.T) {
 	require.True(t, third, "释放后可以重新获取")
 }
 type flakyRunner struct {
-	calls int
-	errs  []error // 按调用序号返回；耗尽后返回 nil
+	calls atomic.Int32 // 后台 goroutine 也在调，读写都要原子
+	errs  []error      // 按调用序号返回；耗尽后返回 nil
 }
 
 func (r *flakyRunner) Sync(context.Context, service.SyncScope) (service.HubSyncResult, error) {
-	r.calls++
-	if r.calls-1 < len(r.errs) && r.errs[r.calls-1] != nil {
-		return service.HubSyncResult{}, r.errs[r.calls-1]
+	n := int(r.calls.Add(1))
+	if n-1 < len(r.errs) && r.errs[n-1] != nil {
+		return service.HubSyncResult{}, r.errs[n-1]
 	}
 	return service.HubSyncResult{Scope: "all"}, nil
 }
+
+func (r *flakyRunner) count() int { return int(r.calls.Load()) }
 
 func syncScheduleForTest(t *testing.T) *service.SyncSchedule {
 	t.Helper()
@@ -178,7 +181,7 @@ func TestRunSyncCycleRunsOnFirstStart(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ran)
 	require.Equal(t, 1, attempts)
-	require.Equal(t, 1, runner.calls, "首次没有 last_success，立即跑一次")
+	require.Equal(t, 1, runner.count(), "首次没有 last_success，立即跑一次")
 
 	_, ok, err := store.LastSuccess(context.Background())
 	require.NoError(t, err)
@@ -188,7 +191,7 @@ func TestRunSyncCycleRunsOnFirstStart(t *testing.T) {
 	ran, _, err = service.RunSyncCycle(context.Background(), opts)
 	require.NoError(t, err)
 	require.False(t, ran)
-	require.Equal(t, 1, runner.calls)
+	require.Equal(t, 1, runner.count())
 }
 
 func TestRunSyncCycleCatchesUpAfterRestart(t *testing.T) {
@@ -212,7 +215,7 @@ func TestRunSyncCycleSkipsWhenLockHeld(t *testing.T) {
 	ran, _, err := service.RunSyncCycle(context.Background(), opts)
 	require.NoError(t, err)
 	require.False(t, ran)
-	require.Zero(t, runner.calls)
+	require.Zero(t, runner.count())
 }
 
 func TestRunSyncCycleRetriesThenSucceeds(t *testing.T) {
@@ -224,7 +227,7 @@ func TestRunSyncCycleRetriesThenSucceeds(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ran)
 	require.Equal(t, 3, attempts)
-	require.Equal(t, 3, runner.calls)
+	require.Equal(t, 3, runner.count())
 	_, ok, err := store.LastSuccess(context.Background())
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -252,7 +255,7 @@ func TestRunSyncCycleSkipsRetryWhenSyncInProgress(t *testing.T) {
 	ran, _, err := service.RunSyncCycle(context.Background(), opts)
 	require.NoError(t, err, "手动触发正在进行不算失败")
 	require.False(t, ran)
-	require.Equal(t, 1, runner.calls, "不重试")
+	require.Equal(t, 1, runner.count(), "不重试")
 	_, ok, _ := store.LastSuccess(context.Background())
 	require.False(t, ok)
 }
@@ -269,11 +272,11 @@ func TestStartSyncCronTicksAndStopsOnCancel(t *testing.T) {
 		Now:   func() time.Time { return now },
 		Sleep: func(context.Context, time.Duration) error { return nil },
 	})
-	require.Eventually(t, func() bool { return runner.calls >= 1 }, time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return runner.count() >= 1 }, time.Second, 5*time.Millisecond)
 
 	cancel()
 	time.Sleep(30 * time.Millisecond)
-	stopped := runner.calls
+	stopped := runner.count()
 	time.Sleep(60 * time.Millisecond)
-	require.Equal(t, stopped, runner.calls)
+	require.Equal(t, stopped, runner.count())
 }

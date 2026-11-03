@@ -24,6 +24,8 @@ export interface UsageFilterFields {
   keyType: boolean
   dept: boolean
   studio: boolean
+  /** 模型等级（L3-Premium / L2-Advanced / L1-Basic / unclassified） */
+  tier: boolean
 }
 
 const HTTP_STATUS: StatusOption[] = [
@@ -71,11 +73,14 @@ export function filterFieldsFor(
       keyType: false,
       dept: false,
       studio: false,
+      tier: false,
     }
   }
 
   if (role === 'dashboard') {
     // 看板：模型/状态/用户/Key 类型常驻；Video 再加渠道
+    // 组织维度（部门/事业部）与模型等级进「更多」——对齐原型三组筛选（模型/等级/部门），
+    // 联动 AI 分析卡 scope（model > dept > tier）与 model-hourly/model-users 端点。
     return {
       group: false,
       model: true,
@@ -88,8 +93,9 @@ export function filterFieldsFor(
       moreStatus: false,
       user: !compact,
       keyType: !compact,
-      dept: false,
-      studio: false,
+      dept: true,
+      studio: true,
+      tier: true,
     }
   }
 
@@ -108,6 +114,7 @@ export function filterFieldsFor(
     keyType: true,
     dept: true,
     studio: true,
+    tier: false,
   }
 }
 
@@ -128,6 +135,7 @@ export function countActiveFilters(
   if (f.keyType) keys.push('keyType')
   if (f.dept) keys.push('deptName')
   if (f.studio) keys.push('studioId')
+  if (f.tier) keys.push('tier')
   return keys.filter(k => !!values[k]).length
 }
 

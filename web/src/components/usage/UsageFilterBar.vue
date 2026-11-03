@@ -241,6 +241,20 @@
           <el-option v-for="d in deptOptions" :key="d.value" :label="d.label" :value="d.value" />
         </el-select>
       </div>
+      <div v-if="fields.tier" class="ufb-chip">
+        <span class="ufb-label">等级</span>
+        <el-select
+          v-model="tier"
+          placeholder="全部"
+          clearable
+          size="small"
+          class="ufb-select"
+          @change="emit('change')"
+          @clear="emit('change')"
+        >
+          <el-option v-for="o in tierOptions" :key="o.value" :label="o.label" :value="o.value" />
+        </el-select>
+      </div>
       <div v-if="fields.studio" class="ufb-chip">
         <span class="ufb-label">事业部</span>
         <el-select
@@ -269,6 +283,7 @@ import {
   type UsageCapability,
   type UsagePageRole,
 } from '@/utils/usageFilterConfig'
+import { TIER_OPTIONS } from '@/utils/analytics-tier'
 
 defineOptions({ name: 'UsageFilterBar' })
 
@@ -305,6 +320,9 @@ const provider = defineModel<string>('provider', { default: '' })
 const userName = defineModel<string>('userName', { default: '' })
 const deptName = defineModel<string>('deptName', { default: '' })
 const studioId = defineModel<string>('studioId', { default: '' })
+const tier = defineModel<string>('tier', { default: '' })
+
+const tierOptions = TIER_OPTIONS
 
 const emit = defineEmits<{
   applyPreset: [preset: { label: string; days: number }]
@@ -326,7 +344,7 @@ const statusOptions = computed(() => statusOptionsFor(props.capability))
 const hasMoreFields = computed(() => {
   const f = fields.value
   // user / keyType 已常驻；「更多」只收低频项
-  return f.moreModel || f.moreProvider || f.moreStatus || f.keyName || f.dept || f.studio
+  return f.moreModel || f.moreProvider || f.moreStatus || f.keyName || f.dept || f.tier || f.studio
 })
 
 watch(() => props.capability, () => {

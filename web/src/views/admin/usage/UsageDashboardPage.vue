@@ -17,8 +17,13 @@
       v-model:key-type="filterKeyType"
       v-model:user-name="filterUserName"
       v-model:provider="filterProvider"
+      v-model:tier="filterTier"
+      v-model:dept-name="filterDept"
+      v-model:studio-id="filterStudio"
       :model-options="modelOptions"
       :provider-options="providerOptions"
+      :dept-options="deptOptions"
+      :studio-options="studioOptions"
       :active-count="activeFilterCount"
       @apply-preset="applyPreset"
       @change="onFilterChange"
@@ -55,6 +60,7 @@
     </template>
     <template v-else>
       <KpiCards
+        id="sec-overview"
         :summary="summary"
         :loading="summaryLoading"
         :currency="currency"
@@ -66,6 +72,13 @@
         :current-scope="currentScope"
         :avg-cost-per-call="avgCostPerCall"
         :endpoint-type="logEndpointType"
+      />
+      <AiAnalysisCard
+        v-if="!isCompactUsageTab"
+        :scope-label="insightScopeLabel"
+        :segments="insightSegments"
+        :loading="insightLoading"
+        @drill="handleAiDrill"
       />
       <TrendChartSection
         :loading="trendLoading"
@@ -89,6 +102,7 @@
       />
       <div v-if="!isCompactUsageTab" class="ud-main-row">
         <RankingTable
+          id="sec-dept"
           :loading="summaryLoading"
           :displayed-breakdown="displayedBreakdown"
           :current-scope="currentScope"
@@ -113,6 +127,7 @@
           @user-click="handleUserClick"
         />
         <ModelChartSection
+          id="sec-models"
           :loading="modelsLoading"
           :models-data="modelsData"
           v-model:model-metric="modelMetric"
@@ -157,6 +172,7 @@
       </Transition>
       <UsageLogSection
         ref="logSectionRef"
+        id="sec-users"
         title="调用明细"
         api-path="/api/v1/usage/scoped/logs"
         trace-api-path="/api/v1/usage/logs"
@@ -178,6 +194,7 @@ import CostBreakdownSection from './components/CostBreakdownSection.vue'
 import RankingTable from './components/RankingTable.vue'
 import ModelChartSection from './components/ModelChartSection.vue'
 import LongTailAlerts from './components/LongTailAlerts.vue'
+import AiAnalysisCard from './components/AiAnalysisCard.vue'
 import UsageLogSection from '@/components/usage/UsageLogSection.vue'
 import UsageFilterBar from '@/components/usage/UsageFilterBar.vue'
 import SeedanceVideoTabs from '@/components/usage/SeedanceVideoTabs.vue'
@@ -191,6 +208,15 @@ import http from '@/services/http'
 import { useSettingsStore } from '@/stores/settings'
 import { fetchUsersRanking } from '@/api/dashboard-enhanced'
 import type { UserRankRow } from '@/types/dashboard-enhanced'
+import { usageApi } from '@/api/usage'
+import type {
+  InsightCardDrillPayload,
+  InsightCardSegment,
+  InsightResponse,
+  InsightScope,
+  Segment,
+} from '@/types/analytics'
+import { tierLabel } from '@/utils/analytics-tier'
 import { type Currency, currencySymbol, convertCost } from '@/utils/currency'
 import type { UsageEndpointType } from '@/utils/usage-endpoint'
 import {
@@ -249,7 +275,12 @@ const filterStatus   = ref('')
 const filterKeyType  = ref('')
 const filterEndpoint = ref('')
 const filterProvider = ref('')
+const filterTier     = ref('')
+const filterDept     = ref('')
+const filterStudio   = ref('')
 const providerOptions = ref<string[]>([])
+const deptOptions = ref<Array<{ label: string; value: string }>>([])
+const studioOptions = ref<Array<{ label: string; value: string }>>([])
 const activeTab = ref('chat')
 const videoRefreshToken = ref(0)
 const videoModelParam = computed(() =>
@@ -335,6 +366,9 @@ const activeFilterCount = computed(() =>
     status: filterStatus.value,
     keyType: filterKeyType.value,
     provider: filterProvider.value,
+    tier: filterTier.value,
+    deptName: filterDept.value,
+    studioId: filterStudio.value,
   }),
 )
 
@@ -345,6 +379,9 @@ function clearFilters() {
   filterKeyType.value  = ''
   filterEndpoint.value = ''
   filterProvider.value = ''
+  filterTier.value     = ''
+  filterDept.value     = ''
+  filterStudio.value   = ''
   if (breadcrumbs.value[breadcrumbs.value.length - 1]?.scope === 'user') {
     breadcrumbs.value = []
   }
@@ -355,6 +392,14 @@ async function loadProviderOptions() {
   try {
     const r = await http.get('/api/v1/usage/options')
     providerOptions.value = r.data.providers || []
+    deptOptions.value = (r.data.depts || []).map((d: any) => ({
+      label: d.name || d.id,
+      value: d.id,
+    }))
+    studioOptions.value = (r.data.studios || []).map((s: any) => ({
+      label: s.name || s.id,
+      value: s.id,
+    }))
   } catch { /* ignore */ }
 }
 
@@ -786,6 +831,110 @@ async function loadModels() {
   }
 }
 
+// ── AI 分析卡 ────────────────────────────────────────────────
+// 三段式（事实 / 原因 / 建议）随筛选联动：scope 推导对齐原型 currentScope()，
+// 请求 /api/v1/analytics/insight，按「scope.kind + key + 日期区间」缓存，300ms 防抖合并。
+const insightLoading = ref(false)
+const insightSegments = ref<InsightCardSegment[]>([])
+const loadedInsightLabel = ref('全司')
+const insightCache = new Map<string, InsightResponse>()
+
+/** 对齐原型 currentScope()：model > dept > tier > company */
+const currentInsightScope = computed<InsightScope>(() => {
+  if (filterModel.value) return { kind: 'model', key: filterModel.value }
+  const last = breadcrumbs.value[breadcrumbs.value.length - 1]
+  const deptKey = filterDept.value || (last?.scope === 'dept' ? last.name || last.id : '')
+  if (deptKey) return { kind: 'dept', key: deptKey }
+  if (filterTier.value) return { kind: 'tier', key: filterTier.value }
+  return { kind: 'company' }
+})
+
+/** 卡片头部范围标签：请求未返回时先用筛选推导的乐观标签 */
+const insightScopeLabel = computed(() => {
+  const s = currentInsightScope.value
+  if (s.kind === 'model') return `模型：${s.key || ''}`
+  if (s.kind === 'dept') return `部门：${s.key || ''}`
+  if (s.kind === 'tier') return `等级：${tierLabel(s.key || '')}`
+  return loadedInsightLabel.value || '全司'
+})
+
+function insightCacheKey(): string {
+  const s = currentInsightScope.value
+  return `${dateRange.value[0]}~${dateRange.value[1]}|${s.kind}|${s.key || ''}`
+}
+
+/** Segment → 卡片内联 html：文本 + 估算标记 + 下钻锚点（对齐原型 drillHtml） */
+function segmentToHtml(seg: Segment): string {
+  const parts: string[] = [seg.text]
+  if (seg.est) parts.push('<span class="ai-flag est">估</span>')
+  if (seg.drill) {
+    const d = seg.drill
+    const attrs = [
+      d.dept ? `data-dept="${d.dept}"` : '',
+      d.model ? `data-model="${d.model}"` : '',
+      `data-scroll="${d.scroll || 'overview'}"`,
+    ].filter(Boolean).join(' ')
+    parts.push(`<a class="ai-drill" ${attrs}>下钻</a>`)
+  }
+  return parts.join(' ')
+}
+
+function applyInsight(resp: InsightResponse) {
+  if (resp.scope?.label) loadedInsightLabel.value = resp.scope.label
+  const facts = (resp.segments?.facts || []).map(segmentToHtml).join(' ')
+  const causes = (resp.segments?.causes || []).map(segmentToHtml).join(' ')
+  const suggestions = (resp.segments?.suggestions || []).map(segmentToHtml).join(' ')
+  const segs: InsightCardSegment[] = [
+    { tag: '事实', html: facts },
+    { tag: '原因', html: causes },
+    { tag: '建议', html: suggestions },
+  ]
+  insightSegments.value = segs.filter(s => s.html.length > 0)
+}
+
+async function loadInsight() {
+  const [start, end] = dateRange.value
+  if (!start || !end) return
+  const key = insightCacheKey()
+  const cached = insightCache.get(key)
+  if (cached) {
+    applyInsight(cached)
+    return
+  }
+  insightLoading.value = true
+  try {
+    const resp = await usageApi.getInsight({ start, end, scope: currentInsightScope.value })
+    insightCache.set(key, resp)
+    applyInsight(resp)
+  } catch (e) {
+    // 后端 insight 未就绪时静默降级：组件展示空态
+    console.warn('Failed to load AI insight:', e)
+    insightSegments.value = []
+  } finally {
+    insightLoading.value = false
+  }
+}
+
+let insightTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleInsight() {
+  if (insightTimer) clearTimeout(insightTimer)
+  insightTimer = setTimeout(() => loadInsight(), 300)
+}
+
+/** 轻量下钻：model → 打开模型面板；dept → 收窄 AI 分析范围；scroll → 滚动到区块 */
+function handleAiDrill(payload: InsightCardDrillPayload) {
+  if (payload.model) jumpToModel(payload.model)
+  if (payload.dept) filterDept.value = payload.dept
+  scrollToAiSection(payload.scroll)
+}
+
+function scrollToAiSection(sec?: string) {
+  const el = document.getElementById('sec-' + (sec || 'overview'))
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+watch([currentInsightScope, dateRange], () => scheduleInsight(), { immediate: true, deep: true })
+
 // ── 调用明细 ──────────────────────────────────────────────────
 const logsLoading = ref(false)
 const logSectionRef = ref<InstanceType<typeof UsageLogSection> | null>(null)
@@ -805,6 +954,8 @@ const logParams = computed(() => {
     p.studio_id = sp.studio_id
   } else {
     if (filterUserName.value) p.user_name = filterUserName.value
+    if (filterDept.value) p.dept_name = filterDept.value
+    if (filterStudio.value) p.studio_id = filterStudio.value
   }
   if (filterModel.value)  p.model_name = filterModel.value
   if (filterStatus.value) p.status     = filterStatus.value

@@ -259,6 +259,18 @@ func main() {
 		},
 		nil,
 	)
+
+	// 媒体准入计价闸门（A2）：开关走配置（MEDIA_REQUIRE_PRICING，默认 true），
+	// 价表复用上面同一份实时 provider 价 —— 保证「准入判有价」与「记账算得出钱」同源。
+	// 媒体 handler（B/C 队）通过 middleware.EnsureMediaPricing / RequireMediaPricing 使用本闸门。
+	mediaPricingGate := middleware.ConfigureMediaPricingGate(middleware.MediaPricingGateConfig{
+		RequirePricing: cfg.Media.RequirePricing,
+		Resolver:       providerPricing,
+	})
+	slog.Info("media pricing gate ready",
+		"require_pricing", mediaPricingGate.RequirePricing(),
+		"env_override", "MEDIA_REQUIRE_PRICING",
+	)
 	var traceWriter *gwobs.TraceWriter
 	// traceBodySpooler 必须在**外层**声明：它的生命周期归关停编排（取消 ctx → 等写入侧
 	// 排空 → Close），不能由 spooler.Run 在 ctx.Done 时自行 Close（评审必修 1）。

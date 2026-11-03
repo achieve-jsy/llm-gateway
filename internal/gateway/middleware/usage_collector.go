@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -77,11 +78,43 @@ func UsageCollectorWithRedis(collector *gwobs.Collector, traceWriter *gwobs.Trac
 			event.Status = c.Writer.Status()
 			event.DurationMs = int64(totalMs)
 
-			// 同步完成预算记账后再投递 call_log，确保 Redis 计数先于审计事件可见。
-			if postHook != nil && event.EstCostUSD > 0 && c.Writer.Status() < 400 {
+			// 媒体准入闸门（A2）判定「无价」时打的标（拒绝时打、开关关闭放行时也打）：
+			// 强制 usage_missing=true，让「有字段但无价」这事落到 call_logs.usage_missing，
+			// 而不是以 est_cost_usd=0 的形态悄悄混进正常账目里。
+			_, mediaUnpriced := MediaPricingMissingInfoFrom(c)
+			if mediaUnpriced {
+				event.UsageMissing = true
+			}
+
+			// ── 预算核销：按「是否发生计价事实」判定，而不是按「金额是否 > 0」 ──
+			//
+			// 改前：`event.EstCostUSD > 0` 是唯一门槛。无价（catalog 媒体价列为 NULL/0）
+			// 或用量缺失时金额恒为 0，请求连记账钩子都进不去 —— 预算层与账目层
+			// 对这次调用完全无感，这正是「静默 0 元」。
+			// 改后：只要有计价事实（有金额 / 有计价意图但价或用量缺失 / 有真实用量），
+			// 就交给钩子；金额为 0 时钩子自身会短路，不会污染账目。
+			billable := hasBillableSignal(event, mediaUnpriced)
+			if postHook != nil && c.Writer.Status() < 400 && billable {
 				if _, checked := budget.GetAccountingPlan(c); checked {
 					postHook(c, event.EstCostUSD, c.Writer.Status())
 					event.PendingBudgetAccount = budget.GetPendingAccount(c)
+				}
+			}
+			// 有计价事实却算不出钱：必须留计数（E 队告警口径），媒体链路再补一条 Warn 日志。
+			// 这里刻意只对媒体链路打日志：token 链路上游不回 usage 是既有常态，
+			// 逐请求打日志会淹掉真正需要处理的无价告警。
+			if billable && event.EstCostUSD <= 0 && c.Writer.Status() < 400 {
+				recordBillableCostMissing(c, billableCostMissingReason(mediaUnpriced, event))
+				if mediaUnpriced || event.Media.HasUsage() {
+					slog.Warn("媒体请求金额为 0：本次未产生计费事实",
+						"request_id", event.RequestID,
+						"model", event.Model,
+						"routed_model", event.RoutedModel,
+						"provider", event.Provider,
+						"inbound_endpoint", event.InboundEndpoint,
+						"media_pricing_missing", mediaUnpriced,
+						"usage_missing", event.UsageMissing,
+					)
 				}
 			}
 			collector.Emit(event)
@@ -220,6 +253,40 @@ func UsageCollectorWithRedis(collector *gwobs.Collector, traceWriter *gwobs.Trac
 		}
 
 		tw.Emit(te)
+	}
+}
+
+// hasBillableSignal 判定本次请求是否发生了「应当计价」的事实。
+//
+// 与「金额 > 0」的区别（这正是不再被绕过的关键）：
+//   - 无价（catalog 媒体价列为 NULL / 字段存在但为 0 占位）→ 金额恒为 0；
+//   - 用量缺失（上游不回 usage / 媒体链路没拿到终态用量）→ 金额同样为 0。
+//
+// 这两种情况下「计价事实已经发生」，必须走完留痕（usage_missing + 计数）与核销路径，
+// 不能被金额门槛静默吞掉。只有「既没有金额、也没有任何计价意图」的请求
+// （例如非计费端点的探测请求）才返回 false，此时不必惊动预算钩子。
+func hasBillableSignal(event gwobs.UsageEvent, mediaUnpriced bool) bool {
+	if event.EstCostUSD > 0 {
+		return true // 有价且算出了钱
+	}
+	if mediaUnpriced || event.UsageMissing {
+		return true // 有计价意图，但价或用量缺失
+	}
+	if event.Media.HasUsage() || event.TotalTokens > 0 || event.SearchUnits > 0 {
+		return true // 有真实用量，只是这次金额算出来是 0
+	}
+	return false
+}
+
+// billableCostMissingReason 给出「有计价事实但金额为 0」的原因（低基数，可安全作为指标标签）。
+func billableCostMissingReason(mediaUnpriced bool, event gwobs.UsageEvent) string {
+	switch {
+	case mediaUnpriced:
+		return "media_pricing_missing"
+	case event.UsageMissing:
+		return "usage_missing"
+	default:
+		return "cost_zero"
 	}
 }
 

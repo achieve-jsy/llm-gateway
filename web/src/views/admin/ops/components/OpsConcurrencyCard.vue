@@ -113,10 +113,10 @@
     <!-- User 视图 -->
     <template v-else>
       <div class="ops-user-stats-header" v-if="userStats">
-        <span class="ops-stat-chip">活跃用户 {{ userStats.total_users }}</span>
+        <span class="ops-stat-chip">活跃用户 {{ userStats.total }}</span>
       </div>
 
-      <div class="ops-user-table-wrap" v-if="userStats && userStats.users.length > 0">
+      <div class="ops-user-table-wrap" v-if="userStats && userStats.items && userStats.items.length > 0">
         <table class="ops-user-table">
           <thead>
             <tr>
@@ -128,7 +128,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="u in userStats.users" :key="u.user_id">
+            <tr v-for="u in userStats.items" :key="u.user_id">
               <td class="ops-user-id">{{ u.user_id }}</td>
               <td>{{ u.request_count }}</td>
               <td>
@@ -138,15 +138,17 @@
               </td>
               <td>{{ u.avg_duration_ms }} ms</td>
               <td>
+                <!-- B03/WP2: 后端 GetUserConcurrency 不返回 status，按 error_count 推算展示，
+                     缺失时降级为 healthy，避免 undefined 状态。 -->
                 <el-tag
-                  :type="userStatusTagType(u.status)"
+                  :type="userStatusTagType(deriveUserStatus(u))"
                   size="small"
                   effect="plain"
                   round
                   class="ops-status-tag"
                 >
                   <span class="ops-status-badge-icon">●</span>
-                  {{ userStatusLabel(u.status) }}
+                  {{ userStatusLabel(deriveUserStatus(u)) }}
                 </el-tag>
               </td>
             </tr>
@@ -167,8 +169,9 @@ import { Refresh } from '@element-plus/icons-vue'
 import { opsAPI } from '@/api/ops'
 import type {
   OpsConcurrencyStatsResponse,
-  OpsUserConcurrencyResponse,
-  OpsProviderConcurrency
+  OpsUserConcurrencyResponseNew,
+  OpsProviderConcurrency,
+  OpsUserConcurrencyItem
 } from '@/api/ops'
 
 // ---- Props ----
@@ -187,7 +190,15 @@ const props = withDefaults(
 const viewMode = ref<'provider' | 'user'>('provider')
 const loading = ref(false)
 const stats = ref<OpsConcurrencyStatsResponse | null>(null)
-const userStats = ref<OpsUserConcurrencyResponse | null>(null)
+// B03/WP2: 用户并发用 OpsUserConcurrencyResponseNew {items, total} 对齐后端契约。
+const userStats = ref<OpsUserConcurrencyResponseNew | null>(null)
+
+// B03/WP2: 后端 GetUserConcurrency 不返回 status 字段，按 error_count 推算展示。
+function deriveUserStatus(u: OpsUserConcurrencyItem): 'healthy' | 'warning' | 'critical' {
+  if (u.error_count >= 10) return 'critical'
+  if (u.error_count > 0) return 'warning'
+  return 'healthy'
+}
 
 // ---- 视图切换 ----
 function onViewChange() {
@@ -241,9 +252,14 @@ function userStatusLabel(status: 'healthy' | 'warning' | 'critical'): string {
 }
 
 // ---- 加载条 ----
+// B03/WP2: 后端 current_load 已是 0-100 百分比（active/max*100），直接取用；
+// 若旧响应无该字段，回退按 active_requests/max_capacity 计算。
 function loadPercent(p: OpsProviderConcurrency): number {
+  if (typeof p.current_load === 'number' && p.current_load >= 0) {
+    return Math.min(100, Math.round(p.current_load))
+  }
   if (p.max_capacity <= 0) return 0
-  return Math.min(100, Math.round((p.current_load / p.max_capacity) * 100))
+  return Math.min(100, Math.round((p.active_requests / p.max_capacity) * 100))
 }
 
 function loadColor(p: OpsProviderConcurrency): string {

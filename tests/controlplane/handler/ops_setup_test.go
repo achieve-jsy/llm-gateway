@@ -115,6 +115,32 @@ func setupOpsHandler(t *testing.T) (*gin.Engine, *gorm.DB, *redis.Client) {
 	return r, db, rdb
 }
 
+// setupOpsHandlerAll 在 setupOpsHandler 基础上额外注册 concurrency / token-stats /
+// snapshot-v2 / user-concurrency / realtime-traffic 等路由，供 WP2/WP3 测试使用。
+//
+// 说明：这些 handler 的"响应 shape"测试（聚合字段齐、Redis 路径不崩）在 SQLite 上
+// 可跑——handler 即便内部含 PG 方言子查询（如 GetConcurrencyStats 的错误率统计），
+// Scan 出错也只产生日志、不影响 200 响应与 Redis 数据合并；故仍可断言字段结构。
+// 真 SQL 行为（分页/排序/聚合数值）由 PGOnly 测试在真 Postgres 下补。
+func setupOpsHandlerAll(t *testing.T) (*gin.Engine, *gorm.DB, *redis.Client) {
+	t.Helper()
+	r, db, rdb := setupOpsHandler(t)
+	mc := service.NewSystemMetricsCollector(db, rdb)
+	h := handler.NewOpsHandler(db, rdb, mc)
+
+	// 并发（Redis+call_logs，shape 测试在 SQLite 可跑）
+	r.GET("/ops/concurrency", h.GetConcurrencyStats)
+	r.GET("/ops/user-concurrency", h.GetUserConcurrency)
+	// 实时流量
+	r.GET("/ops/realtime-traffic", h.GetRealtimeTraffic)
+	// Token 统计（PG 方言；SQLite 仅注册，PGOnly 测试 skip）
+	r.GET("/ops/token-stats", h.GetTokenStats)
+	// Snapshot-V2（PG 方言 bucket；SQLite 仅注册，PGOnly 测试 skip）
+	r.GET("/ops/dashboard/snapshot-v2", h.GetSnapshotV2)
+
+	return r, db, rdb
+}
+
 // doRequest 发送 HTTP 请求并返回 recorder
 func doRequest(r *gin.Engine, method, path string, body ...string) *httptest.ResponseRecorder {
 	var reqBody string

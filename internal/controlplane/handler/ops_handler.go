@@ -1929,6 +1929,11 @@ func (h *OpsHandler) UpdateRuntimeLogConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save config"})
 		return
 	}
+
+	// 实时应用日志配置
+	cfg := service.RuntimeLogConfigFromMap(input)
+	service.ApplyRuntimeLogConfig(cfg)
+
 	c.JSON(http.StatusOK, input)
 }
 
@@ -2677,8 +2682,50 @@ func (h *OpsHandler) SendTestAlertEmail(c *gin.Context) {
 		return
 	}
 
-	// TODO: 接入实际邮件发送（依赖 email_sender 模块）
-	c.JSON(http.StatusOK, gin.H{"sent": true, "recipient": req.Recipient, "message": "test email queued (email sender not yet wired)"})
+	// 读取邮件通知配置
+	cfg := h.loadEmailNotificationConfig()
+	if !cfg.Enabled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email notification is disabled"})
+		return
+	}
+
+	// 构造测试邮件
+	subject := "[LLM Gateway] 测试告警邮件"
+	body := fmt.Sprintf("这是一封测试告警邮件。\n收件人: %s\n时间: %s\n\n如果您收到此邮件，说明邮件通知配置正确。",
+		req.Recipient, time.Now().Format("2006-01-02 15:04:05"))
+
+	recipients := []string{req.Recipient}
+	// 如果配置了告警收件人列表，也发送给所有告警收件人
+	if len(cfg.AlertRecipients) > 0 {
+		recipients = cfg.AlertRecipients
+	}
+
+	emailSvc := service.NewEmailService()
+	if err := emailSvc.SendAlertEmail(recipients, subject, body); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to send test email: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"sent": true, "recipient": req.Recipient, "message": "test email sent"})
+}
+
+// loadEmailNotificationConfig 从 system_configs 读取邮件通知配置
+func (h *OpsHandler) loadEmailNotificationConfig() EmailNotificationConfig {
+	val, err := h.settingsRepo.GetValue(settingKeyEmailNotification)
+	if err != nil || val == "" {
+		return defaultEmailNotificationConfig()
+	}
+	var cfg EmailNotificationConfig
+	if jsonErr := json.Unmarshal([]byte(val), &cfg); jsonErr != nil {
+		return defaultEmailNotificationConfig()
+	}
+	if cfg.AlertRecipients == nil {
+		cfg.AlertRecipients = []string{}
+	}
+	if cfg.ReportRecipients == nil {
+		cfg.ReportRecipients = []string{}
+	}
+	return cfg
 }
 
 // =============================================================================

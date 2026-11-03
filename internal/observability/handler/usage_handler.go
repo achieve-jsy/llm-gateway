@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,8 +13,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
+	"github.com/example/llm-gateway/internal/archive"
 	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	"github.com/example/llm-gateway/internal/observability/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
@@ -82,6 +86,9 @@ type UsageHandler struct {
 	svc *service.RollupService
 	db  *gorm.DB
 	rdb *redis.Client
+	// arc 归档点读器（契约 §7.2）。nil = 点读未启用；此时遇到「有 archive_ref 但无正文」必须显式报错，
+	// 不能静默返回空正文（否则与「正文永久丢失」在外部表现上完全一致）。
+	arc traceArchiveReader
 }
 
 // NewUsageHandler 创建 UsageHandler
@@ -96,6 +103,142 @@ func NewUsageHandler(svc *service.RollupService, db ...*gorm.DB) *UsageHandler {
 // SetRedis 注入可选 Redis 缓存，用于全站百分位等低频统计。
 func (h *UsageHandler) SetRedis(rdb *redis.Client) {
 	h.rdb = rdb
+}
+
+// traceArchiveReader 归档点读器（契约 §7.2）：正文置空（archive_status=2）后按 archive_ref 从归档读回正文。
+// 声明为接口而非 *archive.LocalStore：装配层注入具体实现，测试可注入桩。
+type traceArchiveReader interface {
+	ReadBody(ctx context.Context, archiveRef, requestID string) (*archive.ArchiveObject, error)
+}
+
+// SetArchiveReader 注入归档点读器；传 nil（或装配层不调用）表示点读未启用。
+// 注意：装配时必须传真正的 nil 而非「值为 nil 的 *archive.LocalStore」，否则接口非 nil 会在点读时空指针。
+func (h *UsageHandler) SetArchiveReader(r traceArchiveReader) {
+	h.arc = r
+}
+
+// traceBodyState 描述一条 trace 的正文可用状态（契约 §7.2 三种情况必须可区分）。
+type traceBodyState string
+
+const (
+	// traceBodyHot 正文仍在 PG（热路径），直接返回。
+	traceBodyHot traceBodyState = ""
+	// traceBodyArchived 正文已离场，本次从归档点读回填成功（正常冷路径）。
+	traceBodyArchived traceBodyState = "archived"
+	// traceBodyArchiveMiss 有 archive_ref 且点读可用，但归档未命中（数据异常，需告警）。
+	traceBodyArchiveMiss traceBodyState = "archive_miss"
+	// traceBodyReadDisabled 有 archive_ref 但点读未启用：属配置问题，【不得】表现为「数据不存在」。
+	traceBodyReadDisabled traceBodyState = "read_disabled"
+	// traceBodyLost 无 archive_ref 且正文为空：正文永久丢失，需告警。
+	traceBodyLost traceBodyState = "lost"
+)
+
+// tracePayload 在既有 CallTrace 字段之外附加正文可用状态。
+// 嵌入匿名字段 → JSON 扁平合并，既有字段名/含义不变，仅新增 body_state（前端据此区分四种情况）。
+type tracePayload struct {
+	obsmodel.CallTrace
+	BodyState traceBodyState `json:"body_state,omitempty"`
+}
+
+// hydrateTraceBody 两段式读：PG 正文为空时按 archive_ref 从归档点读回填，并返回正文可用状态。
+//
+// 必须在 MaskTracePrompt 之前调用：MaskTracePrompt 会清空 request_body，
+// 掩盖「正文本来是否存在」这一判断依据。
+//
+// 四种情况（契约 §7.2）：
+//  1. 有正文 → 直接返回（热路径，绝大多数请求）；
+//  2. 无正文 + archive_ref 非空 + 点读可用 → 走归档点读；
+//  3. 无正文 + archive_ref 非空 + 点读未启用 → 返回可观测错误码并 slog.Error（不得表现为「数据不存在」）；
+//  4. 无正文 + archive_ref 为空 → 永久丢失态，slog.Error 告警。
+func (h *UsageHandler) hydrateTraceBody(c *gin.Context, trace *obsmodel.CallTrace) traceBodyState {
+	if trace == nil {
+		return traceBodyHot
+	}
+	if len(trace.RequestBody) > 0 || len(trace.ResponseBody) > 0 {
+		return traceBodyHot
+	}
+
+	ref := ""
+	if trace.ArchiveRef != nil {
+		ref = *trace.ArchiveRef
+	}
+
+	// 情况 4：正文已离场且没有归档指针 → 不可恢复。
+	if ref == "" {
+		slog.Error("trace body permanently lost: no archive_ref while PG body is empty",
+			"request_id", trace.RequestID,
+			"archive_status", trace.ArchiveStatus,
+			"ts", trace.TS,
+		)
+		return traceBodyLost
+	}
+
+	// 情况 3：正文在归档里，但本进程没有点读器（archive.read.enabled=false 或 root 未配置）。
+	if h.arc == nil {
+		slog.Error("trace body archived but archive point-read is disabled",
+			"request_id", trace.RequestID,
+			"archive_ref", ref,
+			"archive_status", trace.ArchiveStatus,
+			"hint", "enable archive.read.enabled and make archive.root readable; body is NOT missing",
+		)
+		return traceBodyReadDisabled
+	}
+
+	// 情况 2：正常冷路径——从归档读回正文（并发闸与解码窗口在 LocalStore 层，见契约 §7.3）。
+	obj, err := h.arc.ReadBody(c.Request.Context(), ref, trace.RequestID)
+	if err != nil {
+		slog.Error("archive point-read failed",
+			"request_id", trace.RequestID, "archive_ref", ref, "error", err)
+		return traceBodyArchiveMiss
+	}
+	if obj == nil {
+		slog.Error("archive point-read returned empty object",
+			"request_id", trace.RequestID, "archive_ref", ref)
+		return traceBodyArchiveMiss
+	}
+	if len(obj.RequestHeaders) > 0 {
+		trace.RequestHeaders = datatypes.JSON(obj.RequestHeaders)
+	}
+	if len(obj.RequestBody) > 0 {
+		trace.RequestBody = datatypes.JSON(obj.RequestBody)
+	}
+	if len(obj.ResponseBody) > 0 {
+		trace.ResponseBody = datatypes.JSON(obj.ResponseBody)
+	}
+	return traceBodyArchived
+}
+
+// writeTraceResponse 按正文可用状态输出 trace：可区分「热正文 / 归档回填 / 点读未启用 / 归档未命中 / 永久丢失」。
+//   - 点读未启用：503 + code=read_disabled（明确的可观测错误码，不能当成 404「数据不存在」）；
+//   - 归档未命中：404 + code=archive_miss（数据异常，已在上游 slog.Error 告警）；
+//   - 其余：200 + CallTrace + body_state（lost 时也返回元数据，便于详情页与告警关联）。
+func writeTraceResponse(c *gin.Context, trace obsmodel.CallTrace, state traceBodyState) {
+	switch state {
+	case traceBodyReadDisabled:
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"code":        string(traceBodyReadDisabled),
+			"error":       "trace body is archived but archive point-read is disabled (body is not missing)",
+			"request_id":  trace.RequestID,
+			"archive_ref": archiveRefValue(trace.ArchiveRef),
+		})
+	case traceBodyArchiveMiss:
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":        string(traceBodyArchiveMiss),
+			"error":       "trace body archived but not found in archive (data anomaly)",
+			"request_id":  trace.RequestID,
+			"archive_ref": archiveRefValue(trace.ArchiveRef),
+		})
+	default:
+		c.JSON(http.StatusOK, tracePayload{CallTrace: trace, BodyState: state})
+	}
+}
+
+// archiveRefValue 安全解引用 archive_ref（nil → ""）。
+func archiveRefValue(ref *string) string {
+	if ref == nil {
+		return ""
+	}
+	return *ref
 }
 
 // Trace GET /api/v1/usage/logs/:request_id/trace — 单条请求完整 trace（管理面，admin 路由）
@@ -142,10 +285,13 @@ func (h *UsageHandler) trace(c *gin.Context, ownOnly bool) {
 		}
 		return
 	}
+	// 两段式读：正文被置空（archive_status=2）后从归档按 archive_ref 回填。
+	// 必须在 MaskTracePrompt 之前——提示词裁剪会清空 request_body，掩盖正文是否存在的判断依据。
+	bodyState := h.hydrateTraceBody(c, &trace)
 	// 提示词正文只对 admin 或记录本人（且非程序 Key 调用）下发；
 	// 调用记录其余内容（响应、耗时、token、费用）正常展示。
 	MaskTracePrompt(&trace, canViewPrompt)
-	c.JSON(http.StatusOK, trace)
+	writeTraceResponse(c, trace, bodyState)
 }
 
 // traceSubject 描述一条请求的归属：记录者与 Key 类型。
@@ -220,8 +366,10 @@ func (h *UsageHandler) ScopedTrace(c *gin.Context) {
 	// QueryScope 只保证「这条记录在 actor 管辖范围内、看得到」；
 	// 提示词正文另按归属裁剪：admin 可见全部；其余角色只看得到自己的、
 	// 且非程序（服务）Key 发起的记录的提示词（lg.UserID / lg.KeyType）。
+	// 两段式读同样先于裁剪（裁剪会清空 request_body）。
+	bodyState := h.hydrateTraceBody(c, &trace)
 	MaskTracePrompt(&trace, rbac.CanViewPrompt(c, lg.UserID, lg.KeyType == obsmodel.KeyTypeService))
-	c.JSON(http.StatusOK, trace)
+	writeTraceResponse(c, trace, bodyState)
 }
 
 // Query GET /api/v1/usage — 聚合用量查询

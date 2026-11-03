@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/example/llm-gateway/internal/archive"
 	authrepo "github.com/example/llm-gateway/internal/auth/repository"
 	"github.com/example/llm-gateway/internal/budgetperiod"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
@@ -39,6 +40,30 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	}
 	// 加载配置（YAML + 环境变量）
 	cfg := cpconfig.Load()
+
+	// 归档点读器（Trace 详情两段式回填）：正文被置空（archive_status=2）后按 archive_ref 从归档读回正文。
+	//
+	// 【与 archive.write.enabled 无关】：只要 archive.read.enabled 且 archive.root 非空就独立构造。
+	// 这是回滚语义的关键（契约 §7.1 / v3 §5.1）：关写（cron 停）时点读必须仍可用，
+	// 否则已置空的 trace 会静默变成空正文，和「正文永久丢失」在外部表现上完全一致（评审 MAJ-12）。
+	// 声明在 Setup 顶层，使 usageH（我的记录 / 管理面 trace）与 usageH2（scoped trace）两处都能注入。
+	var archiveReader *archive.LocalStore
+	if cfg.Archive.ReadEnabled {
+		if cfg.Archive.Root == "" {
+			slog.Error("archive read enabled but archive.root is empty; point-read disabled")
+		} else {
+			archiveReader = archive.NewLocalStore(cfg.Archive.Root, "")
+			// 并发闸落在 LocalStore 层（契约 §7.3）：解码前 acquire，handler 无法绕过。
+			archiveReader.SetMaxConcurrentReads(cfg.Archive.MaxConcurrentReads)
+			// 解码窗口必须与写入侧一致，否则大窗口 zstd 帧解码失败（契约 §3.3）。
+			archiveReader.SetZstdWindowBytes(cfg.Archive.ZstdWindowMB << 20)
+			slog.Info("archive point-read enabled",
+				"root", cfg.Archive.Root,
+				"max_concurrent_reads", archiveReader.MaxConcurrentReads(),
+				"zstd_window_bytes", archiveReader.ZstdWindowBytes(),
+			)
+		}
+	}
 
 	r := gin.New()
 
@@ -579,6 +604,26 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		}
 		opsCleanup.Start(context.Background())
 
+		// 归档写路径（archive.write.enabled 控制）：archiver（分块导出 + 四步校验 + 写指针）
+		// → janitor（补归档 → 轮转巡检 → 7 项门闸置空 → 保留期删除）。
+		// 关闭时整条写链路不装配、不调度；点读不受影响（见 Setup 顶部的 archiveReader，契约 §7.1）。
+		if cfg.Archive.WriteEnabled {
+			if cfg.Archive.Root == "" {
+				slog.Error("archive write enabled but archive.root is empty; write path disabled")
+			} else {
+				archiveSvc := obssvc.NewTraceArchiveService(db, rdb, cfg.Archive)
+				// janitor 单轮内部依次执行：补归档 → 轮转巡检 → 置空（7 项门闸）→ 保留期删除，
+				// 因此「巡检」与「保留期删除」与 janitor 同受 archive.write.enabled 控制。
+				archiveJanitor := obssvc.NewTraceArchiveJanitor(db, rdb, archiveSvc, cfg.Archive)
+				archiveCron := obscron.NewArchiveCron(archiveSvc, archiveJanitor, cfg.Archive)
+				if err := archiveCron.Start(lifecycleCtx); err != nil {
+					slog.Error("archive cron start failed", "error", err)
+				}
+			}
+		} else {
+			slog.Info("archive write path disabled")
+		}
+
 		opsHandler := handler.NewOpsHandler(db, rdb, systemMetricsCollector)
 
 		// WP9: 邮件服务 + 定时报表服务
@@ -755,6 +800,10 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		usageSvc := obssvc.NewRollupService(db)
 		usageH := obshandler.NewUsageHandler(usageSvc, db)
 		usageH.SetRedis(rdb)
+		// 归档点读器：非 nil 才注入（typed-nil 会让 handler 的 arc == nil 判定失效）。
+		if archiveReader != nil {
+			usageH.SetArchiveReader(archiveReader)
+		}
 		adminGroup.GET("/usage/logs", guard(rbac.PermUsageViewAll), usageH.Logs)
 		adminGroup.GET("/usage/logs/:request_id/trace", guard(rbac.PermUsageViewAll), usageH.Trace)
 		adminGroup.GET("/usage/options", usageH.Options)
@@ -990,6 +1039,11 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		// ── 用量看板：dashboard/scoped-logs 需 Guard 注入 Actor ─────────────
 		// usageH2 复用同一 DB，仅在此处注册带 Guard 的路由
 		usageH2 := obshandler.NewUsageHandler(obssvc.NewRollupService(db), db)
+		// ScopedTrace（/usage/scoped/logs/:request_id/trace）同样返回正文，必须注入点读器，
+		// 否则 admin / dept_admin 走该端点时读不到已置空正文。
+		if archiveReader != nil {
+			usageH2.SetArchiveReader(archiveReader)
+		}
 		// 方案X 异常反馈闭环（真人工反馈）：写路径 CRUD 落在 control-plane（anomaly_records 由其 GORM model 管理），
 		// 独立于 observability 的只读报告聚合 handler，故单独构造 AnomalyFeedbackHandler（轻量：直接持 *gorm.DB）。
 		anomalyFeedbackH := handler.NewAnomalyFeedbackHandler(db)

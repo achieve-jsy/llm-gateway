@@ -287,7 +287,7 @@ func TestReadBody(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newTestStore(t)
 	dt := "dt=2026-06-04/"
-	key := "dt=2026-06-04/body-2026-06-04.jsonl.gz"
+	dir := "dt=2026-06-04"
 
 	lines := []map[string]any{
 		{
@@ -309,10 +309,17 @@ func TestReadBody(t *testing.T) {
 			"error_message":   "",
 		},
 	}
-	gz := gzipLines(t, lines)
-	if _, err := s.Put(ctx, key, bytes.NewReader(gz), int64(len(gz)), PutOptions{}); err != nil {
-		t.Fatalf("put body: %v", err)
+	// v3 分块格式：PartWriter 写 part + index + manifest，调用方在校验通过后写 _SUCCESS。
+	raw := make([][]byte, 0, len(lines))
+	for _, l := range lines {
+		b, err := json.Marshal(l)
+		if err != nil {
+			t.Fatalf("marshal line: %v", err)
+		}
+		raw = append(raw, b)
 	}
+	buildDay(t, s, dir, raw, 0)
+	markSuccess(t, s, dir)
 
 	obj, err := s.ReadBody(ctx, dt, "req_bbb")
 	if err != nil {
@@ -330,7 +337,7 @@ func TestReadBody(t *testing.T) {
 		t.Fatalf("unmarshal response_body: %v", err)
 	}
 	if resp["content"] != "第二响应" {
-		t.Fatalf("response_body.content = %v", resp["content"])
+		t.Fatalf("response_body.content = %v want 第二响应", resp["content"])
 	}
 	var hdr map[string]any
 	if err := json.Unmarshal(obj.RequestHeaders, &hdr); err != nil {
@@ -344,12 +351,12 @@ func TestReadBody(t *testing.T) {
 func TestReadBodyNotFoundAndInvalid(t *testing.T) {
 	ctx := context.Background()
 	s, root := newTestStore(t)
-
-	// 未归档天 → CodeNotFound（文件不存在）。
-	_, err := s.ReadBody(ctx, "dt=2026-06-04/", "req_zzz")
 	var se *StoreError
+
+	// 未归档天且无 _SUCCESS → CodeNotFound。
+	_, err := s.ReadBody(ctx, "dt=2026-06-04/", "req_zzz")
 	if !errors.As(err, &se) || se.Code != CodeNotFound {
-		t.Fatalf("missing file err = %v want CodeNotFound", err)
+		t.Fatalf("missing day err = %v want CodeNotFound", err)
 	}
 
 	// 解析非法的 archiveRef → CodeInvalidArgument。
@@ -358,15 +365,24 @@ func TestReadBodyNotFoundAndInvalid(t *testing.T) {
 		t.Fatalf("bad ref err = %v want CodeInvalidArgument", err)
 	}
 
-	// 写了文件但 request_id 不命中 → CodeNotFound。
-	gz := gzipLines(t, []map[string]any{{"request_id": "req_a", "request_body": map[string]any{"p": 1}}})
-	key := "dt=2026-06-04/body-2026-06-04.jsonl.gz"
-	_ = os.MkdirAll(filepath.Join(root, "dt=2026-06-04"), 0o750)
-	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(key)), gz, 0o640); err != nil {
-		t.Fatalf("write file: %v", err)
-	}
+	// 归档完成但 rid 不命中 → CodeNotFound。
+	buildDay(t, s, "dt=2026-06-04", ridLines(t, []string{"req_a"}), 0)
+	markSuccess(t, s, "dt=2026-06-04")
 	_, err = s.ReadBody(ctx, "dt=2026-06-04/", "req_b")
 	if !errors.As(err, &se) || se.Code != CodeNotFound {
 		t.Fatalf("no-match err = %v want CodeNotFound", err)
+	}
+
+	// 旧版 v2 单文件格式（body-<dt>.jsonl.gz，无 index/_SUCCESS）不得被点读当成有效归档。
+	legacyDir := "dt=2026-06-05"
+	gz := gzipLines(t, []map[string]any{{"request_id": "req_legacy", "request_body": map[string]any{"p": 1}}})
+	key := legacyDir + "/body-2026-06-05.jsonl.gz"
+	_ = os.MkdirAll(filepath.Join(root, filepath.FromSlash(legacyDir)), 0o750)
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(key)), gz, 0o640); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
+	_, err = s.ReadBody(ctx, legacyDir+"/", "req_legacy")
+	if !errors.As(err, &se) || se.Code != CodeNotFound {
+		t.Fatalf("legacy v2 format err = %v want CodeNotFound（v3 点读只认分块+索引+_SUCCESS）", err)
 	}
 }

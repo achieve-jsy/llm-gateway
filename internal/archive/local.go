@@ -12,22 +12,33 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
-// 目录布局（相对 archive.root）：
+// 目录布局（相对 archive.root，v3 分块格式，见契约 §3.1）：
 //
-//	{root}/dt=YYYY-MM-DD/body-YYYY-MM-DD.jsonl.gz   # 当天正文，每行一个 JSON
-//	{root}/dt=YYYY-MM-DD/_SUCCESS                   # 0 字节，该天「完整 + 校验通过」标记
-//	{StagingDir}/...                                # 暂存/残留（默认 root/_tmp，按 mtime 清理）
+//	{root}/dt=YYYY-MM-DD/.spool/part-00000.jsonl   # 未压缩导出暂存，封块后删除
+//	{root}/dt=YYYY-MM-DD/part-00000.jsonl.zst      # 每块 = 独立 zstd 帧
+//	{root}/dt=YYYY-MM-DD/index.jsonl               # 每块一行（未压缩）
+//	{root}/dt=YYYY-MM-DD/manifest.json             # 汇总（行数/字节/sha256/块数）
+//	{root}/dt=YYYY-MM-DD/_SUCCESS                  # 0 字节，该天「完整 + 校验通过」标记
+//	{StagingDir}/...                               # 暂存/残留（默认 root/_tmp，按 mtime 清理）
 //
-// key 一律为相对路径（如 dt=2026-06-04/body-2026-06-04.jsonl.gz），
-// 与 DB 中 archive_ref / files[].name 一致，换盘/换挂载不回写 DB。
+// key 一律为相对路径（如 dt=2026-09-19/part-00000.jsonl.zst），与 DB 中 archive_ref /
+// files[].name 一致，换盘/换挂载不回写 DB。
 type LocalStore struct {
 	root       string // 归档根目录
 	stagingDir string // 暂存目录（残留清理用）
+
+	// sem 点读并发闸（契约 §5.3/§7.3）：nil 表示不限制。
+	sem chan struct{}
+	// zstdWindow 解码窗口上限（字节），与写入侧 archive.zstd_window_mb 保持一致。
+	zstdWindow int
 }
 
 // NewLocalStore 创建本地文件系统实现。空值回退到设计默认。
+// 点读并发闸默认 DefaultMaxConcurrentReads；由装配层用 SetMaxConcurrentReads 覆盖。
 func NewLocalStore(root, stagingDir string) *LocalStore {
 	if root == "" {
 		root = "/var/lib/llm-gateway/archive"
@@ -35,7 +46,66 @@ func NewLocalStore(root, stagingDir string) *LocalStore {
 	if stagingDir == "" {
 		stagingDir = filepath.Join(root, "_tmp")
 	}
-	return &LocalStore{root: root, stagingDir: stagingDir}
+	return &LocalStore{
+		root:       root,
+		stagingDir: stagingDir,
+		sem:        make(chan struct{}, DefaultMaxConcurrentReads),
+		zstdWindow: DefaultZstdWindowBytes,
+	}
+}
+
+// SetMaxConcurrentReads 设置点读并发上限（archive.max_concurrent_reads）。<=0 表示不限制。
+func (s *LocalStore) SetMaxConcurrentReads(n int) {
+	if n <= 0 {
+		s.sem = nil
+		return
+	}
+	s.sem = make(chan struct{}, n)
+}
+
+// MaxConcurrentReads 返回当前点读并发上限；0 表示不限制。
+func (s *LocalStore) MaxConcurrentReads() int {
+	if s.sem == nil {
+		return 0
+	}
+	return cap(s.sem)
+}
+
+// SetZstdWindowBytes 设置解码窗口上限（archive.zstd_window_mb<<20），
+// 必须与写入侧一致，否则大窗口帧会解码失败。<=0 回退默认值。
+func (s *LocalStore) SetZstdWindowBytes(n int) {
+	if n <= 0 || n < zstd.MinWindowSize {
+		s.zstdWindow = DefaultZstdWindowBytes
+		return
+	}
+	s.zstdWindow = n
+}
+
+// ZstdWindowBytes 返回解码窗口上限（契约 §3.3：WithDecoderMaxWindow）。
+func (s *LocalStore) ZstdWindowBytes() int { return s.zstdWindow }
+
+// acquireRead 获取点读许可；ctx 取消时立即返回，避免排队点读把请求挂死。
+func (s *LocalStore) acquireRead(ctx context.Context) error {
+	if s.sem == nil {
+		return ctx.Err()
+	}
+	select {
+	case s.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// releaseRead 释放点读许可。
+func (s *LocalStore) releaseRead() {
+	if s.sem == nil {
+		return
+	}
+	select {
+	case <-s.sem:
+	default:
+	}
 }
 
 // Root 返回归档根目录。
@@ -214,6 +284,10 @@ func (s *LocalStore) List(ctx context.Context, prefix string, opts ListOptions) 
 						return filepath.SkipDir
 					}
 				}
+				// 跳过 .spool 暂存子树（契约 §3.1：未压缩中间产物，不是归档对象）。
+				if filepath.Base(rel) == SpoolDirName {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
@@ -322,7 +396,7 @@ func (s *LocalStore) CleanupStaging(ctx context.Context, olderThan time.Duration
 		}
 	}
 
-	// 清理天目录下的 .part/.tmp 中间产物。
+	// 清理天目录下的 .part/.tmp 中间产物，以及 .spool 中的陈旧未压缩暂存。
 	walkErr := filepath.WalkDir(s.root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -331,7 +405,33 @@ func (s *LocalStore) CleanupStaging(ctx context.Context, olderThan time.Duration
 			return err
 		}
 		if d.IsDir() {
-			return nil
+			// .spool 内的文件不叫 .part/.tmp，需单独按 mtime 清理（崩溃残留）。
+			if d.Name() != SpoolDirName {
+				return nil
+			}
+			entries, rerr := os.ReadDir(path)
+			if rerr != nil {
+				res.Errors = append(res.Errors, rerr)
+				return filepath.SkipDir
+			}
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				info, ierr := e.Info()
+				if ierr != nil {
+					continue
+				}
+				if info.ModTime().Before(cutoff) {
+					if rerr := os.Remove(filepath.Join(path, e.Name())); rerr != nil {
+						res.Errors = append(res.Errors, rerr)
+					} else {
+						res.Removed++
+						res.Bytes += info.Size()
+					}
+				}
+			}
+			return filepath.SkipDir
 		}
 		if !isTempName(d.Name()) {
 			return nil

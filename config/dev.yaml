@@ -50,3 +50,37 @@ budget_tier:
   shadow_enabled: false
   v2_total_enforcement_enabled: false
   legacy_total_write_enabled: true
+
+# 调用链路正文归档 v3（契约：docs/trace-archive-v3-implementation-contract.md §2.2）
+# 开发环境默认关闭写入与点读；需要本地验证时用 ARCHIVE_WRITE_ENABLED / ARCHIVE_READ_ENABLED 覆盖。
+archive:
+  write:
+    enabled: false
+  read:
+    enabled: false
+  root: /datalog/llm-gateway-archive
+  tz: Asia/Shanghai
+  hot_window_days: 3
+  days_per_night: 2
+  closure_lag_hours: 24
+  cron_schedule: "0 3 * * *"
+  chunk_mb: 256
+  zstd_level: best
+  zstd_window_mb: 128
+  encoder_concurrency: 1
+  max_concurrent_reads: 4
+  batch_rows: 1000
+  max_retry: 5
+  verify_sample_rows: 20
+  inspect_freshness_hours: 168
+  inspect_per_cycle: 3
+  backfill:
+    enabled: false
+    max_days: 30
+  require_offhost_copy: true
+  offhost_copy_marker: ""
+  offhost_marker_freshness_hours: 24
+  disk_watermark_percent: 80
+  max_disk_gb: 0
+  retention_days: 180
+  staging_retention_hours: 336

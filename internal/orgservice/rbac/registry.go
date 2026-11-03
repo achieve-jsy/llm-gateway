@@ -136,6 +136,8 @@ var Registry = map[Permission]PolicyEntry{
 	PermHealthCheckManage: {ScopeGlobal},
 	// 公告管理（写操作）：仅 admin
 	PermAnnouncementManage: {ScopeGlobal},
+	// 反馈管理（查看与处理用户反馈）：仅 admin
+	PermFeedbackManage: {ScopeGlobal},
 	// 用户搜索：任意管理角色
 	PermOrgUserSearch: {ScopeManage},
 	// 查看用户角色：任意管理角色

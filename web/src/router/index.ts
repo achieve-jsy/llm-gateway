@@ -119,6 +119,14 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/ModelSquarePage.vue'),
     meta: { title: '模型广场' }
   },
+  // 使用手册刻意为 public：手册只含静态说明、不含任何用户私有数据，
+  // 未登录也能打开，便于对外分享链接与本地演示。
+  {
+    path: '/manual',
+    name: 'Manual',
+    component: () => import('@/views/manual/ManualPage.vue'),
+    meta: { title: '使用手册', public: true }
+  },
   {
     path: '/my/budget',
     name: 'MyBudget',
@@ -153,6 +161,12 @@ const routes: RouteRecordRaw[] = [
     name: 'AuditLogs',
     component: () => import('@/views/admin/AuditLogPage.vue'),
     meta: { title: '审计日志', requiresManager: true }
+  },
+  {
+    path: '/admin/feedback',
+    name: 'FeedbackList',
+    component: () => import('@/views/admin/FeedbackListPage.vue'),
+    meta: { title: '反馈管理', requiresAdmin: true }
   },
   {
     path: '/admin/group-entitlements',

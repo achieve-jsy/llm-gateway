@@ -180,6 +180,11 @@ var (
 	auditCacheTTL  = 5 * time.Minute
 )
 
+// auditRequestBodyLimit 审计日志里请求正文的保留上限。
+// 注意这是「日志截断上限」，不是「可读写的请求体上限」：超过它的请求体不会被捕获，
+// 但也绝不会被截断后回填（那会破坏下游解析，见 AuditMiddleware 内注释）。
+const auditRequestBodyLimit = 64 * 1024
+
 func lookupUserIdentity(db *gorm.DB, userID string) (name, deptID, deptName string) {
 	if db == nil || userID == "" {
 		return "", "", ""
@@ -235,10 +240,16 @@ func AuditMiddleware(recorder audit.Recorder, db ...*gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// 捕获请求体（读取后还原供下游处理）
+		// 捕获请求体（读取后还原供下游处理）。
+		//
+		// 只在「确认能完整读到」时捕获：审计正文只保留前 auditRequestBodyLimit 个字节，
+		// 但**截断后回填会破坏下游解析**——multipart 会丢尾部 boundary（FormFile 直接报
+		// 「缺少 file 字段」），大 JSON 会变成非法 JSON（解析 400）。因此当 Content-Length
+		// 未知（-1，chunked）或超过上限时，宁可放弃本次审计正文，也不动原始 Body 流。
+		// 影响面：附件上传（图片常 >64KB）与员工/部门映射导入（multipart xlsx）等。
 		var bodyBytes []byte
-		if c.Request.Body != nil && c.Request.ContentLength != 0 {
-			bodyBytes, _ = io.ReadAll(io.LimitReader(c.Request.Body, 64*1024))
+		if c.Request.Body != nil && c.Request.ContentLength > 0 && c.Request.ContentLength <= auditRequestBodyLimit {
+			bodyBytes, _ = io.ReadAll(c.Request.Body)
 			c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		}
 		startTime := time.Now()

@@ -1,0 +1,380 @@
+/*
+ * 模型网关员工使用手册 —— 应用内文档页样式
+ *
+ * 这份样式表是「SPA 内的文档页」外壳，不是独立全屏页：
+ *   1. 所有选择器收敛在根类 .manual-page 之下（后代选择器），不污染全局样式。
+ *   2. 颜色一律走 Element Plus 的 CSS 变量（--el-bg-color / --el-text-color-* / --el-color-primary* ...），
+ *      html.dark 下由 element-plus 的 dark/css-vars.css 自动换成暗色，不再有硬编码的白底黑字。
+ *      唯一例外是灯箱遮罩 rgba(0,0,0,.82)（规格明确允许）。
+ *   3. 版面是「左目录 220px + 右正文」两栏 grid + 页脚，正文列随视口增长（minmax(0,1fr)）。
+ *      整个 body 封顶 --manual-body-max 并水平居中：不封顶则 1920px 下正文行长接近 100 字，
+ *      难读；封顶后不居中则多余空白全堆在右侧（1920px 实测 592px），看起来像没做自适应。
+ *      居中把这块空白对称化，才是「自适应」的观感。
+ *   4. 导航只有左侧目录一份；原独立页的页内吸顶导航条（7 项）与 hero 四张快捷卡已删除。
+ *   5. 吸顶偏移统一由 --manual-sticky-top 提供（默认 0px，由 ManualPage 按 SPA 顶栏高度设置）。
+ */
+
+/* ============ 页面基座 ============ */
+.manual-page{
+  --manual-mono:"SF Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --manual-sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+
+  -webkit-text-size-adjust:100%;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+
+  /* 内边距归属：未登录时 App.vue 挂的是 .page-container--public（padding:0），由本页自己给；
+     登录态则由 .page-container 给（它随 global.scss 的断点自适应 24/16/12/8px）。
+     这里不采用其他通栏页「margin:-20px -24px」的抵消写法——那要求本页复制一份 global.scss
+     的断点表，一旦 global.scss 改了就会在 1024/768/480px 处横向溢出（实测过）。 */
+  --manual-pad-y:24px;
+  --manual-pad-x:32px;
+  /* 文档标题尺寸。Element Plus 只到 20px，仓库的 --font-title-size 又未定义，故局部定义。
+     30px 是与 812px 正文列相称的标题分量（26px 在宽列里显小、34px 又压过正文）。 */
+  --manual-title-size:30px;
+  /* 内容区上限：220(目录) + 48(gap) + 812(正文) = 1080。
+     正文 812px 在 14px 下约 55 字/行，是舒适阅读区（1052px 时是 72 字/行，偏长）。
+     整个 body 居中后左右留白对称，不会像左对齐那样把空白全堆在一侧。
+     视口比它窄时按视口走，不会被撑出横向滚动。 */
+  --manual-body-max:1080px;
+  padding:var(--manual-pad-y) var(--manual-pad-x);
+  margin:0;
+  background:var(--el-bg-color-page);
+  color:var(--el-text-color-primary);
+  font-family:var(--manual-sans);
+  font-size:14px;
+  line-height:1.75;
+}
+/* 登录态：内边距交给 .page-container，避免与本页叠加成 56px 留白 */
+.manual-page--logged-in{--manual-pad-y:0px;--manual-pad-x:0px}
+.manual-page *,.manual-page *::before,.manual-page *::after{box-sizing:border-box}
+.manual-page img{max-width:100%;display:block}
+.manual-page a{color:inherit}
+.manual-page code{font-family:var(--manual-mono);font-size:13px;background:var(--el-fill-color);border-radius:4px;padding:1px 5px;color:var(--el-text-color-primary)}
+.manual-page ::selection{background:var(--el-color-primary-light-8)}
+.manual-page :focus-visible{outline:2px solid var(--el-color-primary);outline-offset:2px;border-radius:4px}
+
+/* ============ 阅读进度条（sticky 2px，吸在 SPA 顶栏之下） ============ */
+.manual-page .manual-progress{position:sticky;top:var(--manual-sticky-top,0px);left:0;right:0;height:2px;z-index:10;background:transparent;margin-inline:calc(-1 * var(--manual-pad-x))}
+.manual-page .manual-progress i{
+  display:block;height:100%;width:0;
+  background:linear-gradient(90deg,var(--el-color-primary),var(--el-color-primary-light-3));
+  transition:width .12s linear;
+}
+
+/* ============ 内容外壳 ============ */
+.manual-page .manual-shell{padding:0}
+
+/* ============ 页面头：紧凑两行（标题+元信息），不占首屏 ============ */
+.manual-page .page-header,
+.manual-page .manual-head{padding-bottom:14px;margin-bottom:24px;border-bottom:1px solid var(--el-border-color-lighter)}
+.manual-page .manual-head-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+/* 标题：Element Plus 字号令牌止于 20px（--el-font-size-extra-large），仓库的
+   --font-title-size 是未定义债务（见前端设计规范 §1），故用局部变量显式定尺寸。
+   抬到 26px 是为了让「页头靠标题立住」，这样下面那行元信息才敢压到 12.5px 单行。 */
+.manual-page .page-title{
+  margin:0;
+  font-family:var(--manual-sans);
+  font-size:var(--manual-title-size);
+  font-weight:600;line-height:1.25;color:var(--el-text-color-primary);letter-spacing:-.01em;
+}
+.manual-page .header-actions,
+.manual-page .manual-head-actions{margin-left:auto;display:flex;align-items:center;gap:8px}
+.manual-page .manual-feedback-btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 14px;border-radius:8px;
+  border:1px solid var(--el-color-primary);background:transparent;
+  color:var(--el-color-primary);
+  font-family:var(--manual-sans);font-size:13px;font-weight:600;line-height:1.5;cursor:pointer;
+  transition:background .2s ease,color .2s ease;
+}
+.manual-page .manual-feedback-btn:hover{background:var(--el-color-primary-light-9)}
+
+/* 元信息：单行小灰字 + 「·」分隔，但每项都是不可断开的原子块。
+   原先是一串空格相连的灰字，折行会从条目中间断开（1360px 下 "API Base URL" 被拆到下一行），
+   看着就是「信息很乱」。给每项 white-space:nowrap 后折行只会在条目之间发生；
+   分隔符用 ::before 挂在项上（不是行尾），折行后它跟着自己那一项走，行首即「· 」表示续行。
+   注意：不要用 chip 底色——--el-fill-color-light 与页面底色 --el-bg-color-page 几乎同色，
+   实测看起来只是间距被随机拉大的一串词，反而更乱。 */
+.manual-page .manual-meta{
+  display:flex;flex-wrap:wrap;align-items:baseline;
+  margin:10px 0 0;font-size:12.5px;line-height:1.9;color:var(--el-text-color-secondary);
+}
+.manual-page .manual-meta-item{white-space:nowrap}
+.manual-page .manual-meta-item:not(:first-child)::before{
+  content:"·";margin:0 7px;color:var(--el-text-color-placeholder);
+}
+.manual-page .manual-meta-item code{font-size:12.5px;color:var(--el-text-color-regular)}
+
+/* 引导语：13.5px，宽度不再单独限缩（跟着正文列走）。
+   限成 92% 时在 1920px 下正好差几个字，会掉出只有「用量和预算。」的寡行；放开即收成 1 行。
+   这里也不能用 ch 限宽：ch 以 "0" 字形宽计（≈0.5em），中日韩文本下 96ch 仅 ≈648px，照样折行。 */
+.manual-page .manual-lede{
+  margin:10px 0 0;
+  font-size:13.5px;line-height:1.8;color:var(--el-text-color-regular);
+}
+
+/* ============ 两栏 grid（左目录 + 右正文），整体左对齐 ============ */
+.manual-page .manual-body{
+  display:grid;grid-template-columns:220px minmax(0,1fr);gap:48px;align-items:start;
+  max-width:var(--manual-body-max);margin-inline:auto;
+}
+
+/* ============ 左侧目录（唯一一份导航） ============ */
+.manual-page .manual-toc{
+  position:sticky;top:calc(var(--manual-sticky-top,0px) + 20px);
+  align-self:start;
+  max-height:calc(100vh - var(--manual-sticky-top,0px) - 40px);
+  overflow-y:auto;
+  font-size:13px;
+}
+.manual-page .manual-toc h5{margin:0 0 10px;font-size:12px;font-weight:600;letter-spacing:.08em;color:var(--el-text-color-secondary)}
+.manual-page .manual-toc ol{margin:0;padding:0;list-style:none}
+.manual-page .manual-toc a{
+  display:block;position:relative;
+  padding:6px 10px 6px 12px;
+  border-left:2px solid transparent;
+  border-radius:0 6px 6px 0;
+  font-size:13px;line-height:1.5;color:var(--el-text-color-regular);text-decoration:none;cursor:pointer;
+  transition:color .18s ease,background .18s ease,border-color .18s ease;
+}
+.manual-page .manual-toc a:hover{color:var(--el-text-color-primary);background:var(--el-fill-color-light)}
+.manual-page .manual-toc a.active{color:var(--el-color-primary);border-left-color:var(--el-color-primary);background:var(--el-color-primary-light-9);font-weight:600}
+.manual-page .manual-toc .t2 a{padding-left:24px}
+
+/* ============ 正文 ============ */
+.manual-page .manual-main{min-width:0;padding-bottom:8px}
+.manual-page .chap{margin-bottom:36px}
+.manual-page .chap + .chap{padding-top:36px;border-top:1px solid var(--el-border-color-lighter)}
+.manual-page .chap-head{margin-bottom:20px}
+.manual-page .chap-no{display:block;margin-bottom:4px;font-size:12px;font-weight:500;letter-spacing:.04em;color:var(--el-text-color-secondary)}
+.manual-page h2{margin:0 0 10px;font-size:var(--el-font-size-large);font-weight:600;line-height:1.4;color:var(--el-text-color-primary);letter-spacing:0}
+.manual-page .chap-head p{margin:0;max-width:100%;font-size:14px;line-height:1.75;color:var(--el-text-color-regular)}
+
+.manual-page .sub{margin-bottom:28px}
+.manual-page .sub:last-child{margin-bottom:0}
+.manual-page .sub h3{
+  position:relative;margin:0 0 16px;padding-left:12px;
+  font-size:15px;font-weight:600;line-height:1.5;color:var(--el-text-color-primary);
+}
+.manual-page .sub h3::before{content:"";position:absolute;left:0;top:.35em;bottom:.35em;width:3px;border-radius:3px;background:var(--el-color-primary)}
+
+/* ---------- 步骤 ---------- */
+.manual-page .steps{position:relative;margin:0;padding:0 0 0 40px;list-style:none;counter-reset:stp}
+.manual-page .steps::before{content:"";position:absolute;left:11px;top:14px;bottom:14px;width:2px;background:var(--el-border-color-lighter)}
+.manual-page .step{position:relative;padding:0 0 28px}
+.manual-page .step:last-child{padding-bottom:0}
+.manual-page .step::before{
+  content:counter(stp);counter-increment:stp;
+  position:absolute;left:-40px;top:2px;
+  width:24px;height:24px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--el-color-primary-light-9);border:1.5px solid var(--el-color-primary);
+  color:var(--el-color-primary);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;
+}
+.manual-page .step h4{margin:0 0 6px;font-size:15px;font-weight:600;line-height:1.5;color:var(--el-text-color-primary)}
+.manual-page .step p{margin:0 0 12px;font-size:14px;line-height:1.75;color:var(--el-text-color-regular)}
+.manual-page .step p:last-child{margin-bottom:0}
+.manual-page .step strong{color:var(--el-text-color-primary);font-weight:600}
+.manual-page .step a{color:var(--el-color-primary);text-decoration:none;border-bottom:1px solid var(--el-color-primary-light-5)}
+.manual-page .step a:hover{border-bottom-color:var(--el-color-primary)}
+.manual-page .ui{
+  font-weight:500;color:var(--el-text-color-primary);
+  background:var(--el-fill-color-light);border:1px solid var(--el-border-color-lighter);
+  border-radius:4px;padding:0 5px;white-space:nowrap;
+}
+
+/* ---------- 提示块 ---------- */
+.manual-page .note{
+  display:flex;gap:10px;margin:14px 0 0;padding:12px 14px;
+  border-radius:8px;border-left:3px solid var(--el-color-primary);
+  background:var(--el-color-primary-light-9);
+  font-size:13px;line-height:1.7;color:var(--el-text-color-regular);
+}
+.manual-page .note b{color:var(--el-text-color-primary);font-weight:600}
+.manual-page .note .n-i{flex:none;width:16px;height:16px;margin-top:3px;color:var(--el-color-primary)}
+
+/* ---------- 截图卡片 ---------- */
+.manual-page .shot{
+  margin:14px 0 0;
+  border:1px solid var(--el-border-color-lighter);
+  border-radius:10px;overflow:hidden;
+  background:var(--el-bg-color);
+}
+.manual-page .shot-canvas{
+  position:relative;display:block;width:100%;padding:0;border:0;
+  background:var(--el-bg-color);cursor:zoom-in;line-height:0;
+  font:inherit;text-align:initial;
+}
+.manual-page .shot-canvas img{display:block;width:100%;height:auto}
+.manual-page .shot-zoom{
+  position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--el-mask-color);
+  color:var(--el-text-color-primary);
+  font-size:13px;line-height:1.6;
+  opacity:0;transition:opacity .2s ease;
+}
+.manual-page .shot-canvas:hover .shot-zoom,
+.manual-page .shot-canvas:focus-visible .shot-zoom{opacity:1}
+.manual-page .shot-foot{
+  display:flex;align-items:flex-start;gap:8px;
+  padding:10px 14px;border-top:1px solid var(--el-border-color-lighter);
+  font-size:13px;line-height:1.65;color:var(--el-text-color-secondary);
+  background:var(--el-bg-color);
+}
+.manual-page .shot-foot i{flex:none;width:6px;height:6px;border-radius:50%;background:var(--el-color-primary);margin-top:6px}
+.manual-page .shot-foot em{font-style:normal;color:var(--el-text-color-primary);font-weight:600}
+.manual-page .duo{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+.manual-page .duo .shot{margin-top:0}
+
+/* ---------- FAQ（原生 details/summary） ---------- */
+.manual-page .faq{display:grid;gap:10px}
+.manual-page .q{
+  border:1px solid var(--el-border-color-lighter);border-radius:10px;
+  background:var(--el-bg-color);overflow:hidden;
+  transition:border-color .2s ease;
+}
+.manual-page .q[open]{border-color:var(--el-color-primary-light-5)}
+.manual-page .q summary{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 14px;cursor:pointer;list-style:none;
+  font-size:14px;font-weight:600;line-height:1.6;color:var(--el-text-color-primary);
+}
+.manual-page .q summary::-webkit-details-marker{display:none}
+.manual-page .q summary::after{
+  content:"";flex:none;margin-left:auto;width:7px;height:7px;
+  border-right:1.5px solid var(--el-color-primary-light-3);
+  border-bottom:1.5px solid var(--el-color-primary-light-3);
+  transform:rotate(45deg) translate(-2px,-2px);
+  transition:transform .22s ease,border-color .22s ease;
+}
+.manual-page .q[open] summary::after{transform:rotate(-135deg) translate(-3px,-3px);border-color:var(--el-color-primary)}
+.manual-page .q .a{padding:0 14px 14px;font-size:14px;line-height:1.75;color:var(--el-text-color-regular)}
+.manual-page .q .a p{margin:0 0 10px}
+.manual-page .q .a p:last-child{margin-bottom:0}
+
+/* ---------- 正文底部反馈入口 ---------- */
+.manual-page .manual-cta{
+  display:flex;align-items:center;flex-wrap:wrap;gap:12px;
+  margin-top:36px;padding:16px 18px;
+  border-radius:10px;border:1px solid var(--el-border-color-lighter);
+  background:var(--el-color-primary-light-9);
+}
+.manual-page .manual-cta p{margin:0;font-size:13px;line-height:1.7;color:var(--el-text-color-regular)}
+.manual-page .manual-cta .manual-feedback-btn{margin-left:auto;background:var(--el-bg-color)}
+
+/* ---------- 页脚 ---------- */
+.manual-page .manual-foot{
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px 20px;
+  margin-top:40px;padding:16px 0 32px;border-top:1px solid var(--el-border-color-lighter);
+  font-size:13px;color:var(--el-text-color-secondary);
+}
+.manual-page .manual-foot p{margin:0}
+.manual-page .manual-foot .r{margin-left:auto;display:flex;flex-wrap:wrap;gap:6px 18px}
+.manual-page .manual-foot a{color:var(--el-text-color-regular);text-decoration:none;cursor:pointer;transition:color .18s ease}
+.manual-page .manual-foot a:hover{color:var(--el-color-primary)}
+
+/* ---------- 灯箱 ---------- */
+.manual-page .lb{
+  position:fixed;inset:0;z-index:80;
+  display:flex;align-items:center;justify-content:center;
+  padding:24px;
+  background:rgba(0,0,0,.82);
+  opacity:0;transition:opacity .22s ease;
+}
+.manual-page .lb.vis{opacity:1}
+.manual-page .lb-panel{
+  display:flex;flex-direction:column;gap:12px;
+  max-width:min(1280px,94vw);max-height:92vh;
+  padding:14px;border-radius:12px;
+  border:1px solid var(--el-border-color);
+  background:var(--el-bg-color);
+  box-shadow:var(--el-box-shadow-dark);
+  transform:scale(.985);transition:transform .22s ease;
+}
+.manual-page .lb.vis .lb-panel{transform:none}
+.manual-page .lb-panel img{
+  display:block;margin:0 auto;max-width:100%;max-height:70vh;
+  width:auto;height:auto;border-radius:8px;background:var(--el-bg-color);
+}
+.manual-page .lb-bar{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--el-text-color-secondary)}
+.manual-page .lb-bar .lb-path{font-family:var(--manual-mono);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.manual-page .lb-bar .sp{margin-left:auto;display:flex;gap:8px}
+.manual-page .lb-btn{
+  border:1px solid var(--el-border-color);background:var(--el-fill-color-light);
+  color:var(--el-text-color-regular);border-radius:8px;padding:5px 11px;
+  font-family:var(--manual-sans);font-size:13px;line-height:1.5;cursor:pointer;
+  transition:background .18s ease,border-color .18s ease,color .18s ease;
+}
+.manual-page .lb-btn:hover{background:var(--el-color-primary-light-9);border-color:var(--el-color-primary-light-5);color:var(--el-color-primary)}
+.manual-page .lb-btn[disabled]{opacity:.4;cursor:default}
+.manual-page .lb-cap{text-align:center;font-size:13px;line-height:1.7;color:var(--el-text-color-secondary)}
+.manual-page .lb-cap b{color:var(--el-text-color-primary);font-weight:600}
+
+/* ---------- 回到顶部 ---------- */
+.manual-page .totop{
+  position:fixed;right:24px;bottom:24px;z-index:50;
+  width:36px;height:36px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--el-border-color);background:var(--el-bg-color);
+  color:var(--el-text-color-secondary);cursor:pointer;
+  box-shadow:var(--el-box-shadow-light);
+  opacity:0;transform:translateY(10px);pointer-events:none;
+  transition:opacity .28s ease,transform .28s ease,color .2s ease,border-color .2s ease;
+}
+.manual-page .totop.on{opacity:1;transform:none;pointer-events:auto}
+.manual-page .totop:hover{color:var(--el-color-primary);border-color:var(--el-color-primary-light-5)}
+
+/* ---------- 进场动画 ----------
+ * 只动 opacity，刻意不用 transform:translateY()。
+ * 原因（实测 bug）：未进入视口的 .rv 元素带着 translateY(18px) 参与 getBoundingClientRect()，
+ * scrollToId 按这个偏移量算出的落点会低 18px；滚动到位后入场动画把 transform 抹平，
+ * 标题正好上跳 18px 钻进 52px 吸顶顶栏底下（8 项目录里 5 项中招）。
+ * opacity 不参与布局与几何测量，从根上消除这类「测量值 ≠ 最终位置」的漂移。 */
+.manual-page .rv{opacity:0;transition:opacity .45s ease}
+.manual-page .rv.in{opacity:1}
+
+/* ============ 响应式（断点取自 global.scss：1024 / 768 / 640 / 480） ============ */
+@media (max-width:1024px){
+  /* 目录收窄；两图并排退化为单列 */
+  .manual-page .manual-body{grid-template-columns:180px minmax(0,1fr);gap:32px}
+  .manual-page .duo{grid-template-columns:1fr}
+  /* 目录改为正文上方的两列块，省掉纵向 250px */
+  .manual-page .manual-toc ol{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
+  .manual-page .manual-toc .t2 a{padding-left:16px}
+}
+@media (max-width:768px){
+  /* 目录折叠到正文上方：单列铺满，目录不再吸顶 */
+  .manual-page .manual-body{grid-template-columns:minmax(0,1fr);gap:0}
+  .manual-page .manual-toc{
+    position:static;max-height:none;overflow:visible;
+    margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid var(--el-border-color-lighter);
+  }
+}
+@media (max-width:640px){
+  /* 窄屏把文档标题收回一档，避免 26px 在 375px 宽上换行挤爆页头 */
+  .manual-page{--manual-title-size:24px}
+  .manual-page .manual-toc ol{grid-template-columns:minmax(0,1fr)}
+  .manual-page .steps{padding-left:34px}
+  .manual-page .steps::before{left:9px}
+  .manual-page .step::before{left:-34px;width:22px;height:22px}
+  .manual-page .manual-cta .manual-feedback-btn{margin-left:0;width:100%;justify-content:center}
+  .manual-page .lb{padding:12px}
+  .manual-page .totop{right:16px;bottom:16px}
+}
+@media (prefers-reduced-motion:reduce){
+  .manual-page *{animation-duration:.001s!important;animation-iteration-count:1!important;transition-duration:.001s!important}
+  .manual-page .rv{opacity:1}
+}
+@media print{
+  @page{size:A4;margin:14mm 13mm 16mm}
+  .manual-page .manual-toc,.manual-page .totop,.manual-page .manual-progress,.manual-page .lb{display:none!important}
+  .manual-page .manual-shell{padding:0}
+  .manual-page .manual-body{grid-template-columns:minmax(0,1fr);gap:0}
+  .manual-page .rv{opacity:1!important;transition:none!important}
+  .manual-page .shot,.manual-page .duo,.manual-page .step,.manual-page .note,.manual-page .q{break-inside:avoid;page-break-inside:avoid;box-shadow:none}
+  .manual-page .chap{margin-bottom:20px}
+  .manual-page .chap + .chap{page-break-before:always;padding-top:0}
+  .manual-page .q .a{display:block!important}
+}

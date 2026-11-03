@@ -458,6 +458,20 @@ func TestContentShapes(t *testing.T) {
 	})
 }
 
+// 配置文件的 actions key 会被 Viper 转成全小写，必须仍然生效。
+// 否则 yaml 里写 block，实际按默认 mask 放行，等于悄悄降低了策略强度。
+func TestActionsKeyFromConfigFile(t *testing.T) {
+	e, err := New(Config{Mode: ModeMask, RulesOnly: true, Actions: map[string]string{"gitlab_token": privacy.Block}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s := e.NewSession()
+	defer s.Close()
+	if _, err := s.ProtectText(context.Background(), "token "+synthToken); !errors.Is(err, privacy.ErrBlocked) {
+		t.Fatalf("小写 key 的 block 动作没生效，err=%v", err)
+	}
+}
+
 // fail-closed：Block 动作必须返回错误且不把原文交回调用方。
 func TestBlockActionFailClosed(t *testing.T) {
 	ctx := context.Background()

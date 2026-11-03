@@ -1,6 +1,7 @@
 // Package llmclient provides a base HTTP client for LLM providers with:
 // - Request marshaling/unmarshaling
 // - Retries with exponential backoff and jitter
+// - Per-call opt-out of retries for non-idempotent submit requests (see retry_policy.go)
 // - Standardized error parsing (429, 502, 503, 504)
 // - Circuit breaking with half-open state protection
 package llmclient
@@ -165,6 +166,11 @@ type Request struct {
 	// It is intended for one-shot passthrough requests and is not replayable for retries.
 	RawBodyReader io.Reader
 	Headers       http.Header
+	// NoRetry 为 true 时本次调用**至多发出一次**上游请求：429 / 5xx / 非超时网络错误
+	// 都不再重发。用于媒体提交类非幂等请求（上游会重复建单并重复计费），
+	// 与 llmclient.WithNoRetry(ctx) 等价，任一为真即生效。
+	// 默认 false，等价于既有重试语义。
+	NoRetry bool
 }
 
 // Response represents an HTTP response
@@ -344,6 +350,9 @@ func (c *Client) Do(ctx context.Context, req Request, result any) error {
 //
 // The final status code and error in metrics reflect the outcome after all retry attempts.
 func (c *Client) DoRaw(ctx context.Context, req Request) (*Response, error) {
+	// 在 hooks 有机会改写 ctx 之前先取「禁止重试」标记，避免 hook 返回的新 ctx 丢掉调用级标记。
+	noRetry := retryDisabled(ctx, req)
+
 	scope, err := c.beginRequest(ctx, req, false)
 	if err != nil {
 		return nil, err
@@ -354,7 +363,8 @@ func (c *Client) DoRaw(ctx context.Context, req Request) (*Response, error) {
 	var lastStatusCode int
 	lastErrFromTransport := false
 	maxAttempts := c.maxAttempts()
-	if req.RawBodyReader != nil {
+	if req.RawBodyReader != nil || noRetry {
+		// RawBodyReader 是一次性流、不可重放；noRetry 是调用方显式声明的「提交类请求至多一次」。
 		maxAttempts = 1
 	}
 
@@ -513,6 +523,10 @@ func (c *Client) DoStream(ctx context.Context, req Request) (io.ReadCloser, erro
 	return resp.Body, nil
 }
 
+// canRetryPassthrough 判定 passthrough 请求**本身**是否具备可重放语义
+// （幂等方法，或显式带 Idempotency-Key）。最终 maxAttempts 还要叠加
+// retryDisabled（WithNoRetry(ctx) / Request.NoRetry）这一调用级禁用开关，
+// 见 DoPassthrough。
 func canRetryPassthrough(req Request) bool {
 	if req.RawBodyReader != nil {
 		return false
@@ -546,6 +560,8 @@ func hasIdempotencyKey(headers http.Header) bool {
 // Unlike DoRaw, it preserves non-200 responses for the caller to proxy unchanged.
 func (c *Client) DoPassthrough(ctx context.Context, req Request) (*http.Response, error) {
 	stream := strings.Contains(strings.ToLower(strings.Join(req.Headers.Values("Accept"), ",")), "text/event-stream")
+	// 同 DoRaw：在 hooks 改写 ctx 之前取值。
+	noRetry := retryDisabled(ctx, req)
 	scope, err := c.beginRequest(ctx, req, stream)
 	if err != nil {
 		return nil, err
@@ -553,7 +569,7 @@ func (c *Client) DoPassthrough(ctx context.Context, req Request) (*http.Response
 	ctx = scope.ctx
 
 	maxAttempts := 1
-	if canRetryPassthrough(req) {
+	if canRetryPassthrough(req) && !noRetry {
 		maxAttempts = c.maxAttempts()
 	}
 

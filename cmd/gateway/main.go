@@ -134,17 +134,22 @@ func main() {
 
 	// ProviderLoader bridges control-plane entries → GoModel Router.
 	var reloadSeedance func(entries []gatewaymodel.ProviderEntry)
+
+	// 异步媒体任务适配器（C4）：注册「按 snapshot 整表构建适配器」的工厂。
+	//
+	// 🔴 必须在**首次 loadProviders 之前**注册，否则第一次 loadProviders 触发的
+	// onReload 回调里 ReloadMediaAdapters 会把注册表 Swap 成空表，
+	// /v1/videos 三件套要等到下一次 config:change 才会恢复（表现为启动后长时间 501）。
+	server.RegisterMediaAdapterFactory(server.BuildMediaAdapters)
+
 	providerLoader := loader.NewProviderLoader(factory, func(_ *providers.Router, entries []gatewaymodel.ProviderEntry) {
 		if reloadSeedance != nil {
 			reloadSeedance(entries)
 		}
 		// 异步媒体任务适配器（C4）：与 seedance 适配器挂在**同一条** config:change
 		// 热更新链路上，按 snapshot entries **整表重建后一次性 Swap**（渠道增删即时生效）。
-		//
-		// 前置条件：渠道侧（D 队）的「整表构建器」必须已经通过
-		// server.RegisterMediaAdapterFactory(...) 注册，且要发生在首次 loadProviders 之前
-		// （建议与 buildProviderFactory 放在一起）。未注册时注册表保持为空，
-		// /v1/videos 三件套返回 501 not_implemented（未接线），不会 panic。
+		// 工厂已在下方注册；Kling/Vidu 任一未配置或构造失败时该渠道不出现在注册表里
+		// （请求得到 501 not_implemented），不会 panic。
 		server.ReloadMediaAdapters(entries)
 	})
 

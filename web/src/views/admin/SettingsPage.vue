@@ -657,7 +657,7 @@
       </div>
 
       <!-- 操作栏 -->
-      <div class="action-bar">
+      <div v-if="activeTab !== 'notification-channels'" class="action-bar">
         <div class="action-status">
           <span v-if="formChanged" class="change-indicator">有未保存的更改</span>
           <span v-else-if="settingsStore.loaded" class="saved-indicator">

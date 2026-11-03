@@ -318,6 +318,27 @@ type ImageProvider interface {
 - 传输错误（网络/鉴权/5xx）返回 `error`；**业务失败（上游 state=failed）返回 `Status=failed` + `FailReason`，不返回 error**，否则会被重试放大成重复计费。
 - 请求翻译在适配器内完成（与 `core/video.VideoProvider` 的"纯直通"不同，这是本方案的核心增量）。
 
+#### 6.1.1 `MediaSubmitRequest.Params` 键名契约（**已冻结**，2026-10-16）
+
+`Params` 是**网关 handler（C 队）与渠道适配器（D 队）之间唯一的参数接口**：C 队往里放、D 队往外读。键名不冻结必然在 Batch 2 集成时对不上，故在此冻结。
+
+**归一后的键名 = 对外请求字段名**（`docs/media-api.md:106`），让 handler 的映射退化为「同名字段搬运 + 校验」，不引入第二套词表：
+
+| `Params` 键 | 类型 | 适用渠道 | 说明 |
+|---|---|---|---|
+| `prompt` | `string` | 全部 | 文本提示词 |
+| `images` | `[]string` | 全部 | **归一后的图片列表**（URL 或 data URL）。⚠️ 对外字段 `image` 可为**单值或数组**（Vidu 的 `first_tail_to_video` 要 2 张、`reference_to_video` 要 >2 张），**网关一律归一到 `images`**，适配器只认 `[]string`；元素个数决定 action（0/1/2/>2） |
+| `duration` | `int` | Kling / Vidu | 秒。⚠️ Kling 上游要求**字符串**（`"5"`），由适配器转换，`Params` 里保持 `int` |
+| `resolution` | `string` | Vidu | `360p` / `540p` / `720p` / `1080p` |
+| `mode` | `string` | Kling | `std` / `pro`，缺省 `std` |
+| `aspect_ratio` | `string` | Kling | `1:1` / `16:9` / `9:16`；缺省由 `size` 映射（映射表见 §3.1） |
+| `size` | `string` | Kling | 如 `1024x1024`，**仅用于推导 `aspect_ratio`** |
+
+**两条配套铁律**：
+
+1. **适配器 fail-closed**：遇到上表之外的 `Params` 键**必须返回错误**（对应 400），**不得静默丢弃**——这在 `internal/core/media_task.go` 的 `MediaSubmitRequest.Params` 注释里已是既有约定。反之网关只放上表列出的键。否则「网关加了字段而适配器没跟上」会让用户参数被无声吃掉，正是本方案要消灭的静默失败类问题。
+2. **厂商私有开关写在适配器内部，不进 `Params`**：`internal/core/media_task.go` 的 `MediaSubmitRequest` **只有 4 个字段（Kind/Action/UpstreamModel/Params），没有厂商逃生口**——这是有意的。因此 Kling 的 `cfg_scale`（固定 `0.5`）、`metadata` 平铺、Vidu 的 `movement_amplitude`（固定 `auto`）等一律由适配器内部决定；确有厂商参数透传需求时，必须**显式给 `MediaSubmitRequest` 加字段并走评审**，不要塞进 `Params` 让它变成厂商字段垃圾桶。
+
 ### 6.2 适配器注册表泛化
 
 ```go

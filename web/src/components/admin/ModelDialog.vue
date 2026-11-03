@@ -35,6 +35,9 @@
             <span class="cs-meta">
               · {{ formatCtxK(item.context_length) }}K
               · ${{ item.input_price_per_million }}/${{ item.output_price_per_million }}
+              <template v-if="item.cache_read_price != null || item.cache_write_price != null">
+                · cache ${{ item.cache_read_price ?? '-' }}/${{ item.cache_write_price ?? '-' }}
+              </template>
             </span>
             <span class="cs-icons">
               <span v-if="item.supports_function_calling" title="function calling">🛠</span>
@@ -340,6 +343,9 @@
           <div class="picker-meta">
             {{ item.provider || '-' }} · {{ formatCtxK(item.context_length) }}K ·
             ${{ item.input_price_per_million }}/${{ item.output_price_per_million }}
+            <template v-if="item.cache_read_price != null || item.cache_write_price != null">
+              · cache ${{ item.cache_read_price ?? '-' }}/${{ item.cache_write_price ?? '-' }}
+            </template>
           </div>
         </div>
       </div>
@@ -414,8 +420,8 @@ interface FormState {
   price_mode: 'catalog' | 'manual'
   input_price: number
   output_price: number
-  cache_read_price: number
-  cache_write_price: number
+  cache_read_price: number | null
+  cache_write_price: number | null
   weight: number
   video_supported_resolutions: string[]
   video_supported_aspect_ratios: string[]
@@ -475,8 +481,8 @@ const formData = ref<FormState>({
   price_mode: 'catalog',
   input_price: 0,
   output_price: 0,
-  cache_read_price: 0,
-  cache_write_price: 0,
+  cache_read_price: null,
+  cache_write_price: null,
   weight: 1,
   video_supported_resolutions: ['720p', '480p'],
   video_supported_aspect_ratios: ['16:9', '9:16', '1:1'],
@@ -503,8 +509,8 @@ model_type: (val.model_type as FormState['model_type']) || 'chat',
         price_mode: val.price_mode || 'catalog',
         input_price: val.input_price || 0,
         output_price: val.output_price || 0,
-        cache_read_price: val.cache_read_price || 0,
-        cache_write_price: val.cache_write_price || 0,
+        cache_read_price: val.cache_read_price ?? null,
+        cache_write_price: val.cache_write_price ?? null,
         weight: val.weight || 1,
         video_supported_resolutions: val.video_supported_resolutions || ['720p', '480p'],
         video_supported_aspect_ratios: val.video_supported_aspect_ratios || ['16:9', '9:16', '1:1'],
@@ -531,8 +537,8 @@ model_type: (val.model_type as FormState['model_type']) || 'chat',
         price_mode: 'catalog',
         input_price: 0,
         output_price: 0,
-        cache_read_price: 0,
-        cache_write_price: 0,
+        cache_read_price: null,
+        cache_write_price: null,
         weight: 1,
         video_supported_resolutions: ['720p', '480p'],
         video_supported_aspect_ratios: ['16:9', '9:16', '1:1'],
@@ -830,8 +836,8 @@ async function handleSubmit() {
       price_mode: isVideo ? 'manual' : formData.value.price_mode,
       input_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.input_price || undefined) : undefined),
       output_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.output_price || undefined) : undefined),
-      cache_read_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.cache_read_price || undefined) : undefined),
-      cache_write_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? (formData.value.cache_write_price || undefined) : undefined),
+      cache_read_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? formData.value.cache_read_price : null),
+      cache_write_price: isVideo ? undefined : (formData.value.price_mode === 'manual' ? formData.value.cache_write_price : null),
       weight: isVideo ? 1 : formData.value.weight,
     }
     if (isVideo) {

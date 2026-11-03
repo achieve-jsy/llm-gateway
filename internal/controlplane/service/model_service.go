@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,25 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/google/uuid"
 )
+
+type OptionalFloat64 struct {
+	Set   bool
+	Value *float64
+}
+
+func (o *OptionalFloat64) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+	var value float64
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	o.Value = &value
+	return nil
+}
 
 var (
 	ErrModelNameExists            = errors.New("model name already exists")
@@ -108,8 +128,8 @@ type CreateModelInput struct {
 	MaxOutputTokens         *int                 `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
 	InputPrice              *float64             `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice             *float64             `json:"output_price" binding:"omitempty,min=0"`
-	CacheReadPrice          *float64             `json:"cache_read_price" binding:"omitempty,min=0"`
-	CacheWritePrice         *float64             `json:"cache_write_price" binding:"omitempty,min=0"`
+	CacheReadPrice          OptionalFloat64      `json:"cache_read_price"`
+	CacheWritePrice         OptionalFloat64      `json:"cache_write_price"`
 	PriceMode               string               `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
 	Weight                  *int                 `json:"weight" binding:"omitempty,min=0,max=9999"`
 	// 视频模型参数
@@ -172,11 +192,17 @@ func (s *ModelService) CreateModel(input CreateModelInput) (*model.Model, error)
 	if input.OutputPrice != nil {
 		m.OutputPrice = *input.OutputPrice
 	}
-	if input.CacheReadPrice != nil {
-		m.CacheReadPrice = input.CacheReadPrice
+	if input.CacheReadPrice.Set {
+		if input.CacheReadPrice.Value != nil && *input.CacheReadPrice.Value < 0 {
+			return nil, fmt.Errorf("cache_read_price must be >= 0")
+		}
+		m.CacheReadPrice = input.CacheReadPrice.Value
 	}
-	if input.CacheWritePrice != nil {
-		m.CacheWritePrice = input.CacheWritePrice
+	if input.CacheWritePrice.Set {
+		if input.CacheWritePrice.Value != nil && *input.CacheWritePrice.Value < 0 {
+			return nil, fmt.Errorf("cache_write_price must be >= 0")
+		}
+		m.CacheWritePrice = input.CacheWritePrice.Value
 	}
 	if input.PriceMode != "" {
 		m.PriceMode = input.PriceMode
@@ -260,8 +286,8 @@ type UpdateModelInput struct {
 	MaxOutputTokens            *int                  `json:"max_output_tokens" binding:"omitempty,min=0,max=10000000"`
 	InputPrice                 *float64              `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice                *float64              `json:"output_price" binding:"omitempty,min=0"`
-	CacheReadPrice             *float64              `json:"cache_read_price" binding:"omitempty,min=0"`
-	CacheWritePrice            *float64              `json:"cache_write_price" binding:"omitempty,min=0"`
+	CacheReadPrice             OptionalFloat64       `json:"cache_read_price"`
+	CacheWritePrice            OptionalFloat64       `json:"cache_write_price"`
 	PriceMode                  string                `json:"price_mode" binding:"omitempty,oneof=catalog manual"`
 	Weight                     *int                  `json:"weight" binding:"omitempty,min=0,max=9999"`
 	VideoSupportedResolutions  []string              `json:"video_supported_resolutions"`
@@ -342,11 +368,17 @@ func (s *ModelService) UpdateModel(id uuid.UUID, input UpdateModelInput) (*model
 	if input.OutputPrice != nil {
 		m.OutputPrice = *input.OutputPrice
 	}
-	if input.CacheReadPrice != nil {
-		m.CacheReadPrice = input.CacheReadPrice
+	if input.CacheReadPrice.Set {
+		if input.CacheReadPrice.Value != nil && *input.CacheReadPrice.Value < 0 {
+			return nil, fmt.Errorf("cache_read_price must be >= 0")
+		}
+		m.CacheReadPrice = input.CacheReadPrice.Value
 	}
-	if input.CacheWritePrice != nil {
-		m.CacheWritePrice = input.CacheWritePrice
+	if input.CacheWritePrice.Set {
+		if input.CacheWritePrice.Value != nil && *input.CacheWritePrice.Value < 0 {
+			return nil, fmt.Errorf("cache_write_price must be >= 0")
+		}
+		m.CacheWritePrice = input.CacheWritePrice.Value
 	}
 	if input.PriceMode != "" {
 		m.PriceMode = input.PriceMode

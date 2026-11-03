@@ -514,7 +514,21 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	hubSyncSvc := newAIAppHubSyncService(db, settingsRepo)
 	hubSyncHandler := handler.NewAIAppHubSyncHandler(hubSyncSvc)
 	if aiAppHubEHRConfigured() {
-		service.StartAIAppHubSyncCron(lifecycleCtx, hubSyncSvc, aiAppHubSyncInterval())
+		// 定时同步：默认每天 03:00（AI_APP_HUB_SYNC_TZ，默认北京时间）。
+		// AI_APP_HUB_SYNC_CRON 显式设成空串 = 关掉调度（纯手动同步）。
+		sched, err := service.LoadSyncSchedule(os.LookupEnv)
+		switch {
+		case err != nil:
+			slog.Error("ai_app_hub_sync_cron_config_invalid", "error", err)
+		case sched == nil:
+			slog.Info("ai_app_hub_sync_cron_disabled")
+		default:
+			service.StartAIAppHubSyncCron(lifecycleCtx, service.SyncCronOptions{
+				Schedule: sched,
+				State:    service.NewSyncStateStore(rdb),
+				Runner:   hubSyncSvc,
+			})
+		}
 	}
 
 	// 管理接口组（JWT 认证）
@@ -1202,15 +1216,4 @@ type unconfiguredFetcher struct{}
 
 func (unconfiguredFetcher) FetchDepartments(context.Context) ([]aiapphub.Department, error) {
 	return nil, fmt.Errorf("%w: EHR_BASE_URL/EHR_API_TOKEN/EHR_ORG_ID 未配置", aiapphub.ErrUpstream)
-}
-
-// aiAppHubSyncInterval 定时同步周期，默认 6 小时，可用 EHR_SYNC_INTERVAL 覆盖（如 30m）。
-func aiAppHubSyncInterval() time.Duration {
-	if v := os.Getenv("EHR_SYNC_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
-		}
-		slog.Warn("ai_app_hub_sync_interval_invalid", "value", v)
-	}
-	return 6 * time.Hour
 }

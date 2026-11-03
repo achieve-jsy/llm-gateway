@@ -1017,6 +1017,9 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/usage/dashboard/user-top-models", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserTopModels)
 		adminGroup.GET("/usage/dashboard/user-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserDetail)
 		adminGroup.GET("/usage/dashboard/model-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelDetail)
+		adminGroup.GET("/usage/dashboard/model-hourly", guard(rbac.PermUsageViewScoped), usageH2.ModelHourly)
+		adminGroup.GET("/usage/dashboard/model-users", guard(rbac.PermUsageViewScoped), usageH2.ModelUsers)
+		adminGroup.POST("/analytics/insight", guard(rbac.PermUsageViewScoped), usageH2.AnalyticsInsight)
 		adminGroup.GET("/usage/scoped/logs", guard(rbac.PermUsageViewScoped), usageH2.ScopedLogs)
 	}
 

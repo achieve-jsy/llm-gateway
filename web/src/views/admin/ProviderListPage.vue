@@ -505,7 +505,6 @@ onMounted(() => {
   .header-actions :deep(.el-button) { font-size: 12px; padding: 6px 12px; }
   .provider-page :deep(.el-table__body-wrapper) { overflow-x: auto; }
 }
-</style>
 
 .cred-tags {
   display: flex;

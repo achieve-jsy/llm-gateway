@@ -253,7 +253,7 @@
         <span class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
           {{ isDark ? '☀️' : '🌙' }}
         </span>
-        <el-dropdown trigger="click" @command="handleUserCommand">
+        <el-dropdown v-if="authStore.isLoggedIn" trigger="click" @command="handleUserCommand">
           <div class="user-info">
             <el-icon class="user-icon" size="22"><User /></el-icon>
             <span class="user-name">{{ authStore.userName }}</span>

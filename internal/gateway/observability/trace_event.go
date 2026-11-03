@@ -231,7 +231,50 @@ func traceEventToModel(e TraceEvent) obsmodel.CallTrace {
 	if len(e.ResponseBodyRaw) > 0 && json.Valid(e.ResponseBodyRaw) {
 		ct.ResponseBody = scrubNULEscapes(e.ResponseBodyRaw)
 	}
+	// 归档独立列：正文置空后列表/回读无法再用 jsonb 抽取，必须在写入时预先抽列。
+	// 存量回填由归档回填通道处理（见 docs/trace-archive-solution-v3.md §7.3），此处覆盖持续写入的新行。
+	ct.TaskID, ct.DocumentsCount = extractTaskFields(e.RequestBodyRaw, e.ResponseBodyRaw)
 	return ct
+}
+
+// extractTaskFields 从请求/响应原始 JSON 提取归档所需的独立列 task_id 与 documents_count。
+// 写读一致：task_id 统一优先取响应体 id（resp.id），其次 resp.task_id（与读侧 ct.task_id 兜底一致），
+// 不回退请求体 task_id（读侧从未用 req，避免写读前后不一致）；
+// documents_count 取请求体 documents 数组长度（Rerank）。
+func extractTaskFields(reqBody, respBody []byte) (*string, *int32) {
+	var taskID string
+	if len(respBody) > 0 {
+		var resp struct {
+			ID     string `json:"id"`
+			TaskID string `json:"task_id"`
+		}
+		if err := json.Unmarshal(respBody, &resp); err == nil {
+			if resp.ID != "" {
+				taskID = resp.ID
+			} else if resp.TaskID != "" {
+				taskID = resp.TaskID
+			}
+		}
+	}
+	var taskIDPtr *string
+	if taskID != "" {
+		taskIDPtr = &taskID
+	}
+
+	var docsCount *int32
+	if len(reqBody) > 0 {
+		var req struct {
+			Documents json.RawMessage `json:"documents"`
+		}
+		if err := json.Unmarshal(reqBody, &req); err == nil && len(req.Documents) > 0 {
+			var arr []json.RawMessage
+			if err := json.Unmarshal(req.Documents, &arr); err == nil {
+				n := int32(len(arr))
+				docsCount = &n
+			}
+		}
+	}
+	return taskIDPtr, docsCount
 }
 
 // scrubNULEscapes 将 JSON 字节中的 \u0000 转义替换为 \ufffd（U+FFFD 替换字符）。

@@ -32,6 +32,21 @@ type MediaConfig struct {
 	// 放行等于静默记 0 元。关闭后放行，但采集侧会强制 usage_missing=true 并打
 	// Error 级强告警（见 docs/media-channels-integration-design.md §8.3 / D3）。
 	RequirePricing bool
+
+	// TaskTimeoutMinutes 异步媒体任务的超时阈值（分钟），来自 MEDIA_TASK_TIMEOUT_MINUTES，默认 30。
+	//
+	// 语义（C7）：**网关只在查询请求内做前台判定，不做后台扫描**——
+	// 「超时扫描的 cron 在控制面」。超过该阈值仍未终态的任务，网关在
+	// GET /v1/videos/:task_id 里把它 CAS 推进到 expired（对外归一为 failed、不记账），
+	// 保证即使控制面 sweeper 未部署，客户端也不会无限轮询。
+	TaskTimeoutMinutes int
+
+	// PollMaxFailures 单任务允许的连续轮询失败上限，来自 MEDIA_POLL_MAX_FAILURES，默认 20。
+	//
+	// 语义（C7）：上游查询失败按 not_found / auth / transient / unrecognized 分类；
+	// transient / unrecognized 计入 poll_failures，达到本上限后放弃轮询并把任务置为
+	// failed（不记账），避免上游抖动变成无休止轮询。
+	PollMaxFailures int
 }
 
 // ServerConfig 服务配置
@@ -135,6 +150,11 @@ func Load() *Config {
 	// 空字符串的 env 会被 viper 判为"未设置"（getEnv 要求 val != ""），
 	// 因此 MEDIA_REQUIRE_PRICING= 不会把开关意外翻成 false。
 	v.SetDefault("media.require_pricing", true)
+	// 异步媒体任务平台的运行策略（C7）：超时阈值与轮询失败上限。
+	// 与 New API 的 TASK_TIMEOUT_MINUTES / TASK_POLL_MAX_FAILURES 同义
+	// （见 docs/media-channels-integration-design.md §4.1 / §6.4）。
+	v.SetDefault("media.task_timeout_minutes", 30)
+	v.SetDefault("media.poll_max_failures", 20)
 	v.SetDefault("provider.internal_token", "")
 	v.SetDefault("provider.control_plane_url", "http://localhost:8081")
 	v.SetDefault("auth.url", "http://localhost:8082")
@@ -174,6 +194,8 @@ func Load() *Config {
 	// 额外绑定一些与 YAML key 命名不一致的历史环境变量
 	_ = v.BindEnv("server.port", "GATEWAY_PORT")
 	_ = v.BindEnv("media.require_pricing", "MEDIA_REQUIRE_PRICING")
+	_ = v.BindEnv("media.task_timeout_minutes", "MEDIA_TASK_TIMEOUT_MINUTES")
+	_ = v.BindEnv("media.poll_max_failures", "MEDIA_POLL_MAX_FAILURES")
 	_ = v.BindEnv("redis.addr", "REDIS_ADDR")
 	_ = v.BindEnv("redis.password", "REDIS_PASSWORD")
 	_ = v.BindEnv("redis.db", "REDIS_DB")
@@ -225,7 +247,9 @@ func Load() *Config {
 			return tb
 		}(),
 		Media: MediaConfig{
-			RequirePricing: v.GetBool("media.require_pricing"),
+			RequirePricing:     v.GetBool("media.require_pricing"),
+			TaskTimeoutMinutes: normalizePositiveInt(v.GetInt("media.task_timeout_minutes"), defaultMediaTaskTimeoutMinutes),
+			PollMaxFailures:    normalizePositiveInt(v.GetInt("media.poll_max_failures"), defaultMediaPollMaxFailures),
 		},
 		OTLP: OTLPConfig{
 			Endpoint: v.GetString("otlp.endpoint"),
@@ -253,6 +277,22 @@ func Load() *Config {
 	}
 
 	return cfg
+}
+
+// 媒体任务平台的兜底默认值（C7）。与 SetDefault 保持一致：即使 SetDefault 被
+// 绕过（例如未来改用别的加载方式），非法/缺失值也落回这两个安全值，
+// 而不是 0（0 会让「超时 = 立刻过期」「失败上限 = 首次失败即放弃」）。
+const (
+	defaultMediaTaskTimeoutMinutes = 30
+	defaultMediaPollMaxFailures    = 20
+)
+
+// normalizePositiveInt 把非正数（含未配置时的 0、负数、非法值）归一为兜底值。
+func normalizePositiveInt(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func splitList(raw string) []string {

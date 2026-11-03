@@ -396,6 +396,13 @@ func setup(
 		}
 
 		v1.POST("/assets/:action", assetHandler.Handle)
+
+		// 媒体接缝（A7）：依赖在此一次性汇总，两条链路各自的注册实现见 routes_media.go。
+		// B/C 队新增依赖时只改 routes_media.go 的 MediaDeps/newMediaDeps，不要改本文件。
+		mediaDeps := newMediaDeps(v1, routerGetter, groupDispatch, controlPlaneURL, internalToken,
+			rdb, collectorOpt, quotaMW, modelQuotaGate, tierBudgetGate)
+		registerMediaImageRoutes(mediaDeps)
+		registerMediaTaskRoutes(mediaDeps)
 	}
 
 	// Claude Code telemetry stub — returns 200 to prevent client-side 404 errors.

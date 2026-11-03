@@ -430,7 +430,12 @@ func isBillableRequest(request *http.Request) bool {
 		return false
 	}
 	switch request.URL.Path {
-	case "/v1/chat/completions", "/v1/embeddings", "/v1/rerank", "/v1/responses", "/v1/messages":
+	case "/v1/chat/completions", "/v1/embeddings", "/v1/rerank", "/v1/responses", "/v1/messages",
+		// 媒体提交类端点同样会写计费事实（call_logs），必须与 chat 一起接受背压，
+		// 否则会出现「chat 被拒流、媒体全量放行」（docs/video-integration-comparison.md §5 P0#3）。
+		"/v1/images/generations", "/v1/images/edits", "/v1/videos",
+		// 已有的 Seedance 原生视频创建端点一并纳入，否则视频仍可绕过背压。
+		"/v1/contents/generations/tasks":
 		return true
 	default:
 		return false

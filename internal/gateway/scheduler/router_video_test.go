@@ -15,8 +15,8 @@ func newVideoRouteTable() *RouteTable {
 			{ID: 1, Name: "mixed-group", Strategy: StrategyPriority, Enabled: true},
 		},
 		Models: []GroupModel{
-			{ID: 1, GroupID: 1, ModelName: "video-capable", ChannelType: "ark", ProviderName: "ark", Priority: intPtr(0), SupportsVideoInput: true},
-			{ID: 2, GroupID: 1, ModelName: "text-only", ChannelType: "openai", ProviderName: "openai", Priority: intPtr(1)},
+			{ID: 1, GroupID: 1, ModelID: 1, ModelName: "video-capable", ChannelType: "ark", ProviderName: "ark", Priority: intPtr(0), SupportsVideoInput: true},
+			{ID: 2, GroupID: 1, ModelID: 2, ModelName: "text-only", ChannelType: "openai", ProviderName: "openai", Priority: intPtr(1)},
 		},
 	}
 	rt := NewRouteTable()
@@ -97,5 +97,41 @@ func TestRouteVideoCapabilityNoMember(t *testing.T) {
 	// 纯文本请求仍然正常
 	if _, err := router.Route("text-only-group", textRequest()); err != nil {
 		t.Fatalf("text request should still work: %v", err)
+	}
+}
+
+// TestFailoverStaysVideoCapable failover 不能在视频请求上换来一个不支持视频的成员
+// （否则视频被静默丢弃，模型凭空作答，比直接报错更糟）。
+func TestFailoverStaysVideoCapable(t *testing.T) {
+	rt := newVideoRouteTable()
+	hs := NewHealthStore(3, 3, 3, 30*time.Second)
+	router := NewRouter(rt, hs)
+	fh := NewFailoverHandler(rt, hs, router)
+
+	decision, err := router.Route("mixed-group", videoRequest())
+	if err != nil {
+		t.Fatalf("initial video route failed: %v", err)
+	}
+	if decision.ModelName != "video-capable" {
+		t.Fatalf("initial route = %q, want video-capable", decision.ModelName)
+	}
+
+	// 唯一的视频成员失败后，failover 不应落到 text-only
+	_, err = fh.FailoverExcluding("mixed-group", []string{decision.ModelID}, videoRequest())
+	if !errors.Is(err, ErrNoVideoCapableModel) {
+		t.Fatalf("video failover err = %v, want ErrNoVideoCapableModel（不得回退到不支持视频的成员）", err)
+	}
+
+	// 纯文本请求的 failover 行为不变：应落到下一个候选
+	textDecision, err := router.Route("mixed-group", textRequest())
+	if err != nil {
+		t.Fatalf("text route failed: %v", err)
+	}
+	next, err := fh.FailoverExcluding("mixed-group", []string{textDecision.ModelID}, textRequest())
+	if err != nil {
+		t.Fatalf("text failover failed: %v", err)
+	}
+	if next.ModelName != "text-only" {
+		t.Fatalf("text failover = %q, want text-only", next.ModelName)
 	}
 }

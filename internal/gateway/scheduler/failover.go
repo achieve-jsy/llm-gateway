@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/example/llm-gateway/internal/core"
 )
@@ -47,6 +48,18 @@ func (fh *FailoverHandler) FailoverExcluding(groupName string, excludeIDs []stri
 
 	healthyModels := fh.healthStore.FilterHealthy(remaining)
 	if len(healthyModels) == 0 {
+		return nil, ErrNoOtherModel
+	}
+
+	// 视频请求的 failover 同样只能落在声明支持视频的成员上：换到一个不支持视频的
+	// 成员会让视频被静默丢弃、模型凭空作答，比直接失败更糟。
+	needsVideo := req != nil && core.HasVideoContent(req.Messages)
+	healthyModels = filterVideoCapable(healthyModels, needsVideo)
+	if len(healthyModels) == 0 {
+		if needsVideo {
+			slog.Warn("failover: no video-capable models left", "group", groupName, "tried", len(excludeIDs))
+			return nil, ErrNoVideoCapableModel
+		}
 		return nil, ErrNoOtherModel
 	}
 

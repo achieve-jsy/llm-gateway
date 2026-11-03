@@ -47,7 +47,7 @@ func (incidentOrchestrator) ChatStream(_ context.Context, _ *core.ChatRequest) (
 func TestMessagesHandler_StreamToolUseKeepsFirstChunkArguments(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	nc := cache.NewGroupNameCache("")
+	nc := cache.NewGroupNameCache()
 	nc.SetNames([]string{"bf-glm-5.3-flash"})
 	sch := &fakeMessagesScheduler{decision: &scheduler.RouteDecision{
 		GroupName:    "bf-glm-5.3-flash",

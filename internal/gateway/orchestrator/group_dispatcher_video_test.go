@@ -46,7 +46,7 @@ func (s *videoSchedulerStub) UpdateSticky(context.Context, string, string, strin
 func TestDispatchMapsNoVideoCapableModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	nc := cache.NewGroupNameCache("")
+	nc := cache.NewGroupNameCache()
 	nc.SetNames([]string{"text-only-group"})
 	d := NewGroupAwareDispatcher(&videoSchedulerStub{routeErr: scheduler.ErrNoVideoCapableModel}, nc)
 

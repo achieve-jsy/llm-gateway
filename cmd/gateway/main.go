@@ -241,19 +241,15 @@ func main() {
 		if err != nil {
 			slog.Warn("failed to create scheduler", "error", err)
 		} else {
+			// 组名缓存由调度器的配置同步灌入（同一份 /api/v1/internal/groups payload），
+			// 因此必须先挂 sink 再 Start，否则首次同步的组名会丢。
+			// 未就绪期间请求返回 503 config_not_ready（见 group_dispatcher），不会再误判成 403。
+			nameCache = cache.NewGroupNameCache()
+			sch.SetGroupNamesSink(nameCache.SetNames)
+
 			sch.Start(ctx)
 			defer sch.Shutdown()
 			slog.Info("scheduler started")
-
-			// 初始化模型组名称缓存：阻塞等待首次刷新成功，
-			// 避免 GroupNameCache 尚未就绪时让请求走 direct 路径误返回 404。
-			// 最多尝试 5 次 × 2s 间隔，控制面就绪后即可进入定期刷新循环。
-			nameCache = cache.NewGroupNameCache(internalToken)
-			if err := nameCache.RefreshWithRetry(ctx, controlPlaneURL, 5, 2*time.Second); err != nil {
-				slog.Error("group name cache failed to initialize, group requests may 404 until next refresh", "error", err)
-			}
-			go refreshGroupNameCache(ctx, nameCache, controlPlaneURL)
-			slog.Info("group name cache started", "initialized", nameCache.IsInitialized())
 		}
 	}
 
@@ -537,25 +533,6 @@ func newTraceDBLogger() logger.Interface {
 			Colorful:                  false,
 		},
 	)
-}
-
-func refreshGroupNameCache(ctx context.Context, nc *cache.GroupNameCache, controlPlaneURL string) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	// 立即执行一次
-	nc.Refresh(ctx, controlPlaneURL)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := nc.Refresh(ctx, controlPlaneURL); err != nil {
-				slog.Warn("group name cache refresh failed", "error", err)
-			}
-		}
-	}
 }
 
 func loadProviders(ctx context.Context, rdb *redis.Client, pl *loader.ProviderLoader, controlPlaneURL, token string) (*providerLoadResult, error) {

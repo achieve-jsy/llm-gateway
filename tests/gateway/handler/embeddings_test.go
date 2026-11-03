@@ -76,7 +76,7 @@ func (f *fakeEmbeddingScheduler) UpdateSticky(_ context.Context, _, _, _, _ stri
 }
 
 func newEmbeddingGroupDispatcher(groupName, modelName, modelType string) *orchestrator.GroupAwareDispatcher {
-	nc := cache.NewGroupNameCache("")
+	nc := cache.NewGroupNameCache()
 	nc.SetNames([]string{groupName})
 	sch := &fakeEmbeddingScheduler{
 		decision: &scheduler.RouteDecision{

@@ -129,7 +129,7 @@ func TestModelTierBudgetIntegration_RealHandlersEnforceGateOrderForSixProtocols(
 					require.NoError(t, infra.Redis.ZAdd(context.Background(), quota.RPMKey("user", "u-1", "", ""),
 						redis.Z{Score: float64(time.Now().UnixMilli()), Member: "existing"}).Err())
 				}
-				nameCache := cache.NewGroupNameCache("")
+				nameCache := cache.NewGroupNameCache()
 				nameCache.SetNames([]string{"premium"})
 				dispatcher := orchestrator.NewGroupAwareDispatcherWithBindingAndTier(
 					integrationProtocolScheduler{}, nameCache, nil, budget.NewTierResolver(budgetHolder),

@@ -93,6 +93,13 @@ var (
 		Type: "forbidden", Code: "direct_model_not_allowed",
 		Message: "direct model access is not allowed; request the model by its model group name", HTTPStatus: http.StatusForbidden,
 	}
+	// ErrConfigNotReady 路由配置（模型组注册表）尚未同步完成。
+	// 必须与“不是组”区分开：冷启动把合法组名判成直连模型会让全体调用方收到 403，
+	// 而这里给的是可重试的 503（2026-10-30 17:17 blue 切流事故）。
+	ErrConfigNotReady = &UnifiedError{
+		Type: "service_unavailable", Code: "config_not_ready",
+		Message: "gateway routing config is not ready yet, please retry shortly", HTTPStatus: http.StatusServiceUnavailable,
+	}
 )
 
 // NewUnifiedError 创建自定义统一错误

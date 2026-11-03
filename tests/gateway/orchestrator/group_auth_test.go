@@ -38,7 +38,7 @@ func (r *countingTierResolver) Resolve(groupName string) (budget.TierContext, bo
 func TestDispatch_AuthorizationBeforeTier(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	sch := &fakeScheduler{decision: &scheduler.RouteDecision{ModelID: "1", ModelName: "m"}}
-	nc := cache.NewGroupNameCache("")
+	nc := cache.NewGroupNameCache()
 	nc.SetNames([]string{"premium"})
 	resolver := &countingTierResolver{}
 	dispatcher := orchestrator.NewGroupAwareDispatcherWithBindingAndTier(sch, nc, nil, resolver)
@@ -115,7 +115,7 @@ func setupDispatcher(groupNames []string, bindURL string) *orchestrator.GroupAwa
 			ModelID:   "1",
 		},
 	}
-	nc := cache.NewGroupNameCache("")
+	nc := cache.NewGroupNameCache()
 	nc.SetNames(groupNames)
 
 	if bindURL != "" {

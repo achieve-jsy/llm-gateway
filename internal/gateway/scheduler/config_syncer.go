@@ -28,6 +28,15 @@ type ConfigSyncer struct {
 	lastSyncAt    time.Time
 	syncMu        sync.RWMutex
 	internalToken string
+	// groupNamesSink 组名消费方（gateway 的组名缓存）。组名清单与路由表来自同一个
+	// 控制面接口，一次同步同时喂两边，避免两份缓存出现“路由已就绪、组名判定仍为空”
+	// 的窗口把合法组名误判成直连模型。
+	groupNamesSink func([]string)
+}
+
+// SetGroupNamesSink 注册组名消费方，必须在 Run 之前调用。
+func (cs *ConfigSyncer) SetGroupNamesSink(sink func([]string)) {
+	cs.groupNamesSink = sink
 }
 
 // NewConfigSyncer creates a ConfigSyncer with the given parameters.
@@ -53,6 +62,12 @@ func NewConfigSyncer(cpBaseURL, internalToken string, routeTable *RouteTable, he
 
 // Run starts the config sync loop. It blocks until Stop is called.
 func (cs *ConfigSyncer) Run() {
+	// 先立即同步一次：/ready 依赖 lastSyncAt，组名缓存也由本次同步灌入，
+	// 越早完成，“路由配置未就绪”的窗口越短。
+	if err := cs.doSync(); err != nil {
+		slog.Warn("scheduler config sync failed", "error", err)
+	}
+
 	ticker := time.NewTicker(cs.interval)
 	defer ticker.Stop()
 
@@ -78,6 +93,13 @@ func (cs *ConfigSyncer) doSync() error {
 	}
 
 	cs.routeTable.ReplaceAll(config)
+
+	// 组名注册表与路由表同源（同一个控制面接口），同一份 payload 一次性下发，
+	// 不再单独维护第二份 HTTP 缓存。必须早于 lastSyncAt：/ready 变 true 就意味着
+	// 组名一定可用（否则就是 17:17 事故里那个 30s 误判窗口）。
+	if cs.groupNamesSink != nil {
+		cs.groupNamesSink(enabledGroupNames(config))
+	}
 
 	activeIDs := collectActiveModelIDs(config)
 	cs.healthStore.CleanOrphaned(activeIDs)
@@ -172,6 +194,20 @@ func (cs *ConfigSyncer) fetchConfig() (*ControlPlaneConfig, error) {
 	}
 
 	return &config, nil
+}
+
+// enabledGroupNames 返回启用中的组名（组名判定的唯一数据源）。
+func enabledGroupNames(config *ControlPlaneConfig) []string {
+	if config == nil {
+		return nil
+	}
+	names := make([]string, 0, len(config.Groups))
+	for _, g := range config.Groups {
+		if g.Enabled && g.Name != "" {
+			names = append(names, g.Name)
+		}
+	}
+	return names
 }
 
 // collectActiveModelIDs extracts all model IDs from a ControlPlaneConfig

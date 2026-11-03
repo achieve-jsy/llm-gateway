@@ -404,7 +404,7 @@ func TestRealHandlers_EnforceAuthorizationBudgetQuotaBeforeUpstream(t *testing.T
 					require.NoError(t, rdb.ZAdd(context.Background(), quota.RPMKey("user", "u-1", "", ""),
 						redis.Z{Score: float64(time.Now().UnixMilli()), Member: "existing"}).Err())
 				}
-				nameCache := cache.NewGroupNameCache("")
+				nameCache := cache.NewGroupNameCache()
 				nameCache.SetNames([]string{"premium"})
 				dispatcher := orchestrator.NewGroupAwareDispatcherWithBindingAndTier(
 					protocolScheduler{}, nameCache, nil, budget.NewTierResolver(budgetHolder),
@@ -459,7 +459,7 @@ func TestRealHandlers_DirectModelRejected(t *testing.T) {
 	quotaHolder := quota.NewSnapshotHolder()
 	quotaHolder.Set(&corequota.QuotaSnapshot{Version: 1, DefaultUserRPM: 1})
 	quotaGate := quota.NewMiddleware(quotaHolder, quota.NewRedisStore(rdb))
-	nameCache := cache.NewGroupNameCache("")
+	nameCache := cache.NewGroupNameCache()
 	nameCache.SetNames([]string{"premium"})
 	dispatcher := orchestrator.NewGroupAwareDispatcherWithBindingAndTier(
 		protocolScheduler{}, nameCache, nil, budget.NewTierResolver(budgetHolder),

@@ -18,7 +18,7 @@ import (
 func TestDispatch_DirectModelRejectedWhenTierEnabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	sch := &fakeScheduler{decision: &scheduler.RouteDecision{ModelID: "1", ModelName: "m"}}
-	nc := cache.NewGroupNameCache("")
+	nc := cache.NewGroupNameCache()
 	nc.SetNames([]string{"g1"})
 	resolver := &countingTierResolver{}
 	dispatcher := orchestrator.NewGroupAwareDispatcherWithBindingAndTier(sch, nc, nil, resolver)
@@ -40,7 +40,7 @@ func TestDispatch_DirectModelRejectedWhenTierEnabled(t *testing.T) {
 func TestDispatch_DirectModelAllowedWhenTierDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	sch := &fakeScheduler{decision: &scheduler.RouteDecision{ModelID: "1", ModelName: "m"}}
-	nc := cache.NewGroupNameCache("")
+	nc := cache.NewGroupNameCache()
 	nc.SetNames([]string{"g1"})
 	dispatcher := orchestrator.NewGroupAwareDispatcher(sch, nc)
 	ctx, _ := makeContext(&model.UserIdentity{KeyID: "key-1"})
@@ -55,7 +55,7 @@ func TestDispatch_DirectModelAllowedWhenTierDisabled(t *testing.T) {
 func TestDispatch_EmptyModelNotRejected(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	sch := &fakeScheduler{decision: &scheduler.RouteDecision{ModelID: "1", ModelName: "m"}}
-	nc := cache.NewGroupNameCache("")
+	nc := cache.NewGroupNameCache()
 	nc.SetNames([]string{"g1"})
 	resolver := &countingTierResolver{}
 	dispatcher := orchestrator.NewGroupAwareDispatcherWithBindingAndTier(sch, nc, nil, resolver)
@@ -70,7 +70,7 @@ func TestDispatch_EmptyModelNotRejected(t *testing.T) {
 func TestDispatch_GroupNameStillRoutes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	sch := &fakeScheduler{decision: &scheduler.RouteDecision{ModelID: "1", ModelName: "m"}}
-	nc := cache.NewGroupNameCache("")
+	nc := cache.NewGroupNameCache()
 	nc.SetNames([]string{"g1"})
 	resolver := &countingTierResolver{}
 	dispatcher := orchestrator.NewGroupAwareDispatcherWithBindingAndTier(sch, nc, nil, resolver)

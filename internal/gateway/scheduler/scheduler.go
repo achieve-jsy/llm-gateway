@@ -100,6 +100,12 @@ func (s *Scheduler) GetGroupConfig(groupName string) *GroupRoutingConfig {
 	return s.router.routeTable.Get(groupName)
 }
 
+// SetGroupNamesSink 把每次配置同步的组名清单转交外部消费者（gateway 的组名缓存）。
+// 必须在 Start 之前调用，否则首次同步的组名会丢。
+func (s *Scheduler) SetGroupNamesSink(sink func([]string)) {
+	s.configSyncer.SetGroupNamesSink(sink)
+}
+
 func (s *Scheduler) NotifyFailure(modelID string) {
 	s.healthProber.NotifyFailure(modelID)
 }

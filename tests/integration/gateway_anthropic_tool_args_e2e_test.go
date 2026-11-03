@@ -295,7 +295,7 @@ func startGatewayE2E(t *testing.T) (gatewayURL string) {
 
 	// ── 真实 orchestrator + 真实 group 分发（调度决定用替身）
 	orch := orchestrator.NewChatOrchestrator(providerRouter)
-	nameCache := cache.NewGroupNameCache("")
+	nameCache := cache.NewGroupNameCache()
 	nameCache.SetNames([]string{e2eModelName})
 	dispatcher := orchestrator.NewGroupAwareDispatcher(&e2eScheduler{decision: &scheduler.RouteDecision{
 		GroupName:    e2eModelName,

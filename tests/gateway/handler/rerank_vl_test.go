@@ -72,7 +72,7 @@ func (f *fakeRerankScheduler) PersistSticky(_ context.Context, _, _ string, _ *s
 func (f *fakeRerankScheduler) UpdateSticky(_ context.Context, _, _, _, _ string) bool { return false }
 
 func newRerankGroupDispatcher(groupName, modelName, modelType string) *orchestrator.GroupAwareDispatcher {
-	nc := cache.NewGroupNameCache("")
+	nc := cache.NewGroupNameCache()
 	nc.SetNames([]string{groupName})
 	sch := &fakeRerankScheduler{
 		decision: &scheduler.RouteDecision{

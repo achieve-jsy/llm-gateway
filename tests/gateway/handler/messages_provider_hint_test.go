@@ -87,7 +87,7 @@ func (f *fakeMessagesScheduler) UpdateSticky(_ context.Context, _, _, _, _ strin
 func TestMessagesHandler_SetsProviderHintFromGroupDispatch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	nc := cache.NewGroupNameCache("")
+	nc := cache.NewGroupNameCache()
 	nc.SetNames([]string{"claude-opus-4-6"})
 	sch := &fakeMessagesScheduler{
 		decision: &scheduler.RouteDecision{

@@ -57,6 +57,14 @@ func NewGroupAwareDispatcherWithBindingAndTier(
 }
 
 func (d *GroupAwareDispatcher) Dispatch(c *gin.Context, modelName string, req *core.ChatRequest) (*scheduler.RouteDecision, error) {
+	// 冷启动：组名注册表还没同步完。“还不知道”不能等同于“不是组”，否则每个合法
+	// 组名都会被判成直连模型——启用档位预算时就是对全体调用方的
+	// 403 direct_model_not_allowed（2026-10-30 17:17 blue 切流事故）。
+	// 这里返回可重试的 503，让调用方重试而不是当成永久性鉴权失败。
+	if modelName != "" && !d.nameCache.IsInitialized() {
+		return nil, model.ErrConfigNotReady
+	}
+
 	if !d.nameCache.IsGroupName(modelName) {
 		// 直连（非组名）模型请求会绕过档位预算：只有组名路径会设置 tier context，
 		// 导致 budget.Gate.Check 读不到档位而跳过档位限制。启用档位预算

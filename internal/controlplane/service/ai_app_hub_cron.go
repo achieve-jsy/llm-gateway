@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -90,6 +92,12 @@ const (
 	// syncLastFailureKey 最近一次彻底失败的时间。失败后冷却一段时间再试，
 	// 避免上游宕机时每个 tick 都重跑一整轮重试。
 	syncLastFailureKey = "ai_app_hub:sync:last_failure"
+	// syncLastSuccessBuildKey 最近一次成功同步的构建时间戳（秒）。
+	//
+	// 蓝绿两色都跑同一个 cron：切流后备用色是老镜像，谁先到点谁抢到锁，
+	// 当天的同步就可能由旧代码执行（实测发生过：旧色先跑，把 last_success 写掉，
+	// 新代码当天再也不会跑）。用构建时间戳比较，让更新的构建补跑一次、旧构建让位。
+	syncLastSuccessBuildKey = "ai_app_hub:sync:last_success_build"
 
 	syncLastSuccessTTL = 30 * 24 * time.Hour
 	syncLeaderTTL      = 10 * time.Minute
@@ -143,6 +151,31 @@ func (s *SyncStateStore) MarkSuccess(ctx context.Context, t time.Time) error {
 	return s.rdb.Set(ctx, syncLastSuccessKey, t.UTC().Format(time.RFC3339), syncLastSuccessTTL).Err()
 }
 
+// MarkSuccessBuild 记下这次成功同步来自哪个构建（APP_BUILD_TIME，秒）。
+func (s *SyncStateStore) MarkSuccessBuild(ctx context.Context, build int64) error {
+	if build <= 0 {
+		return nil
+	}
+	return s.rdb.Set(ctx, syncLastSuccessBuildKey, strconv.FormatInt(build, 10), syncLastSuccessTTL).Err()
+}
+
+// LastSuccessBuild 最近一次成功同步的构建时间戳；没有记录返回 (0, false, nil)。
+func (s *SyncStateStore) LastSuccessBuild(ctx context.Context) (int64, bool, error) {
+	raw, err := s.rdb.Get(ctx, syncLastSuccessBuildKey).Result()
+	if err == redis.Nil {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	n, convErr := strconv.ParseInt(raw, 10, 64)
+	if convErr != nil {
+		slog.Warn("ai_app_hub_sync_state_corrupt", "key", syncLastSuccessBuildKey, "value", raw, "error", convErr)
+		return 0, false, nil
+	}
+	return n, true, nil
+}
+
 func (s *SyncStateStore) MarkFailure(ctx context.Context, t time.Time) error {
 	return s.rdb.Set(ctx, syncLastFailureKey, t.UTC().Format(time.RFC3339), syncLastSuccessTTL).Err()
 }
@@ -191,6 +224,23 @@ type SyncCronOptions struct {
 	Backoff    []time.Duration
 	Now        func() time.Time
 	Sleep      func(context.Context, time.Duration) error
+	// Build 本实例的构建时间戳（秒），见 BuildEpoch。0 表示不参与构建优先级判断。
+	Build int64
+}
+
+// BuildEpoch 从 APP_BUILD_TIME 读本实例的构建时间戳（秒），由部署脚本注入。
+// 读不到返回 0：那就退回"只有到点才跑"的老行为，不影响同步本身。
+func BuildEpoch() int64 {
+	raw := strings.TrimSpace(os.Getenv("APP_BUILD_TIME"))
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		slog.Warn("ai_app_hub_sync_build_env_invalid", "value", raw, "error", err)
+		return 0
+	}
+	return n
 }
 
 func (o SyncCronOptions) withDefaults() SyncCronOptions {
@@ -244,7 +294,17 @@ func RunSyncCycle(ctx context.Context, opts SyncCronOptions) (ran bool, attempts
 		slog.Warn("ai_app_hub_sync_last_success_read_failed", "error", err)
 		return false, 0, err
 	}
-	if hasLast && !opts.Schedule.IsDue(last, opts.Now()) {
+	due := !hasLast || opts.Schedule.IsDue(last, opts.Now())
+	if !due && opts.Build > 0 {
+		// 本实例的构建比上次成功同步的构建更新（刚发版）→ 立刻补跑一次；
+		// 反之说明是刚被切下去的旧色，让位给新色，别用旧代码覆盖当天数据。
+		if prev, ok, berr := opts.State.LastSuccessBuild(ctx); berr != nil {
+			slog.Warn("ai_app_hub_sync_last_build_read_failed", "error", berr)
+		} else if !ok || opts.Build > prev {
+			due = true
+		}
+	}
+	if !due {
 		return false, 0, nil
 	}
 
@@ -267,6 +327,9 @@ func RunSyncCycle(ctx context.Context, opts SyncCronOptions) (ran bool, attempts
 		if err == nil {
 			if markErr := opts.State.MarkSuccess(ctx, opts.Now()); markErr != nil {
 				slog.Warn("ai_app_hub_sync_mark_success_failed", "error", markErr)
+			}
+			if buildErr := opts.State.MarkSuccessBuild(ctx, opts.Build); buildErr != nil {
+				slog.Warn("ai_app_hub_sync_mark_build_failed", "error", buildErr)
 			}
 			return true, i, nil
 		}

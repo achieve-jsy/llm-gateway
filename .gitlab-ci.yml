@@ -374,6 +374,8 @@ deploy-app-test:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         # EHR 接口中心（AI 应用聚合页同步）：三个都注入才启动每日 03:00 同步，否则接口 502、调度不启动。
         export EHR_BASE_URL='${TEST_EHR_BASE_URL:-}' EHR_API_TOKEN='${TEST_EHR_API_TOKEN:-}' EHR_ORG_ID='${TEST_EHR_ORG_ID:-}'
+        # 构建时间戳：蓝绿两色都跑定时同步，用它让新色先跑一次、旧色让位。
+        export APP_BUILD_TIME=$(date +%s)
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
         # 非密钥 canonical 开关：测试环境默认进入安全影子记账，不启用任何阻断。
@@ -427,6 +429,8 @@ rollback-test:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         # EHR 接口中心（AI 应用聚合页同步）：三个都注入才启动每日 03:00 同步，否则接口 502、调度不启动。
         export EHR_BASE_URL='${TEST_EHR_BASE_URL:-}' EHR_API_TOKEN='${TEST_EHR_API_TOKEN:-}' EHR_ORG_ID='${TEST_EHR_ORG_ID:-}'
+        # 构建时间戳：蓝绿两色都跑定时同步，用它让新色先跑一次、旧色让位。
+        export APP_BUILD_TIME=$(date +%s)
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
         export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
@@ -536,6 +540,8 @@ deploy-app-test-fast:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         # EHR 接口中心（AI 应用聚合页同步）：三个都注入才启动每日 03:00 同步，否则接口 502、调度不启动。
         export EHR_BASE_URL='${TEST_EHR_BASE_URL:-}' EHR_API_TOKEN='${TEST_EHR_API_TOKEN:-}' EHR_ORG_ID='${TEST_EHR_ORG_ID:-}'
+        # 构建时间戳：蓝绿两色都跑定时同步，用它让新色先跑一次、旧色让位。
+        export APP_BUILD_TIME=$(date +%s)
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
         export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
@@ -586,6 +592,8 @@ deploy-app-test-fast:
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
         # EHR 接口中心（AI 应用聚合页同步）：三个都注入才启动每日 03:00 同步，否则接口 502、调度不启动。
         export EHR_BASE_URL='${TEST_EHR_BASE_URL:-}' EHR_API_TOKEN='${TEST_EHR_API_TOKEN:-}' EHR_ORG_ID='${TEST_EHR_ORG_ID:-}'
+        # 构建时间戳：蓝绿两色都跑定时同步，用它让新色先跑一次、旧色让位。
+        export APP_BUILD_TIME=$(date +%s)
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
         export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
@@ -655,6 +663,8 @@ deploy-prod:
         export OAUTH_CLIENT_ID='${PROD_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${PROD_OAUTH_CLIENT_SECRET}'
         # EHR 接口中心（AI 应用聚合页同步）：三个都注入才启动每日 03:00 同步，否则接口 502、调度不启动。
         export EHR_BASE_URL='${PROD_EHR_BASE_URL:-}' EHR_API_TOKEN='${PROD_EHR_API_TOKEN:-}' EHR_ORG_ID='${PROD_EHR_ORG_ID:-}'
+        # 构建时间戳：蓝绿两色都跑定时同步，用它让新色先跑一次、旧色让位。
+        export APP_BUILD_TIME=$(date +%s)
         export OAUTH_REDIRECT_URI='${PROD_OAUTH_REDIRECT_URI:-https://aimeter.xk-devops.com/auth/callback}'
         export FRONTEND_URL='${PROD_FRONTEND_URL:-https://aimeter.xk-devops.com}'
         export INTERNAL_AUTH_TOKEN='${PROD_INTERNAL_AUTH_TOKEN}'

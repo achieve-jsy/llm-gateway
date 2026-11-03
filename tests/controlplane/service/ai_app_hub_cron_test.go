@@ -43,7 +43,6 @@ func (r *countingRunner) firstScope() service.SyncScope {
 	return r.scopes[0]
 }
 
-
 func TestLoadSyncScheduleDefaults(t *testing.T) {
 	env := map[string]string{}
 	s, err := service.LoadSyncSchedule(func(k string) (string, bool) { v, ok := env[k]; return v, ok })
@@ -131,6 +130,7 @@ func TestSyncStateStoreLockIsExclusiveAndOwnerScoped(t *testing.T) {
 	_, third := store.TryLock(ctx)
 	require.True(t, third, "释放后可以重新获取")
 }
+
 type flakyRunner struct {
 	calls atomic.Int32 // 后台 goroutine 也在调，读写都要原子
 	errs  []error      // 按调用序号返回；耗尽后返回 nil
@@ -189,6 +189,46 @@ func TestRunSyncCycleRunsOnFirstStart(t *testing.T) {
 
 	// 同一个周期内再 tick：不重复
 	ran, _, err = service.RunSyncCycle(context.Background(), opts)
+	require.NoError(t, err)
+	require.False(t, ran)
+	require.Equal(t, 1, runner.count())
+}
+
+// 蓝绿两色都跑同一个 cron：新构建（刚发版）要立刻补跑一次，旧构建要让位，
+// 否则备用色会用旧代码写掉当天数据（线上真发生过）。
+func TestRunSyncCycleNewerBuildRunsOnceAndOlderBuildDefers(t *testing.T) {
+	newer, older := int64(2_000), int64(1_000)
+	now := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+
+	// 今天 03:00 已经由旧构建跑过
+	runner := &countingRunner{}
+	opts, store := cronOptsForTest(t, runner, now)
+	require.NoError(t, store.MarkSuccess(context.Background(), now))
+	require.NoError(t, store.MarkSuccessBuild(context.Background(), older))
+
+	// 旧构建：同一构建已经跑过，让位
+	oldOpts := opts
+	oldOpts.Build = older
+	ran, _, err := service.RunSyncCycle(context.Background(), oldOpts)
+	require.NoError(t, err)
+	require.False(t, ran, "旧构建不重复跑")
+	require.Zero(t, runner.count())
+
+	// 新构建：补跑一次并记下自己的构建号
+	newOpts := opts
+	newOpts.Build = newer
+	ran, _, err = service.RunSyncCycle(context.Background(), newOpts)
+	require.NoError(t, err)
+	require.True(t, ran, "新构建发版后立刻补一次")
+	require.Equal(t, 1, runner.count())
+
+	got, ok, err := store.LastSuccessBuild(context.Background())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, newer, got)
+
+	// 再 tick：新构建自己也只跑一次
+	ran, _, err = service.RunSyncCycle(context.Background(), newOpts)
 	require.NoError(t, err)
 	require.False(t, ran)
 	require.Equal(t, 1, runner.count())

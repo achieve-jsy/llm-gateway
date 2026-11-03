@@ -97,6 +97,9 @@ services:
       EHR_PREFIX: ${EHR_PREFIX:-/open-apis/ehr-apic/open-apis/resource/v1}
       AI_APP_HUB_SYNC_CRON: "${AI_APP_HUB_SYNC_CRON:-0 3 * * *}"
       AI_APP_HUB_SYNC_TZ: ${AI_APP_HUB_SYNC_TZ:-Asia/Shanghai}
+      # 本镜像的构建/部署时间戳（秒）。蓝绿两色都跑定时同步，靠它让更新的构建先跑、
+      # 旧构建让位，避免备用色用旧代码写掉当天已有数据。空值 = 不参与比较。
+      APP_BUILD_TIME: ${APP_BUILD_TIME:-}
       DEV_LOGIN_ENABLED: ${DEV_LOGIN_ENABLED:-false}
       DEV_LOGIN_PROD_ALLOWED: ${DEV_LOGIN_PROD_ALLOWED:-false}
       BUDGET_TIER_MASTER_ENABLED: ${BUDGET_TIER_MASTER_ENABLED:-false}

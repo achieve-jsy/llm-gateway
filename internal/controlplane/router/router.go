@@ -527,6 +527,9 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 				Schedule: sched,
 				State:    service.NewSyncStateStore(rdb),
 				Runner:   hubSyncSvc,
+				// 蓝绿两色都跑 cron：用构建时间戳决定谁先跑，避免备用色（旧镜像）
+				// 抢到当天的同步权。取不到就是 0，退回"只有到点才跑"。
+				Build: service.BuildEpoch(),
 			})
 		}
 	}

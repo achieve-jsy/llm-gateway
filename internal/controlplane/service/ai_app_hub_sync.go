@@ -29,6 +29,10 @@ const (
 	lastSyncDepartmentsKey = "ai_app_hub.last_sync_departments"
 	// lastSyncDeletedKey 上次对账隐藏的工作室数（管理页展示）。
 	lastSyncDeletedKey = "ai_app_hub.last_sync_deleted_studios"
+	// lastSyncEmployeesKey 上次成功写入的人员档案数。
+	lastSyncEmployeesKey = "ai_app_hub.last_sync_employees"
+	// lastSyncUnmappedKey 归属不到工作室的部门数（聚合页不可见，非 0 要查数据）。
+	lastSyncUnmappedKey = "ai_app_hub.last_sync_unmapped_departments"
 
 	// syncReconcileMinRatio 本次部门数 / 上次成功部门数 低于它 → 认为上游只给了部分树，
 	// 本轮跳过隐藏对账：宁可漏隐藏，也不要因为上游抽风把整棵组织树藏掉。
@@ -68,6 +72,9 @@ type HubSyncResult struct {
 	Hidden      int    `json:"hidden"`
 	// Employees 本轮写入的人员档案数（只有实现 EmployeeFetcher 的 fetcher 才会统计）。
 	Employees int `json:"employees"`
+	// UnmappedDepartments 归属不到任何工作室的部门数（EHR 里没有父节点的孤儿部门）。
+	// 这些部门在聚合页不可见，非 0 时看日志里的名字确认是数据问题还是配置问题。
+	UnmappedDepartments int `json:"unmapped_departments"`
 	// DeletedStudios 本次对账隐藏的工作室数（只有 scope=all 会变）。
 	DeletedStudios int   `json:"deleted_studios"`
 	DurationMs     int64 `json:"duration_ms"`
@@ -151,7 +158,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 	start := time.Now()
 	defer func() {
 		if err != nil {
-			s.markStatus(scope, "failed", err.Error(), 0, 0)
+			s.markStatus(scope, "failed", err.Error(), 0, 0, 0, 0)
 		}
 	}()
 
@@ -200,6 +207,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		return HubSyncResult{}, err
 	}
 
+	var unmapped []string
 	for id := range targets {
 		it, ok := byID[id]
 		if !ok {
@@ -209,6 +217,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		if !resolved {
 			// 解析不出归属（例如祖先事业部本地还没有行）时保持原值，
 			// 不能把上一轮同步算出的 studio_id 抹成 NULL。
+			unmapped = append(unmapped, it.Name)
 			continue
 		}
 		if err = s.repo.SetDepartmentStudio(ctx, id, studioID); err != nil {
@@ -236,15 +245,21 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		}
 	}
 
-	s.markStatus(scope, "success", "", int(deleted), len(items))
+	if len(unmapped) > 0 {
+		// 这些部门在聚合页上看不到，属于"数据有问题但不该让同步失败"的情况：
+		// 打日志 + 计数，别让它静默消失。
+		slog.Warn("ai_app_hub_sync_departments_without_studio", "count", len(unmapped), "names", unmapped)
+	}
+	s.markStatus(scope, "success", "", int(deleted), len(items), employees, len(unmapped))
 	return HubSyncResult{
-		Scope:          string(scope.Kind),
-		Departments:    len(targets),
-		Studios:        studios,
-		Hidden:         hidden,
-		Employees:      employees,
-		DeletedStudios: int(deleted),
-		DurationMs:     time.Since(start).Milliseconds(),
+		Scope:               string(scope.Kind),
+		Departments:         len(targets),
+		Studios:             studios,
+		Hidden:              hidden,
+		Employees:           employees,
+		UnmappedDepartments: len(unmapped),
+		DeletedStudios:      int(deleted),
+		DurationMs:          time.Since(start).Milliseconds(),
 	}, nil
 }
 
@@ -490,7 +505,7 @@ func (s *AIAppHubSyncService) reconcileLooksPartial(current int) bool {
 }
 
 // markStatus 记录最近一次同步结果，管理页据此展示"上次同步时间/结果"。
-func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string, deleted, departments int) {
+func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string, deleted, departments, employees, unmapped int) {
 	if s.settings == nil {
 		return
 	}
@@ -504,6 +519,8 @@ func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string,
 		values["ai_app_hub.last_sync_error"] = ""
 		values[lastSyncDeletedKey] = strconv.Itoa(deleted)
 		values[lastSyncDepartmentsKey] = strconv.Itoa(departments)
+		values[lastSyncEmployeesKey] = strconv.Itoa(employees)
+		values[lastSyncUnmappedKey] = strconv.Itoa(unmapped)
 	} else {
 		values["ai_app_hub.last_sync_error"] = truncateRunes(errMsg, 500)
 	}

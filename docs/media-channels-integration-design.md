@@ -527,7 +527,9 @@ gpt-image 复用既有 OpenAI provider，只需要新增 `model_type=image` 的�
 1. **控制面**：`catalog_parser` 现在只解析 4 个 token 价字段（`service/catalog_parser.go:104-118`），图像价（`output_cost_per_image`/`input_cost_per_pixel` 等）只落在 `RawPayload` → 需要新增解析；`pricing/resolver.go:176-180` 对图像/视频直接返回空 → 需要新增分支。
 2. **快照**：`provider_snapshot_service.go:112-155` 需携带 `billing_unit`/`unit_price_usd`/`billing_rules`；`core.ModelPricing` 增加字段（`PerImage`/`InputPerImage` 已有但无消费）。
 3. **网关成本估算**：`observability/cost.go:101-102` 与 `collector.go:644-690` 只有 rerank/token 分支 → 增加 image/video 分支。
-4. **准入**：`usage_collector.go:86-91` 要求 `EstCostUSD > 0` 才核销预算 —— 这个门槛**保持**（配合 D3 的"无价拒绝"，就能从"静默 0 元"变成"要么有价要么报错"）。
+4. **准入**：`usage_collector.go:81` 原判据是 `event.EstCostUSD > 0` 才调预算记账钩子。⚠️ **2026-10-16 决策变更（原写「保持」）**：实测证明该门槛会**静默吞掉记账钩子**——`collector.Emit` 本身是无条件执行的（埋点/call_logs 从未被丢），被吞的只有预算钩子，于是「无价 / 缺用量」的请求对预算层完全不可见，正是本文档要消灭的「静默 0 元」的**残余来源**。若只加「无价拒绝」而不动门槛，则 `MEDIA_REQUIRE_PRICING=false` 的应急放行路径仍会静默漏账。故 A2 已把判据改为**「是否有计价事实」**（`hasBillableSignal` = 金额>0 ∨ 无价标记 ∨ `UsageMissing` ∨ 有真实用量），并配套：① 强制 `event.UsageMissing=true`；② 新增指标 `gateway_billable_cost_missing_total{reason,endpoint}`（reason ∈ media_pricing_missing/usage_missing/cost_zero）；③ 无价拒绝用 **402 `media_pricing_missing`**（不是 503——503 在本仓语义是「稍后重试」，而「模型没价」重试永远不会成功）；④ 闸门入口 `middleware.EnsureMediaPricing(c, routedModel, providerType)` 放在**组调度之后、调上游之前**（中间件阶段拿不到「组名→上游模型」：模型在 body 里、图像编辑还是 multipart，「查任务」类端点不得调用）。**不会污染账目**：生产钩子入口即 `realCostUSD <= 0` 短路（`router.go:513-515`），token 链路逐字段行为不变（有测试锁定）。
+
+> **§8.2 落地状态（2026-10-16）**：第 1、2、3 条已由 A1 交付（`catalog_parser` 解析 12 个媒体价列 → `catalog_sync` 落库 → `provider_snapshot` 透传 `Catalog.Mode` → `pricing.ApplyCatalogMediaPricing` 按 catalog `mode` 权威分派；`EstimateMediaCost` + 采集器媒体分支）。第 4 条按上述新决策实现。原第 2 条提到的 `billing_unit`/`unit_price_usd`（`price_mode=manual` 的媒体价）**尚未落地**——这类模型计费时必然 `usage_missing=true`，是已知缺口。
 
 ### 8.3 无价策略（D3）
 

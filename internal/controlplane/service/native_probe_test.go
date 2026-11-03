@@ -8,6 +8,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,11 +17,14 @@ import (
 
 func TestProbeAnthropicMessages_UsesNativePathAndHeaders(t *testing.T) {
 	var gotPath, gotKey, gotVersion string
+	var gotBody map[string]any
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotKey = r.Header.Get("x-api-key")
 		gotVersion = r.Header.Get("anthropic-version")
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"type":"message","content":[{"type":"text","text":"hi"}]}`))
 	}))
@@ -40,6 +45,17 @@ func TestProbeAnthropicMessages_UsesNativePathAndHeaders(t *testing.T) {
 	}
 	if gotVersion == "" {
 		t.Fatal("Anthropic 请求必须带 anthropic-version")
+	}
+	// 请求体同样由 adapter 改写而来，不能只验证 URL 就宣布等价：
+	// Anthropic 要求 max_tokens 必填，探针若漏了它会永远 400。
+	if gotBody["max_tokens"] != float64(16) {
+		t.Fatalf("max_tokens 必须为 16，实际 %v", gotBody["max_tokens"])
+	}
+	if gotBody["model"] != "claude-x" {
+		t.Fatalf("model 必须原样透传，实际 %v", gotBody["model"])
+	}
+	if msgs, ok := gotBody["messages"].([]any); !ok || len(msgs) == 0 {
+		t.Fatalf("messages 不能为空，实际 %v", gotBody["messages"])
 	}
 }
 

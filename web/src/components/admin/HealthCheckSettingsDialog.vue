@@ -66,6 +66,53 @@
         </span>
       </el-form-item>
 
+      <el-divider content-position="left">模型检测</el-divider>
+      <el-form-item label="启用">
+        <el-switch v-model="form.model_check_enabled" />
+      </el-form-item>
+      <el-form-item label="检测间隔">
+        <el-input-number v-model="form.model_check_interval_minutes" :min="1" :max="1440" />
+        <span style="margin-left: 8px; color: var(--el-text-color-secondary); font-size: 12px">分钟</span>
+      </el-form-item>
+      <el-form-item label="失败阈值">
+        <el-input-number v-model="form.model_check_failure_threshold" :min="1" :max="100" />
+        <span style="margin-left: 8px; color: var(--el-text-color-secondary); font-size: 12px">次</span>
+      </el-form-item>
+      <el-form-item>
+        <span style="color: var(--el-text-color-secondary); font-size: 12px">
+          逐模型发起一次真实推理（消耗少量 Token），连续失败后自动禁用该模型。
+          不需要时请关闭，否则即使渠道检测选了「仅连通性」它仍会按本间隔运行。
+        </span>
+      </el-form-item>
+
+      <el-divider content-position="left">模型组检测</el-divider>
+      <el-form-item label="启用">
+        <el-switch v-model="form.group_check_enabled" />
+      </el-form-item>
+      <el-form-item label="检测间隔">
+        <el-input-number v-model="form.group_check_interval_minutes" :min="1" :max="1440" />
+        <span style="margin-left: 8px; color: var(--el-text-color-secondary); font-size: 12px">分钟</span>
+      </el-form-item>
+      <el-form-item>
+        <span style="color: var(--el-text-color-secondary); font-size: 12px">
+          以对外模型组名发起请求，只记录日志，不改任何状态。
+        </span>
+      </el-form-item>
+
+      <el-divider content-position="left">模型自动恢复</el-divider>
+      <el-form-item label="启用">
+        <el-switch v-model="form.model_recovery_enabled" />
+      </el-form-item>
+      <el-form-item label="恢复阈值">
+        <el-input-number v-model="form.model_recovery_success_threshold" :min="1" :max="100" />
+        <span style="margin-left: 8px; color: var(--el-text-color-secondary); font-size: 12px">次</span>
+      </el-form-item>
+      <el-form-item>
+        <span style="color: var(--el-text-color-secondary); font-size: 12px">
+          被自动禁用的模型连续成功达到该次数后自动重新启用。
+        </span>
+      </el-form-item>
+
       <el-divider style="margin: 16px 0" />
 
       <el-form-item label=" ">
@@ -130,6 +177,16 @@ const form = ref({
   interval_custom: false,
   check_mode: 'connectivity',
   max_failures: 3,
+  // 模型级检测（独立于渠道检测）
+  model_check_enabled: true,
+  model_check_interval_minutes: 5,
+  model_check_failure_threshold: 3,
+  // 模型组检测（只记录日志）
+  group_check_enabled: true,
+  group_check_interval_minutes: 5,
+  // 模型自动恢复
+  model_recovery_enabled: true,
+  model_recovery_success_threshold: 2,
 })
 
 const saving = ref(false)
@@ -148,6 +205,18 @@ watch(
         form.value.interval_minutes = config.interval_minutes
         form.value.interval_custom = !intervalOptions.some(o => o.value === form.value.interval_minutes)
         form.value.max_failures = config.max_failures
+
+        // 模型级/组级/恢复配置此前只存在于后端，表单从未读取过，
+        // 导致这三条后台任务在 UI 上不可见、也关不掉。
+        // 老库里的这些字段可能为 0/空（历史上没被写入过），用默认值兜底，
+        // 否则 el-input-number 会显示 0，用户一保存就把间隔改成了 0。
+        form.value.model_check_enabled = config.model_check_enabled !== false
+        form.value.model_check_interval_minutes = config.model_check_interval_minutes || 5
+        form.value.model_check_failure_threshold = config.model_check_failure_threshold || 3
+        form.value.group_check_enabled = config.group_check_enabled !== false
+        form.value.group_check_interval_minutes = config.group_check_interval_minutes || 5
+        form.value.model_recovery_enabled = config.model_recovery_enabled !== false
+        form.value.model_recovery_success_threshold = config.model_recovery_success_threshold || 2
         // 从 check_providers/check_models 映射到 check_mode
         if (config.check_providers && config.check_models) {
           form.value.check_mode = 'both'
@@ -178,7 +247,14 @@ async function handleSave() {
       max_failures: form.value.max_failures,
       check_providers,
       check_models,
-    } as any)
+      model_check_enabled: form.value.model_check_enabled,
+      model_check_interval_minutes: form.value.model_check_interval_minutes,
+      model_check_failure_threshold: form.value.model_check_failure_threshold,
+      group_check_enabled: form.value.group_check_enabled,
+      group_check_interval_minutes: form.value.group_check_interval_minutes,
+      model_recovery_enabled: form.value.model_recovery_enabled,
+      model_recovery_success_threshold: form.value.model_recovery_success_threshold,
+    })
     ElMessage.success('检测设置已保存')
     emit('saved')
   } catch {

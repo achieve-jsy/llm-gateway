@@ -219,15 +219,28 @@ func (s *HealthCheckService) StartBackground(ctx context.Context) {
 		return
 	}
 
-	// 同步 interval 到 config 表
 	config, err := s.healthRepo.GetConfig()
 	if err != nil {
 		slog.Warn("failed to get health check config for background start", "error", err)
 		return
 	}
-	config.IntervalSeconds = intervalMin * 60
-	config.Enabled = true
-	s.healthRepo.UpdateConfig(config)
+
+	// 环境变量只在配置尚未初始化时作为种子值。
+	// 原实现每次启动都无条件写回 interval + enabled=true，导致运维在管理界面上
+	// 改过的间隔和关掉的开关，重启一次就被静默改回去。
+	if config.IntervalSeconds <= 0 {
+		config.IntervalSeconds = intervalMin * 60
+		config.Enabled = true
+		if err := s.healthRepo.UpdateConfig(config); err != nil {
+			slog.Warn("failed to seed health check config", "error", err)
+		}
+	}
+
+	// 尊重配置表里的总开关：用户关掉自动检测后，重启不应该把它偷偷开起来。
+	if !config.Enabled {
+		slog.Info("health check background disabled (config.enabled=false)")
+		return
+	}
 
 	s.mu.Lock()
 	if s.running {
@@ -245,10 +258,10 @@ func (s *HealthCheckService) StartBackground(ctx context.Context) {
 
 	// 渠道检测后台 goroutine
 	go func() {
-		interval := time.Duration(intervalMin) * time.Minute
+		interval := time.Duration(config.IntervalSeconds) * time.Second
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		slog.Info("health check background started", "interval_minutes", intervalMin)
+		slog.Info("health check background started", "interval_seconds", config.IntervalSeconds)
 
 		// 首次延迟 30 秒执行，避免启动时立即发请求
 		select {

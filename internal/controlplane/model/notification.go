@@ -62,3 +62,60 @@ const (
 	NotificationLevelWarning  = "warning"
 	NotificationLevelCritical = "critical"
 )
+
+// NotificationChannelRule 通知渠道规则：控制某种通知类型是否允许通过某条渠道发送。
+type NotificationChannelRule struct {
+	NotificationType string `gorm:"primaryKey;column:notification_type;type:varchar(32)" json:"notification_type"`
+	Channel          string `gorm:"primaryKey;column:channel;type:varchar(16)" json:"channel"` // "inapp" | "email"
+	Enabled          bool   `gorm:"column:enabled;not null;default:true" json:"enabled"`
+}
+
+func (NotificationChannelRule) TableName() string { return "notification_channel_rules" }
+
+// ValidNotificationChannel 判断 channel 是否为合法值。
+func ValidNotificationChannel(ch string) bool {
+	return ch == "inapp" || ch == "email"
+}
+
+// NotificationTypeMeta 通知类型元数据：key + 中文标签
+type NotificationTypeMeta struct {
+	Type  string `json:"type"`
+	Label string `json:"label"`
+}
+
+// NotificationChannelMeta 通知渠道元数据：channel key + 中文标签
+type NotificationChannelMeta struct {
+	Channel string `json:"channel"`
+	Label   string `json:"label"`
+}
+
+// NotificationMetadata 包含所有通知类型和渠道的元数据
+type NotificationMetadata struct {
+	Types    []NotificationTypeMeta    `json:"types"`
+	Channels []NotificationChannelMeta `json:"channels"`
+}
+
+// AllNotificationTypeMetas 返回所有通知类型及其中文标签
+func AllNotificationTypeMetas() []NotificationTypeMeta {
+	return []NotificationTypeMeta{
+		{Type: NotificationTypeBudgetAlert, Label: "预算告警"},
+		{Type: NotificationTypeExpansionSubmitted, Label: "扩容申请提交"},
+		{Type: NotificationTypeExpansionApproved, Label: "扩容审批通过"},
+		{Type: NotificationTypeExpansionRejected, Label: "扩容审批拒绝"},
+		{Type: NotificationTypeExpansionDecision, Label: "扩容审批决策"},
+		{Type: NotificationTypeExpansionApplyFailed, Label: "扩容执行失败"},
+		{Type: NotificationTypeExpansionExpiring, Label: "临时扩容即将到期"},
+		{Type: NotificationTypeExpansionRestored, Label: "扩容已恢复"},
+		{Type: NotificationTypeBudgetOwnerAttention, Label: "预算负责人提醒"},
+		{Type: NotificationTypeKeyActivity, Label: "密钥活动异常"},
+		{Type: NotificationTypeKeyRequestApproved, Label: "密钥申请审批通过"},
+	}
+}
+
+// AllNotificationChannelMetas 返回所有通知渠道及其中文标签
+func AllNotificationChannelMetas() []NotificationChannelMeta {
+	return []NotificationChannelMeta{
+		{Channel: "inapp", Label: "站内信"},
+		{Channel: "email", Label: "邮件"},
+	}
+}

@@ -129,6 +129,7 @@ func (s *Scanner) ScanOnce(ctx context.Context) error {
 // evalRow 逐行评估 E1/E2/E3，并更新 state.last_seen_at
 func (s *Scanner) evalRow(ctx context.Context, row *CallLogRow, cfg *KeyActivityConfig) {
 	fp := SourceFP(row.UserAgent, row.IPAddress, cfg.IPAsSource)
+	silentUA := IsSilentUserAgent(row.UserAgent)
 
 	anySeen, err := s.kaRepo.AnySeen(row.KeyID)
 	if err != nil {
@@ -140,7 +141,9 @@ func (s *Scanner) evalRow(ctx context.Context, row *CallLogRow, cfg *KeyActivity
 
 	if !anySeen {
 		s.upsertSeen(row, fp)
-		s.emitAlert(ctx, EventTypeFirstUse, *row, fp, "first", keyName, "")
+		if !silentUA {
+			s.emitAlert(ctx, EventTypeFirstUse, *row, fp, "first", keyName, "")
+		}
 	} else {
 		exists, err := s.kaRepo.SeenExists(row.KeyID, fp)
 		if err != nil {
@@ -149,7 +152,9 @@ func (s *Scanner) evalRow(ctx context.Context, row *CallLogRow, cfg *KeyActivity
 		}
 		if !exists {
 			s.upsertSeen(row, fp)
-			s.emitAlert(ctx, EventTypeNewSource, *row, fp, fp, keyName, "")
+			if !silentUA {
+				s.emitAlert(ctx, EventTypeNewSource, *row, fp, fp, keyName, "")
+			}
 		} else {
 			_ = s.kaRepo.TouchSeen(row.KeyID, fp, row.TS)
 		}
@@ -166,7 +171,9 @@ func (s *Scanner) evalRow(ctx context.Context, row *CallLogRow, cfg *KeyActivity
 			dormantDays := int(row.TS.Sub(*state.LastSeenAt).Hours() / 24)
 			dedup := row.TS.Format("2006-01-02")
 			detail := fmt.Sprintf(`{"dormant_days":%d}`, dormantDays)
-			s.emitAlert(ctx, EventTypeWakeup, *row, fp, dedup, keyName, detail)
+			if !silentUA {
+				s.emitAlert(ctx, EventTypeWakeup, *row, fp, dedup, keyName, detail)
+			}
 		}
 	}
 

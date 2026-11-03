@@ -114,8 +114,6 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
-			req.LogicalModel = decision.GroupName
-			req.ParamStyle = decision.ParamStyle
 			// 传递 provider hint，确保 Router 在同名模型多 provider 场景下
 			// 选择 scheduler 指定的 provider，避免路由歧义。
 			if decision.ProviderName != "" {
@@ -250,7 +248,7 @@ func (h *ChatHandler) handleNonStream(c *gin.Context, baseCtx context.Context, r
 		// Update sticky mapping after successful failover
 		dc := model.GetDispatchContext(c)
 		if dc != nil && dc.SessionKey != "" {
-			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelID)
+			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelName)
 		}
 
 		// v0.15: failover 模型也需要经过模型层配额检查
@@ -357,7 +355,7 @@ func (h *ChatHandler) handleStream(c *gin.Context, baseCtx context.Context, req 
 		// Update sticky mapping after successful failover
 		dc := model.GetDispatchContext(c)
 		if dc != nil && dc.SessionKey != "" {
-			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelID)
+			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelName)
 		}
 
 		// v0.15: failover 模型也需要经过模型层配额检查

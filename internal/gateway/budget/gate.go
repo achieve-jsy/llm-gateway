@@ -100,7 +100,7 @@ func (e *ExceededError) Error() string {
 func (e *ExceededError) WriteHTTPResponse(ctx *gin.Context) {
 	body := gin.H{
 		"error": gin.H{
-			"message": "budget limit exceeded",
+			"message": ExceededMessage(e.Primary),
 			"type":    e.Code,
 			"code":    e.Code,
 			"gate":    "budget",

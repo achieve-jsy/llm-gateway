@@ -62,9 +62,10 @@ func (r *BudgetRepo) ResolveMyBudgetChain(ctx context.Context, userID string) ([
 	if err != nil {
 		return nil, err
 	}
-	if identity.UserID == "" || identity.DeptID == "" || identity.StudioID == "" {
+	if identity.UserID == "" {
 		return nil, fmt.Errorf("%w: %s", ErrMyBudgetChainUnavailable, userID)
 	}
+	// 未挂部门/工作室时仍返回个人层（平台管理员常见）；有完整组织再补上级链。
 	defs := []struct {
 		scopeType string
 		scopeID   string
@@ -72,10 +73,29 @@ func (r *BudgetRepo) ResolveMyBudgetChain(ctx context.Context, userID string) ([
 		visible   bool
 	}{
 		{model.BudgetScopeMember, identity.UserID, "我的额度", true},
-		{model.BudgetScopeDeptDaily, identity.DeptID, identity.DeptName + "·成员日常预算", false},
-		{model.BudgetScopeStudio, identity.StudioID, identity.StudioName, false},
-		{model.BudgetScopeCompany, model.BudgetScopeGlobal, "全公司", false},
 	}
+	if identity.DeptID != "" {
+		defs = append(defs, struct {
+			scopeType string
+			scopeID   string
+			label     string
+			visible   bool
+		}{model.BudgetScopeDeptDaily, identity.DeptID, identity.DeptName + "·成员日常预算", false})
+	}
+	if identity.StudioID != "" {
+		defs = append(defs, struct {
+			scopeType string
+			scopeID   string
+			label     string
+			visible   bool
+		}{model.BudgetScopeStudio, identity.StudioID, identity.StudioName, false})
+	}
+	defs = append(defs, struct {
+		scopeType string
+		scopeID   string
+		label     string
+		visible   bool
+	}{model.BudgetScopeCompany, model.BudgetScopeGlobal, "全公司", false})
 	result := make([]MyBudgetScopeAllocation, 0, len(defs))
 	for _, def := range defs {
 		if def.scopeID == "" {
@@ -815,20 +835,53 @@ func (r *BudgetRepo) ResolveMemberDeptID(memberID string) (string, error) {
 	if memberID == "" {
 		return "", nil
 	}
-	var row struct {
-		DeptID string `gorm:"column:dept_id"`
-	}
-	err := r.db.Raw(`
-		SELECT COALESCE(d.dept_id, '') AS dept_id
-		FROM users u
-		JOIN departments d ON d.id = u.dept_id
-		WHERE u.id::text = ?
-		LIMIT 1
-	`, memberID).Scan(&row).Error
+	m, err := r.MapMemberDeptIDs([]string{memberID})
 	if err != nil {
 		return "", err
 	}
-	return row.DeptID, nil
+	return m[memberID], nil
+}
+
+// MapMemberDeptIDs 批量解析 user_id → SSO dept_id。
+func (r *BudgetRepo) MapMemberDeptIDs(memberIDs []string) (map[string]string, error) {
+	out := make(map[string]string, len(memberIDs))
+	if len(memberIDs) == 0 {
+		return out, nil
+	}
+	uniq := make([]string, 0, len(memberIDs))
+	seen := make(map[string]struct{}, len(memberIDs))
+	for _, id := range memberIDs {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniq = append(uniq, id)
+	}
+	if len(uniq) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		UserID string `gorm:"column:user_id"`
+		DeptID string `gorm:"column:dept_id"`
+	}
+	err := r.db.Raw(`
+		SELECT CAST(u.id AS TEXT) AS user_id, COALESCE(d.dept_id, '') AS dept_id
+		FROM users u
+		JOIN departments d ON d.id = u.dept_id
+		WHERE CAST(u.id AS TEXT) IN ?
+	`, uniq).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row.UserID != "" && row.DeptID != "" {
+			out[row.UserID] = row.DeptID
+		}
+	}
+	return out, nil
 }
 
 // DeleteAllocation 删除指定成员的单独配额，还原为共享部门预算池。

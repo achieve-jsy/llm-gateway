@@ -89,25 +89,17 @@ func (r *Router) Route(groupName string, req *core.ChatRequest) (*RouteDecision,
 
 func buildDecision(group *GroupRoutingConfig, entry *ModelRoutingEntry, start time.Time) *RouteDecision {
 	return &RouteDecision{
-		GroupName:               group.GroupName,
-		Strategy:                group.Strategy,
-		ModelID:                 strconv.FormatUint(uint64(entry.ModelID), 10),
-		ModelName:               entry.ModelName,
-		ModelType:               entry.ModelType,
-		ChannelID:               strconv.FormatUint(uint64(entry.ChannelID), 10),
-		ChannelType:             entry.ChannelType,
-		ProviderName:            entry.ProviderName,
-		Endpoint:                entry.Endpoint,
-		Credential:              entry.Credential,
-		DecisionTimeUs:          time.Since(start).Microseconds(),
-		ParamStyle:              entry.ParamStyle,
-		UpstreamModelID:         entry.UpstreamModelID,
-		BaseModel:               entry.BaseModel,
-		ProtocolMode:            entry.ProtocolMode,
-		ParamProfile:            entry.ParamProfile,
-		UnsupportedParamPolicy:  entry.UnsupportedParamPolicy,
-		SupportedParamsOverride: entry.SupportedParamsOverride,
-		TransformOverrides:      entry.TransformOverrides,
+		GroupName:      group.GroupName,
+		Strategy:       group.Strategy,
+		ModelID:        strconv.FormatUint(uint64(entry.ModelID), 10),
+		ModelName:      entry.ModelName,
+		ModelType:      entry.ModelType,
+		ChannelID:      strconv.FormatUint(uint64(entry.ChannelID), 10),
+		ChannelType:    entry.ChannelType,
+		ProviderName:   entry.ProviderName,
+		Endpoint:       entry.Endpoint,
+		Credential:     entry.Credential,
+		DecisionTimeUs: time.Since(start).Microseconds(),
 	}
 }
 
@@ -120,24 +112,16 @@ func (r *Router) SelectByStrategy(strategy RoutingStrategy, groupName string, he
 	}
 
 	decision := &RouteDecision{
-		Strategy:                strategy,
-		GroupName:               groupName,
-		ModelID:                 strconv.FormatUint(uint64(entry.ModelID), 10),
-		ModelName:               entry.ModelName,
-		ChannelID:               strconv.FormatUint(uint64(entry.ChannelID), 10),
-		ChannelType:             entry.ChannelType,
-		ProviderName:            entry.ProviderName,
-		Endpoint:                entry.Endpoint,
-		Credential:              entry.Credential,
-		DecisionTimeUs:          time.Since(start).Microseconds(),
-		ParamStyle:              entry.ParamStyle,
-		UpstreamModelID:         entry.UpstreamModelID,
-		BaseModel:               entry.BaseModel,
-		ProtocolMode:            entry.ProtocolMode,
-		ParamProfile:            entry.ParamProfile,
-		UnsupportedParamPolicy:  entry.UnsupportedParamPolicy,
-		SupportedParamsOverride: entry.SupportedParamsOverride,
-		TransformOverrides:      entry.TransformOverrides,
+		Strategy:       strategy,
+		GroupName:      groupName,
+		ModelID:        strconv.FormatUint(uint64(entry.ModelID), 10),
+		ModelName:      entry.ModelName,
+		ChannelID:      strconv.FormatUint(uint64(entry.ChannelID), 10),
+		ChannelType:    entry.ChannelType,
+		ProviderName:   entry.ProviderName,
+		Endpoint:       entry.Endpoint,
+		Credential:     entry.Credential,
+		DecisionTimeUs: time.Since(start).Microseconds(),
 	}
 	return decision, nil
 }
@@ -292,14 +276,14 @@ func (r *Router) trySticky(groupName, sessionKey string, healthyModels []*ModelR
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	pinnedModelID, err := r.stickyStore.Get(ctx, groupName, sessionKey)
-	if err != nil || pinnedModelID == "" {
+	pinnedModel, err := r.stickyStore.Get(ctx, groupName, sessionKey)
+	if err != nil || pinnedModel == "" {
 		return nil // No pin or Redis error
 	}
 
 	// Validate: is pinned model still in healthy pool?
 	for _, m := range healthyModels {
-		if fmt.Sprintf("%d", m.ModelID) == pinnedModelID {
+		if m.ModelName == pinnedModel {
 			sessionKeyPrefix := sessionKey
 			if len(sessionKey) > 8 {
 				sessionKeyPrefix = sessionKey[:8] + "..."
@@ -307,8 +291,7 @@ func (r *Router) trySticky(groupName, sessionKey string, healthyModels []*ModelR
 			slog.Info("sticky: using pinned model",
 				"group", groupName,
 				"session_key", sessionKeyPrefix,
-				"model_id", pinnedModelID,
-				"model_name", m.ModelName,
+				"model_name", pinnedModel,
 			)
 			return m
 		}
@@ -322,7 +305,7 @@ func (r *Router) trySticky(groupName, sessionKey string, healthyModels []*ModelR
 	slog.Info("sticky: pinned model not available, routing fresh",
 		"group", groupName,
 		"session_key", sessionKeyPrefix,
-		"pinned_model_id", pinnedModelID,
+		"pinned_model", pinnedModel,
 	)
 	return nil
 }

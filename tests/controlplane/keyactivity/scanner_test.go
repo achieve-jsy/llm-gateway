@@ -347,6 +347,34 @@ func TestScanner_E2_FirstUse_SeenRecordCreated(t *testing.T) {
 	}
 }
 
+func TestScanner_TraeFirstUse_SilentButRecordsSeen(t *testing.T) {
+	repo := newFakeRepo()
+	repo.configVals["key_activity.bootstrap_done"] = "true"
+	repo.cursor = ka.Cursor{TS: time.Now().Add(-24 * time.Hour)}
+	repo.callLogs = []ka.CallLogRow{
+		pastHourRow(testTestKey, "Trae/2.3.47348", "10.0.0.1", "req-trae-first"),
+	}
+
+	notif := &fakeNotifier{}
+	scanner := ka.NewScanner(repo, notif, enabledConfig(), defaultKeyLookup())
+	if err := scanner.ScanOnce(context.Background()); err != nil {
+		t.Fatalf("ScanOnce: %v", err)
+	}
+
+	if count := countAlertsByType(repo.alerts, ka.EventTypeFirstUse); count != 0 {
+		t.Fatalf("Trae first use should not create first_use alert, got %d", count)
+	}
+	if len(notif.calls) != 0 {
+		t.Fatalf("Trae first use should not notify, got %d calls", len(notif.calls))
+	}
+	if ok, _ := repo.AnySeen(testTestKey); !ok {
+		t.Fatal("Trae first use should still record source as seen")
+	}
+	if st := repo.stateMap[testTestKey]; st == nil || st.LastSeenAt == nil {
+		t.Fatal("Trae first use should still update key activity state")
+	}
+}
+
 func TestScanner_E2_SkipsEmptyKeyID(t *testing.T) {
 	// 测试目的：key_id 为空字符串的行应跳过评估，不触发任何 alert
 	repo := newFakeRepo()
@@ -418,6 +446,38 @@ func TestScanner_E1_NewSource_CreatesAlert(t *testing.T) {
 			title = notif.calls[0].title
 		}
 		t.Errorf("expected 'Key 新设备使用提醒', got %q", title)
+	}
+}
+
+func TestScanner_TraeNewSource_SilentButRecordsSeen(t *testing.T) {
+	repo := newFakeRepo()
+	repo.configVals["key_activity.bootstrap_done"] = "true"
+	repo.cursor = ka.Cursor{TS: time.Now().Add(-24 * time.Hour)}
+
+	knownFP := ka.SourceFP("curl/8.0", "10.0.0.1", true)
+	repo.seenRows[repo.seenKey(testTestKey, knownFP)] = &ka.KeySourceSeen{
+		KeyID: testTestKey, SourceFP: knownFP, UAFp: "ua-curl",
+		FirstSeen: time.Now().Add(-time.Hour), LastSeen: time.Now().Add(-time.Hour), HitCount: 1,
+	}
+	repo.callLogs = []ka.CallLogRow{
+		pastHourRow(testTestKey, "Mozilla/5.0 TRAE/2.3.47348 Electron/33.2.1", "10.0.0.2", "req-trae-source"),
+	}
+
+	notif := &fakeNotifier{}
+	scanner := ka.NewScanner(repo, notif, enabledConfig(), defaultKeyLookup())
+	if err := scanner.ScanOnce(context.Background()); err != nil {
+		t.Fatalf("ScanOnce: %v", err)
+	}
+
+	if count := countAlertsByType(repo.alerts, ka.EventTypeNewSource); count != 0 {
+		t.Fatalf("Trae new source should not create new_source alert, got %d", count)
+	}
+	if len(notif.calls) != 0 {
+		t.Fatalf("Trae new source should not notify, got %d calls", len(notif.calls))
+	}
+	traeFP := ka.SourceFP("Mozilla/5.0 TRAE/2.3.47348 Electron/33.2.1", "10.0.0.2", true)
+	if ok, _ := repo.SeenExists(testTestKey, traeFP); !ok {
+		t.Fatal("Trae new source should still be recorded as seen")
 	}
 }
 

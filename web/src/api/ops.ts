@@ -72,11 +72,21 @@ export interface OpsTraffic {
   peak_tps: number
 }
 
+/** 与后端 realtime-traffic 对齐；window 切换应反映流量 + 健康评分 */
 export interface OpsRealtimeTrafficSummary {
+  total_requests?: number
+  total_tokens?: number
+  avg_qps?: number
+  avg_tps?: number
   current_qps: number
   current_tps: number
-  window: string
-  sample_count: number
+  peak_qps?: number
+  peak_tps?: number
+  window?: string
+  sample_count?: number
+  success_rate?: number
+  error_rate?: number
+  health_score?: number
 }
 
 export interface OpsGroupOption {
@@ -95,6 +105,8 @@ export interface OpsModelItem {
 
 export interface OpsFilterParams {
   time_range?: string
+  start?: string
+  end?: string
   group_id?: number
   provider?: string
   model?: string
@@ -120,6 +132,13 @@ export interface OpsLatency {
   ttft_p99_ms: number
   ttft_avg_ms: number
   ttft_max_ms: number
+  /** 生成阶段 = 端到端 - 首字（仅流式有首字的请求） */
+  gen_p50_ms?: number
+  gen_p90_ms?: number
+  gen_p95_ms?: number
+  gen_p99_ms?: number
+  gen_avg_ms?: number
+  gen_max_ms?: number
 }
 
 export interface OpsErrors {
@@ -183,6 +202,33 @@ export interface OpsThroughputTrendResponse {
   points: OpsTrafficPoint[]
   by_provider: OpsThroughputByProvider[]
   top_groups: OpsThroughputByGroup[]
+}
+
+/** Top 慢路径（按 model+provider+group 聚合） */
+export interface OpsTopSlowItem {
+  model: string
+  provider: string
+  group_name: string
+  request_count: number
+  duration_p95_ms: number
+  duration_avg_ms: number
+}
+
+/** Top 错误路径（按 model+provider+group 聚合） */
+export interface OpsTopErrorItem {
+  model: string
+  provider: string
+  group_name: string
+  request_count: number
+  error_count: number
+  error_rate: number
+  top_status: number
+}
+
+export interface OpsTopIssuesResponse {
+  slow: OpsTopSlowItem[]
+  errors: OpsTopErrorItem[]
+  limit: number
 }
 
 // ============ 请求 / 错误详情类型 ============
@@ -290,6 +336,10 @@ export interface OpsProviderConcurrency {
   rate_limit_remaining: number
   rate_limit_reset_seconds: number
   error_count_5min: number
+  /** 近 5 分钟成功率（0-1）；无流量时为 null */
+  success_rate_5min: number | null
+  /** 近 5 分钟端到端 P95（ms）；无流量时为 null */
+  duration_p95_ms: number | null
   last_error_at: string | null
   last_error_message: string | null
 }
@@ -529,6 +579,7 @@ export interface OpsAdvancedSettings {
 
 export interface OpsUserConcurrencyItem {
   user_id: string
+  user_name?: string
   request_count: number
   error_count: number
   avg_duration_ms: number
@@ -698,9 +749,14 @@ export const opsAPI = {
       error_trend: { points: OpsErrorPoint[] }
     }>('/api/v1/ops/dashboard/snapshot-v2', { params: filter }),
 
-  // 实时流量摘要（复用 /ops/realtime-traffic 路由，按 window 过滤）
-  getRealtimeTrafficSummary: (window: string = '1min') =>
-    get<OpsRealtimeTrafficSummary>('/api/v1/ops/realtime-traffic', { params: { window } }),
+  // 实时流量摘要（复用 /ops/realtime-traffic 路由，按 window + 维度过滤）
+  getRealtimeTrafficSummary: (
+    window: string = '1min',
+    filter: Omit<OpsFilterParams, 'time_range' | 'start' | 'end'> = {},
+  ) =>
+    get<OpsRealtimeTrafficSummary>('/api/v1/ops/realtime-traffic', {
+      params: { window, ...filter },
+    }),
 
   // ---- 模型组下拉列表（运维过滤用） ----
   getGroupOptions: () =>
@@ -726,6 +782,9 @@ export const opsAPI = {
 
   getErrorDistribution: (filter: OpsFilterParams) =>
     get<{ distribution: OpsErrorDistributionItem[] }>('/api/v1/ops/error-distribution', { params: filter }),
+
+  getTopIssues: (filter: OpsFilterParams & { limit?: number }) =>
+    get<OpsTopIssuesResponse>('/api/v1/ops/top-issues', { params: filter }),
 
   getSwitchRateTrend: (filter: OpsFilterParams) =>
     get<{ points: OpsSwitchRatePoint[] }>('/api/v1/ops/switch-rate-trend', { params: filter }),
@@ -871,8 +930,8 @@ export const opsAPI = {
   listErrorLogs: (params: OpsErrorLogQuery) =>
     get<OpsErrorLogResponse>('/api/v1/ops/error-logs', { params }),
 
-  resolveErrorLog: (id: number, resolved: boolean) =>
-    put(`/api/v1/ops/error-logs/${id}/resolve`, { resolved }),
+  resolveErrorLog: (id: number | string, resolved: boolean) =>
+    put(`/api/v1/ops/error-logs/${encodeURIComponent(String(id))}/resolve`, { resolved }),
 
   // ---- 视频任务统计 ----
   getVideoTaskStats: () =>

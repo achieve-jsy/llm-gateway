@@ -1,6 +1,6 @@
 import http from './http'
 import type { Provider, ProviderPayload, ProviderDefinition, QuickOnboardPayload, QuickOnboardPreview, QuickOnboardCreateResult } from '@/types/provider'
-import type { Model, ModelPayload } from '@/types/model'
+import type { Model, ModelPayload, BatchCreateModelsPayload } from '@/types/model'
 import type { ModelTag, ModelTagPayload } from '@/types/model-tag'
 import type { SyncResult, ConfirmSyncPayload, ConfirmSyncResult, CheckModelsPayload, CheckModelsResult } from '@/types/sync'
 import type {
@@ -9,6 +9,8 @@ import type {
   SyncTriggerResponse,
   ApplyDiffResponse,
   CreateFromCatalogPayload,
+  BatchCreateFromCatalogPayload,
+  BatchCreateModelsResult,
   ResettableOverrideField,
   AutoBindResult,
   BindCatalogPayload,
@@ -343,6 +345,12 @@ export async function createModel(payload: ModelPayload): Promise<Model> {
   return response.data.data
 }
 
+/** 批量注册模型到多个渠道 */
+export async function batchCreateModels(payload: BatchCreateModelsPayload): Promise<BatchCreateModelsResult> {
+  const response = await http.post<ApiResponse<BatchCreateModelsResult>>('/api/v1/models/batch', payload)
+  return response.data.data
+}
+
 /** 更新模型 */
 export async function updateModel(id: string, payload: ModelPayload): Promise<Model> {
   const response = await http.put<ApiResponse<Model>>(`/api/v1/models/${id}`, payload)
@@ -369,15 +377,17 @@ export async function batchUpdateModelStatus(modelIds: string[], enabled: boolea
 /**
  * 检查模型名称是否可用（不与现有模型冲突）。
  *
- * 走独立的 `GET /api/v1/models/check-name?name=…` 端点（S0-3 修复），返回
+ * 走独立的 `GET /api/v1/models/check-name?name=…&provider_id=…` 端点（S0-3 修复），返回
  * `{ data: { available: boolean } }`。
  *
  * 注意：仅做乐观查重提示，最终唯一性由 CreateModel 的事务校验兜底。
  */
-export async function checkModelNameUnique(name: string): Promise<boolean> {
+export async function checkModelNameUnique(name: string, providerId?: string): Promise<boolean> {
+  const params: Record<string, string> = { name }
+  if (providerId) params.provider_id = providerId
   const response = await http.get<ApiResponse<{ available: boolean }>>(
     '/api/v1/models/check-name',
-    { params: { name } }
+    { params }
   )
   return response.data.data.available
 }
@@ -552,6 +562,17 @@ export async function createModelFromCatalog(payload: CreateFromCatalogPayload):
   return response.data.data
 }
 
+/** 基于 catalog 项批量注册到多个渠道 */
+export async function batchCreateModelsFromCatalog(
+  payload: BatchCreateFromCatalogPayload
+): Promise<BatchCreateModelsResult> {
+  const response = await http.post<ApiResponse<BatchCreateModelsResult>>(
+    '/api/v1/models/batch-from-catalog',
+    payload
+  )
+  return response.data.data
+}
+
 /** 取消某字段的人工覆盖，恢复跟随 catalog */
 export async function resetModelOverride(
   modelId: string,
@@ -676,7 +697,7 @@ export async function resetKey(id: string): Promise<CreateKeyWrappedResponse> {
 
 // ===================== 系统设置 =====================
 
-import type { SystemSettings, SettingsResponse, PublicSettingsResponse } from '@/types/settings'
+import type { SystemSettings, SettingsResponse, PublicSettingsResponse, NotificationChannelRule, NotificationChannelMetadata, NotificationChannelMetadataResponse } from '@/types/settings'
 
 export async function getPublicSettings(): Promise<PublicSettingsResponse> {
   const response = await http.get<PublicSettingsResponse>('/api/v1/settings/public')
@@ -714,6 +735,20 @@ export async function exportSettings(): Promise<Record<string, string>> {
 
 export async function importSettings(settings: Record<string, string>): Promise<void> {
   await http.post('/api/v1/settings/import', settings)
+}
+
+export async function getNotificationChannelRules(): Promise<NotificationChannelRule[]> {
+  const response = await http.get<{ code: number; data: NotificationChannelRule[] }>('/api/v1/settings/notification-channels')
+  return response.data.data ?? []
+}
+
+export async function updateNotificationChannelRules(rules: NotificationChannelRule[]): Promise<void> {
+  await http.put('/api/v1/settings/notification-channels', rules)
+}
+
+export async function getNotificationChannelMetadata(): Promise<NotificationChannelMetadata> {
+  const response = await http.get<NotificationChannelMetadataResponse>('/api/v1/settings/notification-channels/metadata')
+  return response.data.data
 }
 
 // ===================== OpenCode 配置 =====================
@@ -1188,8 +1223,35 @@ export async function applyBudgetTierBatch(input: {
 }
 
 export async function getBudgetTierUsage(params: Record<string, string>): Promise<BudgetTierUsage[]> {
-  const { data } = await http.get<{ items: BudgetTierUsage[] }>('/api/v1/budgets/tier-usage', { params })
-  return data.items || []
+  type RawBudgetTierUsage = BudgetTierUsage & {
+    accounting_cost_usd?: string | number
+    reported_cost_usd?: string | number
+  }
+  type BudgetTierUsageResponse = {
+    items?: RawBudgetTierUsage[]
+    data?: {
+      items?: RawBudgetTierUsage[]
+      data_as_of?: string
+      stale?: boolean
+    }
+  }
+  const { data } = await http.get<BudgetTierUsageResponse>('/api/v1/budgets/tier-usage', { params })
+  const dataAsOf = data.data?.data_as_of
+  const stale = data.data?.stale
+  const items = data.data?.items ?? data.items ?? []
+  const usedAmount = (item: RawBudgetTierUsage) => {
+    if (item.used_usd !== undefined) return item.used_usd
+    const accounting = Number(item.accounting_cost_usd)
+    if (Number.isFinite(accounting) && accounting > 0) return item.accounting_cost_usd
+    return item.reported_cost_usd ?? item.accounting_cost_usd ?? 0
+  }
+  return items.map(item => ({
+    ...item,
+    period_type: item.period_type ?? params.period_type,
+    used_usd: usedAmount(item),
+    data_as_of: item.data_as_of ?? dataAsOf ?? '',
+    stale: item.stale ?? stale ?? false,
+  }))
 }
 
 export async function getMyBudgetTiers(): Promise<MyBudgetTiersResponse> {

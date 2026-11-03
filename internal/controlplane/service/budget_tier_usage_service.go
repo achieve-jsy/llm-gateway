@@ -88,6 +88,9 @@ func (s *BudgetTierService) QueryTierUsage(ctx context.Context, actor rbac.Actor
 		}
 		return nil, usageErr
 	}
+	for i := range items {
+		items[i].PeriodType = string(input.PeriodType)
+	}
 	dataAsOf, stale, freshnessErr := s.usageRepo.UsageFreshness(ctx)
 	if freshnessErr != nil {
 		dataAsOf, stale = s.clock(), true

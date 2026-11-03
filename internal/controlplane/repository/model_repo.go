@@ -75,7 +75,8 @@ func (r *ModelRepo) List(filter ModelListFilter, offset, limit int) ([]model.Mod
 		return nil, 0, err
 	}
 
-	err = query.Preload("Provider").Order("created_at DESC").Order("name ASC").Offset(offset).Limit(limit).Find(&models).Error
+	// Preload Catalog：列表页与快速接入「继承模型价格」需拿到目录快照价。
+	err = query.Preload("Provider").Preload("Catalog").Order("created_at DESC").Order("name ASC").Offset(offset).Limit(limit).Find(&models).Error
 	if err != nil {
 		return nil, 0, err
 	}
@@ -117,7 +118,7 @@ func (r *ModelRepo) CountByProviderID(providerID uuid.UUID) (int64, error) {
 // ListAvailable 查询所有启用的模型及其渠道信息（供 gateway-api 内部接口消费）
 func (r *ModelRepo) ListAvailable() ([]model.Model, error) {
 	var models []model.Model
-	err := r.db.Preload("Provider").Preload("Provider.Definition").
+	err := r.db.Preload("Provider").Preload("Provider.Definition").Preload("Catalog").
 		Joins("JOIN providers ON providers.id = models.provider_id").
 		Where("models.enabled = ? AND providers.enabled = ?", true, true).
 		Find(&models).Error

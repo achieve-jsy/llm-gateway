@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -21,12 +22,20 @@ type SettingsServiceInterface interface {
 	GetSMTPPassword(ctx context.Context) string
 }
 
-type SettingsHandler struct {
-	svc SettingsServiceInterface
+// NotificationChannelServiceInterface 通知渠道规则服务。
+type NotificationChannelServiceInterface interface {
+	GetRules(ctx context.Context) ([]model.NotificationChannelRule, error)
+	UpdateRules(ctx context.Context, rules []model.NotificationChannelRule) error
+	GetMetadata() model.NotificationMetadata
 }
 
-func NewSettingsHandler(svc SettingsServiceInterface) *SettingsHandler {
-	return &SettingsHandler{svc: svc}
+type SettingsHandler struct {
+	svc             SettingsServiceInterface
+	notificationSvc NotificationChannelServiceInterface
+}
+
+func NewSettingsHandler(svc SettingsServiceInterface, notificationSvc NotificationChannelServiceInterface) *SettingsHandler {
+	return &SettingsHandler{svc: svc, notificationSvc: notificationSvc}
 }
 
 func (h *SettingsHandler) GetSystemSettings(c *gin.Context) {
@@ -59,6 +68,15 @@ func (h *SettingsHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 	if err := h.svc.UpdateSettings(c.Request.Context(), &input); err != nil {
+		if errors.Is(err, service.ErrBudgetShadowAndPositive) || errors.Is(err, service.ErrBudgetMasterDisabled) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{
+					"message": err.Error(),
+					"code":    CodeBadRequest,
+				},
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
 				"message": "更新系统设置失败",
@@ -154,22 +172,21 @@ func (h *SettingsHandler) TestEmail(c *gin.Context) {
 	password := req.Password
 	skipVerify := req.SkipVerify
 
+	// 前端回显的脱敏占位（••••••）不能当真实密码；一律回落已保存明文。
+	if service.IsMaskedSecret(password) {
+		password = ""
+	}
+
 	if host == "" && saved != nil {
 		host = saved.SMTPHost
 		port = saved.SMTPPort
 		from = saved.SMTPFrom
-		if password == "" {
-			password = saved.SMTPPassword
-			// SMTPPassword 在 GetSystemSettings 中已脱敏，用原始值覆盖
-			if h.svc != nil {
-				if raw := h.svc.GetSMTPPassword(c.Request.Context()); raw != "" {
-					password = raw
-				}
-			}
-		}
 		if !req.SkipVerify {
 			skipVerify = saved.SMTPTLSSkipVerify
 		}
+	}
+	if password == "" {
+		password = h.svc.GetSMTPPassword(c.Request.Context())
 	}
 
 	if host == "" {
@@ -183,9 +200,6 @@ func (h *SettingsHandler) TestEmail(c *gin.Context) {
 			"error": gin.H{"message": "请填写发件人邮箱", "code": CodeBadRequest},
 		})
 		return
-	}
-	if password == "" && saved != nil {
-		password = h.svc.GetSMTPPassword(c.Request.Context())
 	}
 	if password == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -249,6 +263,76 @@ func (h *SettingsHandler) ImportSettings(c *gin.Context) {
 	if err := h.svc.ImportSettings(c.Request.Context(), input); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{"message": "导入设置失败", "code": CodeInternalError},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+	})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 通知渠道规则
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (h *SettingsHandler) GetNotificationChannelMetadata(c *gin.Context) {
+	if h.notificationSvc == nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": model.NotificationMetadata{}})
+		return
+	}
+	meta := h.notificationSvc.GetMetadata()
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    meta,
+	})
+}
+
+func (h *SettingsHandler) GetNotificationChannelRules(c *gin.Context) {
+	if h.notificationSvc == nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": []model.NotificationChannelRule{}})
+		return
+	}
+	rules, err := h.notificationSvc.GetRules(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"message": "读取通知渠道规则失败", "code": CodeInternalError},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    rules,
+	})
+}
+
+func (h *SettingsHandler) UpdateNotificationChannelRules(c *gin.Context) {
+	if h.notificationSvc == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"message": "通知渠道服务未初始化", "code": CodeInternalError},
+		})
+		return
+	}
+	var rules []model.NotificationChannelRule
+	if err := c.ShouldBindJSON(&rules); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"message": "请求参数无效", "code": CodeBadRequest},
+		})
+		return
+	}
+	for _, r := range rules {
+		if !model.ValidNotificationChannel(r.Channel) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{"message": "无效的渠道: " + r.Channel, "code": CodeBadRequest},
+			})
+			return
+		}
+	}
+	if err := h.notificationSvc.UpdateRules(c.Request.Context(), rules); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"message": "更新通知渠道规则失败", "code": CodeInternalError},
 		})
 		return
 	}

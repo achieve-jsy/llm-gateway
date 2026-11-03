@@ -137,6 +137,8 @@ func setupOpsHandlerAll(t *testing.T) (*gin.Engine, *gorm.DB, *redis.Client) {
 	r.GET("/ops/token-stats", h.GetTokenStats)
 	// Snapshot-V2（PG 方言 bucket；SQLite 仅注册，PGOnly 测试 skip）
 	r.GET("/ops/dashboard/snapshot-v2", h.GetSnapshotV2)
+	// Top 慢/错路径（PG 方言；SQLite 仅 shape 测试）
+	r.GET("/ops/top-issues", h.GetTopIssues)
 
 	return r, db, rdb
 }

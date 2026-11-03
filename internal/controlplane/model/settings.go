@@ -54,6 +54,17 @@ type SystemSettings struct {
 	SMTPFrom          string `json:"smtp_from"`
 	SMTPPassword      string `json:"smtp_password"`
 	SMTPTLSSkipVerify bool   `json:"smtp_tls_skip_verify"`
+	// 预算拦截（热切换，写入 system_configs 后重发 snapshot）
+	BudgetMasterEnabled              bool `json:"budget_master_enabled"`
+	BudgetAccountingEnabled          bool `json:"budget_accounting_enabled"`
+	BudgetPositiveEnforcementEnabled bool `json:"budget_positive_enforcement_enabled"`
+	BudgetZeroBlockEnabled           bool `json:"budget_zero_block_enabled"`
+	BudgetShadowEnabled              bool `json:"budget_shadow_enabled"`
+	BudgetV2TotalEnforcementEnabled  bool `json:"budget_v2_total_enforcement_enabled"`
+	BudgetLegacyTotalWriteEnabled   bool `json:"budget_legacy_total_write_enabled"`
+	// 全局粘性路由默认
+	StickyDefaultEnabled    bool `json:"sticky_default_enabled"`
+	StickyDefaultTTLSeconds int  `json:"sticky_default_ttl_seconds"`
 }
 
 type PublicSettings struct {

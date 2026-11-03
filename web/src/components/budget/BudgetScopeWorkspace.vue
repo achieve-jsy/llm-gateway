@@ -395,6 +395,7 @@ interface TierUsageItem {
   scope_id: string
   scope_type?: BudgetItem['scope_type']
   tier_name: string
+  used_usd?: number
   used_ratio?: number
   color?: string
   enabled?: boolean

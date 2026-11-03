@@ -108,6 +108,31 @@
           />
           <span class="form-item-tip">0 = 使用系统默认（非流式 30s / 流式 300s）；每轮上游调用独立计时，failover 不受上一轮影响</span>
         </el-form-item>
+
+        <el-divider content-position="left">会话粘性</el-divider>
+
+        <el-form-item label="粘性路由">
+          <el-radio-group v-model="formData.sticky_enabled">
+            <el-radio :value="null">跟随全局</el-radio>
+            <el-radio :value="true">开启</el-radio>
+            <el-radio :value="false">关闭</el-radio>
+          </el-radio-group>
+          <div class="form-item-tip" style="margin-left:0;margin-top:4px;display:block">
+            开启后，同一会话的请求会粘到首次命中的渠道，直到失败才切换
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="formData.sticky_enabled !== false" label="粘性 TTL(秒)">
+          <el-input-number
+            v-model="formData.sticky_ttl_seconds"
+            :min="1"
+            :max="86400"
+            size="small"
+            controls-position="right"
+            :placeholder="formData.sticky_enabled === null ? '跟随全局默认 (300)' : '默认 300'"
+          />
+          <span class="form-item-tip">留空 = 跟随全局默认（300 秒）</span>
+        </el-form-item>
       </template>
 
       <el-form-item label="关联模型">
@@ -117,7 +142,7 @@
           </div>
           <div v-else class="model-items">
             <div v-for="(item, index) in modelList" :key="item.model_id" class="model-item">
-              <span class="model-item-name">{{ item.model_name }}</span>
+              <span class="model-item-name">{{ formatModelLabel(item) }}</span>
               <template v-if="formData.model_type !== 'video' && formData.strategy === 'priority'">
                 <el-input-number
                   :model-value="item.priority ?? 0"
@@ -208,9 +233,14 @@ import ModelGroupSelector from '@/components/ModelGroupSelector.vue'
 interface ModelItem {
   model_id: string
   model_name: string
+  provider_name?: string
   priority: number | null
   weight: number | null
   complexity_tier?: ComplexityTier
+}
+
+function formatModelLabel(item: Pick<ModelItem, 'model_name' | 'provider_name'>) {
+  return item.provider_name ? `${item.provider_name}: ${item.model_name}` : item.model_name
 }
 
 interface FormState {
@@ -222,6 +252,8 @@ interface FormState {
   same_model_retries: number
   failover_cooldown_seconds: number
   timeout_seconds: number
+  sticky_enabled: boolean | null
+  sticky_ttl_seconds: number | null
 }
 
 const props = defineProps<{
@@ -251,6 +283,8 @@ const formData = ref<FormState>({
   same_model_retries: 1,
   failover_cooldown_seconds: 60,
   timeout_seconds: 0,
+  sticky_enabled: null,
+  sticky_ttl_seconds: null,
 })
 
 const modelList = ref<ModelItem[]>([])
@@ -277,6 +311,8 @@ function applyGroupToForm(g: {
   same_model_retries?: number
   failover_cooldown_seconds?: number
   timeout_seconds?: number
+  sticky_enabled?: boolean | null
+  sticky_ttl_seconds?: number | null
 }) {
   const mt = g.model_type || 'chat'
   formData.value = {
@@ -288,6 +324,8 @@ function applyGroupToForm(g: {
     same_model_retries: g.same_model_retries ?? 1,
     failover_cooldown_seconds: g.failover_cooldown_seconds ?? 60,
     timeout_seconds: g.timeout_seconds ?? 0,
+    sticky_enabled: g.sticky_enabled ?? null,
+    sticky_ttl_seconds: g.sticky_ttl_seconds ?? null,
   }
   prevModelType.value = mt
   originalStrategy.value = formData.value.strategy
@@ -317,6 +355,8 @@ watch(
         same_model_retries: globalDefaults.value?.same_model_retries ?? 1,
         failover_cooldown_seconds: globalDefaults.value?.failover_cooldown_seconds ?? 60,
         timeout_seconds: 0,
+        sticky_enabled: null,
+        sticky_ttl_seconds: null,
       }
       prevModelType.value = 'chat'
       originalStrategy.value = 'round_robin'
@@ -355,6 +395,7 @@ async function loadGroupModels(groupId: number) {
     modelList.value = (res.data.data || []).map(m => ({
       model_id: m.model_id,
       model_name: m.model_name,
+      provider_name: m.provider_name,
       priority: m.priority,
       weight: m.weight,
       complexity_tier: m.complexity_tier,
@@ -468,6 +509,8 @@ async function handleSubmit() {
       same_model_retries: formData.value.same_model_retries,
       failover_cooldown_seconds: formData.value.failover_cooldown_seconds,
       timeout_seconds: formData.value.timeout_seconds,
+      sticky_enabled: formData.value.sticky_enabled,
+      sticky_ttl_seconds: formData.value.sticky_ttl_seconds,
     }
 
     const buildModelParams = () => {

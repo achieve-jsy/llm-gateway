@@ -207,11 +207,33 @@ func (h *BudgetHandler) List(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		// 为 member item 填充所属部门（多部门场景路由跳转使用）
-		if len(userDeptMap) > 0 {
+		// 为 member item 填充所属部门（多部门场景路由跳转 / 成员配置抽屉使用）
+		if userDeptMap == nil {
+			userDeptMap = make(map[string]string)
+		}
+		for i := range items {
+			if items[i].ScopeType != model.BudgetScopeMember {
+				continue
+			}
+			if deptID := userDeptMap[items[i].ScopeID]; deptID != "" {
+				items[i].ParentScopeID = deptID
+			}
+		}
+		missing := make([]string, 0)
+		for i := range items {
+			if items[i].ScopeType == model.BudgetScopeMember && items[i].ParentScopeID == "" {
+				missing = append(missing, items[i].ScopeID)
+			}
+		}
+		if len(missing) > 0 {
+			resolved, resolveErr := h.svc.MapMemberDeptIDs(missing)
+			if resolveErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": resolveErr.Error()})
+				return
+			}
 			for i := range items {
-				if items[i].ScopeType == model.BudgetScopeMember {
-					items[i].ParentScopeID = userDeptMap[items[i].ScopeID]
+				if items[i].ScopeType == model.BudgetScopeMember && items[i].ParentScopeID == "" {
+					items[i].ParentScopeID = resolved[items[i].ScopeID]
 				}
 			}
 		}
@@ -545,13 +567,13 @@ func (h *BudgetHandler) SetMultiPeriod(c *gin.Context) {
 }
 
 // MyBudget GET /api/v1/my/budget
-// 员工查看自己的预算链（成员额度 + 部门 + 工作室 + 公司）。
+// 员工/管理员查看自己的预算链（成员额度 + 可选部门/工作室 + 公司）。
 func (h *BudgetHandler) MyBudget(c *gin.Context) {
 	deptID := c.GetString("user_dept_id")
 	studioID := c.GetString("user_studio_id")
 	userID := c.GetString("user_id")
 
-	if deptID == "" {
+	if userID == "" {
 		c.JSON(http.StatusOK, gin.H{"chain": []interface{}{}})
 		return
 	}
@@ -563,6 +585,7 @@ func (h *BudgetHandler) MyBudget(c *gin.Context) {
 	if actor.UserID == "" {
 		actor.UserID = userID
 	}
+	// 平台管理员也可查看个人预算；金额可见性仍按 Actor 权限（含 IsGlobal）。
 	if c.GetString("user_role") == "admin" {
 		actor.IsGlobal = true
 	}

@@ -24,6 +24,8 @@ export interface Group {
   override_supports_vision: boolean
   override_supports_function_calling: boolean
   override_supports_tool_choice: boolean
+  sticky_enabled: boolean | null
+  sticky_ttl_seconds: number | null
   created_at: string
   updated_at: string
 }
@@ -39,6 +41,7 @@ export interface GroupModel {
   group_id: number
   model_id: string
   model_name: string
+  provider_name?: string
   priority: number | null
   weight: number | null
   complexity_tier?: ComplexityTier
@@ -59,6 +62,8 @@ export interface CreateGroupRequest {
   same_model_retries?: number
   failover_cooldown_seconds?: number
   timeout_seconds?: number
+  sticky_enabled?: boolean | null
+  sticky_ttl_seconds?: number | null
 }
 
 export interface UpdateGroupRequest {
@@ -75,6 +80,8 @@ export interface UpdateGroupRequest {
   override_supports_vision?: boolean
   override_supports_function_calling?: boolean
   override_supports_tool_choice?: boolean
+  sticky_enabled?: boolean | null
+  sticky_ttl_seconds?: number | null
 }
 
 export interface AddModelToZoneRequest {

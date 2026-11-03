@@ -170,8 +170,9 @@ func (r *GroupRepo) RemoveModelFromGroup(groupID uint, modelID uuid.UUID) error 
 func (r *GroupRepo) ListGroupModels(groupID uint) ([]model.GroupModel, error) {
 	var gms []model.GroupModel
 	err := r.db.Table("group_models").
-		Select("group_models.*, models.name as model_name").
+		Select("group_models.*, models.name as model_name, providers.name as provider_name").
 		Joins("JOIN models ON models.id = group_models.model_id").
+		Joins("LEFT JOIN providers ON providers.id = models.provider_id").
 		Where("group_models.group_id = ?", groupID).
 		Order("group_models.id ASC").
 		Scan(&gms).Error

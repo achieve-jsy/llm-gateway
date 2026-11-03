@@ -21,6 +21,8 @@ const allocation: BudgetItem = {
   period: 'monthly',
   enabled: true,
   used_usd: 420,
+  daily_used_usd: 18,
+  weekly_used_usd: 96,
   used_ratio: 0.42,
 }
 
@@ -102,6 +104,22 @@ const usages: BudgetTierUsage[] = [
     data_as_of: '2026-07-14T00:00:00Z',
     stale: false,
   },
+  {
+    allocation_id: 'allocation-1',
+    model_tier_id: 'premium',
+    period_type: 'daily',
+    used_usd: '12.000000',
+    data_as_of: '2026-07-14T00:00:00Z',
+    stale: false,
+  },
+  {
+    allocation_id: 'allocation-1',
+    model_tier_id: 'premium',
+    period_type: 'weekly',
+    used_usd: '80.000000',
+    data_as_of: '2026-07-14T00:00:00Z',
+    stale: false,
+  },
 ]
 
 const draft: TierLimitsDraft = {
@@ -171,6 +189,10 @@ describe('TierLimitsEditor', () => {
     expect(wrapper.find('[data-test="tier-period-advanced"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="tier-premium-daily-input"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="tier-premium-weekly-input"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="tier-premium-daily-used"]').text()).toContain('已用 $12.00')
+    expect(wrapper.get('[data-test="tier-premium-weekly-used"]').text()).toContain('已用 $80.00')
+    expect(wrapper.text()).toContain('已用 $18.00')
+    expect(wrapper.text()).toContain('已用 $96.00')
     expect(wrapper.find('[data-test="adjust-reason"]').exists()).toBe(true)
   })
 

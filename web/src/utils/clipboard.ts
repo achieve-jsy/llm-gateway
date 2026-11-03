@@ -1,4 +1,8 @@
 export async function copyToClipboard(text: string): Promise<void> {
+  if (typeof text !== 'string' || text.length === 0) {
+    throw new Error('clipboard text is empty')
+  }
+
   // 1. Try modern clipboard API first (works on HTTPS or localhost)
   try {
     if (navigator.clipboard && window.isSecureContext) {
@@ -23,7 +27,11 @@ export async function copyToClipboard(text: string): Promise<void> {
   try {
     ta.focus()
     ta.select()
-    document.execCommand('copy')
+    ta.setSelectionRange(0, ta.value.length)
+    const ok = document.execCommand('copy')
+    if (!ok) {
+      throw new Error('execCommand copy failed')
+    }
   } finally {
     document.body.removeChild(ta)
   }

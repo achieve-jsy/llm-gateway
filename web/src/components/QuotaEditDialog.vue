@@ -50,7 +50,7 @@
         <div class="quota-effective-grid">
           <div class="quota-effective-item">
             <span class="label">RPM：</span>
-            <span class="value">{{ formatEffectiveValue(effective.rpm) }}</span>
+            <span class="value">{{ formatEffectiveValue(effective.rpm, effective.rpm_source) }}</span>
             <el-tag
               size="small"
               :type="sourceTagInfo(effective.rpm_source).type"
@@ -61,7 +61,7 @@
           </div>
           <div class="quota-effective-item">
             <span class="label">并发：</span>
-            <span class="value">{{ formatEffectiveValue(effective.max_concurrency) }}</span>
+            <span class="value">{{ formatEffectiveValue(effective.max_concurrency, effective.max_concurrency_source) }}</span>
             <el-tag
               size="small"
               :type="sourceTagInfo(effective.max_concurrency_source).type"
@@ -156,8 +156,8 @@ const clearConfirmTitle = computed(() => inheritsSystemDefault.value
   ? '清除配额设置？清除后将继承系统默认'
   : '清除配额设置？清除后将不再单独限制')
 
-function formatEffectiveValue(value: number) {
-  if (!inheritsSystemDefault.value && effective.value?.source === 'unset') {
+function formatEffectiveValue(value: number, source?: QuotaEffective['source']) {
+  if (!inheritsSystemDefault.value && source !== 'override') {
     return '未单独限制'
   }
   return value === 0 ? '不限制' : value

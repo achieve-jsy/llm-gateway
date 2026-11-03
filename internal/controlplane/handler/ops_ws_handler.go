@@ -393,15 +393,11 @@ func (h *OpsWSHandler) serveQPSWebSocket(ctx context.Context, conn *websocket.Co
 				}
 			}
 
-			// 使用实际已过秒数作为分母，避免分钟边界 count/60 少报。
-			elapsed := float64(now.Second() + 1)
-			if elapsed > 60 {
-				elapsed = 60
-			}
-
+			// 与 realtime-traffic / 窗口均值同一口径：按整分钟桶折算（÷60）。
+			// 用 elapsed 会在分钟初把大上下文请求放大成数十 K TPS，观感异常。
 			msg := map[string]any{
-				"qps":       float64(qpsCount) / elapsed,
-				"tps":       float64(tpsCount) / elapsed,
+				"qps":       float64(qpsCount) / 60.0,
+				"tps":       float64(tpsCount) / 60.0,
 				"timestamp": now.Format(time.RFC3339),
 				"sample":    qpsCount,
 			}

@@ -40,6 +40,8 @@ var auditRouteMap = map[string]routeAction{
 	"PATCH:/api/v1/models/batch-status":      {audit.ActionModelBatchUpdateStatus, audit.ResourceModel},
 	"PUT:/api/v1/models/batch-tags":          {audit.Action("model.tag.update"), audit.ResourceModel},
 	"POST:/api/v1/models/from-catalog":       {audit.ActionModelCreate, audit.ResourceModel},
+	"POST:/api/v1/models/batch":             {audit.ActionModelCreate, audit.ResourceModel},
+	"POST:/api/v1/models/batch-from-catalog": {audit.ActionModelCreate, audit.ResourceModel},
 	"POST:/api/v1/models/batch-bind-catalog": {audit.Action("model.bind_catalog"), audit.ResourceModel},
 	"POST:/api/v1/models/check-all":          {audit.Action("model.check"), audit.ResourceModel},
 	"POST:/api/v1/models/:id/check":          {audit.Action("model.check"), audit.ResourceModel},

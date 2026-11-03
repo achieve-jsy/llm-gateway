@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/example/llm-gateway/internal/budgetperiod"
+	"github.com/example/llm-gateway/internal/budgetrebuild"
 	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
 
@@ -40,9 +42,7 @@ type budgetConstraint struct {
 
 func (s *BudgetTierService) GetMyBudgetTiers(ctx context.Context, actor rbac.Actor) (*MyBudgetTiersResponse, error) {
 	now := s.clock()
-	if actor.IsGlobal {
-		return emptyMyBudgetTiersResponse(now), nil
-	}
+	// 平台管理员也按个人身份查看「我的预算」；IsGlobal 不再短路为空。
 	if strings.TrimSpace(actor.UserID) == "" {
 		return emptyMyBudgetTiersResponse(now), nil
 	}
@@ -104,6 +104,10 @@ func (s *BudgetTierService) GetMyBudgetTiers(ctx context.Context, actor rbac.Act
 		}
 		for index := range limits {
 			limit := &limits[index]
+			// 已归档等级不出现在「我的预算」；额度配置可保留供管理面审计，但不对终端用户展示。
+			if limit.ModelTier.ArchivedAt != nil {
+				continue
+			}
 			key := limit.ModelTierID.String() + ":" + string(limit.PeriodType)
 			if !limit.Enabled {
 				disabledTierPeriods[key] = true
@@ -203,13 +207,8 @@ func (s *BudgetTierService) GetMyBudgetTiers(ctx context.Context, actor rbac.Act
 		}
 		view := tierViews[*limiting.tierID]
 		if view == nil {
-			view = &MyBudgetTierView{ModelTierID: *limiting.tierID, ModelTierName: limiting.tierName, Enabled: true}
-			for _, periodType := range []budgetdomain.PeriodType{budgetdomain.PeriodDaily, budgetdomain.PeriodWeekly, budgetdomain.PeriodMonthly} {
-				period, _ := budgetperiod.Resolve(now, periodType, s.periodConfig)
-				view.Periods = append(view.Periods, MyBudgetTierPeriod{PeriodType: periodType, ResetAt: period.ResetAt, Status: "unset"})
-			}
-			tierViews[*limiting.tierID] = view
-			tierOrder = append(tierOrder, *limiting.tierID)
+			// 不在活跃等级列表（含已归档）：不合成展示项，避免归档等级回流到「我的预算」。
+			continue
 		}
 		periodView := MyBudgetTierPeriod{
 			PeriodType: limiting.period, Configured: true, ResetAt: limiting.resetAt,
@@ -306,6 +305,27 @@ func (s *BudgetTierService) buildConstraint(ctx context.Context, scope repositor
 
 func (s *BudgetTierService) accountingUsage(ctx context.Context, allocation model.BudgetAllocation, tierID *uuid.UUID, period budgetperiod.Period, startAt time.Time, total bool) (budgetdomain.Amount, error) {
 	zero := amountFromDecimal(decimal.Zero)
+	// 网关在请求成功后先写入 Redis v2 计数器，再异步落库 call_logs。
+	// “我的预算”必须优先读取同一计数器，否则用户刚完成请求时页面会暂时显示 0。
+	// Redis 不可用或计数器不存在时再回退数据库，兼容历史日志和重建前的数据。
+	if tierID != nil && s.rdb != nil {
+		key := "budget:v2:tier:used:" + allocation.ScopeType + ":" + allocation.ScopeID + ":" + tierID.String() + ":" + period.Key
+		generation, generationErr := s.rdb.Get(ctx, budgetrebuild.ActiveGenerationKey).Result()
+		if generationErr == redis.Nil {
+			generation = budgetrebuild.LegacyGeneration
+		}
+		if generationErr == nil || generationErr == redis.Nil {
+			value, readErr := s.rdb.Get(ctx, budgetrebuild.GenerationKey(generation, key)).Result()
+			if readErr == nil {
+				micro, parseErr := decimal.NewFromString(value)
+				if parseErr == nil && !micro.IsNegative() {
+					return amountFromDecimal(micro.Shift(-6)), nil
+				}
+			} else if readErr != redis.Nil {
+				// 读取失败时继续使用数据库兜底，不能让“我的预算”页面整体不可用。
+			}
+		}
+	}
 	if s.usageRepo == nil {
 		return zero, nil
 	}

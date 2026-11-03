@@ -57,15 +57,19 @@ const mockGetBudgetList = vi.fn()
 const mockGetBudgetContext = vi.fn()
 const mockGetBudgetRiskSummary = vi.fn()
 const mockListModelTiers = vi.fn()
+const mockListBudgetTierLimits = vi.fn()
 
 vi.mock('@/services/control-plane', () => ({
   getBudgetList: (...args: unknown[]) => mockGetBudgetList(...args),
   getBudgetContext: (...args: unknown[]) => mockGetBudgetContext(...args),
   getBudgetRiskSummary: (...args: unknown[]) => mockGetBudgetRiskSummary(...args),
   listModelTiers: (...args: unknown[]) => mockListModelTiers(...args),
+  listBudgetTierLimits: (...args: unknown[]) => mockListBudgetTierLimits(...args),
   rebuildBudgetCounters: vi.fn(),
   adjustBudget: vi.fn(),
   previewBudgetAdjustment: vi.fn(),
+  adjustBudgetMultiPeriod: vi.fn(),
+  previewBudgetMultiPeriod: vi.fn(),
 }))
 
 vi.mock('@/services/http', () => ({
@@ -175,6 +179,7 @@ describe('BudgetManagePage - Drill-Down Views', () => {
     mockGetBudgetContext.mockResolvedValue([])
     mockGetBudgetRiskSummary.mockResolvedValue({ total: 0 })
     mockListModelTiers.mockResolvedValue([])
+    mockListBudgetTierLimits.mockResolvedValue([])
     mockFetchDeptMembers.mockResolvedValue({ members: [], total: 0 })
     mockAuthStore.effectiveRole = 'admin'
     mockAuthStore.orgRoles = []
@@ -676,6 +681,22 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       mockGetBudgetContext.mockResolvedValue([
         { scope_type: 'company', scope_id: 'GLOBAL', label: '公司预算池', amount_usd: 10000 },
       ])
+      mockListModelTiers.mockResolvedValue([
+        { id: 'tier-premium', name: '超高级模型', color: '#8b5cf6', description: '', sort_order: 1, enabled: true, archived_at: null, group_count: 0, budget_count: 0, history_count: 0, reference_count: 0, created_at: '', updated_at: '' },
+      ])
+      mockListBudgetTierLimits.mockResolvedValue([
+        {
+          id: 'limit-1',
+          budget_allocation_id: 'alloc-member',
+          model_tier_id: 'tier-premium',
+          model_tier_name: '超高级模型',
+          period_type: 'monthly',
+          limit_usd: '2.000000',
+          effective_limit_usd: '2.000000',
+          used_usd: '2.200000',
+          enabled: true,
+        },
+      ])
     })
 
     it('显示成员汇总卡片', async () => {
@@ -720,8 +741,10 @@ describe('BudgetManagePage - Drill-Down Views', () => {
       expect(html).toContain('已使用')
       expect(html).toContain('使用率')
       expect(html).toContain('状态')
-      // 总预算行（初始时 memberDetailTarget 为空，表格可能无数据）
-      // 验证表格结构正确渲染即可
+      // 成员下钻页应直接渲染总预算 + 真实等级行（不再依赖弹窗 memberDetailTarget）
+      expect(html).toContain('总预算')
+      expect(html).toContain('超高级模型')
+      expect(html).not.toContain('No Data')
     })
 
     it('表格列匹配原型（限制项/额度/已使用/使用率/状态）', async () => {

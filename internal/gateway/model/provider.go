@@ -1,16 +1,12 @@
 package model
 
+import "github.com/example/llm-gateway/internal/core"
+
 // ModelEntry 模型元数据
 type ModelEntry struct {
-	Name                    string          `json:"name"`
-	UpstreamModelID         string          `json:"upstream_model_id,omitempty"`
-	BaseModel               string          `json:"base_model"`
-	ProtocolMode            string          `json:"protocol_mode"`
-	ParamProfile            string          `json:"param_profile"`
-	UnsupportedParamPolicy  string          `json:"unsupported_param_policy"`
-	Capabilities            map[string]bool `json:"capabilities,omitempty"`
-	SupportedParamsOverride map[string]any  `json:"supported_params_override"`
-	TransformOverrides      map[string]any  `json:"transform_overrides"`
+	Name            string             `json:"name"`
+	UpstreamModelID string             `json:"upstream_model_id,omitempty"`
+	Pricing         *core.ModelPricing `json:"pricing,omitempty"`
 }
 
 // ProviderEntry 厂商通道元数据（来自 control-plane）

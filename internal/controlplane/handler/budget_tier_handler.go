@@ -62,9 +62,7 @@ func (h *BudgetTierHandler) MyBudgetTiers(c *gin.Context) {
 	if actor.UserID == "" {
 		actor.UserID = c.GetString("user_id")
 	}
-	if c.GetString("user_role") == "admin" {
-		actor.IsGlobal = true
-	}
+	// 不因 JWT admin 角色将 Actor 标为 IsGlobal：我的预算始终按个人 user_id 解析。
 	result, err := h.service.GetMyBudgetTiers(c.Request.Context(), actor)
 	if err != nil {
 		writeBudgetTierError(c, err)

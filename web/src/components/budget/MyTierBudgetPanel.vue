@@ -57,7 +57,7 @@
             v-for="tier in tierBudget.tier_limits"
             :key="tier.model_tier_id"
             class="tier-row"
-            :class="{ 'is-disabled': !canApply(tier) }"
+            :class="{ 'is-disabled': !isTierAvailable(tier) }"
           >
             <div class="tier-row__identity">
               <div class="tier-row__title">
@@ -231,10 +231,37 @@ function openGroupsDialog(tier: MyBudgetTierLimit) {
   groupsDialogVisible.value = true
 }
 
+/** 当前周期是否仍可调用（展示「可用/受限」）；超额 / $0 算受限，但仍可申请扩容。 */
+function isTierAvailable(tier: MyBudgetTierLimit): boolean {
+  const period = periodInfo(tier)
+  if (!tier.enabled || !period || period.status === 'tier_disabled' || period.status === 'limit_disabled') {
+    return false
+  }
+  return !tierStatus(tier).blocked
+}
+
+/** 是否允许发起等级额度提升申请。已超额、$0 都应可申请；仅停用类状态不可申请。 */
 function canApply(tier: MyBudgetTierLimit): boolean {
   const period = periodInfo(tier)
-  const status = tierStatus(tier)
-  return Boolean(tier.enabled && period && period.status !== 'tier_disabled' && !status.blocked)
+  return Boolean(
+    tier.enabled
+    && period
+    && period.status !== 'tier_disabled'
+    && period.status !== 'limit_disabled',
+  )
+}
+
+/** 预填目标：必须大于当前限额，且不低于已用量（否则审批侧会因 used > target 拒绝）。 */
+function suggestedExpansionTarget(period: TierPeriodUsage): string {
+  const current = Math.max(0, Number(period.effective_limit_usd) || 0)
+  const used = Math.max(0, Number(period.used_usd) || 0)
+  let target = Math.max(Math.ceil(current * 1.5), current + 50, Math.ceil(used))
+  if (target <= current) target = current + 1
+  if (target < used) {
+    target = Math.ceil(used)
+    if (target <= current) target = current + 1
+  }
+  return String(target)
 }
 
 function usageSummary(period: TierPeriodUsage): string {
@@ -250,7 +277,7 @@ const currentSourceLabel = computed(() => ({
 }[tierBudget.value?.source_summary.mode ?? 'shared']))
 
 const availableTierCount = computed(() =>
-  tierBudget.value?.tier_limits.filter(tier => canApply(tier)).length ?? 0,
+  tierBudget.value?.tier_limits.filter(tier => isTierAvailable(tier)).length ?? 0,
 )
 const restrictedTierCount = computed(() => Math.max((tierBudget.value?.tier_limits.length ?? 0) - availableTierCount.value, 0))
 const periodLabel = computed(() => ({ daily: '日', weekly: '周', monthly: '月' }[selectedPeriod.value]))
@@ -287,11 +314,12 @@ function formatExpiry(value: string): string {
 function openExpansion(tierId = '') {
   const tier = tierBudget.value?.tier_limits.find(item => item.model_tier_id === tierId)
     ?? tierBudget.value?.tier_limits[0]
+  const period = tier ? periodInfo(tier) : undefined
   emit('requestExpansion', {
     dimension: 'tier',
     tierId: tier?.model_tier_id ?? '',
     period: selectedPeriod.value,
-    targetAmount: tier ? periodInfo(tier)?.effective_limit_usd ?? '' : '',
+    targetAmount: period?.configured ? suggestedExpansionTarget(period) : '',
   })
 }
 

@@ -70,15 +70,6 @@
             限流 {{ p.rate_limit_reset_seconds }}s
           </el-tag>
 
-          <!-- Rate limit remaining -->
-          <span
-            v-if="!p.is_rate_limited && p.rate_limit_remaining >= 0"
-            class="ops-rate-remaining"
-            :class="{ 'ops-rate-remaining--low': p.rate_limit_remaining < 5 }"
-          >
-            余量 {{ p.rate_limit_remaining }}
-          </span>
-
           <!-- 加载条 -->
           <div class="ops-load-bar-wrap">
             <div
@@ -94,6 +85,22 @@
           <!-- 活跃 / 队列 -->
           <span class="ops-active-count">活跃 {{ p.active_requests }}</span>
           <span class="ops-queue-count">队列 {{ p.waiting_queue }}</span>
+
+          <!-- 近 5 分钟成功率 / P95 -->
+          <span
+            class="ops-success-rate"
+            :class="successRateClass(p.success_rate_5min)"
+            :title="p.success_rate_5min == null ? '近5分钟无流量' : '近5分钟成功率'"
+          >
+            成功 {{ formatSuccessRate(p.success_rate_5min) }}
+          </span>
+          <span
+            class="ops-p95"
+            :class="{ 'ops-p95--high': (p.duration_p95_ms ?? 0) >= 5000 }"
+            :title="p.duration_p95_ms == null ? '近5分钟无流量' : '近5分钟端到端 P95'"
+          >
+            P95 {{ formatLatencyMs(p.duration_p95_ms) }}
+          </span>
 
           <!-- 5分钟错误数 -->
           <span
@@ -120,7 +127,7 @@
         <table class="ops-user-table">
           <thead>
             <tr>
-              <th>用户ID</th>
+              <th>用户名</th>
               <th>请求数</th>
               <th>错误数</th>
               <th>平均耗时</th>
@@ -129,7 +136,7 @@
           </thead>
           <tbody>
             <tr v-for="u in userStats.items" :key="u.user_id">
-              <td class="ops-user-id">{{ u.user_id }}</td>
+              <td class="ops-user-id" :title="u.user_id">{{ u.user_name || u.user_id }}</td>
               <td>{{ u.request_count }}</td>
               <td>
                 <span :class="{ 'ops-error-count--has': u.error_count > 0 }">
@@ -267,6 +274,28 @@ function loadColor(p: OpsProviderConcurrency): string {
   if (pct <= 60) return '#10b981'
   if (pct <= 80) return '#f59e0b'
   return '#ef4444'
+}
+
+function formatSuccessRate(rate: number | null | undefined): string {
+  if (rate == null || !Number.isFinite(rate)) return '—'
+  return `${(rate * 100).toFixed(1)}%`
+}
+
+function successRateClass(rate: number | null | undefined): string {
+  if (rate == null || !Number.isFinite(rate)) return ''
+  if (rate >= 0.99) return 'ops-success-rate--ok'
+  if (rate >= 0.95) return 'ops-success-rate--warn'
+  return 'ops-success-rate--bad'
+}
+
+/** 延迟展示：≥1s 用秒，≥60s 用分秒 */
+function formatLatencyMs(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms <= 0) return '—'
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  const m = Math.floor(ms / 60000)
+  const s = ((ms % 60000) / 1000).toFixed(1)
+  return `${m}m ${s}s`
 }
 
 // ---- 数据获取 ----
@@ -448,19 +477,6 @@ onMounted(() => {
   50% { opacity: 0.7; }
 }
 
-.ops-rate-remaining {
-  font-size: var(--font-size-xxs);
-  color: var(--text-placeholder);
-  white-space: nowrap;
-  flex-shrink: 0;
-  width: 52px;
-}
-
-.ops-rate-remaining--low {
-  color: #f59e0b;
-  font-weight: var(--font-weight-semibold);
-}
-
 /* ====== 加载条 ====== */
 .ops-load-bar-wrap {
   flex: 1;
@@ -488,20 +504,51 @@ onMounted(() => {
 }
 
 .ops-active-count,
-.ops-queue-count {
-  font-size: var(--font-size-xxs);
-  color: var(--text-placeholder);
-  width: 52px;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
+.ops-queue-count,
+.ops-success-rate,
+.ops-p95,
 .ops-error-count {
   font-size: var(--font-size-xxs);
   color: var(--text-placeholder);
-  width: 52px;
   flex-shrink: 0;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ops-active-count,
+.ops-queue-count {
+  width: 52px;
+}
+
+.ops-success-rate {
+  min-width: 64px;
+}
+
+.ops-p95 {
+  min-width: 72px;
+}
+
+.ops-error-count {
+  width: 52px;
+}
+
+.ops-success-rate--ok {
+  color: #10b981;
+}
+
+.ops-success-rate--warn {
+  color: #f59e0b;
+  font-weight: var(--font-weight-semibold);
+}
+
+.ops-success-rate--bad {
+  color: #ef4444;
+  font-weight: var(--font-weight-semibold);
+}
+
+.ops-p95--high {
+  color: #f59e0b;
+  font-weight: var(--font-weight-semibold);
 }
 
 .ops-error-count--has {
@@ -577,11 +624,13 @@ onMounted(() => {
     order: 10;
     flex-basis: 100%;
   }
-  .ops-rate-remaining,
   .ops-error-count,
   .ops-active-count,
-  .ops-queue-count {
+  .ops-queue-count,
+  .ops-success-rate,
+  .ops-p95 {
     width: auto;
+    min-width: 0;
   }
   .ops-card {
     border-radius: var(--radius-xl);

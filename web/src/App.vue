@@ -35,7 +35,7 @@
           <el-icon><Collection /></el-icon>
           <template #title>模型广场</template>
         </el-menu-item>
-        <el-menu-item v-if="!authStore.isAdmin" index="/my/budget">
+        <el-menu-item index="/my/budget">
           <el-icon><Wallet /></el-icon>
           <template #title>
             我的预算

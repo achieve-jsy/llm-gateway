@@ -75,7 +75,7 @@
         <tbody>
           <tr
             v-for="log in items"
-            :key="log.id"
+            :key="log.request_id || String(log.id)"
             class="ops-table-row"
             :class="{ 'row--resolved': log.resolved }"
           >
@@ -255,8 +255,13 @@ async function fetchData(page?: number) {
 }
 
 async function toggleResolved(log: OpsErrorLogEntry) {
+  const resolveKey = log.request_id || String(log.id)
+  if (!resolveKey) {
+    ElMessage.warning('缺少 request_id，无法标记')
+    return
+  }
   try {
-    await opsAPI.resolveErrorLog(log.id, !log.resolved)
+    await opsAPI.resolveErrorLog(resolveKey, !log.resolved)
     log.resolved = !log.resolved
     ElMessage.success(log.resolved ? '已标记为已解决' : '已取消标记')
   } catch (err: any) {

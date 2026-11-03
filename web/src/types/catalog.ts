@@ -75,6 +75,29 @@ export interface CreateFromCatalogPayload {
   name: string
 }
 
+/** POST /api/v1/models/batch-from-catalog 的请求体 */
+export interface BatchCreateFromCatalogPayload {
+  catalog_id: string
+  provider_ids: string[]
+  name: string
+}
+
+/** 批量注册单渠道结果 */
+export interface BatchCreateModelResultItem {
+  provider_id: string
+  status: 'created' | 'skipped' | 'failed'
+  model_id?: string
+  reason?: string
+}
+
+/** 批量注册汇总 */
+export interface BatchCreateModelsResult {
+  success_count: number
+  skip_count: number
+  fail_count: number
+  results: BatchCreateModelResultItem[]
+}
+
 /** 可被恢复跟随目录的字段集合（与 POST /api/v1/models/:id/reset-override 对齐） */
 export type ResettableOverrideField = 'context_length' | 'max_output_tokens'
 

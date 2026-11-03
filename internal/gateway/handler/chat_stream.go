@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"io"
 
 	"github.com/gin-gonic/gin"
@@ -22,19 +23,33 @@ func HandleStreamResponse(c *gin.Context, stream io.ReadCloser) {
 	c.Writer.WriteHeader(200)
 	c.Writer.Flush()
 
-	// 逐块读取并在每次写入后 flush，确保 SSE 事件实时下发给客户端。
-	// 不能用 io.Copy：gin/net-http 的 ResponseWriter 自带缓冲，小块 SSE 事件
-	// 会在缓冲区里攒到一定大小或请求结束才发出，表现为"流式请求却同步返回"。
+	// 按 SSE event 边界（\n\n）切分并逐事件 flush，确保每个 token 粒度的
+	// event 独立到达客户端，避免 TCP 合并导致多个 event 被打包成一个视觉块。
 	buf := make([]byte, 16*1024)
+	var pending []byte
+
 	for {
 		n, readErr := stream.Read(buf)
 		if n > 0 {
-			if _, writeErr := c.Writer.Write(buf[:n]); writeErr != nil {
-				return
+			pending = append(pending, buf[:n]...)
+
+			for {
+				idx := bytes.Index(pending, []byte("\n\n"))
+				if idx == -1 {
+					break
+				}
+				if _, writeErr := c.Writer.Write(pending[:idx+2]); writeErr != nil {
+					return
+				}
+				c.Writer.Flush()
+				pending = pending[idx+2:]
 			}
-			c.Writer.Flush()
 		}
 		if readErr != nil {
+			if len(pending) > 0 {
+				c.Writer.Write(pending)
+				c.Writer.Flush()
+			}
 			return
 		}
 	}

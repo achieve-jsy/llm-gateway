@@ -28,9 +28,10 @@ type GroupServiceInterface interface {
 }
 
 type GroupHandler struct {
-	svc          GroupServiceInterface
-	modelRepo    ModelRepoInterface
+	svc        GroupServiceInterface
+	modelRepo  ModelRepoInterface
 	providerRepo ProviderRepoInterface
+	settingsSvc  SettingsServiceInterface
 }
 
 type ModelRepoInterface interface {
@@ -45,10 +46,16 @@ func NewGroupHandler(svc GroupServiceInterface, modelRepo ModelRepoInterface, pr
 	return &GroupHandler{svc: svc, modelRepo: modelRepo, providerRepo: providerRepo}
 }
 
+// WithSettingsService 注入设置服务，用于解析组级 sticky 的全局默认值。
+func (h *GroupHandler) WithSettingsService(svc SettingsServiceInterface) *GroupHandler {
+	h.settingsSvc = svc
+	return h
+}
+
 type addModelsRequest struct {
-	ModelIDs        []uuid.UUID          `json:"model_ids" binding:"required,min=1"`
-	Priorities      map[uuid.UUID]int    `json:"priorities,omitempty"`
-	Weights         map[uuid.UUID]int    `json:"weights,omitempty"`
+	ModelIDs        []uuid.UUID         `json:"model_ids" binding:"required,min=1"`
+	Priorities      map[uuid.UUID]int   `json:"priorities,omitempty"`
+	Weights         map[uuid.UUID]int   `json:"weights,omitempty"`
 	ComplexityTiers map[uuid.UUID]string `json:"complexity_tiers,omitempty"`
 }
 
@@ -424,25 +431,27 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 		return
 	}
 
+	// 获取全局 sticky 默认值，用于组级未显式设置时的 fallback
+	stickyDefaultEnabled := true
+	stickyDefaultTTL := 300
+	if h.settingsSvc != nil {
+		if sysSettings, err := h.settingsSvc.GetSystemSettings(c.Request.Context()); err == nil && sysSettings != nil {
+			stickyDefaultEnabled = sysSettings.StickyDefaultEnabled
+			stickyDefaultTTL = sysSettings.StickyDefaultTTLSeconds
+		}
+	}
+
 	type modelInfo struct {
-		ID                      uuid.UUID            `json:"id"`
-		Name                    string               `json:"name"`
-		ModelType               string               `json:"model_type,omitempty"`
-		ProviderID              uuid.UUID            `json:"provider_id,omitempty"`
-		ProviderType            string               `json:"provider_type,omitempty"`
-		ProviderName            string               `json:"provider_name,omitempty"`
-		Endpoint                string               `json:"endpoint,omitempty"`
-		Priority                *int                 `json:"priority"`
-		Weight                  *int                 `json:"weight"`
-		ComplexityTier          string               `json:"complexity_tier"`
-		ParamStyle              string               `json:"param_style,omitempty"`
-		BaseModel               string               `json:"base_model"`
-		UpstreamModelID         string               `json:"upstream_model_id,omitempty"`
-		ProtocolMode            string               `json:"protocol_mode"`
-		ParamProfile            string               `json:"param_profile"`
-		UnsupportedParamPolicy  string               `json:"unsupported_param_policy"`
-		SupportedParamsOverride model.PlannerJSONMap `json:"supported_params_override"`
-		TransformOverrides      model.PlannerJSONMap `json:"transform_overrides"`
+		ID             uuid.UUID `json:"id"`
+		Name           string    `json:"name"`
+		ModelType      string    `json:"model_type,omitempty"`
+		ProviderID     uuid.UUID `json:"provider_id,omitempty"`
+		ProviderType   string    `json:"provider_type,omitempty"`
+		ProviderName   string    `json:"provider_name,omitempty"`
+		Endpoint       string    `json:"endpoint,omitempty"`
+		Priority       *int      `json:"priority"`
+		Weight         *int      `json:"weight"`
+		ComplexityTier string    `json:"complexity_tier"`
 	}
 
 	type groupInfo struct {
@@ -459,6 +468,16 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 
 	result := make([]groupInfo, 0, len(groups))
 	for _, g := range groups {
+		// 解析 effective sticky：组级显式设置优先，否则用全局默认
+		effStickyEnabled := stickyDefaultEnabled
+		if g.StickyEnabled != nil {
+			effStickyEnabled = *g.StickyEnabled
+		}
+		effStickyTTL := stickyDefaultTTL
+		if g.StickyTTLSeconds != nil {
+			effStickyTTL = *g.StickyTTLSeconds
+		}
+
 		gi := groupInfo{
 			ID:               g.ID,
 			Name:             g.Name,
@@ -466,8 +485,8 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 			Strategy:         g.Strategy,
 			Enabled:          g.Enabled,
 			TimeoutSeconds:   g.TimeoutSeconds,
-			StickyEnabled:    g.StickyEnabled,
-			StickyTTLSeconds: g.StickyTTLSeconds,
+			StickyEnabled:    effStickyEnabled,
+			StickyTTLSeconds: effStickyTTL,
 			Models:           make([]modelInfo, 0, len(g.Models)),
 		}
 		for _, gm := range g.Models {
@@ -484,36 +503,22 @@ func (h *GroupHandler) ListEnabledGroups(c *gin.Context) {
 					if m.Enabled == nil || !*m.Enabled {
 						continue
 					}
-					mi.Name = m.UpstreamName()
-					mi.ModelType = m.ModelType
-					mi.ProviderID = m.ProviderID
-					mi.ParamStyle = m.ParamStyle
-					mi.BaseModel = m.BaseModel
-					mi.UpstreamModelID = m.UpstreamModelID
-					mi.ProtocolMode = defaultString(m.ProtocolMode, model.ProtocolModeAuto)
-					mi.ParamProfile = defaultString(m.ParamProfile, model.ParamProfileAuto)
-					mi.UnsupportedParamPolicy = defaultString(m.UnsupportedParamPolicy, model.UnsupportedParamPolicyPreserve)
-					mi.SupportedParamsOverride = m.SupportedParamsOverride
-					if mi.SupportedParamsOverride == nil {
-						mi.SupportedParamsOverride = model.PlannerJSONMap{}
-					}
-					mi.TransformOverrides = m.TransformOverrides
-					if mi.TransformOverrides == nil {
-						mi.TransformOverrides = model.PlannerJSONMap{}
-					}
-					providerEnabled := false
-					if h.providerRepo != nil {
-						p, err := h.providerRepo.GetByID(m.ProviderID)
-						if err == nil && p != nil && p.Enabled {
-							mi.ProviderType = p.DefinitionID
-							if mi.ProviderType == "" {
-								mi.ProviderType = p.Type
-							}
-							mi.ProviderName = p.Name
-							mi.Endpoint = p.Endpoint
-							providerEnabled = true
+				mi.Name = m.UpstreamName()
+				mi.ModelType = m.ModelType
+				mi.ProviderID = m.ProviderID
+				providerEnabled := false
+				if h.providerRepo != nil {
+					p, err := h.providerRepo.GetByID(m.ProviderID)
+					if err == nil && p != nil && p.Enabled {
+						mi.ProviderType = p.DefinitionID
+						if mi.ProviderType == "" {
+							mi.ProviderType = p.Type
 						}
+						mi.ProviderName = p.Name
+						mi.Endpoint = p.Endpoint
+						providerEnabled = true
 					}
+				}
 					if !providerEnabled {
 						continue
 					}
@@ -539,10 +544,4 @@ func upstreamModelName(m *model.Model) string {
 		return m.UpstreamModelID
 	}
 	return m.Name
-}
-func defaultString(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
 }

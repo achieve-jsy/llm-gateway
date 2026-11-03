@@ -211,6 +211,7 @@ import BudgetEmptyState from './BudgetEmptyState.vue'
 interface TierUsageItem {
   scope_id: string
   tier_name: string
+  used_usd?: number
   used_ratio?: number
   color?: string
   enabled?: boolean

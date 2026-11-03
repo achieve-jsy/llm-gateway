@@ -99,7 +99,8 @@ const previewRows = computed(() => {
 })
 function resolveLabel(itemId: string): string {
   const allocationId = itemId.includes(':') ? itemId.split(':')[0] : itemId
-  const item = props.items.find(i => i.allocation_id === allocationId)
+  const item = props.items.find(i => budgetBatchItemId(i) === itemId)
+    ?? props.items.find(i => i.allocation_id === (itemId.includes(':') ? itemId.split(':')[0] : itemId))
   return item?.label || item?.scope_id || allocationId
 }
 function budgetBatchItemId(item: BudgetItem): string {
@@ -135,8 +136,9 @@ async function runPreview() {
       }))
     } else preview.value = await previewBudgetTierBatch({
       operation: form.operation, effective_mode: form.effectiveMode, reason: form.reason.trim(),
-      items: props.items.filter(item => item.allocation_id).map(item => ({
-        item_id: item.allocation_id!, allocation_id: item.allocation_id!,
+      items: props.items.map(item => ({
+        item_id: budgetBatchItemId(item), allocation_id: item.allocation_id,
+        scope_type: item.scope_type, scope_id: item.scope_id,
         model_tier_id: form.modelTierId, period_type: form.periodType,
         direction: form.operation === 'adjust_percent' ? form.direction : undefined,
         value: Number(form.value).toFixed(6),

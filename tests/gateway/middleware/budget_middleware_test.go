@@ -123,6 +123,7 @@ func TestMiddleware_IncludesBudgetTierInfoIn402Response(t *testing.T) {
 				Dimension:  budget.DimensionTier,
 				ScopeType:  "member",
 				ScopeID:    "u-1",
+				TierName:   "超高级模型",
 				PeriodType: budgetdomain.PeriodMonthly,
 			},
 			Additional: []budget.PublicConstraint{
@@ -145,6 +146,7 @@ func TestMiddleware_IncludesBudgetTierInfoIn402Response(t *testing.T) {
 
 	errObj, ok := body["error"].(map[string]interface{})
 	require.True(t, ok)
+	assert.Equal(t, "超高级模型月预算已用尽，请联系负责人扩容", errObj["message"])
 	assert.Equal(t, "tier_budget_exceeded", errObj["type"])
 	assert.Equal(t, "tier_budget_exceeded", errObj["code"])
 	assert.Equal(t, "budget", errObj["gate"])

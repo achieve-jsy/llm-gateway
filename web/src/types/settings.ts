@@ -30,6 +30,15 @@ export interface SystemSettings {
   default_failover_cooldown_seconds: number
   supplier_name: string
   pricing_usd_to_cny_rate: number
+  budget_master_enabled: boolean
+  budget_accounting_enabled: boolean
+  budget_positive_enforcement_enabled: boolean
+  budget_zero_block_enabled: boolean
+  budget_shadow_enabled: boolean
+  budget_v2_total_enforcement_enabled: boolean
+  budget_legacy_total_write_enabled: boolean
+  sticky_default_enabled: boolean
+  sticky_default_ttl_seconds: number
 }
 
 export interface PublicSettings {
@@ -53,4 +62,31 @@ export interface PublicSettingsResponse {
   code: number
   message: string
   data: PublicSettings
+}
+
+export interface NotificationChannelRule {
+  notification_type: string
+  channel: 'inapp' | 'email'
+  enabled: boolean
+}
+
+export interface NotificationTypeMeta {
+  type: string
+  label: string
+}
+
+export interface NotificationChannelMeta {
+  channel: string
+  label: string
+}
+
+export interface NotificationChannelMetadata {
+  types: NotificationTypeMeta[]
+  channels: NotificationChannelMeta[]
+}
+
+export interface NotificationChannelMetadataResponse {
+  code: number
+  message: string
+  data: NotificationChannelMetadata
 }

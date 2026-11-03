@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/example/llm-gateway/internal/controlplane/keyactivity"
 	"github.com/example/llm-gateway/internal/controlplane/model"
@@ -62,6 +63,10 @@ const (
 	SettingKeySMTPFrom          = "smtp_from"
 	SettingKeySMTPPassword      = "smtp_password"
 	SettingKeySMTPTLSSkipVerify = "smtp_tls_skip_verify"
+
+	// 全局粘性路由默认
+	SettingKeyStickyDefaultEnabled    = "sticky_default_enabled"
+	SettingKeyStickyDefaultTTLSeconds = "sticky_default_ttl_seconds"
 )
 
 const (
@@ -88,6 +93,8 @@ const (
 	defaultKAMinBaseline                = 20.0
 	defaultKAMinDev                     = 5.0
 	defaultKABootstrapDays              = 90
+	defaultStickyEnabled                = true
+	defaultStickyTTLSeconds             = 300
 )
 
 type SettingsRepository interface {
@@ -98,7 +105,8 @@ type SettingsRepository interface {
 }
 
 type SettingsService struct {
-	repo SettingsRepository
+	repo            SettingsRepository
+	budgetPublisher budgetEnforcementPublisher
 }
 
 func NewSettingsService(repo SettingsRepository) *SettingsService {
@@ -128,6 +136,10 @@ func allSettingKeys() []string {
 		SettingKeyKeyActivityBootstrapDone, SettingKeyKeyActivityScanCursor,
 		SettingKeyEmailEnabled, SettingKeySMTPHost, SettingKeySMTPPort,
 		SettingKeySMTPFrom, SettingKeySMTPPassword, SettingKeySMTPTLSSkipVerify,
+		SettingKeyBudgetMaster, SettingKeyBudgetAccounting,
+			SettingKeyBudgetPositiveEnforcement, SettingKeyBudgetZeroBlock,
+		SettingKeyBudgetShadow, SettingKeyBudgetV2TotalEnforcement,
+		SettingKeyStickyDefaultEnabled, SettingKeyStickyDefaultTTLSeconds,
 	}
 }
 
@@ -166,6 +178,8 @@ func (s *SettingsService) ensureDefaults() {
 		SettingKeySMTPFrom:                  "llm-gateway@example.com",
 		SettingKeySMTPPassword:      "JHk#7wt#3v)R@W2jP)",
 		SettingKeySMTPTLSSkipVerify: "false",
+		SettingKeyStickyDefaultEnabled:    fmt.Sprintf("%t", defaultStickyEnabled),
+		SettingKeyStickyDefaultTTLSeconds: fmt.Sprintf("%d", defaultStickyTTLSeconds),
 	}
 	existing, _ := s.repo.GetMultiple(allSettingKeys())
 	for k, v := range defaults {
@@ -216,15 +230,38 @@ func (s *SettingsService) GetSystemSettings(ctx context.Context) (*model.SystemS
 		SMTPFrom:          valOrDefault(vals, SettingKeySMTPFrom, ""),
 		SMTPPassword:      maskSecret(valOrDefault(vals, SettingKeySMTPPassword, "")),
 		SMTPTLSSkipVerify: boolOrDefault(vals, SettingKeySMTPTLSSkipVerify, false),
+		BudgetMasterEnabled:              boolOrDefault(vals, SettingKeyBudgetMaster, false),
+		BudgetAccountingEnabled:          boolOrDefault(vals, SettingKeyBudgetAccounting, false),
+		BudgetPositiveEnforcementEnabled: boolOrDefault(vals, SettingKeyBudgetPositiveEnforcement, false),
+		BudgetZeroBlockEnabled:           boolOrDefault(vals, SettingKeyBudgetZeroBlock, false),
+		BudgetShadowEnabled:              boolOrDefault(vals, SettingKeyBudgetShadow, false),
+		BudgetV2TotalEnforcementEnabled:  boolOrDefault(vals, SettingKeyBudgetV2TotalEnforcement, false),
+		BudgetLegacyTotalWriteEnabled:   boolOrDefault(vals, SettingKeyBudgetLegacyTotalWrite, true),
+		StickyDefaultEnabled:    boolOrDefault(vals, SettingKeyStickyDefaultEnabled, defaultStickyEnabled),
+		StickyDefaultTTLSeconds: intOrDefault(vals, SettingKeyStickyDefaultTTLSeconds, defaultStickyTTLSeconds),
 	}, nil
 }
 
-// maskSecret 脱敏密码/密钥：非空时返回 "••••••" 避免在 API 响应中泄露。
+// MaskedSecretPlaceholder 设置页 API 对密码/密钥的脱敏占位符。
+// 前端回显后若原样提交，必须视为「未修改」而非真实凭据。
+const MaskedSecretPlaceholder = "••••••"
+
+// maskSecret 脱敏密码/密钥：非空时返回占位符，避免在 API 响应中泄露。
 func maskSecret(s string) string {
 	if s == "" {
 		return ""
 	}
-	return "••••••"
+	return MaskedSecretPlaceholder
+}
+
+// IsMaskedSecret 判断是否为脱敏占位（含历史 ASCII 星号形态）。
+func IsMaskedSecret(s string) bool {
+	switch strings.TrimSpace(s) {
+	case "", MaskedSecretPlaceholder, "******", "********":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *SettingsService) GetPublicSettings(ctx context.Context) (*model.PublicSettings, error) {
@@ -276,7 +313,7 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 	}
 	updates[SettingKeyOIDCIssuerURL] = settings.OIDCIssuerURL
 	updates[SettingKeyOIDCClientID] = settings.OIDCClientID
-	if settings.OIDCClientSecret != "" {
+	if settings.OIDCClientSecret != "" && !IsMaskedSecret(settings.OIDCClientSecret) {
 		updates[SettingKeyOIDCClientSecret] = settings.OIDCClientSecret
 	}
 	updates[SettingKeyOIDCRedirectURL] = settings.OIDCRedirectURL
@@ -284,7 +321,7 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 	updates[SettingKeyOIDCEnabled] = fmt.Sprintf("%t", settings.OIDCEnabled)
 	updates[SettingKeyWebhookEnabled] = fmt.Sprintf("%t", settings.WebhookEnabled)
 	updates[SettingKeyWebhookURL] = settings.WebhookURL
-	if settings.WebhookSecret != "" {
+	if settings.WebhookSecret != "" && !IsMaskedSecret(settings.WebhookSecret) {
 		updates[SettingKeyWebhookSecret] = settings.WebhookSecret
 	}
 	updates[SettingKeyWebhookEvents] = settings.WebhookEvents
@@ -322,11 +359,29 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, settings *model.Sy
 	if settings.SMTPFrom != "" {
 		updates[SettingKeySMTPFrom] = settings.SMTPFrom
 	}
-	if settings.SMTPPassword != "" {
+	if settings.SMTPPassword != "" && !IsMaskedSecret(settings.SMTPPassword) {
 		updates[SettingKeySMTPPassword] = settings.SMTPPassword
 	}
 	updates[SettingKeySMTPTLSSkipVerify] = fmt.Sprintf("%t", settings.SMTPTLSSkipVerify)
-	return s.repo.SetMultiple(updates)
+	if err := validateBudgetEnforcement(settings); err != nil {
+		return err
+	}
+	updates[SettingKeyBudgetMaster] = fmt.Sprintf("%t", settings.BudgetMasterEnabled)
+	updates[SettingKeyBudgetAccounting] = fmt.Sprintf("%t", settings.BudgetAccountingEnabled)
+	updates[SettingKeyBudgetPositiveEnforcement] = fmt.Sprintf("%t", settings.BudgetPositiveEnforcementEnabled)
+	updates[SettingKeyBudgetZeroBlock] = fmt.Sprintf("%t", settings.BudgetZeroBlockEnabled)
+	updates[SettingKeyBudgetShadow] = fmt.Sprintf("%t", settings.BudgetShadowEnabled)
+	updates[SettingKeyBudgetV2TotalEnforcement] = fmt.Sprintf("%t", settings.BudgetV2TotalEnforcementEnabled)
+	updates[SettingKeyBudgetLegacyTotalWrite] = fmt.Sprintf("%t", settings.BudgetLegacyTotalWriteEnabled)
+	// 全局粘性路由默认
+	updates[SettingKeyStickyDefaultEnabled] = fmt.Sprintf("%t", settings.StickyDefaultEnabled)
+	if settings.StickyDefaultTTLSeconds > 0 {
+		updates[SettingKeyStickyDefaultTTLSeconds] = fmt.Sprintf("%d", settings.StickyDefaultTTLSeconds)
+	}
+	if err := s.repo.SetMultiple(updates); err != nil {
+		return err
+	}
+	return s.publishBudgetEnforcement(ctx, settings)
 }
 
 // GetSMTPPassword 返回原始 SMTP 密码（未脱敏），供测试邮件等内部场景使用。
@@ -469,7 +524,18 @@ func (s *SettingsService) ExportAll(ctx context.Context) (map[string]string, err
 }
 
 func (s *SettingsService) ImportSettings(ctx context.Context, settings map[string]string) error {
-	return s.repo.SetMultiple(settings)
+	if err := s.repo.SetMultiple(settings); err != nil {
+		return err
+	}
+	// 导入若含预算拦截 key，同步到 snapshot；否则保持现状。
+	current, err := s.GetSystemSettings(ctx)
+	if err != nil {
+		return err
+	}
+	if err := validateBudgetEnforcement(current); err != nil {
+		return err
+	}
+	return s.publishBudgetEnforcement(ctx, current)
 }
 
 // GetKeyActivityConfig 从 system_configs 解析 Key 活动提醒的全部配置

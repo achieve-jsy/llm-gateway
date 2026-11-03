@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"sync/atomic"
 
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/infra"
 	gatewaymodel "github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/llmclientconfig"
@@ -63,7 +64,16 @@ func (l *ProviderLoader) Build(entries []gatewaymodel.ProviderEntry) (*providers
 		if !entry.Enabled {
 			continue
 		}
-		if len(entry.Models) == 0 {
+		models := entry.Models
+		if len(entry.ModelsV2) > 0 {
+			models = make([]string, 0, len(entry.ModelsV2))
+			for _, model := range entry.ModelsV2 {
+				if model.Name != "" {
+					models = append(models, model.Name)
+				}
+			}
+		}
+		if len(models) == 0 {
 			slog.Warn("loader: provider has no models configured, skipping",
 				"provider_name", entry.Name,
 				"provider_type", entry.Type,
@@ -73,14 +83,15 @@ func (l *ProviderLoader) Build(entries []gatewaymodel.ProviderEntry) (*providers
 
 		// 构建 model name → upstream ID 映射
 		modelUpstreamIDs := make(map[string]string)
-		models := entry.Models
+		modelMetadata := make(map[string]*core.ModelMetadata)
 		if len(entry.ModelsV2) > 0 {
 			// 优先使用 ModelsV2（新版本，包含 upstream_model_id）
-			models = make([]string, 0, len(entry.ModelsV2))
 			for _, m := range entry.ModelsV2 {
-				models = append(models, m.Name)
 				if m.UpstreamModelID != "" {
 					modelUpstreamIDs[m.Name] = m.UpstreamModelID
+				}
+				if m.Pricing != nil {
+					modelMetadata[m.Name] = &core.ModelMetadata{Pricing: m.Pricing}
 				}
 			}
 		}
@@ -110,7 +121,8 @@ func (l *ProviderLoader) Build(entries []gatewaymodel.ProviderEntry) (*providers
 		}
 
 		registry.RegisterProviderWithNameAndType(p, entry.Name, entry.Type)
-		registry.SetProviderConfiguredModels(entry.Name, entry.Models)
+		registry.SetProviderConfiguredModels(entry.Name, models)
+		registry.SetProviderMetadataOverrides(entry.Name, modelMetadata)
 		builtCount++
 	}
 

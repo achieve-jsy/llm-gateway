@@ -43,6 +43,17 @@ func TestModel_UpstreamName(t *testing.T) {
 			upstreamModelID: "",
 			want:            "ZHIPU/GLM-5.2",
 		},
+		{
+			name:      "kimi-k3 带 provider 前缀",
+			modelName: "kimi/kimi-k3",
+			want:      "kimi/kimi-k3",
+		},
+		{
+			name:            "kimi-k3 UpstreamModelID 覆盖",
+			modelName:       "kimi/kimi-k3",
+			upstreamModelID: "kimi-k3",
+			want:            "kimi-k3",
+		},
 	}
 
 	for _, tc := range cases {

@@ -9,6 +9,8 @@ import (
 	"github.com/example/llm-gateway/internal/configsync"
 	controlmodel "github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/pkg/crypto"
+	controlpricing "github.com/example/llm-gateway/internal/controlplane/pricing"
+	"github.com/example/llm-gateway/internal/core"
 	gatewaymodel "github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/redis/go-redis/v9"
 )
@@ -82,6 +84,7 @@ func buildProviderEntries(models []controlmodel.Model) ([]gatewaymodel.ProviderE
 				APIVersion:  apiVersion,
 				Enabled:     true,
 				Models:      make([]string, 0, 4),
+				ModelsV2:    make([]gatewaymodel.ModelEntry, 0, 4),
 			}
 			providerMap[providerID] = entry
 			providerOrder = append(providerOrder, providerID)
@@ -91,29 +94,55 @@ func buildProviderEntries(models []controlmodel.Model) ([]gatewaymodel.ProviderE
 		// 某些上游（如 ZHIPU）期望收到带前缀的完整模型名；
 		// Bedrock 等需要剥前缀的 provider 在各自的 adapter 中处理。
 		entry.Models = append(entry.Models, m.Name)
-		entry.ModelsV2 = append(entry.ModelsV2, gatewaymodel.ModelEntry{
-			Name:                    m.Name,
-			UpstreamModelID:         m.UpstreamModelID,
-			BaseModel:               m.BaseModel,
-			ProtocolMode:            defaultString(m.ProtocolMode, controlmodel.ProtocolModeAuto),
-			ParamProfile:            defaultString(m.ParamProfile, controlmodel.ParamProfileAuto),
-			UnsupportedParamPolicy:  defaultString(m.UnsupportedParamPolicy, controlmodel.UnsupportedParamPolicyPreserve),
-			SupportedParamsOverride: plannerJSONMapToAny(m.SupportedParamsOverride),
-			TransformOverrides:      plannerJSONMapToAny(m.TransformOverrides),
-		})
+		modelEntry := gatewaymodel.ModelEntry{Name: m.Name, UpstreamModelID: m.UpstreamModelID}
+		if pricing := snapshotModelPricing(m); len(pricing.FieldSources("database")) > 0 {
+			modelEntry.Pricing = &pricing
+		}
+		entry.ModelsV2 = append(entry.ModelsV2, modelEntry)
 	}
 
 	entries := make([]gatewaymodel.ProviderEntry, 0, len(providerOrder))
 	for _, providerID := range providerOrder {
 		entry := providerMap[providerID]
 		sort.Strings(entry.Models)
-		sort.Slice(entry.ModelsV2, func(i, j int) bool {
-			return entry.ModelsV2[i].Name < entry.ModelsV2[j].Name
-		})
+		sort.Slice(entry.ModelsV2, func(i, j int) bool { return entry.ModelsV2[i].Name < entry.ModelsV2[j].Name })
 		entries = append(entries, *entry)
 	}
 
 	return entries, nil
+}
+
+func snapshotModelPricing(m controlmodel.Model) core.ModelPricing {
+	var inputPricePerMillion, outputPricePerMillion *float64
+	var cacheReadPrice, cacheWritePrice *float64
+	var tierThreshold *int64
+	var inputPriceAboveTier, outputPriceAboveTier *float64
+	var rawPayload string
+	if m.Catalog != nil {
+		inputPricePerMillion = &m.Catalog.InputPricePerMillion
+		outputPricePerMillion = &m.Catalog.OutputPricePerMillion
+		cacheReadPrice = m.Catalog.CacheReadPrice
+		cacheWritePrice = m.Catalog.CacheWritePrice
+		tierThreshold = m.Catalog.TierThreshold
+		inputPriceAboveTier = m.Catalog.InputPriceAboveTier
+		outputPriceAboveTier = m.Catalog.OutputPriceAboveTier
+		rawPayload = m.Catalog.RawPayload
+	}
+	pricing := controlpricing.ResolveModelPricing(
+		m.PriceMode, m.InputPrice, m.OutputPrice,
+		m.CacheReadPrice, m.CacheWritePrice,
+		inputPricePerMillion, outputPricePerMillion,
+		cacheReadPrice, cacheWritePrice,
+		tierThreshold, inputPriceAboveTier, outputPriceAboveTier,
+	)
+	usagePricing := controlpricing.ResolveUsagePricing(controlpricing.UsagePricingInput{
+		ModelType: m.ModelType, PriceMode: m.PriceMode,
+		InputPrice: m.InputPrice, CatalogRawPayload: rawPayload,
+	})
+	if usagePricing.RerankPerSearchUnit != nil {
+		pricing.RerankPerSearchUnit = usagePricing.RerankPerSearchUnit
+	}
+	return pricing
 }
 
 func providerTypeForGateway(p controlmodel.Provider) string {
@@ -121,22 +150,4 @@ func providerTypeForGateway(p controlmodel.Provider) string {
 		return p.Type
 	}
 	return p.DefinitionID
-}
-
-func defaultString(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
-}
-
-func plannerJSONMapToAny(src controlmodel.PlannerJSONMap) map[string]any {
-	if src == nil {
-		return map[string]any{}
-	}
-	dst := make(map[string]any, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }

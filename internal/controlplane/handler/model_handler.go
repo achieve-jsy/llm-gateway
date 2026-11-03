@@ -30,6 +30,10 @@ type ModelServiceInterface interface {
 	ResetOverride(modelID uuid.UUID, field string) error
 	GetModel(id uuid.UUID) (*model.Model, error)
 
+	// 批量注册（多渠道）
+	BatchCreateModels(input service.BatchCreateModelsInput) (*service.BatchCreateResult, error)
+	BatchCreateModelsFromCatalog(input service.BatchCreateFromCatalogInput) (*service.BatchCreateResult, error)
+
 	// Catalog 绑定/换绑/解绑（CAT-2）
 	BindCatalog(modelID, catalogID uuid.UUID, resetFields bool) (*model.Model, error)
 	UnbindCatalog(modelID uuid.UUID) (*model.Model, error)
@@ -58,12 +62,6 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 
 	m, err := h.svc.CreateModel(input)
 	if err != nil {
-		if errors.Is(err, service.ErrModelInvalidPlanningConfig) {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest},
-			})
-			return
-		}
 		if errors.Is(err, service.ErrModelNameExists) {
 			c.JSON(http.StatusConflict, gin.H{
 				"error": gin.H{"type": "conflict", "message": "model name already exists", "code": CodeModelNameConflict},
@@ -152,12 +150,6 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 
 	m, err := h.svc.UpdateModel(id, input)
 	if err != nil {
-		if errors.Is(err, service.ErrModelInvalidPlanningConfig) {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest},
-			})
-			return
-		}
 		if errors.Is(err, service.ErrModelNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": gin.H{"type": "not_found", "message": "model not found", "code": CodeModelNotFound},
@@ -317,6 +309,70 @@ func (h *ModelHandler) BatchUpdateModelStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"updated": updated}})
 }
 
+// BatchCreateModels POST /api/v1/models/batch
+//
+// 将同一模型配置注册到多个渠道；部分成功，HTTP 200 返回汇总。
+func (h *ModelHandler) BatchCreateModels(c *gin.Context) {
+	var input service.BatchCreateModelsInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest},
+		})
+		return
+	}
+
+	res, err := h.svc.BatchCreateModels(input)
+	if err != nil {
+		if errors.Is(err, service.ErrEmptyProviderIDs) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest},
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"type": "internal_error", "message": "failed to batch create models", "code": CodeInternalError},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": res})
+}
+
+// BatchCreateModelsFromCatalog POST /api/v1/models/batch-from-catalog
+//
+// 从一条 catalog 快照批量注册到多个渠道；Catalog 不存在时整请求 404。
+func (h *ModelHandler) BatchCreateModelsFromCatalog(c *gin.Context) {
+	var input service.BatchCreateFromCatalogInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest},
+		})
+		return
+	}
+
+	res, err := h.svc.BatchCreateModelsFromCatalog(input)
+	if err != nil {
+		if errors.Is(err, service.ErrEmptyProviderIDs) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest},
+			})
+			return
+		}
+		if errMsg := err.Error(); len(errMsg) > 0 && containsCatalogNotFound(errMsg) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": gin.H{"type": "not_found", "message": errMsg, "code": CodeCatalogNotFound},
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"type": "internal_error", "message": "failed to batch create models from catalog", "code": CodeInternalError},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": res})
+}
+
 // CreateModelFromCatalog POST /api/v1/models/from-catalog
 //
 // 请求体：{ catalog_id, provider_id, name }
@@ -447,8 +503,7 @@ func containsUnsupportedField(s string) bool {
 //
 // 请求体：{ "catalog_id": "uuid", "reset_fields": false }
 // 行为：把当前 model 关联到指定 catalog 条目；reset_fields=true 时同步把价格/容量/上游 ID 全部
-//
-//	回写为新 catalog 的当前值；标志位 ctx_overridden / max_output_overridden 始终重置为 false。
+//      回写为新 catalog 的当前值；标志位 ctx_overridden / max_output_overridden 始终重置为 false。
 type bindCatalogInput struct {
 	CatalogID   uuid.UUID `json:"catalog_id" binding:"required"`
 	ResetFields bool      `json:"reset_fields"`

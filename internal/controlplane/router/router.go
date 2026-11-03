@@ -137,22 +137,52 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		settingsSvc.GetDefaultFailoverCooldownSeconds(context.Background()),
 	)
 	groupHandler := handler.NewGroupHandler(groupSvc, modelRepo, providerRepo)
+	groupHandler.WithSettingsService(settingsSvc)
 	modelTierRepo := repository.NewModelTierRepo(db)
 	groupSvc.WithModelTierRepo(modelTierRepo)
 	modelTierSvc := service.NewModelTierService(modelTierRepo)
+	// 拦截开关：DB（设置页）优先；缺失 key 时用部署 cfg 种子。
+	settingsSvc.SeedBudgetEnforcementDefaults(service.BudgetEnforcementSeed{
+		MasterEnabled:              cfg.BudgetTier.MasterEnabled,
+		AccountingEnabled:          cfg.BudgetTier.AccountingEnabled,
+		PositiveEnforcementEnabled: cfg.BudgetTier.PositiveEnforcementEnabled,
+		ZeroBlockEnabled:           cfg.BudgetTier.ZeroBlockEnabled,
+		ShadowEnabled:              cfg.BudgetTier.ShadowEnabled,
+		V2TotalEnforcementEnabled:  cfg.BudgetTier.V2TotalEnforcementEnabled,
+		LegacyTotalWriteEnabled:    cfg.BudgetTier.LegacyTotalWriteEnabled,
+	})
+	budgetSettingsFromDB, _ := settingsSvc.GetSystemSettings(lifecycleCtx)
+	masterEnabled := cfg.BudgetTier.MasterEnabled
+	accountingEnabled := cfg.BudgetTier.AccountingEnabled
+	positiveEnabled := cfg.BudgetTier.PositiveEnforcementEnabled
+	zeroBlockEnabled := cfg.BudgetTier.ZeroBlockEnabled
+	shadowEnabled := cfg.BudgetTier.ShadowEnabled
+	v2TotalEnabled := cfg.BudgetTier.V2TotalEnforcementEnabled
+	legacyTotalWriteEnabled := cfg.BudgetTier.LegacyTotalWriteEnabled
+	if budgetSettingsFromDB != nil {
+		masterEnabled = budgetSettingsFromDB.BudgetMasterEnabled
+		accountingEnabled = budgetSettingsFromDB.BudgetAccountingEnabled
+		positiveEnabled = budgetSettingsFromDB.BudgetPositiveEnforcementEnabled
+		zeroBlockEnabled = budgetSettingsFromDB.BudgetZeroBlockEnabled
+		shadowEnabled = budgetSettingsFromDB.BudgetShadowEnabled
+		v2TotalEnabled = budgetSettingsFromDB.BudgetV2TotalEnforcementEnabled
+		legacyTotalWriteEnabled = budgetSettingsFromDB.BudgetLegacyTotalWriteEnabled
+	}
+	accountingEnabled = accountingEnabled || positiveEnabled || shadowEnabled
 	budgetSnapshotPublisher := service.NewBudgetTierSnapshotPublisher(
 		groupRepo, rdb, publisher, service.BudgetTierSnapshotSettings{
-			MasterEnabled:              cfg.BudgetTier.MasterEnabled,
-			AccountingEnabled:          cfg.BudgetTier.AccountingEnabled,
-			PositiveEnforcementEnabled: cfg.BudgetTier.PositiveEnforcementEnabled,
-			ZeroBlockEnabled:           cfg.BudgetTier.ZeroBlockEnabled,
-			ShadowEnabled:              cfg.BudgetTier.ShadowEnabled,
-			V2TotalEnforcementEnabled:  cfg.BudgetTier.V2TotalEnforcementEnabled,
-			LegacyTotalWriteEnabled:    cfg.BudgetTier.LegacyTotalWriteEnabled,
+			MasterEnabled:              masterEnabled,
+			AccountingEnabled:          accountingEnabled,
+			PositiveEnforcementEnabled: positiveEnabled,
+			ZeroBlockEnabled:           zeroBlockEnabled,
+			ShadowEnabled:              shadowEnabled,
+			V2TotalEnforcementEnabled:  v2TotalEnabled,
+			LegacyTotalWriteEnabled:    legacyTotalWriteEnabled,
 			Timezone:                   cfg.Budget.Timezone,
 			WeekStart:                  cfg.Budget.WeekStart,
 		}, time.Now,
 	)
+	settingsSvc.WithBudgetEnforcement(budgetSnapshotPublisher)
 	groupSvc.WithBudgetTierSnapshotPublisher(budgetSnapshotPublisher)
 	modelTierSvc.WithSnapshotPublisher(budgetSnapshotPublisher)
 	go budgetSnapshotPublisher.StartReconcile(lifecycleCtx, 30*time.Second)
@@ -185,16 +215,19 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	)
 	budgetRiskHandler := handler.NewBudgetRiskHandler(budgetRiskSvc, orgContainer.RBAC)
 	notificationRepo := repository.NewNotificationRepo(db)
+	notificationChannelRepo := repository.NewNotificationChannelRepo(db)
+	notificationChannelSvc := service.NewNotificationChannelService(notificationChannelRepo)
 	// v0.8: 审计日志（仅管理面写操作落库）
 	auditRepo := repository.NewAuditLogRepo(db)
 	auditSvc := service.NewAuditLogService(auditRepo)
 	// 解耦的通知分发：MultiNotifier = 站内信 + 邮件
 	// 调用方只管构造 model.Notification，内部按已配置通道分发。
+	// 每个 Notifier 外挂 GatedNotifier，由 notification_channel_rules 表控制逐类型开关。
 	emailNotifier := service.NewEmailNotifier(settingsRepo)
 	emailNotifier.SetAuditRecorder(auditSvc)
 	sharedNotifier := service.NewMultiNotifier(
-		service.NewDBNotifier(notificationRepo),
-		emailNotifier,
+		service.NewGatedNotifier(service.NewDBNotifier(notificationRepo), "inapp", notificationChannelSvc),
+		service.NewGatedNotifier(emailNotifier, "email", notificationChannelSvc),
 	)
 	budgetAlertSvc.SetNotifier(sharedNotifier)
 	expansionRepo := repository.NewExpansionRepo(db)
@@ -303,7 +336,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	modelStatusLogHandler := handler.NewModelStatusLogHandler(modelStatusLogRepo)
 
 	keyHandler := handler.NewKeyHandler(keySvc)
-	settingsHandler := handler.NewSettingsHandler(settingsSvc)
+	settingsHandler := handler.NewSettingsHandler(settingsSvc, notificationChannelSvc)
 	opencodeConfigHandler := handler.NewOpencodeConfigHandler(rdb, settingsSvc)
 
 	// 模型 Catalog（D1: LiteLLM 单源；D3: bundled fallback；D4: 启动异步首刷 + 24h cron + 手动）
@@ -480,6 +513,8 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.POST("/models/batch-tags/query", modelTagHandler.BatchGetModelTags)
 		// CAT-1：catalog 一键创建（静态路径，必须在 :id 之前）
 		adminGroup.POST("/models/from-catalog", modelHandler.CreateModelFromCatalog)
+		adminGroup.POST("/models/batch", modelHandler.BatchCreateModels)
+		adminGroup.POST("/models/batch-from-catalog", modelHandler.BatchCreateModelsFromCatalog)
 		// CAT-2：批量绑定（静态路径，必须在 :id 之前）
 		adminGroup.POST("/models/batch-bind-catalog", modelHandler.BatchBindCatalog)
 		adminGroup.GET("/models/:id/status-logs", modelStatusLogHandler.GetModelStatusLogs)
@@ -546,6 +581,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/ops/error-trend", opsHandler.GetErrorTrend)
 		adminGroup.GET("/ops/latency-histogram", opsHandler.GetLatencyHistogram)
 		adminGroup.GET("/ops/error-distribution", opsHandler.GetErrorDistribution)
+		adminGroup.GET("/ops/top-issues", opsHandler.GetTopIssues)
 
 		// 运维看板 v2：请求日志、错误分析、并发、趋势
 		adminGroup.GET("/ops/requests", opsHandler.ListRequests)
@@ -678,6 +714,9 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.POST("/settings/test-email", settingsHandler.TestEmail)
 		adminGroup.POST("/settings/export", settingsHandler.ExportSettings)
 		adminGroup.POST("/settings/import", settingsHandler.ImportSettings)
+		adminGroup.GET("/settings/notification-channels/metadata", settingsHandler.GetNotificationChannelMetadata)
+		adminGroup.GET("/settings/notification-channels", settingsHandler.GetNotificationChannelRules)
+		adminGroup.PUT("/settings/notification-channels", settingsHandler.UpdateNotificationChannelRules)
 
 		// 公告管理
 		adminGroup.GET("/announcements", announcementHandler.List)

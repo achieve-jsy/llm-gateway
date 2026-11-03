@@ -153,7 +153,7 @@
             <div class="tier-limits-editor__limit-head">
               <div>
                 <strong>每日上限</strong>
-                <span>USD</span>
+                <span>已用 {{ formatBudgetUSD(dailyUsage) }}</span>
               </div>
               <span class="tier-limits-editor__limit-state">{{ limitStateLabel(modelValue.total.daily) }}</span>
             </div>
@@ -196,7 +196,7 @@
             <div class="tier-limits-editor__limit-head">
               <div>
                 <strong>每周上限</strong>
-                <span>USD</span>
+                <span>已用 {{ formatBudgetUSD(weeklyUsage) }}</span>
               </div>
               <span class="tier-limits-editor__limit-state">{{ limitStateLabel(modelValue.total.weekly) }}</span>
             </div>
@@ -261,6 +261,9 @@
               <div class="tier-limits-editor__tier-period-controls">
                 <div class="tier-limits-editor__tier-period-field">
                   <label>日</label>
+                  <span class="tier-limits-editor__period-usage" :data-test="`tier-${tier.id}-daily-used`">
+                    已用 {{ formatBudgetUSD(tierUsage(tier.id, 'daily')?.used_usd ?? 0) }}
+                  </span>
                   <el-input
                     :model-value="tierPeriodDraft(tier.id, 'daily').value"
                     inputmode="decimal"
@@ -294,6 +297,9 @@
 
                 <div class="tier-limits-editor__tier-period-field">
                   <label>周</label>
+                  <span class="tier-limits-editor__period-usage" :data-test="`tier-${tier.id}-weekly-used`">
+                    已用 {{ formatBudgetUSD(tierUsage(tier.id, 'weekly')?.used_usd ?? 0) }}
+                  </span>
                   <el-input
                     :model-value="tierPeriodDraft(tier.id, 'weekly').value"
                     inputmode="decimal"
@@ -389,6 +395,8 @@ const displayMonthlyValue = computed(() => (
   monthlyUnlimited.value ? '' : monthlyEntry.value.value
 ))
 const monthlyUsage = computed(() => props.allocation.used_usd ?? 0)
+const dailyUsage = computed(() => props.allocation.daily_used_usd ?? 0)
+const weeklyUsage = computed(() => props.allocation.weekly_used_usd ?? 0)
 const monthlyLimitLabel = computed(() => {
   if (!monthlyEntry.value.configured) return '未配置'
   return formatBudgetUSD(monthlyEntry.value.value, { unlimited: true })
@@ -466,15 +474,15 @@ function tierPeriodDraft(tierId: string, period: ExpansionPeriod) {
   return props.modelValue.tiers[tierId][period]
 }
 
-function tierLimit(tierId: string): BudgetTierLimit | undefined {
+function tierLimit(tierId: string, period: ExpansionPeriod = 'monthly'): BudgetTierLimit | undefined {
   return props.limits.find(limit => (
-    limit.model_tier_id === tierId && limit.period_type === 'monthly'
+    limit.model_tier_id === tierId && limit.period_type === period
   ))
 }
 
-function tierUsage(tierId: string): BudgetTierUsage | undefined {
+function tierUsage(tierId: string, period: ExpansionPeriod = 'monthly'): BudgetTierUsage | undefined {
   return props.usages.find(usage => (
-    usage.model_tier_id === tierId && usage.period_type === 'monthly'
+    usage.model_tier_id === tierId && usage.period_type === period
   ))
 }
 
@@ -792,7 +800,7 @@ p,
 
 .tier-limits-editor__tier-period-field {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) max-content max-content;
+  grid-template-columns: 28px minmax(92px, 0.4fr) minmax(0, 1fr) max-content max-content;
   align-items: center;
   gap: 8px;
 }
@@ -801,6 +809,12 @@ p,
   color: #64748b;
   font-size: 12px;
   font-weight: 600;
+}
+
+.tier-limits-editor__period-usage {
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .tier-limits-editor__tier-period-field :deep(.el-button) {

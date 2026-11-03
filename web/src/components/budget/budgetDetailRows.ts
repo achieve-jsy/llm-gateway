@@ -24,12 +24,18 @@ function parseLimit(limit?: BudgetTierLimit): number | null {
   return Number.isFinite(safeLimit) ? safeLimit : null
 }
 
+function usageAmount(limit?: BudgetTierLimit): number {
+  const raw = limit as any
+  return Number(raw?.used_usd ?? raw?.accounting_cost_usd ?? raw?.reported_cost_usd ?? 0)
+}
+
 /** 将多周期 limit 行按等级聚合为一行（月/周/日）。 */
 export function buildTierDetailRows(tierLimits: BudgetTierLimit[] = []): TierDetailRow[] {
   if (!tierLimits.length) return []
 
   const byTier = new Map<string, BudgetTierLimit[]>()
   for (const limit of tierLimits) {
+    if (!limit.model_tier_name) continue
     const key = limit.model_tier_id
     const list = byTier.get(key) ?? []
     list.push(limit)
@@ -42,12 +48,12 @@ export function buildTierDetailRows(tierLimits: BudgetTierLimit[] = []): TierDet
     const daily = findPeriod(limits, 'daily')
     const any = monthly ?? weekly ?? daily ?? limits[0]
     const monthlyLimit = parseLimit(monthly)
-    const used = Number(monthly?.used_usd ?? 0)
+    const used = usageAmount(monthly)
     const ratio = monthlyLimit !== null && monthlyLimit > 0 ? used / monthlyLimit : 0
 
     return {
       id,
-      name: any.model_tier_name ?? id,
+      name: any.model_tier_name,
       color: undefined,
       enabled: any.enabled ?? true,
       monthly: monthlyLimit,

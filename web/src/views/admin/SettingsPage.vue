@@ -384,6 +384,51 @@
         </div>
       </div>
 
+      <!-- 通知渠道开关 -->
+      <div v-show="activeTab === 'notification-channels'" class="settings-card">
+        <div class="card-header">
+          <div class="card-title-row">
+            <span class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            </span>
+            <h3 class="card-title">通知渠道开关</h3>
+          </div>
+          <p class="card-desc">按通知类型精细控制站内信和邮件的发送开关。邮件总开关在「邮件通知」页签配置。</p>
+        </div>
+
+        <div class="card-body">
+          <div v-if="channelRulesLoading" v-loading="true" style="min-height: 120px"></div>
+          <table v-else class="channel-rules-table">
+            <thead>
+              <tr>
+                <th class="channel-rules-th-type">通知类型</th>
+                <th v-for="ch in notificationMetadata.channels" :key="ch.channel" class="channel-rules-th-ch">
+                  {{ ch.label }}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="nt in notificationMetadata.types" :key="nt.type">
+                <td class="channel-rules-td-type">{{ nt.label }}</td>
+                <td v-for="ch in notificationMetadata.channels" :key="ch.channel" class="channel-rules-td-ch">
+                  <el-switch
+                    :model-value="isChannelEnabled(nt.type, ch.channel)"
+                    :disabled="ch.channel === 'email' && !form.email_enabled"
+                    @change="(v: boolean | string | number) => setChannelEnabled(nt.type, ch.channel, !!v)"
+                  />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-if="!form.email_enabled" class="form-hint" style="margin-top: 8px">邮件总开关未开启，邮件列开关暂不生效。请先到「邮件通知」页签开启。</p>
+          <div style="margin-top: 16px">
+            <el-button type="primary" :loading="savingChannelRules" :disabled="!channelRulesChanged" @click="handleSaveChannelRules">
+              保存渠道设置
+            </el-button>
+          </div>
+        </div>
+      </div>
+
       <!-- 故障默认配置 -->
       <div v-show="activeTab === 'failover'" class="settings-card">
         <div class="card-header">
@@ -429,7 +474,29 @@
                 :step="10"
                 class="form-input-number"
               />
-              <p class="form-hint">模型切换后冷却多久</p>
+            <p class="form-hint">模型切换后冷却多久</p>
+            </div>
+          </div>
+
+          <div class="quota-section">
+            <h4 class="quota-section-title">粘性路由</h4>
+            <p class="quota-section-desc">组级未单独设置时，按此全局默认值决定是否启用会话粘性路由</p>
+            <div class="form-row form-row-3col">
+              <div class="form-group inline-toggle">
+                <label class="form-label">启用粘性路由</label>
+                <el-switch v-model="form.sticky_default_enabled" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">默认 TTL（秒）</label>
+                <el-input-number
+                  v-model="form.sticky_default_ttl_seconds"
+                  :min="60"
+                  :max="86400"
+                  :step="60"
+                  class="form-input-number"
+                />
+                <p class="form-hint">粘性绑定过期时间，命中渠道后保持的最长秒数</p>
+              </div>
             </div>
           </div>
         </div>
@@ -470,6 +537,80 @@
               </div>
               <p class="form-hint">默认 7.2，可随时按实际汇率调整</p>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 预算拦截 -->
+      <div v-show="activeTab === 'budget'" class="settings-card">
+        <div class="card-header">
+          <div class="card-title-row">
+            <span class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </span>
+            <h3 class="card-title">预算拦截</h3>
+          </div>
+          <p class="card-desc">热切换网关预算拦截策略，保存后经 snapshot 秒级生效，无需重启服务</p>
+        </div>
+
+        <div class="card-body">
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">总开关</label>
+              <el-switch
+                v-model="form.budget_master_enabled"
+              />
+            </div>
+            <p class="form-hint">控制整个 tier budget 系统的启停，关闭后所有拦截和计数均不生效</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">计费开关</label>
+              <el-switch v-model="form.budget_accounting_enabled" />
+            </div>
+            <p class="form-hint">控制是否写入用量计数器；开启正向拦截或影子模式时自动开启</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">正向拦截</label>
+              <el-switch
+                v-model="form.budget_positive_enforcement_enabled"
+                :disabled="form.budget_shadow_enabled"
+                @change="onPositiveEnforcementChange"
+              />
+            </div>
+            <p class="form-hint">超额时返回 402，拒绝继续调用</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">零额度拦截</label>
+              <el-switch v-model="form.budget_zero_block_enabled" />
+            </div>
+            <p class="form-hint">档位额度为 $0 时直接拒绝</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">影子模式</label>
+              <el-switch
+                v-model="form.budget_shadow_enabled"
+                :disabled="form.budget_positive_enforcement_enabled"
+              />
+            </div>
+            <p class="form-hint">只记录 would-block，不真正拦截；与正向拦截互斥</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">v2 总额拦截</label>
+              <el-switch v-model="form.budget_v2_total_enforcement_enabled" />
+            </div>
+            <p class="form-hint">总额超限走 v2 Redis 拦截链路</p>
+          </div>
+          <div class="form-group">
+            <div class="inline-toggle">
+              <label class="form-label">旧版总量写入</label>
+              <el-switch v-model="form.budget_legacy_total_write_enabled" />
+            </div>
+            <p class="form-hint">向旧版 total budget 计数器同步写入，用于过渡期兼容</p>
           </div>
         </div>
       </div>
@@ -516,7 +657,7 @@
       </div>
 
       <!-- 操作栏 -->
-      <div class="action-bar">
+      <div v-if="activeTab !== 'notification-channels'" class="action-bar">
         <div class="action-status">
           <span v-if="formChanged" class="change-indicator">有未保存的更改</span>
           <span v-else-if="settingsStore.loaded" class="saved-indicator">
@@ -537,11 +678,11 @@
 
 <script setup lang="ts">
 import { reactive, ref, onMounted, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
-import { exportSettings, importSettings } from '@/services/control-plane'
+import { exportSettings, importSettings, getNotificationChannelRules, updateNotificationChannelRules, getNotificationChannelMetadata } from '@/services/control-plane'
 import { QUOTA_DEFAULTS } from '@/api/quota'
-import type { SystemSettings } from '@/types/settings'
+import type { SystemSettings, NotificationChannelRule, NotificationChannelMetadata } from '@/types/settings'
 import ImageUpload from '@/components/common/ImageUpload.vue'
 
 const settingsStore = useSettingsStore()
@@ -554,6 +695,67 @@ const importing = ref(false)
 const importInputRef = ref<HTMLInputElement>()
 const activeTab = ref('brand')
 
+// ── 通知渠道开关 ──────────────────────────────────────────────────────────────
+const notificationMetadata = ref<NotificationChannelMetadata>({ types: [], channels: [] })
+
+const channelRules = ref<NotificationChannelRule[]>([])
+const channelRulesInitial = ref<NotificationChannelRule[]>([])
+const channelRulesLoading = ref(false)
+const savingChannelRules = ref(false)
+
+function isChannelEnabled(notifType: string, channel: string): boolean {
+  const r = channelRules.value.find(x => x.notification_type === notifType && x.channel === channel)
+  return r ? r.enabled : true
+}
+
+function setChannelEnabled(notifType: string, channel: string, enabled: boolean) {
+  const r = channelRules.value.find(x => x.notification_type === notifType && x.channel === channel)
+  if (r) {
+    r.enabled = enabled
+  } else {
+    channelRules.value.push({ notification_type: notifType, channel: channel as 'inapp' | 'email', enabled })
+  }
+}
+
+const channelRulesChanged = computed(() => {
+  const cur = JSON.stringify(channelRules.value.slice().sort((a, b) =>
+    (a.notification_type + a.channel).localeCompare(b.notification_type + b.channel)))
+  const init = JSON.stringify(channelRulesInitial.value.slice().sort((a, b) =>
+    (a.notification_type + a.channel).localeCompare(b.notification_type + b.channel)))
+  return cur !== init
+})
+
+async function loadChannelRules() {
+  channelRulesLoading.value = true
+  try {
+    const [rules, meta] = await Promise.all([
+      getNotificationChannelRules(),
+      getNotificationChannelMetadata(),
+    ])
+    channelRules.value = rules
+    channelRulesInitial.value = JSON.parse(JSON.stringify(rules))
+    notificationMetadata.value = meta
+  } catch {
+    ElMessage.error('加载通知渠道设置失败')
+  } finally {
+    channelRulesLoading.value = false
+  }
+}
+
+async function handleSaveChannelRules() {
+  savingChannelRules.value = true
+  try {
+    await updateNotificationChannelRules(channelRules.value)
+    channelRulesInitial.value = JSON.parse(JSON.stringify(channelRules.value))
+    ElMessage.success('通知渠道设置已保存')
+  } catch {
+    ElMessage.error('保存失败，请重试')
+  } finally {
+    savingChannelRules.value = false
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const tabs = [
   { key: 'brand', label: '站点品牌', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>' },
   { key: 'access', label: '接入配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10"/></svg>' },
@@ -561,8 +763,10 @@ const tabs = [
   { key: 'oidc', label: 'OIDC 配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>' },
   { key: 'webhook', label: 'Webhook', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>' },
   { key: 'email', label: '邮件通知', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22 6 12 13 2 6"/></svg>' },
+  { key: 'notification-channels', label: '通知渠道', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="12" y1="2" x2="12" y2="4"/></svg>' },
   { key: 'failover', label: '故障默认配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' },
   { key: 'pricing', label: '价格汇率', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>' },
+  { key: 'budget', label: '预算拦截', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>' },
   { key: 'data', label: '数据管理', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>' },
 ]
 
@@ -600,6 +804,15 @@ const form = reactive<SystemSettings>({
   default_same_model_retries: 1,
   default_failover_cooldown_seconds: 60,
   pricing_usd_to_cny_rate: 7.2,
+  budget_master_enabled: false,
+  budget_accounting_enabled: false,
+  budget_positive_enforcement_enabled: false,
+  budget_zero_block_enabled: false,
+  budget_shadow_enabled: false,
+  budget_v2_total_enforcement_enabled: false,
+  budget_legacy_total_write_enabled: true,
+  sticky_default_enabled: false,
+  sticky_default_ttl_seconds: 300,
 })
 
 const initialForm = reactive<SystemSettings>({
@@ -636,6 +849,15 @@ const initialForm = reactive<SystemSettings>({
 	default_same_model_retries: 1,
 	default_failover_cooldown_seconds: 60,
 	pricing_usd_to_cny_rate: 7.2,
+  budget_master_enabled: false,
+  budget_accounting_enabled: false,
+  budget_positive_enforcement_enabled: false,
+  budget_zero_block_enabled: false,
+  budget_shadow_enabled: false,
+  budget_v2_total_enforcement_enabled: false,
+	budget_legacy_total_write_enabled: true,
+	sticky_default_enabled: false,
+	sticky_default_ttl_seconds: 300,
 })
 
 const previewCny = computed(() => (form.pricing_usd_to_cny_rate || 0).toFixed(4).replace(/0+$/, '').replace(/\.$/, ''))
@@ -683,7 +905,13 @@ const formChanged = computed(() => {
     form.default_max_switches !== initialForm.default_max_switches ||
     form.default_same_model_retries !== initialForm.default_same_model_retries ||
     form.default_failover_cooldown_seconds !== initialForm.default_failover_cooldown_seconds ||
-    form.pricing_usd_to_cny_rate !== initialForm.pricing_usd_to_cny_rate
+    form.pricing_usd_to_cny_rate !== initialForm.pricing_usd_to_cny_rate ||
+    form.budget_positive_enforcement_enabled !== initialForm.budget_positive_enforcement_enabled ||
+    form.budget_zero_block_enabled !== initialForm.budget_zero_block_enabled ||
+    form.budget_shadow_enabled !== initialForm.budget_shadow_enabled ||
+    form.budget_v2_total_enforcement_enabled !== initialForm.budget_v2_total_enforcement_enabled ||
+    form.sticky_default_enabled !== initialForm.sticky_default_enabled ||
+    form.sticky_default_ttl_seconds !== initialForm.sticky_default_ttl_seconds
   )
 })
 
@@ -719,6 +947,12 @@ function setFormValues(source: typeof form) {
   form.default_same_model_retries = source.default_same_model_retries
   form.default_failover_cooldown_seconds = source.default_failover_cooldown_seconds
   form.pricing_usd_to_cny_rate = source.pricing_usd_to_cny_rate
+  form.budget_positive_enforcement_enabled = source.budget_positive_enforcement_enabled
+  form.budget_zero_block_enabled = source.budget_zero_block_enabled
+  form.budget_shadow_enabled = source.budget_shadow_enabled
+  form.budget_v2_total_enforcement_enabled = source.budget_v2_total_enforcement_enabled
+  form.sticky_default_enabled = source.sticky_default_enabled
+  form.sticky_default_ttl_seconds = source.sticky_default_ttl_seconds
 }
 
 function captureInitial() {
@@ -753,6 +987,26 @@ function captureInitial() {
   initialForm.default_same_model_retries = form.default_same_model_retries
   initialForm.default_failover_cooldown_seconds = form.default_failover_cooldown_seconds
   initialForm.pricing_usd_to_cny_rate = form.pricing_usd_to_cny_rate
+  initialForm.budget_positive_enforcement_enabled = form.budget_positive_enforcement_enabled
+  initialForm.budget_zero_block_enabled = form.budget_zero_block_enabled
+  initialForm.budget_shadow_enabled = form.budget_shadow_enabled
+  initialForm.budget_v2_total_enforcement_enabled = form.budget_v2_total_enforcement_enabled
+  initialForm.sticky_default_enabled = form.sticky_default_enabled
+  initialForm.sticky_default_ttl_seconds = form.sticky_default_ttl_seconds
+}
+
+async function onPositiveEnforcementChange(enabled: boolean) {
+  if (!enabled) return
+  try {
+    await ElMessageBox.confirm(
+      '开启后，超预算请求将立即被拒绝（402）。确认开启正向拦截？',
+      '确认开启正向拦截',
+      { type: 'warning', confirmButtonText: '开启', cancelButtonText: '取消' },
+    )
+    form.budget_shadow_enabled = false
+  } catch {
+    form.budget_positive_enforcement_enabled = false
+  }
 }
 
 onMounted(async () => {
@@ -788,8 +1042,18 @@ onMounted(async () => {
     form.default_same_model_retries = s.default_same_model_retries ?? 1
     form.default_failover_cooldown_seconds = s.default_failover_cooldown_seconds ?? 60
     form.pricing_usd_to_cny_rate = s.pricing_usd_to_cny_rate ?? 7.2
+    form.budget_master_enabled = s.budget_master_enabled ?? false
+    form.budget_accounting_enabled = s.budget_accounting_enabled ?? false
+    form.budget_positive_enforcement_enabled = s.budget_positive_enforcement_enabled ?? false
+    form.budget_zero_block_enabled = s.budget_zero_block_enabled ?? false
+    form.budget_shadow_enabled = s.budget_shadow_enabled ?? false
+    form.budget_v2_total_enforcement_enabled = s.budget_v2_total_enforcement_enabled ?? false
+    form.budget_legacy_total_write_enabled = s.budget_legacy_total_write_enabled ?? true
+    form.sticky_default_enabled = s.sticky_default_enabled ?? false
+    form.sticky_default_ttl_seconds = s.sticky_default_ttl_seconds ?? 300
   }
   captureInitial()
+  await loadChannelRules()
 })
 
 function isValidHttpUrl(url: string): boolean {
@@ -825,7 +1089,17 @@ function validateForm(): string | null {
       return '启用邮件通知时请填写发件人邮箱'
     }
   }
+  if (form.budget_shadow_enabled && form.budget_positive_enforcement_enabled) {
+    return '影子模式与正向拦截不能同时开启'
+  }
   return null
+}
+
+/** 脱敏占位不当真值提交；空字符串表示「不改已保存密钥」 */
+function secretForSave(v: string | undefined) {
+  const s = (v ?? '').trim()
+  if (!s || s === '••••••' || /^\*+$/.test(s)) return ''
+  return s
 }
 
 async function handleSave() {
@@ -836,7 +1110,7 @@ async function handleSave() {
   }
   saving.value = true
   try {
-    const ok = await settingsStore.saveSettings({
+    const result = await settingsStore.saveSettings({
       site_name: form.site_name.trim(),
       site_logo: form.site_logo,
       site_subtitle: form.site_subtitle.trim(),
@@ -850,30 +1124,39 @@ async function handleSave() {
       default_service_key_max_concurrency: form.default_service_key_max_concurrency,
      oidc_issuer_url: form.oidc_issuer_url.trim(),
       oidc_client_id: form.oidc_client_id.trim(),
-      oidc_client_secret: form.oidc_client_secret,
+      oidc_client_secret: secretForSave(form.oidc_client_secret),
       oidc_redirect_url: form.oidc_redirect_url.trim(),
       oidc_scopes: form.oidc_scopes.trim(),
       oidc_enabled: form.oidc_enabled,
       webhook_enabled: form.webhook_enabled,
       webhook_url: form.webhook_url.trim(),
-      webhook_secret: form.webhook_secret,
+      webhook_secret: secretForSave(form.webhook_secret),
       webhook_events: form.webhook_events,
       email_enabled: form.email_enabled,
       smtp_host: form.smtp_host.trim(),
       smtp_port: form.smtp_port,
       smtp_from: form.smtp_from.trim(),
-      smtp_password: form.smtp_password,
+      smtp_password: secretForSave(form.smtp_password),
       smtp_tls_skip_verify: form.smtp_tls_skip_verify,
       default_max_switches: form.default_max_switches,
       default_same_model_retries: form.default_same_model_retries,
       default_failover_cooldown_seconds: form.default_failover_cooldown_seconds,
       pricing_usd_to_cny_rate: form.pricing_usd_to_cny_rate,
+      budget_master_enabled: form.budget_master_enabled,
+      budget_accounting_enabled: form.budget_accounting_enabled,
+      budget_positive_enforcement_enabled: form.budget_positive_enforcement_enabled,
+      budget_zero_block_enabled: form.budget_zero_block_enabled,
+      budget_shadow_enabled: form.budget_shadow_enabled,
+      budget_v2_total_enforcement_enabled: form.budget_v2_total_enforcement_enabled,
+      budget_legacy_total_write_enabled: form.budget_legacy_total_write_enabled,
+      sticky_default_enabled: form.sticky_default_enabled,
+      sticky_default_ttl_seconds: form.sticky_default_ttl_seconds,
     })
-    if (ok) {
+    if (result.ok) {
       ElMessage.success('设置已保存')
       captureInitial()
     } else {
-      ElMessage.error('保存失败，请重试')
+      ElMessage.error(result.message || '保存失败，请重试')
     }
   } catch {
     ElMessage.error('保存失败，请重试')
@@ -923,7 +1206,7 @@ async function handleTestEmail() {
       smtp_host: form.smtp_host.trim(),
       smtp_port: form.smtp_port,
       smtp_from: form.smtp_from.trim(),
-      smtp_password: form.smtp_password,
+      smtp_password: secretForSave(form.smtp_password),
       smtp_tls_skip_verify: form.smtp_tls_skip_verify,
     })
     ElMessage.success(`测试邮件已发送至 ${email}`)
@@ -1588,5 +1871,38 @@ async function handleImport(event: Event) {
   flex-shrink: 0;
   margin-top: 2px;
   color: var(--el-text-color-secondary);
+}
+
+.channel-rules-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.channel-rules-th-type {
+  text-align: left;
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.channel-rules-th-ch {
+  text-align: center;
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  width: 100px;
+}
+.channel-rules-td-type {
+  padding: 10px 12px;
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+}
+.channel-rules-td-ch {
+  padding: 10px 12px;
+  text-align: center;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
 }
 </style>

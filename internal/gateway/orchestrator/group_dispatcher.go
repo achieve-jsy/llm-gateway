@@ -208,12 +208,12 @@ func (d *GroupAwareDispatcher) GetGroupTimeout(groupName string, defaultTimeout 
 }
 
 // UpdateSticky updates the sticky mapping when failover succeeds
-func (d *GroupAwareDispatcher) UpdateSticky(ctx context.Context, groupName, sessionKey, newModelID string) {
+func (d *GroupAwareDispatcher) UpdateSticky(ctx context.Context, groupName, sessionKey, newModelName string) {
 	if sessionKey == "" {
 		return
 	}
 
-	d.scheduler.UpdateSticky(ctx, groupName, sessionKey, newModelID)
+	d.scheduler.UpdateSticky(ctx, groupName, sessionKey, newModelName)
 
 	sessionKeyPrefix := sessionKey
 	if len(sessionKey) > 8 {
@@ -222,6 +222,6 @@ func (d *GroupAwareDispatcher) UpdateSticky(ctx context.Context, groupName, sess
 	slog.Info("sticky: updated after failover",
 		"group", groupName,
 		"session_key", sessionKeyPrefix,
-		"new_model_id", newModelID,
+		"new_model_name", newModelName,
 	)
 }

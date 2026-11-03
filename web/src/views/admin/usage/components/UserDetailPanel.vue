@@ -452,8 +452,13 @@ function initHourlyChart() {
   const hours = detail.value.hourly_distribution
   const map = new Map<number, number>()
   for (let i = 0; i < 24; i++) map.set(i, 0)
-  for (const h of hours) map.set(h.hour, h.calls)
+  for (const h of hours) {
+    const hour = Number(h.hour)
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23) continue
+    map.set(hour, h.calls)
+  }
 
+  // 固定 0–23 点，避免 Chart.js 采样后 tick index 与真实小时错位
   const labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`)
   const data = Array.from({ length: 24 }, (_, i) => map.get(i) ?? 0)
 
@@ -501,9 +506,11 @@ function initHourlyChart() {
           ticks: {
             font: { size: 9 },
             maxTicksLimit: 12,
-            callback(_value, index) {
-              if (index % 2 === 0) return labels[index]
-              return ''
+            // category 轴第一个参数是 labels 下标；第二个 index 是采样后的 tick 序号，不能用来取小时
+            callback(value) {
+              const hour = Number(value)
+              if (!Number.isInteger(hour) || hour % 2 !== 0) return ''
+              return labels[hour] ?? ''
             },
           },
         },

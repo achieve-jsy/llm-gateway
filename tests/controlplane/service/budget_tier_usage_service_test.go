@@ -7,12 +7,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/example/llm-gateway/internal/budgetperiod"
+	"github.com/example/llm-gateway/internal/budgetrebuild"
 	"github.com/example/llm-gateway/internal/controlplane/budgetdomain"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -157,11 +161,19 @@ func TestMyBudgetTiersReturnsEmptyDTOWhenActorUserIDMissing(t *testing.T) {
 	require.Equal(t, now, got.Data.DataUpdatedAt)
 }
 
-func TestMyBudgetTiersReturnsEmptyDTOForGlobalAdmin(t *testing.T) {
+func TestMyBudgetTiersResolvesPersonalChainForGlobalAdmin(t *testing.T) {
 	now := time.Date(2026, 7, 15, 9, 30, 0, 0, time.UTC)
+	memberAllocationID := uuid.New()
+	reader := myBudgetReader{scopes: []repository.MyBudgetScopeAllocation{{
+		Allocation: model.BudgetAllocation{
+			ID: memberAllocationID, ScopeType: model.BudgetScopeMember, ScopeID: "admin",
+			AmountUSD: 100, Enabled: true,
+		},
+		Label: "我的额度", VisibleAmounts: true,
+	}}}
 	svc := service.NewBudgetTierService(
 		&myBudgetStore{},
-		myBudgetReader{err: errors.New("should not resolve admin personal chain")},
+		reader,
 		newFakeModelTierRepo(),
 		func() time.Time { return now },
 	)
@@ -169,9 +181,8 @@ func TestMyBudgetTiersReturnsEmptyDTOForGlobalAdmin(t *testing.T) {
 	got, err := svc.GetMyBudgetTiers(context.Background(), rbac.Actor{UserID: "admin", IsGlobal: true})
 
 	require.NoError(t, err)
-	require.Empty(t, got.Data.EffectiveTotal)
-	require.Empty(t, got.Data.BudgetChain)
-	require.Empty(t, got.Data.TierLimits)
+	require.Len(t, got.Data.BudgetChain, 1)
+	require.Equal(t, model.BudgetScopeMember, got.Data.BudgetChain[0].ScopeType)
 	require.Equal(t, now, got.Data.DataUpdatedAt)
 }
 
@@ -200,7 +211,9 @@ func TestMyBudgetTiersComputesRestrictedUpstreamLimitingSource(t *testing.T) {
 		limits:    map[uuid.UUID][]model.BudgetTierLimit{memberAllocationID: {memberLimit}, studioAllocationID: {studioLimit}},
 		overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{memberAllocationID: {override}},
 	}
-	svc := service.NewBudgetTierService(store, reader, newFakeModelTierRepo(), func() time.Time { return now }).
+	tiers := newFakeModelTierRepo()
+	tiers.tiers[tierID] = &model.ModelTier{ID: tierID, Name: "高级", Enabled: true, Color: "#7C3AED"}
+	svc := service.NewBudgetTierService(store, reader, tiers, func() time.Time { return now }).
 		WithTierUsageRepository(myBudgetUsage{amount: mustAmount(t, "20"), asOf: now.Add(-time.Minute)})
 	got, err := svc.GetMyBudgetTiers(context.Background(), rbac.Actor{UserID: "member-a"})
 	require.NoError(t, err)
@@ -217,6 +230,51 @@ func TestMyBudgetTiersComputesRestrictedUpstreamLimitingSource(t *testing.T) {
 	require.Nil(t, period.EffectiveLimitUSD)
 	require.Nil(t, period.UsedUSD)
 	require.Nil(t, period.RemainingUSD)
+}
+
+func TestMyBudgetTiersHidesArchivedModelTiers(t *testing.T) {
+	now := time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC)
+	allocationID, activeID, archivedID := uuid.New(), uuid.New(), uuid.New()
+	archivedAt := now.Add(-time.Hour)
+	tiers := newFakeModelTierRepo()
+	tiers.tiers[activeID] = &model.ModelTier{ID: activeID, Name: "标准", Enabled: true, SortOrder: 1}
+	tiers.tiers[archivedID] = &model.ModelTier{
+		ID: archivedID, Name: "已归档", Enabled: true, SortOrder: 2, ArchivedAt: &archivedAt,
+	}
+	store := &myBudgetStore{
+		limits: map[uuid.UUID][]model.BudgetTierLimit{allocationID: {
+			{
+				BudgetAllocationID: allocationID, ModelTierID: activeID,
+				PeriodType: budgetdomain.PeriodMonthly, LimitUSD: mustAmount(t, "100"),
+				Enabled: true, EffectiveAt: now.Add(-time.Hour),
+				ModelTier: model.ModelTier{ID: activeID, Name: "标准", Enabled: true},
+			},
+			{
+				BudgetAllocationID: allocationID, ModelTierID: archivedID,
+				PeriodType: budgetdomain.PeriodMonthly, LimitUSD: mustAmount(t, "50"),
+				Enabled: true, EffectiveAt: now.Add(-time.Hour),
+				ModelTier: model.ModelTier{
+					ID: archivedID, Name: "已归档", Enabled: true, ArchivedAt: &archivedAt,
+				},
+			},
+		}},
+		overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{},
+	}
+	reader := myBudgetReader{scopes: []repository.MyBudgetScopeAllocation{{
+		Allocation: model.BudgetAllocation{
+			ID: allocationID, ScopeType: model.BudgetScopeMember, ScopeID: "member-a",
+			AmountUSD: 300, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+		},
+		VisibleAmounts: true,
+	}}}
+	svc := service.NewBudgetTierService(store, reader, tiers, func() time.Time { return now }).
+		WithTierUsageRepository(myBudgetUsage{amount: mustAmount(t, "0")})
+
+	got, err := svc.GetMyBudgetTiers(context.Background(), rbac.Actor{UserID: "member-a"})
+	require.NoError(t, err)
+	require.Len(t, got.Data.TierLimits, 1)
+	require.Equal(t, activeID, got.Data.TierLimits[0].ModelTierID)
+	require.Equal(t, "标准", got.Data.TierLimits[0].ModelTierName)
 }
 
 func TestMyBudgetTiersIncludesEnabledDisabledAndUnsetPeriods(t *testing.T) {
@@ -268,6 +326,63 @@ func TestMyBudgetTiersIncludesEnabledDisabledAndUnsetPeriods(t *testing.T) {
 	for _, period := range byID[disabledID].Periods {
 		require.Equal(t, "tier_disabled", period.Status)
 	}
+}
+
+func TestMyBudgetTiersReadsRealtimeTierUsageFromActiveGenerationForAllPeriods(t *testing.T) {
+	now := time.Date(2026, 7, 11, 8, 0, 0, 0, time.UTC)
+	allocationID, tierID := uuid.New(), uuid.New()
+	allocation := model.BudgetAllocation{
+		ID: allocationID, ScopeType: model.BudgetScopeMember, ScopeID: "member-a",
+		AmountUSD: -1, DailyAmountUSD: -1, WeeklyAmountUSD: -1, Enabled: true,
+	}
+	limits := make([]model.BudgetTierLimit, 0, 3)
+	for _, periodType := range []budgetdomain.PeriodType{
+		budgetdomain.PeriodDaily, budgetdomain.PeriodWeekly, budgetdomain.PeriodMonthly,
+	} {
+		limits = append(limits, model.BudgetTierLimit{
+			BudgetAllocationID: allocationID, ModelTierID: tierID, PeriodType: periodType,
+			LimitUSD: mustAmount(t, "100"), Enabled: true, EffectiveAt: now.Add(-time.Hour),
+			ModelTier: model.ModelTier{ID: tierID, Name: "高级", Enabled: true},
+		})
+	}
+	reader := myBudgetReader{scopes: []repository.MyBudgetScopeAllocation{{
+		Allocation: allocation, Label: "我的额度", VisibleAmounts: true,
+	}}}
+	store := &myBudgetStore{
+		limits:    map[uuid.UUID][]model.BudgetTierLimit{allocationID: limits},
+		overrides: map[uuid.UUID][]model.BudgetTemporaryOverride{},
+	}
+	tiers := newFakeModelTierRepo()
+	tiers.tiers[tierID] = &model.ModelTier{ID: tierID, Name: "高级", Enabled: true}
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+	require.NoError(t, rdb.Set(context.Background(), budgetrebuild.ActiveGenerationKey, "gen-live", 0).Err())
+	for periodType, used := range map[budgetdomain.PeriodType]string{
+		budgetdomain.PeriodDaily:   "1250000",
+		budgetdomain.PeriodWeekly:  "2500000",
+		budgetdomain.PeriodMonthly: "3750000",
+	} {
+		window, err := budgetperiod.Resolve(now, periodType, budgetperiod.Config{Timezone: "Asia/Shanghai", WeekStart: "monday"})
+		require.NoError(t, err)
+		rawKey := "budget:v2:tier:used:" + allocation.ScopeType + ":" + allocation.ScopeID + ":" + tierID.String() + ":" + window.Key
+		require.NoError(t, rdb.Set(context.Background(), budgetrebuild.GenerationKey("gen-live", rawKey), used, 0).Err())
+	}
+
+	svc := service.NewBudgetTierService(store, reader, tiers, func() time.Time { return now }).
+		WithTierUsageRepository(myBudgetUsage{amount: mustAmount(t, "99"), asOf: now})
+	svc.WithRedis(rdb)
+
+	got, err := svc.GetMyBudgetTiers(context.Background(), rbac.Actor{UserID: "member-a"})
+	require.NoError(t, err)
+	require.Len(t, got.Data.TierLimits, 1)
+	periods := got.Data.TierLimits[0].Periods
+	require.Equal(t, "1.250000", periods[0].UsedUSD.String())
+	require.Equal(t, "2.500000", periods[1].UsedUSD.String())
+	require.Equal(t, "3.750000", periods[2].UsedUSD.String())
+	require.Equal(t, "98.750000", periods[0].RemainingUSD.String())
+	require.Equal(t, "97.500000", periods[1].RemainingUSD.String())
+	require.Equal(t, "96.250000", periods[2].RemainingUSD.String())
 }
 
 func TestTierUsageUsesFullPeriodWhileMyBudgetStartsAtLimitEffectiveAt(t *testing.T) {
@@ -345,6 +460,32 @@ func TestTierUsageIncludesReportedSnapshotsWithoutConfiguredLimitsAndUsesFreshne
 	require.True(t, got.Data.Stale)
 	require.Len(t, queries, 1)
 	require.Nil(t, queries[0].TierID)
+}
+
+func TestTierUsageResponseItemsIncludeRequestedPeriodType(t *testing.T) {
+	now := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+	tierID := uuid.New()
+	usage := myBudgetUsage{asOf: now, rows: []repository.TierUsageAggregate{{
+		TierID:            &tierID,
+		ReportedCostUSD:   mustAmount(t, "12.34"),
+		AccountingCostUSD: mustAmount(t, "12.34"),
+	}}}
+	svc := service.NewBudgetTierService(
+		&myBudgetStore{},
+		myBudgetReader{scopes: []repository.MyBudgetScopeAllocation{{
+			Allocation: model.BudgetAllocation{ScopeType: model.BudgetScopeStudio, ScopeID: "studio-a"},
+		}}},
+		newFakeModelTierRepo(),
+		func() time.Time { return now },
+	).WithTierUsageRepository(usage)
+
+	got, err := svc.QueryTierUsage(context.Background(), rbac.Actor{IsGlobal: true}, service.TierUsageQueryInput{
+		ScopeType: model.BudgetScopeStudio, ScopeID: "studio-a", PeriodType: budgetdomain.PeriodDaily,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, got.Data.Items, 1)
+	require.Equal(t, "daily", got.Data.Items[0].PeriodType)
 }
 
 func TestQueryTierUsageDefaultsEmptyPeriodToMonthly(t *testing.T) {

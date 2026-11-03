@@ -207,7 +207,7 @@ test.describe('RBAC 侧边栏菜单', () => {
     await expect(nav.getByText('系统设置')).toHaveCount(0)
   })
 
-  test('管理员看到角色管理和平台运维菜单，并隐藏我的预算入口', async ({ page }) => {
+  test('管理员看到角色管理、平台运维菜单，并保留我的预算入口', async ({ page }) => {
     await installRbacPageMocks(page)
     await installCommonApiMocks(page, 'admin')
     await loginAs(page, 'admin')
@@ -222,7 +222,7 @@ test.describe('RBAC 侧边栏菜单', () => {
     await expect(nav.getByText('模型管理')).toBeVisible()
     await expect(nav.locator('.menu-group-label', { hasText: /^运维$/ })).toBeVisible()
     await expect(nav.getByText('系统设置')).toBeVisible()
-    await expect(nav.getByText('我的预算')).toHaveCount(0)
+    await expect(nav.getByText('我的预算')).toBeVisible()
     await expect(nav.getByText('我的范围')).toHaveCount(0)
   })
 })

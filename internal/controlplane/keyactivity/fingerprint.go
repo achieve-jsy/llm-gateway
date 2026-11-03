@@ -39,3 +39,15 @@ func SourceFP(uaRaw, ip string, ipAsSource bool) string {
 	}
 	return UAFingerprint(uaRaw)
 }
+
+// IsSilentUserAgent returns true for clients that should not produce
+// first-use/new-source/wakeup notifications (站内信/邮件)。
+//
+// 说明：
+//   - trae：编辑器探针/引导流量，易误报
+//   - hertz：Trae/内部网关常见 UA；出口 IP 频繁变化，在 ip_as_source=true
+//     时会刷爆「新设备使用」提醒，故按 UA 静默（仍会更新 seen，只是不通知）
+func IsSilentUserAgent(raw string) bool {
+	ua := strings.ToLower(raw)
+	return strings.Contains(ua, "trae") || strings.Contains(ua, "hertz")
+}

@@ -120,11 +120,14 @@ type ResignedAccountStats struct {
 // resignedUsageWindow 误判保护窗口：最近这么久还在用 Key 的账号不封。
 const resignedUsageWindow = 30 * 24 * time.Hour
 
-// DisableResignedAccounts 关停离职员工的账号：Key 置 enabled=false、login_status 置 disabled。
+// DisableResignedAccounts 关停离职员工的账号：软删除 users（deleted_at）+ Key 置 enabled=false。
 //
-// 为什么关 Key 而不是删用户：网关 verify-key 只看 api_keys.enabled/expires_at
-// （internal/gateway/middleware/auth.go 里 status != active 直接 401），Key 缓存 15 秒失效，
-// 关 Key 才是真正能挡住流量的那一刀；users 表没有 deleted_at，软删除要动 schema 和三处读路径。
+// 三层一起做，各管一段路：
+//   - users.deleted_at：管理页/组织统计里直接消失（GORM 查询自动过滤），行还在，审计和
+//     历史调用记录仍指得到；SSO 登录在 upsertUser 里按 Unscoped 拦，不会删了又建。
+//   - api_keys.enabled=false：网关 verify-key 只看这个字段（middleware/auth.go 里
+//     status != active 直接 401），缓存 15 秒失效 —— 真正挡住流量的那一刀。
+//   - login_status='disabled'：老数据/老页面还在读它，顺手写上保持一致。
 //
 // 误判保护：最近 30 天还在用 Key 的人不动 —— 先记日志交人工核对，别把在跑业务的人踢下线。
 // 恢复（再入职/误判）走人工：把 enabled / login_status 改回去。
@@ -149,16 +152,17 @@ func (r *AIAppHubRepo) DisableResignedAccounts(ctx context.Context, numbers []st
 	keyRes := r.db.WithContext(ctx).Exec(
 		"UPDATE api_keys SET enabled = false, updated_at = ? WHERE enabled AND user_id IN "+
 			"(SELECT id FROM users WHERE employee_id IN ? AND "+guard+")",
-		time.Now(), numbers, cutoff)
+		time.Now(), numbers, cutoff) // 注意：这里不按 deleted_at 过滤，已软删的账号再来一遍也要把 Key 关干净
 	if keyRes.Error != nil {
 		return stats, keyRes.Error
 	}
 	stats.KeysDisabled = int(keyRes.RowsAffected)
 
+	now := time.Now()
 	userRes := r.db.WithContext(ctx).Exec(
-		"UPDATE users SET login_status = 'disabled', updated_at = ? WHERE employee_id IN ? "+
-			"AND login_status <> 'disabled' AND "+guard,
-		time.Now(), numbers, cutoff)
+		"UPDATE users SET deleted_at = ?, login_status = 'disabled', updated_at = ? "+
+			"WHERE employee_id IN ? AND deleted_at IS NULL AND "+guard,
+		now, now, numbers, cutoff)
 	if userRes.Error != nil {
 		return stats, userRes.Error
 	}

@@ -356,6 +356,12 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string,
 		return pendingUser, deptID, deptName, nil
 	}
 
+	// sub 没查到 → 可能不是"新同事"，而是被 EHR 同步软删的离职人员。
+	// 不查这一下，SSO 登录会直接重建账号，软删除等于白删。
+	if deleted, derr := h.userRepo.FindBySubUnscoped(info.Passport); derr == nil && deleted != nil {
+		return nil, "", "", errAccountDisabled
+	}
+
 	newUser := &amodel.User{
 		Sub:    info.Passport,
 		Name:   info.Name,

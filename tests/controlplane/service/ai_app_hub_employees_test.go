@@ -169,11 +169,19 @@ func TestSyncDisablesResignedAccounts(t *testing.T) {
 	var statuses []struct {
 		Sub         string
 		LoginStatus string
+		DeletedAt   *time.Time
 	}
-	require.NoError(t, db.Raw("SELECT sub, login_status FROM users ORDER BY sub").Scan(&statuses).Error)
+	require.NoError(t, db.Raw("SELECT sub, login_status, deleted_at FROM users ORDER BY sub").Scan(&statuses).Error)
 	require.Equal(t, []string{"left", "live"}, []string{statuses[0].Sub, statuses[1].Sub})
 	require.Equal(t, "disabled", statuses[0].LoginStatus)
-	require.Equal(t, "active", statuses[1].LoginStatus, "有近 30 天流量的不封")
+	require.NotNil(t, statuses[0].DeletedAt, "离职人员要软删除（deleted_at 有值）")
+	require.Nil(t, statuses[1].DeletedAt, "有近 30 天流量的不动")
+	require.Equal(t, "active", statuses[1].LoginStatus)
+
+	// GORM 查询看不到软删的人，但行还在
+	var visible int64
+	require.NoError(t, db.Table("users").Where("deleted_at IS NULL").Count(&visible).Error)
+	require.Equal(t, int64(1), visible, "软删的人从普通查询里消失")
 }
 
 // 单部门/单工作室同步不该顺手把全公司的人都拉一遍。

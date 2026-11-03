@@ -61,7 +61,8 @@ func setupQuotaTestDB(t *testing.T) *gorm.DB {
 		quota_rpm INTEGER,
 		quota_max_concurrency INTEGER,
 		created_at DATETIME NOT NULL,
-		updated_at DATETIME NOT NULL
+		updated_at DATETIME NOT NULL,
+		deleted_at DATETIME
 	)`).Error)
 
 	// api_keys table (matches cpmodel.ApiKey)

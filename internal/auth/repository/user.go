@@ -18,6 +18,16 @@ func (r *UserRepository) FindBySub(sub string) (*model.User, error) {
 	return &user, nil
 }
 
+// FindBySubUnscoped 连软删除的行一起查。SSO 登录用它判断"这个人是离职被软删的"，
+// 否则 FindBySub 查不到 → 走进新建分支 → 删了又建，离职人员原地复活。
+func (r *UserRepository) FindBySubUnscoped(sub string) (*model.User, error) {
+	var user model.User
+	if err := r.db.Unscoped().Where("sub = ?", sub).First(&user).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func (r *UserRepository) FindByEmail(email string) (*model.User, error) {
 	var user model.User
 	if err := r.db.Where("email = ?", email).First(&user).Error; err != nil {

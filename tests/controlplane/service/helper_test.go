@@ -27,7 +27,7 @@ func newAIHubTestDBWithSettings(t *testing.T) (*gorm.DB, *repository.SettingsRep
 		"CREATE TABLE system_configs (key text PRIMARY KEY, value text, encrypted boolean, description text, created_at text, updated_at text)",
 		"CREATE TABLE user_roles (id integer PRIMARY KEY AUTOINCREMENT, user_id text NOT NULL, role text NOT NULL, scope_type text NOT NULL, scope_id text NOT NULL DEFAULT '', granted_by text NOT NULL, actor_id text, created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP)",
 		// users 只取人员同步用到的列（工号 + passport + 登录状态），列名与线上一致。
-		"CREATE TABLE users (id text PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), sub text NOT NULL DEFAULT '', employee_id text, name text NOT NULL DEFAULT '', email text NOT NULL DEFAULT '', login_status text NOT NULL DEFAULT 'active', created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+		"CREATE TABLE users (id text PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), sub text NOT NULL DEFAULT '', employee_id text, name text NOT NULL DEFAULT '', email text NOT NULL DEFAULT '', login_status text NOT NULL DEFAULT 'active', deleted_at datetime, created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP)",
 		// api_keys：离职封号只碰 enabled / last_used_at 两列。
 		"CREATE TABLE api_keys (id text PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), user_id text NOT NULL, name text NOT NULL DEFAULT '', enabled boolean NOT NULL DEFAULT 1, last_used_at datetime, created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP)",
 		// ehr_employees 用线上真实列名（person_name / group_e_number / location），

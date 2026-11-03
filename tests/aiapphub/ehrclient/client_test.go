@@ -69,3 +69,17 @@ func TestFetchDepartmentsErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestFetchDepartmentsRejectsIncompleteConfig(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+	}))
+	defer srv.Close()
+
+	c := ehrclient.New(ehrclient.Config{BaseURL: srv.URL, Token: "t", OrgID: "o"}) // 故意不填 Prefix
+	_, err := c.FetchDepartments(context.Background())
+	require.ErrorIs(t, err, ehrclient.ErrUpstream)
+	require.Contains(t, err.Error(), "Prefix")
+	require.Zero(t, hits, "配置不完整时不得真的发出请求")
+}

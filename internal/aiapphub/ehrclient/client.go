@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -29,6 +30,24 @@ type Config struct {
 	Token   string
 	OrgID   string
 	Timeout time.Duration
+}
+
+// missingFields 返回构造请求所必需但为空字段。
+func (c Config) missingFields() []string {
+	missing := make([]string, 0, 4)
+	if c.BaseURL == "" {
+		missing = append(missing, "BaseURL")
+	}
+	if c.Prefix == "" {
+		missing = append(missing, "Prefix")
+	}
+	if c.Token == "" {
+		missing = append(missing, "Token")
+	}
+	if c.OrgID == "" {
+		missing = append(missing, "OrgID")
+	}
+	return missing
 }
 
 // Department EHR 部门节点。ID 是 departmentId（字符串，不是 uuid）。
@@ -59,6 +78,10 @@ func New(cfg Config) *Client {
 // FetchDepartments 拉取组织树全量节点（约 99 条）。EHR 没有单节点接口，
 // 所有同步范围都从这一次结果里过滤。
 func (c *Client) FetchDepartments(ctx context.Context) ([]Department, error) {
+	// 少任何一项都会变成一个没人看得懂的 404/403，所以在发请求之前先明确报出来。
+	if missing := c.cfg.missingFields(); len(missing) > 0 {
+		return nil, fmt.Errorf("%w: 配置不完整，缺少 %s", ErrUpstream, strings.Join(missing, ", "))
+	}
 	endpoint := c.cfg.BaseURL + c.cfg.Prefix + "/departments?orgId=" + url.QueryEscape(c.cfg.OrgID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

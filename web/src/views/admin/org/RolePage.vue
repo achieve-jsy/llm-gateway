@@ -1,241 +1,147 @@
 <template>
-  <div class="role-page">
-
+  <div class="account-page">
     <div class="page-header">
       <div class="header-left">
-        <h2 class="page-title">角色管理</h2>
-        <span class="page-sub">管理各级负责人的授权与卸任</span>
+        <h2 class="page-title">账号与角色</h2>
+        <span class="page-sub">一人一行；管理员来自角色授权（可授可撤），负责人（EHR 同步）在组织页维护</span>
       </div>
-      <el-button type="primary" size="small" @click="openGrantDialog">
-        <el-icon><Plus /></el-icon> 指定负责人
+      <el-button size="small" :loading="loading" @click="loadAccounts">
+        <el-icon><Refresh /></el-icon> 刷新
       </el-button>
     </div>
 
-    <!-- 角色概览卡片 -->
-    <el-row :gutter="12" style="margin-bottom: 20px">
-      <el-col :span="8">
-        <div class="role-stat-card admin">
-          <div class="stat-icon"><el-icon size="22"><UserFilled /></el-icon></div>
-          <div class="stat-body">
-            <div class="stat-num">{{ adminCount }}</div>
-            <div class="stat-label">平台管理员</div>
-          </div>
-        </div>
-      </el-col>
-      <el-col :span="8">
-        <div class="role-stat-card studio">
-          <div class="stat-icon"><el-icon size="22"><OfficeBuilding /></el-icon></div>
-          <div class="stat-body">
-            <div class="stat-num">{{ studioAdminCount }}</div>
-            <div class="stat-label">工作室负责人</div>
-          </div>
-        </div>
-      </el-col>
-      <el-col :span="8">
-        <div class="role-stat-card dept">
-          <div class="stat-icon"><el-icon size="22"><Folder /></el-icon></div>
-          <div class="stat-body">
-            <div class="stat-num">{{ deptAdminCount }}</div>
-            <div class="stat-label">部门负责人</div>
-          </div>
+    <!-- 四个角色的人数统计：点击卡片即按该角色筛选 -->
+    <el-row :gutter="12" class="stat-row">
+      <el-col v-for="key in ROLE_KEYS" :key="key" :xs="12" :sm="6">
+        <div
+          class="role-stat-card"
+          :class="[`is-${key}`, { active: roleFilter === key }]"
+          :data-test="`stat-${key}`"
+          @click="selectRole(key)"
+        >
+          <div class="stat-num">{{ roleCounts[key] || 0 }}</div>
+          <div class="stat-label">{{ ROLE_META[key].label }}</div>
         </div>
       </el-col>
     </el-row>
 
-    <!-- 角色列表 -->
-    <el-card shadow="never" v-loading="loading">
-      <template #header>
-        <div class="role-list-toolbar">
-          <div class="role-list-title">
-            <span>当前授权列表</span>
-            <span v-if="roleTotal > 0" class="role-total">{{ roleTotal }} 条授权</span>
-          </div>
-          <div class="role-list-controls">
-            <el-input
-              v-model="roleKeyword"
-              data-test="role-search"
-              placeholder="搜索人员、部门或范围"
-              clearable
-              class="role-search"
-              @input="onRoleSearchInput"
-              @keyup.enter="triggerRoleSearch"
-              @clear="triggerRoleSearch"
-            >
-              <template #prefix><el-icon><Search /></el-icon></template>
-            </el-input>
-            <el-radio-group v-model="filterRole" size="small" @change="applyFilter">
-              <el-radio-button value="">全部</el-radio-button>
-              <el-radio-button value="admin">管理员</el-radio-button>
-              <el-radio-button value="studio_admin">工作室负责人</el-radio-button>
-              <el-radio-button value="dept_admin">部门负责人</el-radio-button>
-            </el-radio-group>
-          </div>
-        </div>
-      </template>
+    <el-card shadow="never">
+      <div class="toolbar">
+        <el-input
+          v-model="keyword"
+          data-test="role-search"
+          placeholder="搜索姓名 / 工号 / 岗位 / 邮箱"
+          clearable
+          class="filter filter-keyword"
+          @input="onKeywordInput"
+          @keyup.enter="applyFilters"
+          @clear="applyFilters"
+        >
+          <template #prefix><el-icon><Search /></el-icon></template>
+        </el-input>
 
-      <el-table :data="roles" stripe>
-        <!-- 人员信息 -->
-        <el-table-column label="人员" min-width="180">
-          <template #default="{ row }">
-            <div class="user-cell">
-              <div class="user-avatar">{{ row.user_name?.charAt(0) || '?' }}</div>
-              <div class="user-info">
-                <span class="user-name">{{ row.user_name || row.user_id }}</span>
-                <span class="user-email">{{ row.email }}</span>
-              </div>
-            </div>
-          </template>
-        </el-table-column>
+        <el-select v-model="roleFilter" placeholder="全部角色" clearable class="filter" @change="applyFilters">
+          <el-option v-for="key in ROLE_KEYS" :key="key" :label="ROLE_META[key].label" :value="key" />
+        </el-select>
 
-        <!-- 所在部门 -->
-        <el-table-column label="所在部门" width="120">
-          <template #default="{ row }">
-            <span v-if="row.dept_name" class="dept-tag">{{ row.dept_name }}</span>
-            <span v-else class="text-muted">—</span>
-          </template>
-        </el-table-column>
+        <el-select v-model="studioFilter" placeholder="全部工作室" clearable class="filter" @change="onStudioChange">
+          <el-option v-for="s in orgStore.studios" :key="s.id" :label="s.name" :value="s.id" />
+        </el-select>
 
-        <!-- 角色 -->
-        <el-table-column label="角色" width="140">
-          <template #default="{ row }">
-            <el-tag :type="roleTagType(row.role)" size="small">{{ roleLabel(row.role) }}</el-tag>
-          </template>
-        </el-table-column>
+        <!-- 两级下拉：按工作室分组的团队 -->
+        <el-select v-model="deptFilter" placeholder="全部团队" clearable filterable class="filter" @change="applyFilters">
+          <el-option-group v-for="group in deptGroups" :key="group.label" :label="group.label">
+            <el-option v-for="d in group.depts" :key="d.dept_id" :label="d.dept_name" :value="d.dept_id" />
+          </el-option-group>
+        </el-select>
 
-        <!-- 管辖范围 -->
-        <el-table-column label="管辖范围" min-width="160">
-          <template #default="{ row }">
-            <span v-if="row.role === 'admin'" class="scope-company">全公司</span>
-            <span v-else-if="row.scope_id" class="scope-tag">
-              {{ scopeLabel(row) }}
-            </span>
-            <span v-else class="text-muted">—</span>
-          </template>
-        </el-table-column>
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          start-placeholder="创建起始"
+          end-placeholder="创建截止"
+          class="filter filter-date"
+          @change="applyFilters"
+        />
 
-        <!-- 授权时间 -->
-        <el-table-column label="授权时间" width="120">
-          <template #default="{ row }">
-            <span class="time-text">{{ formatDate(row.created_at) }}</span>
-          </template>
-        </el-table-column>
-
-        <!-- 操作 -->
-        <el-table-column label="操作" width="80" align="center">
-          <template #default="{ row }">
-            <el-popconfirm
-              :title="`确认卸任「${row.user_name || row.user_id}」的${roleLabel(row.role)}角色？`"
-              confirm-button-text="确认卸任"
-              confirm-button-type="danger"
-              @confirm="doRevoke(row)"
-            >
-              <template #reference>
-                <el-button link type="danger" size="small">卸任</el-button>
-              </template>
-            </el-popconfirm>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <div v-if="!loading && roles.length === 0" class="empty-tip">
-        {{ roleKeyword || filterRole ? '未找到匹配的授权记录' : '暂无授权记录' }}
+        <el-button link size="small" @click="resetFilters">重置</el-button>
       </div>
 
-      <div v-if="roleTotal > rolePageSize" class="role-pagination">
+      <div class="list-head">
+        <span>账号列表</span>
+        <span class="list-total">{{ total }} 人</span>
+      </div>
+
+      <AccountTable :accounts="rows" :loading="loading" :empty-text="emptyText" @set-role="openRoleDialog" />
+
+      <div v-if="total > PAGE_SIZE" class="pager">
         <el-pagination
-          v-model:current-page="rolePage"
-          v-model:page-size="rolePageSize"
-          :page-sizes="[20, 50, 100]"
-          :total="roleTotal"
-          layout="total, sizes, prev, pager, next, jumper"
+          :current-page="page"
+          :page-size="PAGE_SIZE"
+          :total="total"
+          layout="total, prev, pager, next, jumper"
           size="small"
-          @current-change="loadRoles"
-          @size-change="onRolePageSizeChange"
+          @current-change="onPageChange"
         />
       </div>
     </el-card>
 
-    <!-- 指定负责人弹窗 -->
-    <el-dialog v-model="grantDialogVisible" title="指定负责人" width="460px" @close="resetGrant">
-      <!-- 步骤 1：搜索员工 -->
-      <div v-if="!selectedUser" class="search-step">
-        <div class="step-label">第一步：搜索并选择员工</div>
-        <el-input
-          v-model="searchKeyword"
-          placeholder="输入姓名或邮箱搜索..."
-          :suffix-icon="Search"
-          clearable
-          @input="onSearchInput"
-        />
-        <div v-if="searchLoading" class="search-hint">搜索中...</div>
-        <div v-else-if="searchResults.length > 0" class="search-results">
-          <div
-            v-for="u in searchResults"
-            :key="u.id"
-            class="search-result-item"
-            @click="selectUser(u)"
-          >
-            <div class="result-avatar">{{ u.name.charAt(0) }}</div>
-            <div class="result-info">
-              <span class="result-name">{{ u.name }}</span>
-              <span class="result-meta">{{ u.email }}<span v-if="u.dept_name"> · {{ u.dept_name }}</span></span>
-            </div>
-          </div>
-        </div>
-        <div v-else-if="searchKeyword.length >= 1 && !searchLoading" class="search-hint">未找到员工</div>
-      </div>
-
-      <!-- 步骤 2：选择角色和管辖域 -->
-      <div v-else class="grant-step">
-        <!-- 已选员工 -->
-        <div class="selected-user">
-          <div class="selected-avatar">{{ selectedUser.name.charAt(0) }}</div>
-          <div class="selected-info">
-            <span class="selected-name">{{ selectedUser.name }}</span>
-            <span class="selected-meta">{{ selectedUser.email }}
-              <span v-if="selectedUser.dept_name"> · {{ selectedUser.dept_name }}</span>
+    <!-- 设置角色：查看/卸任现有角色 + 新增授权 -->
+    <el-dialog v-model="dialogVisible" title="设置角色" width="520px" @close="resetDialog">
+      <template v-if="dialogUser">
+        <div class="dialog-user">
+          <div class="dialog-avatar">{{ dialogUser.name?.charAt(0) || '?' }}</div>
+          <div class="dialog-info">
+            <span class="dialog-name">{{ dialogUser.name || dialogUser.user_id }}</span>
+            <span class="dialog-meta">
+              {{ dialogUser.employee_id || '无工号' }} · {{ dialogUser.dept_name || '未归属团队' }}
+              <template v-if="dialogUser.studio_name"> · {{ dialogUser.studio_name }}</template>
             </span>
           </div>
-          <el-button link size="small" @click="selectedUser = null; searchKeyword = ''">更换</el-button>
         </div>
 
-        <el-divider style="margin: 12px 0" />
+        <div class="section-label">现有角色</div>
+        <div v-if="currentRoles.length === 0" class="empty-roles">暂无角色授权（员工）</div>
+        <div v-for="r in currentRoles" :key="r.role + r.scope_id" class="role-line">
+          <RoleBadge :role="r.role" />
+          <span class="role-scope">{{ r.scope_name || '全公司' }}</span>
+          <el-popconfirm
+            :title="`确认卸任该用户的${roleLabel(r.role)}？`"
+            confirm-button-text="确认卸任"
+            confirm-button-type="danger"
+            @confirm="doRevoke(r)"
+          >
+            <template #reference>
+              <el-button link type="danger" size="small">卸任</el-button>
+            </template>
+          </el-popconfirm>
+        </div>
 
-        <div class="step-label">第二步：选择角色和管辖范围</div>
-        <el-form :model="grantForm" label-width="90px" style="margin-top: 12px">
+        <el-divider style="margin: 14px 0" />
+
+        <div class="section-label">新增角色</div>
+        <el-form :model="grantForm" label-width="80px" style="margin-top: 8px">
           <el-form-item label="角色">
             <el-radio-group v-model="grantForm.role" @change="grantForm.scopeId = ''">
               <el-radio value="admin">平台管理员</el-radio>
-              <el-radio value="studio_admin">工作室负责人</el-radio>
-              <el-radio value="dept_admin">部门负责人</el-radio>
+              <el-radio value="studio_admin">工作室管理员</el-radio>
+              <el-radio value="dept_admin">团队管理员</el-radio>
             </el-radio-group>
           </el-form-item>
-          <el-form-item label="管辖范围" v-if="grantForm.role !== 'admin'">
+          <el-form-item v-if="grantForm.role !== 'admin'" label="管辖范围">
             <el-select
               v-if="grantForm.role === 'studio_admin'"
               v-model="grantForm.scopeId"
               placeholder="选择工作室"
               style="width: 100%"
             >
-              <el-option v-for="s in orgStore.studios" :key="s.id" :label="s.name" :value="s.id">
-                <span>{{ s.name }}</span>
-                <span style="color:#999;font-size:12px;margin-left:8px">{{ s.id }}</span>
-              </el-option>
+              <el-option v-for="s in orgStore.studios" :key="s.id" :label="s.name" :value="s.id" />
             </el-select>
-            <el-select
-              v-else
-              v-model="grantForm.scopeId"
-              placeholder="选择部门"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="d in orgStore.departments"
-                :key="d.dept_id"
-                :label="d.dept_name"
-                :value="d.dept_id"
-              >
+            <el-select v-else v-model="grantForm.scopeId" placeholder="选择团队" filterable style="width: 100%">
+              <el-option v-for="d in orgStore.departments" :key="d.dept_id" :label="d.dept_name" :value="d.dept_id">
                 <span>{{ d.dept_name }}</span>
-                <el-tag v-if="d.status === 'pending_studio'" type="warning" size="small" style="margin-left:8px">待归属</el-tag>
+                <span v-if="d.studio_name" class="option-sub">{{ d.studio_name }}</span>
               </el-option>
             </el-select>
           </el-form-item>
@@ -243,317 +149,294 @@
             <el-text type="info" size="small">平台管理员管辖全公司，无需指定范围</el-text>
           </el-form-item>
         </el-form>
-      </div>
+      </template>
 
       <template #footer>
-        <el-button @click="grantDialogVisible = false">取消</el-button>
+        <el-button @click="dialogVisible = false">关闭</el-button>
         <el-button
-          v-if="selectedUser"
           type="primary"
           :disabled="grantForm.role !== 'admin' && !grantForm.scopeId"
           :loading="granting"
           @click="doGrant"
         >
-          确认授权
+          授权
         </el-button>
       </template>
     </el-dialog>
-
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, UserFilled, OfficeBuilding, Folder, Search } from '@element-plus/icons-vue'
+import { Refresh, Search } from '@element-plus/icons-vue'
 import { useOrgStore } from '@/stores/org'
-import type { RoleWithUser, UserSearchResult } from '@/stores/org'
+import type { AccountRow, OrgDepartment, RoleGrantItem, RoleKey } from '@/types/org'
+import AccountTable from '@/components/org/account/AccountTable.vue'
+import RoleBadge from '@/components/org/account/RoleBadge.vue'
+import { ROLE_KEYS, ROLE_META, roleLabel } from '@/components/org/account/roles'
+
+const PAGE_SIZE = 20
 
 const orgStore = useOrgStore()
 
 const loading = ref(false)
-const roles = ref<RoleWithUser[]>([])
-const filterRole = ref('')
-const roleKeyword = ref('')
-const rolePage = ref(1)
-const rolePageSize = ref(20)
-const roleTotal = ref(0)
-const roleCounts = ref({ admin: 0, studioAdmin: 0, deptAdmin: 0 })
+const accounts = ref<AccountRow[]>([])
+const total = ref(0)
+const page = ref(1)
+const roleCounts = ref<Record<RoleKey, number>>({ admin: 0, studio_admin: 0, dept_admin: 0, user: 0 })
+const apiReady = ref(true)
 
-const adminCount = computed(() => roleCounts.value.admin)
-const studioAdminCount = computed(() => roleCounts.value.studioAdmin)
-const deptAdminCount = computed(() => roleCounts.value.deptAdmin)
+const keyword = ref('')
+const roleFilter = ref<RoleKey | ''>('')
+const studioFilter = ref('')
+const deptFilter = ref('')
+const dateRange = ref<[string, string] | null>(null)
 
-// ─── 授权弹窗 ─────────────────────────────────────────────────────────────────
-const grantDialogVisible = ref(false)
-const granting = ref(false)
-const searchKeyword = ref('')
-const searchResults = ref<UserSearchResult[]>([])
-const searchLoading = ref(false)
-const selectedUser = ref<UserSearchResult | null>(null)
-const grantForm = ref({ role: 'dept_admin', scopeId: '' })
+// ─── 列表 ───────────────────────────────────────────────────────────────────
+// 创建时间区间走服务端 created_from/created_to（YYYY-MM-DD，右界含当日），不再前端过滤当前页
+const rows = computed(() => accounts.value)
 
-let searchTimer: ReturnType<typeof setTimeout> | null = null
-function onSearchInput() {
-  if (searchTimer) clearTimeout(searchTimer)
-  if (!searchKeyword.value.trim()) { searchResults.value = []; return }
-  searchTimer = setTimeout(async () => {
-    searchLoading.value = true
-    try {
-      searchResults.value = await orgStore.searchUsers(searchKeyword.value)
-    } finally {
-      searchLoading.value = false
-    }
-  }, 300)
-}
-
-function selectUser(u: UserSearchResult) {
-  selectedUser.value = u
-  searchResults.value = []
-}
-
-function openGrantDialog() {
-  grantDialogVisible.value = true
-}
-
-function resetGrant() {
-  searchKeyword.value = ''
-  searchResults.value = []
-  selectedUser.value = null
-  grantForm.value = { role: 'dept_admin', scopeId: '' }
-}
-
-async function doGrant() {
-  if (!selectedUser.value) return
-  const role = grantForm.value.role
-  // admin 角色不需要 scopeId
-  if (role !== 'admin' && !grantForm.value.scopeId) return
-  granting.value = true
-
-  let scopeType: string
-  let scopeId: string
-  if (role === 'admin') {
-    scopeType = 'company'
-    scopeId = ''
-  } else if (role === 'studio_admin') {
-    scopeType = 'studio'
-    scopeId = grantForm.value.scopeId
-  } else {
-    scopeType = 'dept'
-    scopeId = grantForm.value.scopeId
+const emptyText = computed(() => {
+  if (!apiReady.value) return '账号接口暂未就绪（GET /api/v1/org/accounts），稍后重试'
+  if (keyword.value || roleFilter.value || studioFilter.value || deptFilter.value || dateRange.value) {
+    return '未找到匹配的账号'
   }
+  return '暂无账号'
+})
 
-  try {
-    await orgStore.grantRole(selectedUser.value.id, role, scopeType, scopeId)
-    ElMessage.success(`已将「${selectedUser.value.name}」设为 ${roleLabel(role)}`)
-    grantDialogVisible.value = false
-    await loadRoles()
-  } catch (e: any) {
-    // 错误已由 http 拦截器处理
-  } finally {
-    granting.value = false
+const deptGroups = computed(() => {
+  const list = studioFilter.value
+    ? orgStore.departments.filter(d => d.studio_id === studioFilter.value)
+    : orgStore.departments
+  const groups = new Map<string, OrgDepartment[]>()
+  for (const d of list) {
+    const label = d.studio_name || '未归属工作室'
+    const arr = groups.get(label) || []
+    arr.push(d)
+    groups.set(label, arr)
   }
+  return [...groups.entries()].map(([label, depts]) => ({ label, depts }))
+})
+
+let keywordTimer: ReturnType<typeof setTimeout> | null = null
+function onKeywordInput() {
+  if (keywordTimer) clearTimeout(keywordTimer)
+  keywordTimer = setTimeout(applyFilters, 300)
 }
 
-// ─── 卸任 ─────────────────────────────────────────────────────────────────────
-async function doRevoke(row: RoleWithUser) {
-  try {
-    await orgStore.revokeRole(row.user_id, row.role, row.scope_id)
-    ElMessage.success('已卸任')
-    await loadRoles()
-  } catch (e: any) {
-    // 错误已由 http 拦截器处理
+function applyFilters() {
+  if (keywordTimer) {
+    clearTimeout(keywordTimer)
+    keywordTimer = null
   }
+  page.value = 1
+  void loadAccounts()
 }
 
-// ─── 辅助函数 ─────────────────────────────────────────────────────────────────
-function roleLabel(role: string) {
-  return { admin: '平台管理员', studio_admin: '工作室负责人', dept_admin: '部门负责人', user: '员工' }[role] || role
-}
-
-function roleTagType(role: string): 'danger' | 'warning' | 'info' | '' {
-  return { admin: 'danger', studio_admin: 'warning', dept_admin: 'info' }[role] as any || ''
-}
-
-function scopeLabel(row: RoleWithUser) {
-  if (row.role === 'studio_admin') {
-    const s = orgStore.studios.find(s => s.id === row.scope_id)
-    return s ? `工作室：${s.name}` : `工作室：${row.scope_id}`
+function onStudioChange() {
+  // 切换工作室后团队不在范围内就清掉，避免两个筛选互相打架查不出人
+  if (deptFilter.value && !deptGroups.value.some(g => g.depts.some(d => d.dept_id === deptFilter.value))) {
+    deptFilter.value = ''
   }
-  const d = orgStore.departments.find(d => d.dept_id === row.scope_id)
-  return d ? `部门：${d.dept_name}` : `部门：${row.scope_id}`
+  applyFilters()
 }
 
-function formatDate(str: string) {
-  if (!str) return '—'
-  return str.slice(0, 10)
+function selectRole(key: RoleKey) {
+  roleFilter.value = roleFilter.value === key ? '' : key
+  applyFilters()
 }
 
-let roleSearchTimer: ReturnType<typeof setTimeout> | null = null
-
-function onRoleSearchInput() {
-  if (roleSearchTimer) clearTimeout(roleSearchTimer)
-  roleSearchTimer = setTimeout(triggerRoleSearch, 280)
+function resetFilters() {
+  keyword.value = ''
+  roleFilter.value = ''
+  studioFilter.value = ''
+  deptFilter.value = ''
+  dateRange.value = null
+  applyFilters()
 }
 
-function triggerRoleSearch() {
-  if (roleSearchTimer) {
-    clearTimeout(roleSearchTimer)
-    roleSearchTimer = null
-  }
-  rolePage.value = 1
-  void loadRoles()
+function onPageChange(next: number) {
+  page.value = next
+  void loadAccounts()
 }
 
-function applyFilter() {
-  rolePage.value = 1
-  void loadRoles()
-}
-
-function onRolePageSizeChange(size: number) {
-  rolePageSize.value = size
-  rolePage.value = 1
-  void loadRoles()
-}
-
-async function loadRoles() {
+async function loadAccounts() {
   loading.value = true
+  const [createdFrom, createdTo] = dateRange.value || []
   try {
-    const result = await orgStore.fetchRolePage({
-      page: rolePage.value,
-      pageSize: rolePageSize.value,
-      keyword: roleKeyword.value,
-      role: filterRole.value,
-    })
-    roles.value = result.roles
-    roleTotal.value = result.total
-    rolePage.value = result.page
-    rolePageSize.value = result.pageSize
-    roleCounts.value = result.roleCounts
+    // createdFrom/createdTo 已在契约里，store 的入参类型待 Lead 补两个可选字段；
+    // 这里放宽一次类型，store 补齐后即可去掉断言（行为不变）
+    const query = {
+      keyword: keyword.value.trim(),
+      role: roleFilter.value,
+      studioId: studioFilter.value,
+      deptId: deptFilter.value,
+      createdFrom,
+      createdTo,
+      page: page.value,
+      pageSize: PAGE_SIZE,
+    }
+    const result = await orgStore.fetchAccounts(query)
+    accounts.value = result.accounts || []
+    total.value = Number(result.total || 0)
+    page.value = Number(result.page || page.value)
+    roleCounts.value = { ...roleCounts.value, ...(result.role_counts || {}) }
+    apiReady.value = true
+  } catch (e) {
+    // 接口未就绪时的兜底：清空列表 + 中文空态，不阻塞页面
+    apiReady.value = false
+    accounts.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
 }
 
+// ─── 角色授权 ───────────────────────────────────────────────────────────────
+const dialogVisible = ref(false)
+const dialogUser = ref<AccountRow | null>(null)
+const granting = ref(false)
+const grantForm = ref<{ role: 'admin' | 'studio_admin' | 'dept_admin'; scopeId: string }>({
+  role: 'dept_admin',
+  scopeId: '',
+})
+
+const currentRoles = computed<RoleGrantItem[]>(() => dialogUser.value?.roles || [])
+
+function openRoleDialog(row: AccountRow) {
+  dialogUser.value = row
+  grantForm.value = { role: 'dept_admin', scopeId: '' }
+  dialogVisible.value = true
+}
+
+function resetDialog() {
+  dialogUser.value = null
+  grantForm.value = { role: 'dept_admin', scopeId: '' }
+}
+
+async function refreshDialogRow() {
+  // 授权/卸任后刷新列表，并把弹窗里的当前行换成最新数据（行内即时更新）
+  const userId = dialogUser.value?.user_id
+  await loadAccounts()
+  const fresh = accounts.value.find(a => a.user_id === userId)
+  if (fresh) {
+    dialogUser.value = fresh
+  } else {
+    dialogVisible.value = false
+  }
+}
+
+async function doGrant() {
+  const user = dialogUser.value
+  if (!user) return
+  const role = grantForm.value.role
+  if (role !== 'admin' && !grantForm.value.scopeId) return
+
+  let scopeType: RoleGrantItem['scope_type'] = 'dept'
+  let scopeId = grantForm.value.scopeId
+  if (role === 'admin') {
+    scopeType = 'company'
+    scopeId = ''
+  } else if (role === 'studio_admin') {
+    scopeType = 'studio'
+  }
+
+  granting.value = true
+  try {
+    await orgStore.grantRole(user.user_id, role, scopeType, scopeId)
+    ElMessage.success(`已将「${user.name || user.user_id}」设为${roleLabel(role as RoleKey)}`)
+    grantForm.value = { role: 'dept_admin', scopeId: '' }
+    await refreshDialogRow()
+  } catch (e) {
+    // 错误已由 http 拦截器提示
+  } finally {
+    granting.value = false
+  }
+}
+
+async function doRevoke(r: RoleGrantItem) {
+  const user = dialogUser.value
+  if (!user) return
+  try {
+    await orgStore.revokeRole(user.user_id, r.role, r.scope_id)
+    ElMessage.success(`已卸任${roleLabel(r.role)}`)
+    await refreshDialogRow()
+  } catch (e) {
+    // 错误已由 http 拦截器提示
+  }
+}
+
 onMounted(async () => {
   await Promise.all([
-    loadRoles(),
-    orgStore.fetchStudios(),
-    orgStore.fetchDepartments(),
+    loadAccounts(),
+    orgStore.fetchStudios().catch(() => null),
+    orgStore.fetchDepartments().catch(() => null),
   ])
 })
 </script>
 
 <style scoped>
-.role-page { padding: 0; }
+.account-page { padding: 0; }
 
 .page-header {
   display: flex; justify-content: space-between; align-items: center;
-  margin-bottom: 20px; flex-wrap: wrap; gap: 12px;
+  margin-bottom: 18px; flex-wrap: wrap; gap: 12px;
 }
 .header-left { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .page-title { margin: 0; font-size: 20px; font-weight: 700; }
 .page-sub { color: var(--el-text-color-secondary); font-size: 13px; }
 
-/* 统计卡片 */
+/* 角色统计卡：点击筛选 */
+.stat-row { margin-bottom: 16px; }
 .role-stat-card {
-  display: flex; align-items: center; gap: 12px;
-  padding: 14px 18px;
+  padding: 14px 16px;
   border-radius: 8px;
   border: 1px solid var(--el-border-color-lighter);
+  cursor: pointer;
+  transition: box-shadow .15s, border-color .15s, transform .15s;
 }
-.role-stat-card.admin { background: #fff1f0; border-color: #ffccc7; }
-.role-stat-card.studio { background: #fffbe6; border-color: #ffe58f; }
-.role-stat-card.dept { background: #e6f4ff; border-color: #bae0ff; }
-.stat-icon { opacity: .7; flex-shrink: 0; }
-.stat-num { font-size: 24px; font-weight: 700; line-height: 1; }
-.stat-label { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; }
+.role-stat-card:hover { border-color: var(--el-color-primary-light-5); }
+.role-stat-card.active { box-shadow: 0 0 0 2px var(--el-color-primary-light-7); border-color: var(--el-color-primary); }
+.role-stat-card.is-admin { background: #fff1f0; }
+.role-stat-card.is-studio_admin { background: #fffbe6; }
+.role-stat-card.is-dept_admin { background: #f0f9eb; }
+.role-stat-card.is-user { background: var(--el-fill-color-light); }
+.stat-num { font-size: 22px; font-weight: 700; line-height: 1.1; }
+.stat-label { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 4px; }
 
-.role-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.role-list-title { display: flex; align-items: baseline; gap: 8px; font-weight: 600; }
-.role-total { color: var(--el-text-color-secondary); font-size: 12px; font-weight: 400; }
-.role-list-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.role-search { width: 240px; }
-.role-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
+.toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.filter { width: 150px; }
+.filter-keyword { width: 240px; }
+.filter-date { width: 250px; }
 
-/* 表格人员列 */
-.user-cell { display: flex; align-items: center; gap: 10px; }
-.user-avatar {
-  width: 32px; height: 32px; border-radius: 50%;
-  background: var(--el-color-primary-light-5);
-  color: var(--el-color-primary-dark-2);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 14px; font-weight: 600; flex-shrink: 0;
+.list-head {
+  display: flex; align-items: baseline; gap: 8px;
+  font-weight: 600; margin-bottom: 8px;
 }
-.user-info { display: flex; flex-direction: column; min-width: 0; }
-.user-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.user-email { font-size: 12px; color: var(--el-text-color-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list-total { color: var(--el-text-color-secondary); font-size: 12px; font-weight: 400; }
+.pager { display: flex; justify-content: flex-end; margin-top: 14px; }
 
-.dept-tag {
-  font-size: 12px; background: var(--el-fill-color);
-  padding: 2px 6px; border-radius: 4px;
-}
-.scope-company { font-size: 13px; font-weight: 500; color: var(--el-color-danger); }
-.scope-tag { font-size: 13px; color: var(--el-text-color-regular); }
-.time-text { font-size: 12px; color: var(--el-text-color-secondary); }
-.text-muted { color: var(--el-text-color-placeholder); }
-.empty-tip { text-align: center; padding: 24px; color: var(--el-text-color-placeholder); }
-
-/* 弹窗 - 搜索 */
-.step-label { font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary); margin-bottom: 10px; }
-.search-step { min-height: 180px; }
-.search-results {
-  margin-top: 8px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 6px; overflow: hidden; max-height: 240px; overflow-y: auto;
-}
-.search-result-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px; cursor: pointer;
-  border-bottom: 1px solid var(--el-border-color-extra-light);
-  transition: background .15s;
-}
-.search-result-item:last-child { border-bottom: none; }
-.search-result-item:hover { background: var(--el-fill-color-light); }
-.result-avatar {
+/* 弹窗 */
+.dialog-user { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--el-fill-color-light); border-radius: 6px; }
+.dialog-avatar {
   width: 34px; height: 34px; border-radius: 50%;
-  background: var(--el-color-primary-light-8);
-  color: var(--el-color-primary);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 14px; font-weight: 600; flex-shrink: 0;
+  background: var(--el-color-primary-light-5); color: var(--el-color-primary-dark-2);
+  display: flex; align-items: center; justify-content: center; font-weight: 600; flex-shrink: 0;
 }
-.result-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.result-name { font-size: 14px; font-weight: 500; }
-.result-meta { font-size: 12px; color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search-hint { padding: 12px 0; font-size: 13px; color: var(--el-text-color-placeholder); text-align: center; }
+.dialog-info { display: flex; flex-direction: column; min-width: 0; }
+.dialog-name { font-size: 14px; font-weight: 600; }
+.dialog-meta { font-size: 12px; color: var(--el-text-color-secondary); }
+.section-label { font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary); margin: 14px 0 8px; }
+.empty-roles { font-size: 13px; color: var(--el-text-color-placeholder); }
+.role-line { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--el-border-color-lighter); }
+.role-line:last-child { border-bottom: none; }
+.role-scope { font-size: 13px; color: var(--el-text-color-regular); flex: 1; }
+.option-sub { color: var(--el-text-color-placeholder); font-size: 12px; margin-left: 8px; }
 
-/* 弹窗 - 已选用户 */
-.selected-user {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px;
-  background: var(--el-fill-color-light);
-  border-radius: 6px;
-}
-.selected-avatar {
-  width: 36px; height: 36px; border-radius: 50%;
-  background: var(--el-color-primary-light-5);
-  color: var(--el-color-primary-dark-2);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 15px; font-weight: 600; flex-shrink: 0;
-}
-.selected-info { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.selected-name { font-size: 14px; font-weight: 600; }
-.selected-meta { font-size: 12px; color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* ─── 响应式 ─────────────────────────────────────────────────── */
-@media (max-width: 900px) {
+@media (max-width: 720px) {
   .page-header { flex-direction: column; align-items: flex-start; }
-}
-
-@media (max-width: 640px) {
-  /* 窄屏统计卡片纵向排列由 el-row gutter 控制，无需额外处理 */
-  .stat-num { font-size: 20px; }
-  .role-list-controls, .role-search { width: 100%; }
-  .role-pagination { justify-content: center; overflow-x: auto; }
+  .filter, .filter-keyword, .filter-date { width: 100%; }
+  .pager { justify-content: center; overflow-x: auto; }
 }
 </style>

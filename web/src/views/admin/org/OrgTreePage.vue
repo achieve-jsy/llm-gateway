@@ -1,7 +1,7 @@
 <template>
   <div class="org-layout">
 
-    <!-- ═══ 左侧：组织树 ═══════════════════════════════════════════════════ -->
+    <!-- ═══ 左侧：组织树 + 下属团队卡 ═════════════════════════════════════════ -->
     <aside class="tree-panel">
       <!-- EHR 同步状态 / 手动触发：只有全局管理员能点（后端同样按 scope=all 校验） -->
       <SyncStatusCard
@@ -18,7 +18,7 @@
       <div class="tree-search">
         <el-input
           v-model="treeSearch"
-          placeholder="搜索工作室 / 部门"
+          placeholder="搜索工作室 / 团队"
           clearable
           size="small"
           :prefix-icon="Search"
@@ -53,317 +53,118 @@
               <el-button
                 link type="primary" size="small" class="node-add-leader"
                 title="加负责人（花名册工号/姓名）"
-                @click.stop="onAddLeader(data)"
+                @click.stop="onTreeAddLeader(data)"
               >+</el-button>
             </span>
           </template>
         </el-tree>
 
+        <!-- 选中工作室/团队下的「下属团队」卡片（原型图3 左栏） -->
+        <TeamCardList
+          v-if="workbenchStudio"
+          :teams="visibleTeams"
+          :active-dept-id="selectedDept?.dept_id"
+          :can-manage="canManageStudio"
+          @select="onTeamCardSelect"
+          @set-admin="onTeamCardSetAdmin"
+          @add-leader="onTeamCardAddLeader"
+        />
+
         <!-- 待归属伪节点 -->
         <div
           v-if="unmappedDepts.length > 0"
-          :class="['unmapped-node', { 'is-current': selectedType === 'unmapped' }]"
+          :class="['unmapped-node', { 'is-current': unmappedSelected }]"
           @click="selectUnmapped"
         >
-          <el-icon class="node-icon" color="#e6a23c"><Warning /></el-icon>
+          <el-icon class="node-icon" color="var(--el-color-warning)"><Warning /></el-icon>
           <span class="node-label">待归属部门</span>
           <el-badge :value="unmappedDepts.length" type="warning" class="node-count" />
         </div>
       </el-scrollbar>
     </aside>
 
-    <!-- ═══ 右侧：内容面板 ══════════════════════════════════════════════════ -->
+    <!-- ═══ 右侧：工作室工作台 ═══════════════════════════════════════════════ -->
     <main class="content-panel">
 
-      <!-- ─── 工作室视图 ─────────────────────────────────────────────────── -->
-      <template v-if="selectedType === 'studio' && selectedStudio">
-        <div class="panel-header">
-          <div class="panel-info">
-            <div class="panel-breadcrumb">公司 <el-icon class="crumb-arrow"><ArrowRight /></el-icon> {{ selectedStudio.name }}</div>
-            <div class="panel-title">
-              <el-icon class="title-icon"><OfficeBuilding /></el-icon>
-              {{ selectedStudio.name }}
-            </div>
-          </div>
-          <div class="panel-actions">
-            <!-- 指定负责人：admin 或当前工作室的 studio_admin -->
-            <el-button
-              v-if="isGlobalAdmin || myStudioIds.includes(selectedStudio?.id ?? '')"
-              size="small" @click="openGrantDialog('studio_admin')"
-            >指定负责人</el-button>
-          </div>
-        </div>
+      <!-- ─── 工作台：工作室头部 + 团队/成员 tabs ────────────────────────── -->
+      <template v-if="workbenchStudio">
+        <TeamHeader
+          :studio-name="workbenchStudio.name"
+          :member-count="studioMemberCount"
+          :admins="studioAdmins"
+          :leaders="studioLeaders"
+          :can-manage="canManageStudio"
+          :team="headerTeam"
+          :can-manage-team="canManageStudio"
+          @set-studio-admin="openGrantDialog('studio_admin')"
+          @revoke-studio-admin="onRevokeStudioAdmin"
+          @add-studio-leader="onAddStudioLeader"
+          @set-team-admin="openGrantDialog('dept_admin')"
+          @revoke-team-admin="onRevokeTeamAdmin"
+          @add-team-leader="onAddTeamLeader"
+        />
 
-        <el-tabs v-model="studioActiveTab" class="panel-tabs">
-          <!-- Tab：部门列表 -->
-          <el-tab-pane name="depts">
-            <template #label>
-              部门列表
-              <el-badge :value="selectedStudioDepts.length" :max="99" type="info" class="tab-badge" />
-            </template>
-            <div class="tab-content">
-              <div class="org-table-wrap"><el-table :data="selectedStudioDepts" stripe size="small">
-                <el-table-column label="部门名称" min-width="160">
-                  <template #default="{ row }">
-                    <span class="clickable-dept" @click="clickDeptFromStudio(row)">{{ row.dept_name }}</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="部门ID" min-width="120">
-                  <template #default="{ row }">
-                    <code class="dept-id-code">{{ row.dept_id }}</code>
-                  </template>
-                </el-table-column>
-                <el-table-column label="状态" width="90">
-                  <template #default="{ row }">
-                    <el-tag :type="row.status === 'active' ? 'success' : 'warning'" size="small">
-                      {{ row.status === 'active' ? '正常' : '待归属' }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column label="部门负责人" min-width="140">
-                  <template #default="{ row }">
-                    <span v-if="getDeptOwners(row.dept_id).length">
-                      <el-tag
-                        v-for="o in getDeptOwners(row.dept_id)"
-                        :key="o.id"
-                        size="small"
-                        class="owner-chip"
-                        style="margin-right:4px"
-                      >{{ o.user_name || o.user_id }}</el-tag>
-                    </span>
-                    <span v-else class="text-muted">未设置</span>
-                  </template>
-                </el-table-column>
-              </el-table></div>
-              <div v-if="selectedStudioDepts.length === 0" class="tab-empty">
-                该工作室暂无部门
-              </div>
-            </div>
-          </el-tab-pane>
-
-          <!-- Tab：工作室负责人 -->
-          <el-tab-pane name="owner">
-            <template #label>
-              负责人
-              <el-badge v-if="selectedStudioOwners.length" :value="selectedStudioOwners.length" type="primary" class="tab-badge" />
-            </template>
-            <div class="tab-content">
-              <div v-if="selectedStudioOwners.length" class="owners-list">
-                <div v-for="owner in selectedStudioOwners" :key="owner.id" class="owner-card">
-                  <div class="owner-avatar">{{ owner.user_name?.charAt(0) || '?' }}</div>
-                  <div class="owner-info">
-                    <div class="owner-name">{{ owner.user_name }}</div>
-                    <div class="owner-email">{{ owner.email }}</div>
-                    <div class="owner-since">授权于 {{ formatDate(owner.created_at) }}</div>
-                  </div>
-                  <el-popconfirm
-                    v-if="isGlobalAdmin || myStudioIds.includes(selectedStudio?.id ?? '')"
-                    :title="`确认卸任「${owner.user_name}」的工作室负责人？`"
-                    confirm-button-text="确认卸任"
-                    confirm-button-type="danger"
-                    @confirm="doRevoke(owner)"
-                  >
-                    <template #reference>
-                      <el-button size="small" type="danger" plain>卸任</el-button>
-                    </template>
-                  </el-popconfirm>
-                </div>
-              </div>
-              <div v-else class="owner-empty">
-                <el-icon size="32" color="#c0c4cc"><UserFilled /></el-icon>
-                <p>该工作室尚未指定负责人</p>
-                <el-button
-                  v-if="isGlobalAdmin || myStudioIds.includes(selectedStudio?.id ?? '')"
-                  size="small" type="primary" plain @click="openGrantDialog('studio_admin')"
-                >立即指定</el-button>
-              </div>
-            </div>
-          </el-tab-pane>
-        </el-tabs>
-      </template>
-
-      <!-- ─── 部门视图 ───────────────────────────────────────────────────── -->
-      <template v-else-if="selectedType === 'dept' && selectedDept">
-        <div class="panel-header">
-          <div class="panel-info">
-            <div class="panel-breadcrumb">
-              公司 <el-icon class="crumb-arrow"><ArrowRight /></el-icon>
-              <!-- dept_admin 无法进入工作室视图，面包屑工作室名退化为纯文字 -->
-              <span
-                v-if="selectedDeptParentStudio"
-                :class="(isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio.id)) ? 'crumb-link' : 'crumb-text'"
-                @click="(isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio.id)) && clickStudioFromDept()"
-              >{{ selectedDeptParentStudio.name }}</span>
-              <el-icon v-if="selectedDeptParentStudio" class="crumb-arrow"><ArrowRight /></el-icon>
-              {{ selectedDept.dept_name }}
-            </div>
-            <div class="panel-title">
-              <el-icon class="title-icon"><Folder /></el-icon>
-              {{ selectedDept.dept_name }}
-              <el-tag :type="selectedDept.status === 'active' ? 'success' : 'warning'" size="small" class="title-badge">
-                {{ selectedDept.status === 'active' ? '正常' : '待归属' }}
-              </el-tag>
-            </div>
-          </div>
-          <div class="panel-actions">
-            <!-- 指定部门负责人：admin 或父工作室 studio_admin -->
-            <el-button
-              v-if="isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')"
-              size="small" @click="openGrantDialog('dept_admin')"
-            >指定负责人</el-button>
-          </div>
-        </div>
-
-        <el-tabs v-model="deptActiveTab" class="panel-tabs">
-          <!-- Tab：成员列表 -->
+        <el-tabs v-model="activeTab" class="panel-tabs">
+          <!-- Tab：团队/成员 -->
           <el-tab-pane name="members">
             <template #label>
-              成员
+              团队/成员
               <span v-if="deptMembersTotal > 0" class="tab-count">{{ deptMembersTotal }}</span>
             </template>
             <div class="tab-content">
-              <div class="members-toolbar">
-                <el-input
-                  v-model="memberSearch"
-                  placeholder="搜索成员姓名或邮箱..."
-                  clearable
-                  size="small"
-                  style="width: 260px"
-                  :prefix-icon="Search"
-                  @input="onMemberSearch"
+              <div v-if="!selectedDept" class="tab-empty">从左侧选择一个团队查看成员</div>
+              <template v-else>
+                <div class="members-toolbar">
+                  <el-input
+                    v-model="memberSearch"
+                    placeholder="搜索成员姓名或邮箱..."
+                    clearable
+                    size="small"
+                    style="width: 260px"
+                    :prefix-icon="Search"
+                  />
+                  <span class="members-hint">{{ selectedDept.dept_name }}</span>
+                </div>
+                <div class="org-table-wrap">
+                  <MemberTable
+                    :members="memberRows"
+                    :quota-map="userQuotaMap"
+                    :loading="deptMembersLoading"
+                    :can-manage="canManageStudio"
+                    @edit-quota="openUserQuotaDialog"
+                    @view-usage="openMemberDetail"
+                    @manage-budget="goBudget"
+                    @manage-entitlement="goEntitlement"
+                  />
+                </div>
+                <div v-if="!deptMembersLoading && filteredMembers.length === 0" class="tab-empty">
+                  {{ memberSearch ? '未找到匹配成员' : '该团队暂无成员（员工首次登录后自动归集）' }}
+                </div>
+                <el-pagination
+                  v-if="deptMembersTotal > deptMembersPageSize"
+                  v-model:current-page="deptMembersPage"
+                  :page-size="deptMembersPageSize"
+                  :total="deptMembersTotal"
+                  layout="prev, pager, next"
+                  small
+                  class="members-pagination"
+                  @current-change="loadDeptMembers"
                 />
-              </div>
-              <div class="org-table-wrap"><el-table :data="filteredMembers" stripe size="small" v-loading="deptMembersLoading"
-                style="cursor:pointer" @row-click="openMemberDetail">
-                <el-table-column label="姓名" min-width="130">
-                  <template #default="{ row }">
-                    <div class="member-cell">
-                      <el-badge
-                        :is-dot="row.has_conflict"
-                        :offset="[-2, 2]"
-                        type="danger"
-                      >
-                        <div class="member-avatar">{{ row.name?.charAt(0) || '?' }}</div>
-                      </el-badge>
-                      <span class="member-name">{{ row.name }}</span>
-                    </div>
-                  </template>
-                </el-table-column>
-                <el-table-column label="工号" width="88" prop="employee_id">
-                  <template #default="{ row }">
-                    <span v-if="row.employee_id" class="text-mono">{{ row.employee_id }}</span>
-                    <span v-else class="text-muted">—</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="岗位" min-width="110" prop="job_title">
-                  <template #default="{ row }">
-                    <span v-if="row.job_title">{{ row.job_title }}</span>
-                    <span v-else class="text-muted">—</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="邮箱" min-width="170" prop="email" />
-                <el-table-column label="归属来源" width="110">
-                  <template #default="{ row }">
-                    <el-tag v-if="row.login_status === 'pending'" type="warning" size="small">未登录</el-tag>
-                    <el-tag
-                      v-else
-                      :type="row.dept_source === 'manual' ? 'warning' : 'info'"
-                      size="small"
-                      :title="row.dept_source === 'manual' ? '手动指定，不受 SSO 影响' : '跟随 SSO 自动归集'"
-                    >{{ row.dept_source === 'manual' ? '手动' : 'SSO' }}</el-tag>
-                    <el-tooltip
-                      v-if="row.has_conflict"
-                      content="SSO 部门与手动归属不一致，建议复核"
-                      placement="top"
-                    >
-                      <el-icon color="#f56c6c" style="margin-left:4px;cursor:pointer"><Warning /></el-icon>
-                    </el-tooltip>
-                  </template>
-                </el-table-column>
-                <el-table-column label="归集时间" width="100" prop="joined_at" />
-                <el-table-column label="配额" width="150" align="center">
-                  <template #default="{ row }">
-                    <span v-if="userQuotaMap[row.id]" class="quota-cell">
-                      <template v-if="userQuotaMap[row.id]!.source === 'override'">
-                        {{ userQuotaMap[row.id]!.rpm === 0 ? '不限' : userQuotaMap[row.id]!.rpm }} RPM /
-                        {{ userQuotaMap[row.id]!.max_concurrency === 0 ? '不限' : userQuotaMap[row.id]!.max_concurrency }} 并发
-                      </template>
-                      <span v-else class="text-placeholder">继承默认</span>
-                    </span>
-                    <span v-else class="text-placeholder">—</span>
-                  </template>
-                </el-table-column>
-                <el-table-column
-                  v-if="isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')"
-                  label="操作" width="90" align="center"
-                >
-                  <template #default="{ row }">
-                    <el-button
-                      link type="primary" size="small"
-                      @click.stop="openUserQuotaDialog(row)"
-                    >配额</el-button>
-                  </template>
-                </el-table-column>
-              </el-table></div>
-              <div v-if="!deptMembersLoading && filteredMembers.length === 0" class="tab-empty">
-                {{ memberSearch ? '未找到匹配成员' : '该部门暂无成员（员工首次登录后自动归集）' }}
-              </div>
-              <el-pagination
-                v-if="deptMembersTotal > deptMembersPageSize"
-                v-model:current-page="deptMembersPage"
-                :page-size="deptMembersPageSize"
-                :total="deptMembersTotal"
-                layout="prev, pager, next"
-                small
-                class="members-pagination"
-                @current-change="loadDeptMembers"
-              />
+              </template>
             </div>
           </el-tab-pane>
 
-          <!-- Tab：部门信息 -->
-          <el-tab-pane label="基本信息" name="info">
-            <div class="tab-content dept-info-grid">
-              <div class="info-row">
-                <span class="info-label">部门 ID</span>
-                <code class="dept-id-code">{{ selectedDept.dept_id }}</code>
-              </div>
-              <div class="info-row">
-                <span class="info-label">所属工作室</span>
-                <span v-if="selectedDeptParentStudio">{{ selectedDeptParentStudio.name }}</span>
-                <el-tag v-else type="warning" size="small">未归属</el-tag>
-              </div>
-              <div class="info-row">
-                <span class="info-label">状态</span>
-                <el-tag :type="selectedDept.status === 'active' ? 'success' : 'warning'" size="small">
-                  {{ selectedDept.status === 'active' ? '正常' : '待归属' }}
-                </el-tag>
-              </div>
-              <div class="info-row">
-                <span class="info-label">部门负责人</span>
-                <div v-if="selectedDeptOwners.length" class="inline-owners">
-                  <span v-for="owner in selectedDeptOwners" :key="owner.id" class="inline-owner">
-                    <span>{{ owner.user_name }}</span>
-                    <el-popconfirm
-                      v-if="isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')"
-                      :title="`确认卸任「${owner.user_name}」的部门负责人？`"
-                      confirm-button-text="确认卸任"
-                      confirm-button-type="danger"
-                      @confirm="doRevoke(owner)"
-                    >
-                      <template #reference>
-                        <el-button link type="danger" size="small">卸任</el-button>
-                      </template>
-                    </el-popconfirm>
-                  </span>
-                </div>
-                <div v-else>
-                  <span class="text-muted">未设置</span>
-                  <el-button
-                    v-if="isGlobalAdmin || myStudioIds.includes(selectedDeptParentStudio?.id ?? '')"
-                    link type="primary" size="small" @click="openGrantDialog('dept_admin')"
-                  >立即指定</el-button>
-                </div>
+          <!-- Tab：Service Key / 模型授权 / 团队用量 / 团队预算 / 申请审批
+               这些能力已有独立页面，这里只做导航，不复制业务逻辑 -->
+          <el-tab-pane v-for="t in NAV_TABS" :key="t.name" :name="t.name" :label="t.label">
+            <div class="tab-content">
+              <div class="nav-placeholder">
+                <el-icon size="30" color="var(--el-text-color-placeholder)"><Link /></el-icon>
+                <p class="nav-placeholder__title">{{ t.label }}</p>
+                <p class="nav-placeholder__sub">{{ t.hint }}</p>
+                <el-button type="primary" plain size="small" @click="gotoNavTab(t)">
+                  打开{{ t.label }}页面
+                </el-button>
               </div>
             </div>
           </el-tab-pane>
@@ -371,19 +172,19 @@
       </template>
 
       <!-- ─── 待归属视图 ─────────────────────────────────────────────────── -->
-      <template v-else-if="selectedType === 'unmapped'">
+      <template v-else-if="unmappedSelected">
         <div class="panel-header">
           <div class="panel-info">
             <div class="panel-breadcrumb">公司 <el-icon class="crumb-arrow"><ArrowRight /></el-icon> 待归属部门</div>
             <div class="panel-title">
-              <el-icon class="title-icon" color="#e6a23c"><Warning /></el-icon>
+              <el-icon class="title-icon" color="var(--el-color-warning)"><Warning /></el-icon>
               待归属部门
               <el-tag type="warning" size="small" class="title-badge">{{ unmappedDepts.length }}</el-tag>
             </div>
           </div>
         </div>
 
-        <div class="tab-content" style="padding-top: 0">
+        <div class="tab-content nav-body">
           <el-alert
             title="以下部门在 EHR 中无对应上级工作室，员工登录后无法使用模型。请联系 EHR 管理员补齐组织关系。"
             type="warning"
@@ -404,16 +205,16 @@
 
       <!-- ─── 空态 ───────────────────────────────────────────────────────── -->
       <div v-else class="content-empty">
-        <el-icon size="52" color="#c0c4cc"><OfficeBuilding /></el-icon>
+        <el-icon size="52" color="var(--el-text-color-placeholder)"><OfficeBuilding /></el-icon>
         <p class="empty-title">选择左侧节点查看详情</p>
-        <p class="empty-sub">点击工作室查看部门列表，点击部门查看成员</p>
+        <p class="empty-sub">点击工作室查看团队与成员，点击「待归属部门」处理未归属团队</p>
       </div>
 
     </main>
   </div>
 
-  <!-- ═══ 授权弹窗 ══════════════════════════════════════════════════════════ -->
-  <el-dialog v-model="grantDialogVisible" title="指定负责人" width="460px" @close="resetGrant">
+  <!-- ═══ 管理员设置弹窗 ═════════════════════════════════════════════════════ -->
+  <el-dialog v-model="grantDialogVisible" title="设置管理员" width="460px" @close="resetGrant">
     <div v-if="!grantSelectedUser" class="search-step">
       <div class="step-label">第一步：搜索并选择员工</div>
       <el-alert
@@ -421,7 +222,7 @@
         type="info" :closable="false" show-icon
         style="margin-bottom: 10px; font-size: 12px;"
       >
-        仅显示「{{ selectedDeptParentStudio?.name }}」工作室下的员工
+        仅显示「{{ workbenchStudio?.name }}」工作室下的员工
       </el-alert>
       <el-input
         v-model="grantSearchKeyword"
@@ -465,7 +266,7 @@
         <el-descriptions :column="1" border size="small">
           <el-descriptions-item label="角色">
             <el-tag :type="grantPresetRole === 'studio_admin' ? 'warning' : 'info'" size="small">
-              {{ grantPresetRole === 'studio_admin' ? '工作室负责人' : '部门负责人' }}
+              {{ grantPresetRole === 'studio_admin' ? '工作室管理员' : '团队管理员' }}
             </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="管辖范围">{{ grantPresetScopeName }}</el-descriptions-item>
@@ -626,22 +427,28 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { Chart, registerables } from 'chart.js'
 Chart.register(...registerables)
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ElTree } from 'element-plus'
 import {
-  OfficeBuilding, Folder, Warning, Search,
-  ArrowRight, UserFilled, Close, Money, DataLine, CircleCheck, List,
+  OfficeBuilding, Folder, Warning, Search, ArrowRight, Link,
+  Close, Money, DataLine, CircleCheck, List,
 } from '@element-plus/icons-vue'
 import { useOrgStore, type RoleWithUser, type UserSearchResult, type DeptMember } from '@/stores/org'
 import { useAuthStore } from '@/stores/auth'
-import type { Studio, OrgDepartment, OrgNodeLeader } from '@/types/org'
+import type {
+  Studio, OrgDepartment, OrgNodeLeader, AccountBrief, OrgLeaderBrief, TeamCard, StudioOverview,
+} from '@/types/org'
 import http from '@/services/http'
 import { useRoute, useRouter } from 'vue-router'
 import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
 import SyncStatusCard from '@/components/org/SyncStatusCard.vue'
+import TeamHeader from '@/components/org/team/TeamHeader.vue'
+import TeamCardList from '@/components/org/team/TeamCardList.vue'
+import MemberTable from '@/components/org/team/MemberTable.vue'
+import type { MemberRow, TeamHeaderTeam } from '@/components/org/team/memberFormat'
 import { QUOTA_DEFAULTS, getUserQuota } from '@/api/quota'
 import type { QuotaEffective } from '@/api/quota'
 
@@ -651,7 +458,6 @@ const route     = useRoute()
 const router    = useRouter()
 
 // ─── 数据 ─────────────────────────────────────────────────────────────────────
-const loading    = ref(false)
 const studios    = ref<Studio[]>([])
 const allDepts   = ref<OrgDepartment[]>([])
 const unmappedDepts = ref<OrgDepartment[]>([])
@@ -703,6 +509,7 @@ async function onManualSync() {
     localSyncing.value = false
     await loadSyncStatus()
     void loadLeaders()
+    void loadOverview(true)
   }
 }
 
@@ -729,7 +536,7 @@ const treeNodes = computed<TreeNode[]>(() => {
       // studio_admin：只显示自己管辖的工作室
       visibleStudios = studios.value.filter(s => myStudioIds.value.includes(s.id))
     } else if (myDeptIds.value.length > 0) {
-      // dept_admin：只显示包含自己管辖部门的工作室（可能为空工作室占位）
+      // dept_admin：只显示包含自己管辖部门的团队（可能为空工作室占位）
       const studioIdsForMyDepts = new Set(
         allDepts.value.filter(d => myDeptIds.value.includes(d.dept_id)).map(d => d.studio_id).filter(Boolean)
       )
@@ -745,7 +552,7 @@ const treeNodes = computed<TreeNode[]>(() => {
     children: allDepts.value
       .filter(d => {
         if (d.studio_id !== s.id) return false
-        // dept_admin 只能看到自己管辖的部门
+        // dept_admin 只能看到自己管辖的团队
         if (!isGlobalAdmin.value && myStudioIds.value.length === 0 && myDeptIds.value.length > 0) {
           return myDeptIds.value.includes(d.dept_id)
         }
@@ -774,6 +581,12 @@ const leadersByNode = computed(() => {
   return m
 })
 
+// EHR 负责人（只读、多值）：本地 leaders 兜底
+function leadersOfNode(nodeType: 'studio' | 'dept', nodeId: string): OrgLeaderBrief[] {
+  return (leadersByNode.value.get(nodeType + ':' + nodeId) || [])
+    .map(l => ({ name: l.name, source: l.source }))
+}
+
 function leadersOf(node: TreeNode): OrgNodeLeader[] {
   const id = node.type === 'studio' ? node.studioData?.id : node.deptData?.id
   return id ? leadersByNode.value.get(node.type + ':' + id) || [] : []
@@ -787,14 +600,13 @@ async function loadLeaders() {
   }
 }
 
-async function onAddLeader(node: TreeNode) {
-  const id = node.type === 'studio' ? node.studioData?.id : node.deptData?.id
-  if (!id) return
+// 唯一手动入口：按花名册关键字解析后追加负责人（EHR 同步不覆盖手动记录）
+async function addLeaderPrompt(nodeType: 'studio' | 'dept', nodeId: string, label: string) {
   let keyword = ''
   try {
     const ret = await ElMessageBox.prompt(
       '按花名册解析：工号精确 / 姓名唯一匹配',
-      '给「' + node.label + '」加负责人',
+      '给「' + label + '」加负责人',
       { confirmButtonText: '添加', cancelButtonText: '取消', inputPlaceholder: '工号 / 姓名' },
     )
     keyword = String(ret.value || '').trim()
@@ -803,13 +615,19 @@ async function onAddLeader(node: TreeNode) {
   }
   if (!keyword) return
   try {
-    await orgStore.addLeader(node.type, id, keyword)
+    await orgStore.addLeader(nodeType, nodeId, keyword)
     ElMessage.success('负责人已添加')
     await loadLeaders()
+    void loadOverview(true)
   } catch (e: any) {
     if (e?.response?.status === 404) ElMessage.error('花名册查无此人，或节点不存在')
     else ElMessage.error(e?.response?.data?.error || e?.message || '加负责人失败')
   }
+}
+
+function onTreeAddLeader(node: TreeNode) {
+  const id = node.type === 'studio' ? node.studioData?.id : node.deptData?.id
+  if (id) void addLeaderPrompt(node.type, id, node.label)
 }
 
 function filterNode(value: string, data: TreeNode) {
@@ -821,134 +639,308 @@ function onTreeSearch(val: string) {
   treeRef.value?.filter(val)
 }
 
-// ─── 选中状态 ─────────────────────────────────────────────────────────────────
-const selectedType         = ref<'studio' | 'dept' | 'unmapped' | null>(null)
-const selectedStudio       = ref<Studio | null>(null)
-const selectedDept         = ref<OrgDepartment | null>(null)
+// ─── 选中状态（工作室工作台：工作室 + 当前团队）───────────────────────────────
+const unmappedSelected       = ref(false)
+const selectedStudio         = ref<Studio | null>(null)
+const selectedDept           = ref<OrgDepartment | null>(null)
 const selectedDeptParentStudio = ref<Studio | null>(null)
+const activeTab              = ref('members')
 
-const studioActiveTab = ref('depts')
-const deptActiveTab   = ref('members')
+// 工作台所在工作室：点工作室节点或团队节点都成立
+const workbenchStudio = computed<Studio | null>(
+  () => selectedStudio.value ?? selectedDeptParentStudio.value ?? null
+)
+// 指定/卸任管理员：admin 或该工作室的 studio_admin
+const canManageStudio = computed(() => {
+  const studio = workbenchStudio.value
+  return !!studio && (isGlobalAdmin.value || myStudioIds.value.includes(studio.id))
+})
+
+// ─── 工作室概览（头部人数/管理员/负责人 + 下属团队卡）────────────────────────
+// 后端 overview 接口并行开发中：失败或字段缺失时全部由本地数据兜底，页面照常可用。
+const overview = ref<StudioOverview | null>(null)
+const overviewLoadedId = ref('')   // 已成功加载的工作室
+let overviewFetchingId = ''        // 在途请求（同一工作室只发一次）
+
+async function loadOverview(force = false) {
+  const studio = workbenchStudio.value
+  if (!studio) {
+    overview.value = null
+    overviewLoadedId.value = ''
+    overviewFetchingId = ''
+    return
+  }
+  if (!force && (overviewLoadedId.value === studio.id || overviewFetchingId === studio.id)) return
+  if (overview.value?.studio_id !== studio.id) overview.value = null
+  // dept_admin 无工作室管辖权：不请求概览，避免无谓 403
+  if (!isGlobalAdmin.value && !myStudioIds.value.includes(studio.id)) return
+  overviewFetchingId = studio.id
+  try {
+    const data = await orgStore.fetchStudioOverview(studio.id)
+    // 期间切了工作室就丢弃（避免串号）
+    if (workbenchStudio.value?.id === studio.id) {
+      overview.value = data
+      overviewLoadedId.value = studio.id
+    }
+  } catch {
+    if (workbenchStudio.value?.id === studio.id) overview.value = null
+  } finally {
+    if (overviewFetchingId === studio.id) overviewFetchingId = ''
+  }
+}
+
+const studioInfo = computed<StudioOverview | null>(() =>
+  overview.value && overview.value.studio_id === workbenchStudio.value?.id ? overview.value : null
+)
+const studioMemberCount = computed<number | null>(() => studioInfo.value?.member_count ?? null)
+
+function briefOfRoles(role: 'studio_admin' | 'dept_admin', scopeId: string): AccountBrief[] {
+  return allRoles.value
+    .filter(r => r.role === role && r.scope_id === scopeId)
+    .map(r => ({ user_id: r.user_id, name: r.user_name }))
+}
+
+const studioAdmins = computed<AccountBrief[]>(() => {
+  const studio = workbenchStudio.value
+  if (!studio) return []
+  const fromOverview = studioInfo.value?.admins
+  if (fromOverview && fromOverview.length) return fromOverview
+  return briefOfRoles('studio_admin', studio.id)
+})
+
+const studioLeaders = computed<OrgLeaderBrief[]>(() => {
+  const studio = workbenchStudio.value
+  if (!studio) return []
+  const fromOverview = studioInfo.value?.leaders
+  if (fromOverview && fromOverview.length) return fromOverview
+  return leadersOfNode('studio', studio.id)
+})
+
+// dept_admin（无工作室管辖权）只看自己管辖的团队
+function canSeeDeptId(deptId: string): boolean {
+  if (isGlobalAdmin.value) return true
+  if (myStudioIds.value.length > 0) return true
+  return myDeptIds.value.includes(deptId)
+}
+
+// 下属团队：优先 overview.teams；缺失时用本地部门列表兜底（人数/管理员/负责人同样兜底）
+function teamsOf(studio: Studio): TeamCard[] {
+  const fromOverview = studioInfo.value?.teams
+  const depts = allDepts.value.filter(d => d.studio_id === studio.id)
+  const base: TeamCard[] = fromOverview && fromOverview.length
+    ? fromOverview
+    : depts.map(d => ({
+      dept_id: d.dept_id,
+      dept_uuid: d.id,
+      dept_name: d.dept_name,
+      member_count: d.member_count ?? 0,
+      admins: [],
+      leaders: [],
+    }))
+  return base
+    .filter(t => canSeeDeptId(t.dept_id))
+    .map(t => ({
+      ...t,
+      member_count: t.member_count ?? depts.find(d => d.dept_id === t.dept_id)?.member_count ?? 0,
+      admins: t.admins?.length ? t.admins : briefOfRoles('dept_admin', t.dept_id),
+      leaders: t.leaders?.length ? t.leaders : leadersOfNode('dept', t.dept_uuid),
+    }))
+}
+
+const visibleTeams = computed<TeamCard[]>(() =>
+  workbenchStudio.value ? teamsOf(workbenchStudio.value) : []
+)
+
+// 团队卡 → 部门行（overview 里出现但本地部门列表没有时兜一个只读视图）
+function deptOfTeam(team: TeamCard): OrgDepartment {
+  const existing = allDepts.value.find(d => d.dept_id === team.dept_id)
+  if (existing) return existing
+  return {
+    id: team.dept_uuid,
+    dept_id: team.dept_id,
+    dept_name: team.dept_name,
+    studio_id: workbenchStudio.value?.id,
+    status: 'active',
+    created_at: '',
+  }
+}
+
+const activeTeam = computed<TeamCard | null>(() => {
+  const dept = selectedDept.value
+  if (!dept) return null
+  return visibleTeams.value.find(t => t.dept_id === dept.dept_id) ?? null
+})
+
+// 头部展示的「当前团队」：名称/状态/人数/管理员/负责人
+const headerTeam = computed<TeamHeaderTeam | null>(() => {
+  const dept = selectedDept.value
+  if (!dept) return null
+  const team = activeTeam.value
+  return {
+    deptId: dept.dept_id,
+    name: dept.dept_name,
+    status: dept.status,
+    memberCount: deptMembersTotal.value || team?.member_count || 0,
+    admins: team?.admins?.length ? team.admins : briefOfRoles('dept_admin', dept.dept_id),
+    leaders: team?.leaders?.length ? team.leaders : leadersOfNode('dept', dept.id),
+  }
+})
+
+// ─── 独立页面导航（不复制业务逻辑，只跳转）────────────────────────────────────
+const NAV_TABS = [
+  { name: 'service-key', label: 'Service Key', hint: 'Service Key 在独立页面按主体维护与查看。', path: '/admin/service-keys' },
+  { name: 'entitlement', label: '模型授权', hint: '模型组授权按工作室 / 团队两级维护。', path: '/admin/entitlements' },
+  // 用量看板当前只认 user_id/user_name/start/end，不认 studio_id/dept_id，所以裸路径跳转后需在看板内下钻
+  { name: 'usage', label: '团队用量', hint: '分层用量看板：工作室 → 团队 → 成员。', path: '/admin/usage/dashboard' },
+  { name: 'budget', label: '团队预算', hint: '团队预算池与成员预算规则在预算管理页维护。', path: '/admin/budget' },
+  { name: 'requests', label: '申请审批', hint: '扩容 / 预算申请在审批页处理。', path: '/admin/expansion-requests' },
+] as const
+
+function gotoNavTab(tab: typeof NAV_TABS[number]) {
+  if (tab.name === 'budget') {
+    goBudget()
+    return
+  }
+  router.push(tab.path)
+}
+
+// 预算页支持 scope 钻取（scope_type/scope_id/scope_label），团队/工作室上下文直接带上
+function goBudget() {
+  const studio = workbenchStudio.value
+  const dept = selectedDept.value
+  if (dept && studio) {
+    router.push({
+      path: '/admin/budget',
+      query: {
+        scope_type: 'dept',
+        scope_id: dept.dept_id,
+        scope_label: dept.dept_name,
+        studio_id: studio.id,
+        studio_label: studio.name,
+      },
+    })
+    return
+  }
+  if (studio) {
+    router.push({ path: '/admin/budget', query: { scope_type: 'studio', scope_id: studio.id, scope_label: studio.name } })
+    return
+  }
+  router.push('/admin/budget')
+}
+
+function goEntitlement() {
+  // ponytail: 模型授权只有工作室/团队两级且页面在 /admin/entitlements，暂无团队过滤查询参数；
+  // 需要"只看本团队授权"时再给该页加 studio_id/dept_id query。
+  router.push('/admin/entitlements')
+}
+
+// ─── 选中动作 ─────────────────────────────────────────────────────────────────
+function selectStudio(studio: Studio) {
+  unmappedSelected.value = false
+  selectedStudio.value = studio
+  selectedDeptParentStudio.value = null
+  selectedDept.value = null
+  deptMembers.value = []
+  deptMembersTotal.value = 0
+  activeTab.value = 'members'
+  treeRef.value?.setCurrentKey(`studio:${studio.id}`)
+  void loadOverview()
+  const first = visibleTeams.value[0]
+  if (first) selectTeam(deptOfTeam(first))
+}
+
+function selectTeam(dept: OrgDepartment) {
+  unmappedSelected.value = false
+  selectedDept.value = dept
+  // 从团队节点进入时没有工作室上下文，用父工作室补齐（工作台头部需要）
+  if (!selectedStudio.value) {
+    selectedDeptParentStudio.value = studios.value.find(s => s.id === dept.studio_id) || null
+  }
+  activeTab.value = 'members'
+  void loadOverview()
+  loadDeptMembers(1)
+}
 
 function onNodeClick(data: TreeNode) {
   if (data.type === 'studio' && data.studioData) {
-    // dept_admin 无工作室管辖权，点击工作室节点时自动跳到该工作室下自己管辖的第一个部门
-    if (!isGlobalAdmin.value && myStudioIds.value.length === 0 && myDeptIds.value.length > 0) {
-      const firstMyDept = allDepts.value.find(
-        d => d.studio_id === data.studioData!.id && myDeptIds.value.includes(d.dept_id)
-      )
-      if (firstMyDept) {
-        selectedType.value  = 'dept'
-        selectedDept.value  = firstMyDept
-        selectedDeptParentStudio.value = data.studioData
-        selectedStudio.value = null
-        deptActiveTab.value = 'members'
-        treeRef.value?.setCurrentKey(`dept:${firstMyDept.dept_id}`)
-        loadDeptMembers(1)
-      }
-      return
-    }
-    selectedType.value  = 'studio'
-    selectedStudio.value = data.studioData
-    selectedDept.value  = null
-    selectedDeptParentStudio.value = null
-    studioActiveTab.value = 'depts'
-  } else if (data.type === 'dept' && data.deptData) {
-    selectedType.value  = 'dept'
-    selectedDept.value  = data.deptData
-    selectedDeptParentStudio.value = data.parentStudio || null
-    selectedStudio.value = null
-    deptActiveTab.value = 'members'
-    loadDeptMembers(1)
+    selectStudio(data.studioData)
+    return
   }
+  if (data.type === 'dept' && data.deptData) {
+    selectedStudio.value = data.parentStudio ?? null
+    selectedDeptParentStudio.value = data.parentStudio ?? null
+    selectTeam(data.deptData)
+  }
+}
+
+function onTeamCardSelect(team: TeamCard) {
+  selectTeam(deptOfTeam(team))
+  treeRef.value?.setCurrentKey(`dept:${team.dept_id}`)
+}
+
+function onTeamCardSetAdmin(team: TeamCard) {
+  selectTeam(deptOfTeam(team))
+  openGrantDialog('dept_admin')
+}
+
+function onTeamCardAddLeader(team: TeamCard) {
+  void addLeaderPrompt('dept', team.dept_uuid, team.dept_name)
+}
+
+function onAddStudioLeader() {
+  const studio = workbenchStudio.value
+  if (studio) void addLeaderPrompt('studio', studio.id, studio.name)
+}
+
+function onAddTeamLeader() {
+  const dept = selectedDept.value
+  if (dept) void addLeaderPrompt('dept', dept.id, dept.dept_name)
+}
+
+function onRevokeStudioAdmin(admin: AccountBrief) {
+  const studio = workbenchStudio.value
+  if (studio) void revokeManager(admin, 'studio_admin', studio.id)
+}
+
+function onRevokeTeamAdmin(admin: AccountBrief) {
+  const dept = selectedDept.value
+  if (dept) void revokeManager(admin, 'dept_admin', dept.dept_id)
 }
 
 function applyRouteSelection() {
   const scopeType = String(route.query.scope_type || '')
   const scopeID = String(route.query.scope_id || '')
-  const targetTab = String(route.query.tab || '')
   if (!scopeType || !scopeID) return
+  const targetTab = String(route.query.tab || '')
+  if (targetTab && NAV_TABS.some(t => t.name === targetTab)) activeTab.value = targetTab
 
   if (scopeType === 'studio') {
     const studio = studios.value.find(s => s.id === scopeID)
-    if (!studio) return
-    selectedType.value = 'studio'
-    selectedStudio.value = studio
-    selectedDept.value = null
-    selectedDeptParentStudio.value = null
-    studioActiveTab.value = targetTab === 'owner' ? 'owner' : 'depts'
-    nextTick(() => treeRef.value?.setCurrentKey(`studio:${studio.id}`))
+    if (studio) selectStudio(studio)
     return
   }
 
   if (scopeType === 'dept' || scopeType === 'dept_daily' || scopeType === 'dept_service') {
     const dept = allDepts.value.find(d => d.dept_id === scopeID)
     if (!dept) return
-    const parent = studios.value.find(s => s.id === dept.studio_id) || null
-    selectedType.value = 'dept'
-    selectedDept.value = dept
-    selectedDeptParentStudio.value = parent
-    selectedStudio.value = null
-    deptActiveTab.value = targetTab === 'info' ? 'info' : 'members'
+    selectedStudio.value = studios.value.find(s => s.id === dept.studio_id) || null
+    selectedDeptParentStudio.value = selectedStudio.value
+    selectTeam(dept)
     nextTick(() => treeRef.value?.setCurrentKey(`dept:${dept.dept_id}`))
-    if (deptActiveTab.value === 'members') loadDeptMembers(1)
   }
 }
 
 function selectUnmapped() {
-  selectedType.value  = 'unmapped'
+  unmappedSelected.value = true
   selectedStudio.value = null
-  selectedDept.value  = null
+  selectedDept.value = null
   selectedDeptParentStudio.value = null
+  overview.value = null
   // 取消树中的高亮
   treeRef.value?.setCurrentKey(undefined)
 }
 
-function clickDeptFromStudio(dept: OrgDepartment) {
-  const parent = studios.value.find(s => s.id === dept.studio_id) || null
-  selectedType.value  = 'dept'
-  selectedDept.value  = dept
-  selectedDeptParentStudio.value = parent
-  selectedStudio.value = null
-  deptActiveTab.value = 'members'
-  treeRef.value?.setCurrentKey(`dept:${dept.dept_id}`)
-  loadDeptMembers(1)
-}
-
-function clickStudioFromDept() {
-  if (!selectedDeptParentStudio.value) return
-  const s = selectedDeptParentStudio.value
-  selectedType.value  = 'studio'
-  selectedStudio.value = s
-  selectedDept.value  = null
-  selectedDeptParentStudio.value = null
-  treeRef.value?.setCurrentKey(`studio:${s.id}`)
-  studioActiveTab.value = 'depts'
-}
-
-// ─── 工作室计算属性 ────────────────────────────────────────────────────────────
-const selectedStudioDepts = computed(() => {
-  const base = allDepts.value.filter(d => d.studio_id === selectedStudio.value?.id)
-  // dept_admin 只能看到自己管辖的部门，不能看工作室全部部门列表
-  if (!isGlobalAdmin.value && myStudioIds.value.length === 0 && myDeptIds.value.length > 0) {
-    return base.filter(d => myDeptIds.value.includes(d.dept_id))
-  }
-  return base
-})
-
-const selectedStudioOwners = computed(() =>
-  allRoles.value.filter(r => r.role === 'studio_admin' && r.scope_id === selectedStudio.value?.id)
-)
-
-const selectedDeptOwners = computed(() =>
-  allRoles.value.filter(r => r.role === 'dept_admin' && r.scope_id === selectedDept.value?.dept_id)
-)
-
-function getDeptOwners(deptId: string): RoleWithUser[] {
-  return allRoles.value.filter(r => r.role === 'dept_admin' && r.scope_id === deptId)
-}
-
-// ─── 部门成员 ─────────────────────────────────────────────────────────────────
+// ─── 团队成员 ─────────────────────────────────────────────────────────────────
 const deptMembers        = ref<DeptMember[]>([])
 const deptMembersTotal   = ref(0)
 const deptMembersPage    = ref(1)
@@ -963,6 +955,8 @@ const filteredMembers = computed(() => {
     m.name.toLowerCase().includes(kw) || m.email.toLowerCase().includes(kw)
   )
 })
+// 后端在既有成员字段上补 is_dept_admin 与 config{quota,budget,entitlement}，字段缺失按 undefined 兜底
+const memberRows = computed<MemberRow[]>(() => filteredMembers.value as MemberRow[])
 
 async function loadDeptMembers(page = 1) {
   if (!selectedDept.value) return
@@ -981,18 +975,14 @@ async function loadDeptMembers(page = 1) {
   }
 }
 
-function onMemberSearch() {
-  // 本地过滤，无需防抖
-}
-
-// ─── 授权弹窗 ─────────────────────────────────────────────────────────────────
+// ─── 管理员（RBAC，可授可撤）──────────────────────────────────────────────────
 const grantDialogVisible  = ref(false)
 const granting            = ref(false)
 const grantPresetRole      = ref('')
 const grantPresetScopeType = ref('')
 const grantPresetScopeId   = ref('')
 const grantPresetScopeName = ref('')
-// 指定部门负责人时限制只能从父工作室成员里选人；工作室负责人时为空（全公司）
+// 团队管理员只能从父工作室成员里选人；工作室管理员为空（全公司）
 const grantScopeStudioId   = ref('')
 const grantSearchKeyword   = ref('')
 const grantSearchResults   = ref<UserSearchResult[]>([])
@@ -1001,17 +991,16 @@ const grantSelectedUser    = ref<UserSearchResult | null>(null)
 
 function openGrantDialog(role: 'studio_admin' | 'dept_admin') {
   grantPresetRole.value = role
-  if (role === 'studio_admin' && selectedStudio.value) {
+  if (role === 'studio_admin' && workbenchStudio.value) {
     grantPresetScopeType.value = 'studio'
-    grantPresetScopeId.value   = selectedStudio.value.id
-    grantPresetScopeName.value = `工作室：${selectedStudio.value.name}`
-    grantScopeStudioId.value   = '' // 工作室负责人：全公司选人
+    grantPresetScopeId.value   = workbenchStudio.value.id
+    grantPresetScopeName.value = `工作室：${workbenchStudio.value.name}`
+    grantScopeStudioId.value   = ''
   } else if (role === 'dept_admin' && selectedDept.value) {
     grantPresetScopeType.value = 'dept'
     grantPresetScopeId.value   = selectedDept.value.dept_id
-    grantPresetScopeName.value = `部门：${selectedDept.value.dept_name}`
-    // 部门负责人：只能从父工作室的员工里选
-    grantScopeStudioId.value   = selectedDeptParentStudio.value?.id ?? ''
+    grantPresetScopeName.value = `团队：${selectedDept.value.dept_name}`
+    grantScopeStudioId.value   = workbenchStudio.value?.id ?? ''
   }
   grantDialogVisible.value = true
 }
@@ -1044,21 +1033,35 @@ async function doGrant() {
       grantPresetScopeType.value,
       grantPresetScopeId.value,
     )
-    const roleLabel = grantPresetRole.value === 'studio_admin' ? '工作室负责人' : '部门负责人'
+    const roleLabel = grantPresetRole.value === 'studio_admin' ? '工作室管理员' : '团队管理员'
     ElMessage.success(`已将「${grantSelectedUser.value.name}」设为${roleLabel}`)
     grantDialogVisible.value = false
-    allRoles.value = await orgStore.fetchAllRoles()
+    await refreshManagers()
   } catch {} finally {
     granting.value = false
   }
 }
 
-async function doRevoke(role: RoleWithUser) {
+async function revokeManager(admin: AccountBrief, role: 'studio_admin' | 'dept_admin', scopeId: string) {
+  const roleLabel = role === 'studio_admin' ? '工作室管理员' : '团队管理员'
   try {
-    await orgStore.revokeRole(role.user_id, role.role, role.scope_id)
+    await ElMessageBox.confirm(`确认卸任「${admin.name}」的${roleLabel}？`, '卸任确认', {
+      type: 'warning', confirmButtonText: '卸任', cancelButtonText: '取消',
+    })
+  } catch {
+    return // 用户取消
+  }
+  try {
+    await orgStore.revokeRole(admin.user_id, role, scopeId)
     ElMessage.success('已卸任')
-    allRoles.value = await orgStore.fetchAllRoles()
+    await refreshManagers()
   } catch {}
+}
+
+// 授权变更后：角色清单（树/兜底）+ 工作室概览（头部/团队卡）一起刷新
+async function refreshManagers() {
+  allRoles.value = await orgStore.fetchAllRoles()
+  await loadOverview(true)
 }
 
 function resetGrant() {
@@ -1068,14 +1071,8 @@ function resetGrant() {
   grantScopeStudioId.value  = ''
 }
 
-// ─── 辅助 ─────────────────────────────────────────────────────────────────────
-function formatDate(str: string) {
-  return str ? str.slice(0, 10) : '—'
-}
-
 // ─── 数据加载 ─────────────────────────────────────────────────────────────────
 async function reload() {
-  loading.value = true
   try {
     const userId = authStore.user?.id
     const [, , , r, myR] = await Promise.all([
@@ -1097,16 +1094,21 @@ async function reload() {
     // 刷新后同步当前选中对象
     if (selectedStudio.value) {
       selectedStudio.value = studios.value.find(s => s.id === selectedStudio.value!.id) || null
-      if (!selectedStudio.value) selectedType.value = null
     }
     if (selectedDept.value) {
-      selectedDept.value = allDepts.value.find(d => d.dept_id === selectedDept.value!.dept_id) || null
-      if (!selectedDept.value) selectedType.value = null
+      const nextDept = allDepts.value.find(d => d.dept_id === selectedDept.value!.dept_id) || null
+      if (nextDept) selectTeam(nextDept)
+      else {
+        selectedDept.value = null
+        deptMembers.value = []
+        deptMembersTotal.value = 0
+      }
     }
     applyRouteSelection()
   } finally {
-    loading.value = false
+    // 加载态由各列表自身的 v-loading 承担（页面级无整块遮罩）
   }
+  await loadOverview(true)
 }
 
 onMounted(async () => {
@@ -1219,7 +1221,7 @@ function renderMdTrendChart() {
   } as any)
 }
 
-function openMemberDetail(member: DeptMember) {
+function openMemberDetail(member: MemberRow) {
   memberDrawerTarget.value  = member
   memberDrawerVisible.value = true
   mdKpi.value       = { callCount: 0, cost: 0, successRate: 0, totalTokens: 0, errorCount: 0, avgDuration: 0 }
@@ -1295,13 +1297,10 @@ function onUserQuotaSaved() {
   background: var(--el-bg-color-page);
 }
 
-.quota-cell { font-size: 13px; }
-.text-placeholder { color: var(--el-text-color-placeholder); font-size: 13px; }
-
 /* ─── 左侧树面板 ────────────────────────────────────────────────────────────── */
 .tree-panel {
-  width: 240px;
-  min-width: 200px;
+  width: 260px;
+  min-width: 210px;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--el-border-color);
@@ -1347,7 +1346,7 @@ function onUserQuotaSaved() {
 
 .node-leaders {
   margin-left: 4px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
@@ -1394,11 +1393,11 @@ function onUserQuotaSaved() {
   border-top: 1px solid var(--el-border-color-extra-light);
   margin-top: 4px;
   transition: background .15s;
-  color: #e6a23c;
+  color: var(--el-color-warning);
 }
 
 .unmapped-node:hover { background: var(--el-fill-color-lighter); }
-.unmapped-node.is-current { background: #fdf6ec; }
+.unmapped-node.is-current { background: var(--el-color-warning-light-9); }
 
 .node-count { flex-shrink: 0; }
 
@@ -1411,7 +1410,7 @@ function onUserQuotaSaved() {
   flex-direction: column;
 }
 
-/* Panel 顶部 header */
+/* 待归属视图头部（工作室头部在 TeamHeader 组件内） */
 .panel-header {
   display: flex;
   align-items: flex-start;
@@ -1435,14 +1434,6 @@ function onUserQuotaSaved() {
 
 .crumb-arrow { font-size: 10px; }
 
-.crumb-link {
-  cursor: pointer;
-  color: var(--el-color-primary);
-}
-
-.crumb-link:hover { text-decoration: underline; }
-.crumb-text { color: var(--el-text-color-regular); cursor: default; }
-
 .panel-title {
   display: flex;
   align-items: center;
@@ -1454,14 +1445,6 @@ function onUserQuotaSaved() {
 
 .title-icon { color: var(--el-color-primary); font-size: 18px; }
 .title-badge { margin-left: 4px; }
-
-.panel-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  padding-top: 26px;
-}
 
 /* Tabs */
 .panel-tabs {
@@ -1478,10 +1461,7 @@ function onUserQuotaSaved() {
   padding: 16px 0;
 }
 
-.tab-badge {
-  margin-left: 4px;
-  vertical-align: middle;
-}
+.nav-body { padding-top: 0; }
 
 .tab-count {
   display: inline-flex;
@@ -1505,87 +1485,38 @@ function onUserQuotaSaved() {
   font-size: 13px;
 }
 
-/* 部门信息 grid */
-.dept-info-grid { display: flex; flex-direction: column; gap: 16px; max-width: 480px; }
-.info-row { display: flex; align-items: center; gap: 12px; font-size: 14px; }
-.info-label {
-  width: 90px;
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  flex-shrink: 0;
-}
-
-.inline-owners { display: flex; flex-direction: column; gap: 6px; }
-.inline-owner { display: flex; align-items: center; gap: 8px; }
-
-/* 部门 ID code */
-.dept-id-code {
-  font-family: monospace;
-  font-size: 12px;
-  background: var(--el-fill-color);
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: var(--el-text-color-secondary);
-}
-
-/* 点击跳转的部门名称 */
-.clickable-dept {
-  cursor: pointer;
-  color: var(--el-color-primary);
-  font-size: 13px;
-}
-.clickable-dept:hover { text-decoration: underline; }
-
-/* 负责人列表（多人） */
-.owners-list { display: flex; flex-direction: column; gap: 12px; }
-
-/* 负责人卡片 */
-.owner-card {
+/* 独立页面导航占位（不复制业务逻辑） */
+.nav-placeholder {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--el-border-color-lighter);
+  gap: 8px;
+  padding: 48px 16px;
+  border: 1px dashed var(--el-border-color);
   border-radius: 8px;
-  max-width: 420px;
+  background: var(--el-fill-color-blank);
 }
-
-.owner-avatar {
-  width: 44px; height: 44px; border-radius: 50%;
-  background: var(--el-color-primary-light-5);
-  color: var(--el-color-primary-dark-2);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 18px; font-weight: 700; flex-shrink: 0;
-}
-
-.owner-info { flex: 1; min-width: 0; }
-.owner-name { font-size: 15px; font-weight: 600; }
-.owner-email { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; }
-.owner-since { font-size: 12px; color: var(--el-text-color-placeholder); margin-top: 2px; }
-
-.owner-empty {
-  display: flex; flex-direction: column; align-items: center;
-  gap: 10px; padding: 40px 0;
-  color: var(--el-text-color-secondary);
-}
-
-.owner-chip {
-  display: inline-flex; align-items: center;
-  font-size: 13px;
+.nav-placeholder__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
   color: var(--el-text-color-primary);
+}
+.nav-placeholder__sub {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 /* 成员列表 */
-.members-toolbar { display: flex; align-items: center; margin-bottom: 12px; }
-.member-cell { display: flex; align-items: center; gap: 8px; }
-.member-avatar {
-  width: 28px; height: 28px; border-radius: 50%;
-  background: var(--el-color-primary-light-8);
-  color: var(--el-color-primary);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 600; flex-shrink: 0;
+.members-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
 }
-.member-name { font-size: 13px; }
+.members-hint { font-size: 12px; color: var(--el-text-color-secondary); }
 .members-pagination { display: flex; justify-content: center; margin-top: 16px; }
 
 /* 空态 */
@@ -1598,12 +1529,20 @@ function onUserQuotaSaved() {
 .empty-title { font-size: 16px; font-weight: 600; margin: 0; }
 .empty-sub { font-size: 13px; color: var(--el-text-color-placeholder); margin: 0; }
 
-.text-muted { color: var(--el-text-color-placeholder); font-size: 13px; }
-
 /* Table horizontal scroll wrapper */
 .org-table-wrap { width: 100%; }
 
-/* ─── 弹窗：授权 ─────────────────────────────────────────────────────────────── */
+/* 部门 ID code */
+.dept-id-code {
+  font-family: monospace;
+  font-size: 12px;
+  background: var(--el-fill-color);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--el-text-color-secondary);
+}
+
+/* ─── 弹窗：设置管理员 ───────────────────────────────────────────────────────── */
 .step-label { font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary); margin-bottom: 10px; }
 .search-step { min-height: 180px; }
 .search-results {
@@ -1647,9 +1586,6 @@ function onUserQuotaSaved() {
 .grant-scope-info { margin-top: 12px; }
 
 code { background: var(--el-fill-color); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
-
-/* ─── 成员列表 ───────────────────────────────────────────────────────────────── */
-.text-mono { font-family: monospace; font-size: 12px; color: var(--el-text-color-secondary); }
 
 /* ─── 成员用量快览抽屉 ────────────────────────────────────────────────────────── */
 :deep(.md-drawer .el-drawer__body) { padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
@@ -1696,27 +1632,26 @@ code { background: var(--el-fill-color); padding: 1px 4px; border-radius: 3px; f
   content: ''; position: absolute; top: 0; left: 0;
   width: 3px; height: 100%; border-radius: 12px 0 0 12px;
 }
-.md-kpi--green::before { background: #67c23a; }
-.md-kpi--blue::before  { background: #409eff; }
-.md-kpi--amber::before { background: #e6a23c; }
-.md-kpi--red::before   { background: #f56c6c; }
-.md-kpi--gray::before  { background: #c0c4cc; }
+.md-kpi--green::before { background: var(--el-color-success); }
+.md-kpi--blue::before  { background: var(--el-color-primary); }
+.md-kpi--amber::before { background: var(--el-color-warning); }
+.md-kpi--red::before   { background: var(--el-color-danger); }
+.md-kpi--gray::before  { background: var(--el-text-color-placeholder); }
 
 .md-kpi__icon {
   width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
 }
-.md-kpi--green .md-kpi__icon { background: rgba(103,194,58,0.12); color: #67c23a; }
-.md-kpi--blue  .md-kpi__icon { background: rgba(64,158,255,0.12);  color: #409eff; }
-.md-kpi--amber .md-kpi__icon { background: rgba(230,162,60,0.12);  color: #e6a23c; }
-.md-kpi--red   .md-kpi__icon { background: rgba(245,108,108,0.12); color: #f56c6c; }
-.md-kpi--gray  .md-kpi__icon { background: var(--el-fill-color);   color: #909399; }
+.md-kpi--green .md-kpi__icon { background: var(--el-color-success-light-9); color: var(--el-color-success); }
+.md-kpi--blue  .md-kpi__icon { background: var(--el-color-primary-light-9);   color: var(--el-color-primary); }
+.md-kpi--amber .md-kpi__icon { background: var(--el-color-warning-light-9);  color: var(--el-color-warning); }
+.md-kpi--red   .md-kpi__icon { background: var(--el-color-danger-light-9);   color: var(--el-color-danger); }
+.md-kpi--gray  .md-kpi__icon { background: var(--el-fill-color);   color: var(--el-text-color-secondary); }
 
 .md-kpi__body  { flex: 1; min-width: 0; }
 .md-kpi__label { font-size: 11px; color: var(--el-text-color-secondary); margin: 0 0 3px; }
 .md-kpi__value { font-size: 20px; font-weight: 700; margin: 0 0 2px; line-height: 1.2; color: var(--el-text-color-primary); }
 .md-kpi__sub   { font-size: 11px; color: var(--el-text-color-placeholder); margin: 0; }
-
 
 /* 最近调用列表 */
 .md-empty { color: var(--el-text-color-placeholder); font-size: 13px; text-align: center; padding: 20px 0; }
@@ -1730,8 +1665,8 @@ code { background: var(--el-fill-color); padding: 1px 4px; border-radius: 3px; f
 .md-log-row:last-child { border-bottom: none; }
 .md-log-row:hover { background: var(--el-fill-color-light); }
 .md-log-status { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.md-log-status--ok  { background: #67c23a; }
-.md-log-status--err { background: #f56c6c; }
+.md-log-status--ok  { background: var(--el-color-success); }
+.md-log-status--err { background: var(--el-color-danger); }
 .md-log-main  { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
 .md-log-model { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--el-text-color-primary); }
 .md-log-time  { font-size: 11px; color: var(--el-text-color-placeholder); }
@@ -1755,7 +1690,7 @@ code { background: var(--el-fill-color); padding: 1px 4px; border-radius: 3px; f
 .md-model-name  { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
 .md-model-calls { font-size: 11px; color: var(--el-text-color-secondary); flex-shrink: 0; }
 .md-model-bar-bg { height: 5px; background: var(--el-fill-color); border-radius: 3px; overflow: hidden; }
-.md-model-bar-fill { height: 100%; background: linear-gradient(90deg, #409eff, #79bbff); border-radius: 3px; transition: width .4s; }
+.md-model-bar-fill { height: 100%; background: var(--el-color-primary-light-5); border-radius: 3px; transition: width .4s; }
 .md-model-cost { font-size: 12px; font-family: monospace; color: var(--el-text-color-secondary); flex-shrink: 0; min-width: 60px; text-align: right; }
 
 /* 调用记录 */
@@ -1769,12 +1704,10 @@ code { background: var(--el-fill-color); padding: 1px 4px; border-radius: 3px; f
 @media (max-width: 768px) {
   .org-layout { flex-direction: column; height: auto; }
   .tree-panel { width: 100%; border-right: none; border-bottom: 1px solid var(--el-border-color); }
-  .tree-body { max-height: 240px; }
-  .md-kpi-row { grid-template-columns: repeat(2, 1fr); }
+  .tree-body { max-height: 280px; }
 
   /* Header: stack vertically */
   .panel-header { flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px 16px 0; }
-  .panel-actions { width: 100%; padding-top: 0; flex-wrap: wrap; }
 
   /* Tabs: reduce padding */
   .panel-tabs { padding: 0 16px; }
@@ -1784,17 +1717,11 @@ code { background: var(--el-fill-color); padding: 1px 4px; border-radius: 3px; f
   .org-table-wrap :deep(.el-table) { min-width: 680px; }
 
   /* Member toolbar: full-width */
-  .members-toolbar { width: 100%; }
+  .members-toolbar { flex-direction: column; align-items: flex-start; }
   .members-toolbar .el-input { width: 100% !important; }
 
   /* Pagination: center */
   .members-pagination { justify-content: center; }
-
-  /* Dept info grid: full width */
-  .dept-info-grid { max-width: 100%; }
-
-  /* Owner cards: full width */
-  .owner-card { max-width: 100%; }
 
   /* Drawer: use narrower size on mobile */
   :deep(.el-drawer) { width: 100% !important; max-width: 100vw; }
@@ -1809,9 +1736,6 @@ code { background: var(--el-fill-color); padding: 1px 4px; border-radius: 3px; f
   /* Breadcrumb: reduce size */
   .panel-breadcrumb { font-size: 11px; }
   .panel-title { font-size: 16px; }
-
-  /* Unmapped table action: full width select */
-  .unmapped-actions { flex-direction: column; gap: 8px; }
 }
 
 @media (max-width: 480px) {

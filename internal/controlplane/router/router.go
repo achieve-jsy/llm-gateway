@@ -891,6 +891,9 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	orgH := orghandler.NewOrgHandler(orgContainer.OrgSvc, orgContainer.StudioSvc, userOrgRepo, roleRepo)
 	mappingH := orghandler.NewMappingHandler(orgContainer.MappingSvc, deptRepo)
 	roleH := orghandler.NewRoleHandler(orgContainer.RoleSvc, mappingRepo)
+	// 组织工作台：账号页（一人一行）+ 工作室概览（头部 + 团队卡）
+	accountH := orghandler.NewAccountHandler(orgrepo.NewAccountRepo(db))
+	orgOverviewH := orghandler.NewOrgOverviewHandler(orgrepo.NewOrgOverviewRepo(db))
 
 	// 模型组授权管理（注册在 adminGroup，与现有组管理路由同级）
 	entitlementHandler := handler.NewEntitlementHandler(entitlementSvc, deptLookup)
@@ -1108,6 +1111,13 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/usage/analysis-report", guard(rbac.PermUsageViewScoped), reportV2H.Report)
 		adminGroup.GET("/usage/analysis-report/members", guard(rbac.PermUsageViewScoped), reportV2H.Members)
 		adminGroup.POST("/usage/analysis-report/anomaly/:user_id/feedback", guard(rbac.PermUsageViewScoped), reportV2H.AnomalyFeedback)
+	}
+
+	// 组织工作台：账号页一人一行 + 工作室概览（头部与左树团队卡）。
+	// 与既有组织接口同前缀 /api/v1/org（adminGroup 已是 /api/v1），负责人与管理员两套数据分开返回。
+	{
+		orgGroup.GET("/accounts", guard(rbac.PermRoleList), accountH.List)
+		orgGroup.GET("/studios/:id/overview", guard(rbac.PermMemberView), orgOverviewH.Studio)
 	}
 
 	// 内部接口（InternalAuth 已在 internalGroup 上，复用）

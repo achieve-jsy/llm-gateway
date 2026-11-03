@@ -88,6 +88,7 @@ export const useOrgStore = defineStore('org', () => {
   // ─── 账号/角色（一人一行）───────────────────────────────────────────────
   async function fetchAccounts(query: {
     keyword?: string; role?: RoleKey | ''; studioId?: string; deptId?: string
+    createdFrom?: string; createdTo?: string
     page?: number; pageSize?: number
   } = {}): Promise<AccountListResult> {
     const params: Record<string, any> = {
@@ -98,7 +99,9 @@ export const useOrgStore = defineStore('org', () => {
     if (query.role) params.role = query.role
     if (query.studioId) params.studio_id = query.studioId
     if (query.deptId) params.dept_id = query.deptId
-    const res = await http.get('/api/v1/admin/org/accounts', { params })
+    if (query.createdFrom) params.created_from = query.createdFrom
+    if (query.createdTo) params.created_to = query.createdTo
+    const res = await http.get('/api/v1/org/accounts', { params })
     return res.data
   }
 
@@ -106,7 +109,7 @@ export const useOrgStore = defineStore('org', () => {
   const studioOverview = ref<StudioOverview | null>(null)
 
   async function fetchStudioOverview(studioId: string): Promise<StudioOverview | null> {
-    const res = await http.get(`/api/v1/admin/org/studios/${studioId}/overview`)
+    const res = await http.get(`/api/v1/org/studios/${studioId}/overview`)
     studioOverview.value = res.data
     return res.data
   }
@@ -115,14 +118,14 @@ export const useOrgStore = defineStore('org', () => {
   const leaders = ref<OrgNodeLeader[]>([])
 
   async function fetchLeaders(): Promise<OrgNodeLeader[]> {
-    const res = await http.get('/api/v1/admin/org/leaders')
+    const res = await http.get('/api/v1/org/leaders')
     leaders.value = res.data?.data || []
     return leaders.value
   }
 
   // 手动新增负责人（唯一手动入口）：keyword 由后端按花名册解析。
   async function addLeader(nodeType: 'studio' | 'dept', nodeId: string, keyword: string) {
-    const res = await http.post('/api/v1/admin/org/leaders', { node_type: nodeType, node_id: nodeId, keyword })
+    const res = await http.post('/api/v1/org/leaders', { node_type: nodeType, node_id: nodeId, keyword })
     return res.data
   }
 

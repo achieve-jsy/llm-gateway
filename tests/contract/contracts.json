@@ -796,10 +796,10 @@
     "auth": "jwt Bearer <jwt>（adminGroup）",
     "purpose": "组织工作台（原型图1/图3）：工作室→团队→成员的权限与成本统一入口。负责人来自 EHR（只读、多值、只增不删），管理员来自本地 RBAC（可授可撤）",
     "routes": {
-      "GET /admin/org/accounts": {
+      "GET /org/accounts": {
         "handler": "AccountHandler.List",
         "purpose": "账号页：一人一行（不是授权记录一行），带主角色与全部授权明细",
-        "query_keys": ["keyword(姓名/工号/岗位/邮箱)", "role(admin|studio_admin|dept_admin|user)", "studio_id", "dept_id", "page", "page_size"],
+        "query_keys": ["keyword(姓名/工号/岗位/邮箱)", "role(admin|studio_admin|dept_admin|user)", "studio_id", "dept_id", "created_from(YYYY-MM-DD)", "created_to(YYYY-MM-DD)", "page", "page_size"],
         "response_keys": [
           "accounts[].user_id", "accounts[].name", "accounts[].employee_id", "accounts[].job_title",
           "accounts[].email", "accounts[].created_at", "accounts[].studio_id", "accounts[].studio_name",
@@ -809,7 +809,7 @@
         ],
         "notes": "role=user 表示无任何授权的员工（不落库，LEFT JOIN 为空推导）"
       },
-      "GET /admin/org/studios/:id/overview": {
+      "GET /org/studios/:id/overview": {
         "handler": "OrgOverviewHandler.Studio",
         "purpose": "工作室工作台头部 + 左树下层：人数、管理员、EHR 负责人、下属团队卡",
         "response_keys": [
@@ -819,7 +819,7 @@
         ],
         "notes": "leaders 多值：前端文案 张三等N人负责；admins 为空显示 未设置管理员"
       },
-      "GET /admin/org/departments/:dept_id/members": {
+      "GET /org/departments/:dept_id/members": {
         "handler": "OrgHandler.GetDeptMembers",
         "purpose": "团队成员表：原字段 + is_dept_admin + 三块配置摘要",
         "response_keys": [
@@ -836,12 +836,12 @@
     "auth": "jwt Bearer <jwt>（adminGroup，平台管理员）",
     "purpose": "组织负责人多值列表：增量覆盖与保留（同步只追加/更新属性，永不删除；手动新增是唯一手动入口）",
     "routes": {
-      "GET /admin/org/leaders": {
+      "GET /org/leaders": {
         "handler": "OrgLeaderHandler.List",
         "purpose": "全量返回负责人（百行量级），前端按 node_type+node_id 分组挂到组织树节点",
         "response_keys": ["data[].id", "data[].node_type(studio|dept)", "data[].node_id(studios.id/departments.id)", "data[].name", "data[].passport", "data[].employee_id", "data[].source(ehr|manual)"]
       },
-      "POST /admin/org/leaders": {
+      "POST /org/leaders": {
         "handler": "OrgLeaderHandler.Add",
         "purpose": "手动加负责人：keyword 按花名册解析（employee_id/group_e_number 精确、person_name 唯一）；重复加同一人幂等",
         "request_keys": ["node_type(studio|dept)", "node_id(uuid)", "keyword(工号或姓名)"],

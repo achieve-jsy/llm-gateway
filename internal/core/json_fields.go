@@ -148,6 +148,44 @@ func (fields *UnknownJSONFields) Delete(key string) {
 	*fields = UnknownJSONFieldsFromMap(remaining)
 }
 
+// Set assigns value to key, preserving all other fields. A nil or empty value
+// removes the key, matching Delete semantics.
+func (fields *UnknownJSONFields) Set(key string, value json.RawMessage) {
+	if len(bytes.TrimSpace(value)) == 0 {
+		fields.Delete(key)
+		return
+	}
+
+	remaining := make(map[string]json.RawMessage)
+	if !fields.IsEmpty() {
+		dec := json.NewDecoder(bytes.NewReader(fields.raw))
+		tok, err := dec.Token()
+		if err != nil {
+			return
+		}
+		if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+			return
+		}
+		for dec.More() {
+			keyToken, err := dec.Token()
+			if err != nil {
+				return
+			}
+			fieldName, ok := keyToken.(string)
+			if !ok {
+				return
+			}
+			var rawValue json.RawMessage
+			if err := dec.Decode(&rawValue); err != nil {
+				return
+			}
+			remaining[fieldName] = rawValue
+		}
+	}
+	remaining[key] = CloneRawJSON(value)
+	*fields = UnknownJSONFieldsFromMap(remaining)
+}
+
 // IsEmpty reports whether the container has no stored fields.
 func (fields UnknownJSONFields) IsEmpty() bool {
 	trimmed := bytes.TrimSpace(fields.raw)

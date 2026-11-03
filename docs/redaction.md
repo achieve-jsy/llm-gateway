@@ -79,6 +79,8 @@
 - key 必须填引擎报告的 **Kind**（大写 + 下划线），例如 `API_KEY`、`EMAIL`、`PHONE`、`PRIVATE_KEY`、
   `GITLAB_TOKEN`。凭证类规则的 Kind 由规则 ID 转大写得到；不是规则的小写 id，也不是自然语言描述。
   **写错的 key 不会报错，只会静默不生效**——上线前用 `detect` 模式看一遍实际 Kind 再配。
+  YAML 里写成小写（`gitlab_token`）也可以：读配置时 key 会被 Viper 小写化，适配层再统一转成大写 Kind。
+  这条曾经是个坑——不归一化时 `block` 会静默退化成默认的 `mask`，策略比配置的弱一档。
 - 值只有三种：
   - `mask`（缺省）：原文换成占位符，请求继续；
   - `block`：同样换成占位符，但整条请求**被拦下**（引擎返回 `ErrBlocked`，handler 按 fail-closed 终止）；
@@ -153,8 +155,41 @@ privacy:
   （例如加空格、换行），还原会失败并原样返回占位符（不报错、不泄漏原文）。
 - **模型可能伪造占位符**：模型学会了占位符格式后可能自己编一个（`{{EMAIL_xxxxxxxx}}`）。引擎只还原自己映射表里
   有的占位符，其余原样返回，客户端会看到假占位符文本。这是这类方案的固有副作用，靠观测（restore 未命中）发现。
-- **日志落库的是还原后的原文**：`TraceCapture` 在 handler 之前就抓走了请求体，因此 `call_logs` 里始终是
-  用户原文（mask 只影响发往上游的内容）。如果合规要求库里也只存脱敏版，需要把脱敏上移到中间件并改写
+- **日志落库的是还原后的原文**：`TraceCapture` 在 handler 之前就抓走了请求体，因此 `call_logs` /
+  `call_traces` 里始终是用户原文（mask 只影响发往上游的内容）。本地双进程 E2E 实测：9/9 条
+  `call_traces.request_body` 含明文凭证、0 条含占位符。如果合规要求库里也只存脱敏版，需要把脱敏上移到中间件并改写
   `c.Request.Body`——这是产品决策，不是实现细节。
 - **命中只进日志**：适配层每次请求会打一行 `privacy_hits`（含 `mode`、`engine_version`、`count` 与按 Kind
   聚合的 `kinds`，**不含任何原文**）。要进指标/审计库需要另外接 `Session.HitsByKind()`，目前没有埋点看板。
+
+## 七、测试与验证
+
+### 7.1 三层测试，各管一段
+
+| 层 | 位置 | 验的是什么 | 需要什么 |
+|---|---|---|---|
+| 单元 / 矩阵 | `internal/gateway/redact/*_test.go` | 引擎接线：模式矩阵、fail-closed、SSE 跨 chunk、字段级（改哪些不改哪些） | `go test` 即可 |
+| 进程内 E2E | `tests/integration/privacy_redaction_e2e_test.go` | 真实 `http.Client` → gin → orchestrator → providers → 假上游；9 个用例覆盖 5 个端点 | `make test` |
+| 双进程 E2E | `tests/e2e/privacy/run.sh` | 两个真实进程 + 真实 API Key 鉴权 + 控制面下发 + Redis 调度 | 本机 PG、Redis、`atlas`、python3 |
+
+### 7.2 怎么跑双进程 E2E
+
+```bash
+bash tests/e2e/privacy/run.sh
+```
+
+脚本会：重建 `llm_gateway_priv_e2e` 库（**不会碰 `llm_gateway`**，库名可用 `E2E_DB_NAME` 改）→
+`atlas migrate apply` → 起 control-plane → `tests/e2e/privacy/seed` 写最小数据集（admin 用户、
+固定 API Key、openai 兼容渠道、chat 模型、模型组）→ 起假上游与网关 → 断言 → 收尾。
+
+五个用例断言的都是**字节**，不是"函数被调用过"：
+
+1. **mask 非流式**：上游 body 里只有 `{{GITLAB_TOKEN_xxxxxxxx}}`，客户端拿回原文；
+2. **跨请求占位符稳定**：两次请求同一凭证得到同一占位符（`privacy.key_path` 生效，上游前缀缓存不被打散）；
+3. **流式跨 chunk**：假上游故意把占位符从中间切成两个 SSE chunk，客户端仍拼回完整原文；
+4. **detect**：原文照发上游，同时落一行 `privacy_hits`；
+5. **block**：HTTP 500 `redaction_failed`，且上游请求计数不增加（fail-closed 真的没发出去）。
+
+`seed` 会对用到的几张表做一次增量 `AutoMigrate`：仓库的 `atlas-migrations` 相对当前代码有列漂移
+（例如 `models.quota_rpm`、`model_catalog.supports_video_input` 没有对应迁移），新库直接跑代码会报
+`column does not exist`。生产仍以 Atlas 为准，这里只是把本地 E2E 库补齐。

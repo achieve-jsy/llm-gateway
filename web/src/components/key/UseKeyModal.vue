@@ -228,33 +228,44 @@ $env:OPENAI_BASE_URL="${url}"
 opencode`
 })
 
+const claudeBaseUrl = computed(() => settingsStore.getBaseUrl())
+
 const claudeCodeEnvContent = computed(() => {
   const key = keyPlaceholder.value
-  const url = baseUrl.value
+  const url = claudeBaseUrl.value
+  const envLines = [
+    `ANTHROPIC_API_KEY="${key}"`,
+    `ANTHROPIC_BASE_URL="${url}"`,
+    `ANTHROPIC_MODEL="claude-sonnet-4-6"`,
+    `ANTHROPIC_DEFAULT_SONNET_MODEL="claude-sonnet-4-6"`,
+    `ANTHROPIC_DEFAULT_HAIKU_MODEL="claude-sonnet-4-6"`,
+    `ANTHROPIC_DEFAULT_OPUS_MODEL="claude-sonnet-4-6"`,
+    `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS="1"`,
+  ]
   if (osTab.value === 'unix') {
-    return `export ANTHROPIC_BASE_URL="${url}"
-export ANTHROPIC_API_KEY="${key}"
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+    return envLines.map(l => `export ${l}`).join('\n') + '\n\nclaude'
   }
   if (osTab.value === 'cmd') {
-    return `set ANTHROPIC_BASE_URL=${url}
-set ANTHROPIC_API_KEY=${key}
-set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+    return envLines.map(l => `set ${l.replace(/"/g, '')}`).join('\n') + '\n\nclaude'
   }
-  return `$env:ANTHROPIC_BASE_URL="${url}"
-$env:ANTHROPIC_API_KEY="${key}"
-$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+  return envLines.map(l => `$env:${l}`).join('\n') + '\n\nclaude'
 })
 
-const claudeCodeSettingsContent = computed(() =>
-  `{
-  "env": {
-    "ANTHROPIC_BASE_URL": "${baseUrl.value}",
-    "ANTHROPIC_API_KEY": "${keyPlaceholder.value}",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
+const claudeCodeSettingsContent = computed(() => {
+  const config = {
+    env: {
+      ANTHROPIC_API_KEY: keyPlaceholder.value,
+      ANTHROPIC_BASE_URL: claudeBaseUrl.value,
+      ANTHROPIC_MODEL: "claude-sonnet-4-6",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-4-6",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-sonnet-4-6",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-sonnet-4-6",
+      CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+    },
+    model: "claude-sonnet-4-6",
   }
-}`)
+  return JSON.stringify(config, null, 2)
+})
 
 const opencodeJsonContent = computed(() => {
   // 构建 models 对象（key 为模型 ID，value 为展示名）

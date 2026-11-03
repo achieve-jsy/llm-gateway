@@ -1194,8 +1194,10 @@ func aiAppHubEHRConfigured() bool {
 // 调用会返回 ErrUpstream，接口上能明确看到"没配 token"，而不是 panic。
 func newAIAppHubSyncService(db *gorm.DB, settingsRepo *repository.SettingsRepo) *service.AIAppHubSyncService {
 	repo := repository.NewAIAppHubRepo(db)
+	// 投影必须接：组织页面 / RBAC / Key 快照读的是老表，不投影同步就白跑。
+	projection := orgrepo.NewEHRProjectionRepo(db)
 	if !aiAppHubEHRConfigured() {
-		return service.NewAIAppHubSyncService(unconfiguredFetcher{}, repo, settingsRepo, service.DefaultSyncRules())
+		return service.NewAIAppHubSyncService(unconfiguredFetcher{}, repo, settingsRepo, service.DefaultSyncRules()).WithProjection(projection)
 	}
 	fetcher := aiapphub.New(aiapphub.Config{
 		BaseURL: os.Getenv("EHR_BASE_URL"),
@@ -1203,7 +1205,7 @@ func newAIAppHubSyncService(db *gorm.DB, settingsRepo *repository.SettingsRepo) 
 		Token:   os.Getenv("EHR_API_TOKEN"),
 		OrgID:   os.Getenv("EHR_ORG_ID"),
 	})
-	return service.NewAIAppHubSyncService(fetcher, repo, settingsRepo, service.DefaultSyncRules())
+	return service.NewAIAppHubSyncService(fetcher, repo, settingsRepo, service.DefaultSyncRules()).WithProjection(projection)
 }
 
 func envOr(key, fallback string) string {

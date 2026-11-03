@@ -54,7 +54,7 @@ func openProjectionTestDB(t *testing.T) *gorm.DB {
 }
 
 func studioIn(ehrID, name string) repository.EHRStudioInput {
-	return repository.EHRStudioInput{EHRDepartmentID: ehrID, Name: name, LeaderName: name + "-负责人"}
+	return repository.EHRStudioInput{EHRDepartmentID: ehrID, Name: name, LeaderName: name + "-负责人", Visible: true}
 }
 
 // 1) 首次投影 → inserted，visible=true / source=ehr

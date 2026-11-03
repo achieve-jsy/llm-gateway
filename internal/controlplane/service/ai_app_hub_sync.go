@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strconv"
@@ -11,6 +12,8 @@ import (
 	"github.com/example/llm-gateway/internal/aiapphub/ehrclient"
 	"github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/repository"
+	orgmodel "github.com/example/llm-gateway/internal/orgservice/model"
+	orgrepo "github.com/example/llm-gateway/internal/orgservice/repository"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -35,6 +38,8 @@ const (
 
 	// lastSyncEmployeesKey 上次成功写入的人员档案数。
 	lastSyncEmployeesKey = "ai_app_hub.last_sync_employees"
+	// lastSyncDiffKey 上次投影到老表的差量（JSON），管理页直接展示。
+	lastSyncDiffKey = "ai_app_hub.last_diff"
 	// lastSyncUnmappedKey 归属不到工作室的部门数（聚合页不可见，非 0 要查数据）。
 	lastSyncUnmappedKey = "ai_app_hub.last_sync_unmapped_departments"
 
@@ -84,7 +89,27 @@ type HubSyncResult struct {
 	// DeletedStudios 本次对账隐藏的工作室数（只有 scope=all 会变）。
 	DeletedStudios int   `json:"deleted_studios"`
 	DurationMs     int64 `json:"duration_ms"`
+
+	// Diff 老表投影的差量：日常应为个位数，突然涨到几十说明上游组织大改或接口变了。
+	Diff SyncDiff `json:"diff"`
 }
+
+// ProjectionDiff 一张老表的增改删计数。
+type ProjectionDiff struct {
+	Inserted int `json:"inserted"`
+	Updated  int `json:"updated"`
+	Deleted  int `json:"deleted"`
+}
+
+// SyncDiff 投影到组织老表的差量统计。
+type SyncDiff struct {
+	Studios     ProjectionDiff `json:"studios"`
+	Departments ProjectionDiff `json:"departments"`
+	Mappings    ProjectionDiff `json:"mappings"`
+}
+
+// departmentTypeBusinessUnit EHR 里"事业部"的 departmentType，对应老表 studios。
+const departmentTypeBusinessUnit = 2
 
 // SyncRules 业务规则：哪些部门不展示、哪些要改名。写死在代码里，
 // 由产品确认后修改，避免散落在数据库配置中难以追溯。
@@ -141,10 +166,28 @@ type AIAppHubSyncService struct {
 	repo     *repository.AIAppHubRepo
 	settings *repository.SettingsRepo
 	rules    SyncRules
+	// legacy 组织老表投影（studios / departments / dept_studio_map）。
+	// nil 表示未接投影：老单元测试不关心老表，生产路由必须接。
+	legacy *orgrepo.EHRProjectionRepo
 }
 
 func NewAIAppHubSyncService(f DepartmentFetcher, repo *repository.AIAppHubRepo, settings *repository.SettingsRepo, rules SyncRules) *AIAppHubSyncService {
 	return &AIAppHubSyncService{fetcher: f, repo: repo, settings: settings, rules: rules}
+}
+
+// WithProjection 接上老表投影。组织页面/RBAC/Key 快照都读老表，生产路由必须接。
+func (s *AIAppHubSyncService) WithProjection(repo *orgrepo.EHRProjectionRepo) *AIAppHubSyncService {
+	s.legacy = repo
+	return s
+}
+
+// Running 是否有一次同步正在执行（含 cron 触发的）。管理页刷新后靠它把按钮留在"同步中"。
+func (s *AIAppHubSyncService) Running() bool {
+	if s.mu.TryLock() {
+		s.mu.Unlock()
+		return false
+	}
+	return true
 }
 
 // Sync 拉取一次 EHR 组织树，按 scope 决定写库范围。
@@ -164,7 +207,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 	start := time.Now()
 	defer func() {
 		if err != nil {
-			s.markStatus(scope, "failed", err.Error(), 0, 0, 0, 0)
+			s.markStatus(scope, "failed", err.Error(), 0, 0, 0, 0, SyncDiff{})
 		}
 	}()
 
@@ -231,6 +274,15 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		}
 	}
 
+	// 老表投影：组织页面 / RBAC / Key 快照读的都是老表，这一步让它们跟上 EHR。
+	// 对账（软删）与窗口内的"上游只回了部分树"护栏共用同一判断：宁可漏删，不要误删。
+	reconcileScope := scope.Kind == ScopeAll && len(items) > 0 && !s.reconcileLooksPartial(len(items))
+	var diff SyncDiff
+	diff, err = s.projectOrg(ctx, items, byID, studioIDs, targets, reconcileScope)
+	if err != nil {
+		return HubSyncResult{}, err
+	}
+
 	// 全量同步收尾对账：EHR 里已经不存在的工作室隐藏。空结果代表上游异常
 	// （ehrclient 已把空 items 转成 ErrEmptyResult），绝不据此隐藏任何东西。
 	var deleted int64
@@ -256,7 +308,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		// 打日志 + 计数，别让它静默消失。
 		slog.Warn("ai_app_hub_sync_departments_without_studio", "count", len(unmapped), "names", unmapped)
 	}
-	s.markStatus(scope, "success", "", int(deleted), len(items), employees, len(unmapped))
+	s.markStatus(scope, "success", "", int(deleted), len(items), employees, len(unmapped), diff)
 	return HubSyncResult{
 		Scope:               string(scope.Kind),
 		Departments:         len(targets),
@@ -267,6 +319,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		UnmappedDepartments: len(unmapped),
 		DeletedStudios:      int(deleted),
 		DurationMs:          time.Since(start).Milliseconds(),
+		Diff:                diff,
 	}, nil
 }
 
@@ -394,6 +447,96 @@ func (s *AIAppHubSyncService) syncStudios(ctx context.Context, items []ehrclient
 //
 // 返回 (studioID, resolved)：resolved=false 表示"这次算不出来"（祖先事业部本地还没有行、
 // 或层级超限），调用方应当保持原值而不是写 NULL；只有真正没有事业部祖先时才返回 (nil, true)。
+// projectOrg 把本轮 EHR 数据投影到组织老表（studios / departments / dept_studio_map）。
+//
+// 只 upsert + 软删，永不 delete + insert：studios.id / departments.id 一动，
+// api_keys / user_roles / call_logs / usage_daily 里的组织快照就跟页面上的组织对不上了。
+// 返回差量，供管理页判断"这轮到底改了什么"。
+func (s *AIAppHubSyncService) projectOrg(ctx context.Context, items []ehrclient.Department,
+	byID map[string]ehrclient.Department, studioIDs map[string]uuid.UUID,
+	targets map[string]bool, reconcile bool) (SyncDiff, error) {
+	var diff SyncDiff
+	if s.legacy == nil {
+		return diff, nil
+	}
+	count := func(outcome string, bucket *ProjectionDiff) {
+		switch outcome {
+		case orgrepo.ProjectionInserted:
+			bucket.Inserted++
+		case orgrepo.ProjectionUpdated:
+			bucket.Updated++
+		}
+	}
+
+	for _, it := range items {
+		if !targets[it.ID] {
+			continue
+		}
+		if it.Type == departmentTypeBusinessUnit {
+			name := it.Name
+			if override, ok := s.rules.NameOverrides[it.ID]; ok {
+				name = override
+			}
+			outcome, err := s.legacy.UpsertStudio(ctx, orgrepo.EHRStudioInput{
+				EHRDepartmentID:  it.ID,
+				Name:             name,
+				LeaderName:       it.LeaderName,
+				LeaderPassport:   it.LeaderPassport,
+				LeaderEmployeeID: it.LeaderEmployeeID,
+				Visible:          !s.rules.HiddenDepartmentIDs[it.ID],
+			})
+			if err != nil {
+				return diff, err
+			}
+			count(outcome, &diff.Studios)
+			continue
+		}
+
+		studioID, resolved := s.nearestStudioID(ctx, it, byID, studioIDs)
+		status := string(orgmodel.DeptStatusPendingStudio)
+		if resolved {
+			status = string(orgmodel.DeptStatusActive)
+		}
+		outcome, err := s.legacy.UpsertDepartment(ctx, orgrepo.EHRDepartmentInput{
+			DeptID: it.ID, DeptName: it.Name, StudioID: studioID, Status: status,
+		})
+		if err != nil {
+			return diff, err
+		}
+		count(outcome, &diff.Departments)
+		if resolved && studioID != nil {
+			mappingOutcome, mErr := s.legacy.UpsertMapping(ctx, it.ID, *studioID, "ehr-sync")
+			if mErr != nil {
+				return diff, mErr
+			}
+			count(mappingOutcome, &diff.Mappings)
+		}
+	}
+
+	if !reconcile {
+		return diff, nil
+	}
+	keepStudios := make([]string, 0, len(items))
+	keepDepts := make([]string, 0, len(items))
+	for _, it := range items {
+		keepDepts = append(keepDepts, it.ID)
+		if it.Type == departmentTypeBusinessUnit {
+			keepStudios = append(keepStudios, it.ID)
+		}
+	}
+	hidden, err := s.legacy.HideStudiosNotIn(ctx, keepStudios)
+	if err != nil {
+		return diff, err
+	}
+	diff.Studios.Deleted = hidden
+	archived, err := s.legacy.ArchiveDepartmentsNotIn(ctx, keepDepts)
+	if err != nil {
+		return diff, err
+	}
+	diff.Departments.Deleted = archived
+	return diff, nil
+}
+
 func (s *AIAppHubSyncService) nearestStudioID(ctx context.Context, node ehrclient.Department, byID map[string]ehrclient.Department, studioIDs map[string]uuid.UUID) (*uuid.UUID, bool) {
 	current := node
 	for depth := 0; depth < maxAncestorDepth; depth++ {
@@ -515,7 +658,7 @@ func (s *AIAppHubSyncService) reconcileLooksPartial(current int) bool {
 }
 
 // markStatus 记录最近一次同步结果，管理页据此展示"上次同步时间/结果"。
-func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string, deleted, departments, employees, unmapped int) {
+func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string, deleted, departments, employees, unmapped int, diff SyncDiff) {
 	if s.settings == nil {
 		return
 	}
@@ -531,6 +674,9 @@ func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string,
 		values[lastSyncDepartmentsKey] = strconv.Itoa(departments)
 		values[lastSyncEmployeesKey] = strconv.Itoa(employees)
 		values[lastSyncUnmappedKey] = strconv.Itoa(unmapped)
+		if raw, mErr := json.Marshal(diff); mErr == nil {
+			values[lastSyncDiffKey] = string(raw)
+		}
 	} else {
 		values["ai_app_hub.last_sync_error"] = truncateRunes(errMsg, 500)
 	}

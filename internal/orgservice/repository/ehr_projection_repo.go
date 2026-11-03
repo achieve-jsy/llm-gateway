@@ -29,6 +29,9 @@ type EHRStudioInput struct {
 	LeaderName       string
 	LeaderPassport   string
 	LeaderEmployeeID string
+	// Visible 只在首次建档时生效：人工隐藏名单（元气/公共关系）要在 INSERT 时就写成 false。
+	// 更新时永远不碰 visible —— 单向语义，见文件头注释。
+	Visible bool
 }
 
 // EHRDepartmentInput 一个 EHR 部门节点要投影到 departments 的字段。
@@ -64,7 +67,7 @@ func (r *EHRProjectionRepo) UpsertStudio(ctx context.Context, in EHRStudioInput)
 			ID:               uuid.NewString(),
 			Name:             in.Name,
 			EHRDepartmentID:  &ehrID,
-			Visible:          true,
+			Visible:          in.Visible,
 			Source:           studioSourceEHR,
 			LeaderName:       in.LeaderName,
 			LeaderPassport:   in.LeaderPassport,
@@ -74,6 +77,13 @@ func (r *EHRProjectionRepo) UpsertStudio(ctx context.Context, in EHRStudioInput)
 		// 而不是悄悄换个名字（那会让页面出现两个几乎同名的工作室）。
 		if err := r.db.WithContext(ctx).Create(row).Error; err != nil {
 			return "", err
+		}
+		// GORM 对带 default 标签的零值字段会在 INSERT 时跳过 —— visible=false 被当成
+		// "未设置"，落到列默认 true，隐藏名单（元气/公共关系）就白隐藏了。显式补一刀。
+		if !in.Visible {
+			if err := r.db.WithContext(ctx).Model(&model.Studio{}).Where("id = ?", row.ID).Update("visible", false).Error; err != nil {
+				return "", err
+			}
 		}
 		return ProjectionInserted, nil
 	}

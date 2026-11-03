@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Studio, OrgDepartment, DeptStudioMapping, ImportDiff } from '@/types/org'
+import type { Studio, OrgDepartment, DeptStudioMapping, ImportDiff, HubSyncStatus } from '@/types/org'
 import http from '@/services/http'
 
 export interface DeptMember {
@@ -65,6 +65,22 @@ export const useOrgStore = defineStore('org', () => {
   const unmappedDepts = ref<OrgDepartment[]>([])
   const unmappedCount = ref(0)
   const loading = ref(false)
+
+  // ─── EHR 同步状态（同步卡片）─────────────────────────────────────────────
+  const syncStatus = ref<HubSyncStatus | null>(null)
+
+  async function fetchSyncStatus(): Promise<HubSyncStatus> {
+    const res = await http.get('/api/v1/admin/ai-app-hub/sync-status')
+    syncStatus.value = res.data
+    return res.data
+  }
+
+  // 手动触发全量同步。同步是阻塞式 HTTP（实测 3~10s），超时给到 60s。
+  // 并发由服务端锁兜住：正在跑时返回 409，调用方按"同步中"处理即可。
+  async function triggerSync() {
+    const res = await http.post('/api/v1/admin/ai-app-hub/sync', { scope: 'all' }, { timeout: 60000 })
+    return res.data
+  }
 
   async function fetchStudios(page = 1, pageSize = 100) {
     const res = await http.get('/api/v1/org/studios', { params: { page, page_size: pageSize } })
@@ -192,6 +208,7 @@ export const useOrgStore = defineStore('org', () => {
 
   return {
     studios, departments, unmappedDepts, unmappedCount, loading,
+    syncStatus, fetchSyncStatus, triggerSync,
     fetchStudios, fetchDepartments, fetchUnmapped, fetchMappings,
     importMappings, setDeptStudio, createStudio, deleteStudio,
     fetchDeptMembers, searchUsers, fetchRolePage, fetchAllRoles, grantRole, revokeRole, getUserRoles,

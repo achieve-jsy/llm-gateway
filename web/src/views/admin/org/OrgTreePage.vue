@@ -3,6 +3,14 @@
 
     <!-- ═══ 左侧：组织树 ═══════════════════════════════════════════════════ -->
     <aside class="tree-panel">
+      <!-- EHR 同步状态 / 手动触发：只有全局管理员能点（后端同样按 scope=all 校验） -->
+      <SyncStatusCard
+        v-if="isGlobalAdmin"
+        :status="orgStore.syncStatus"
+        :syncing="syncInFlight"
+        @trigger="onManualSync"
+      />
+
       <div class="tree-toolbar">
         <span class="tree-title">组织架构</span>
         <div class="tree-toolbar-actions">
@@ -976,6 +984,7 @@ import type { Studio, OrgDepartment, ImportDiff, EmployeeImportPreviewRow, Emplo
 import http from '@/services/http'
 import { useRoute, useRouter } from 'vue-router'
 import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
+import SyncStatusCard from '@/components/org/SyncStatusCard.vue'
 import { QUOTA_DEFAULTS, getUserQuota } from '@/api/quota'
 import type { QuotaEffective } from '@/api/quota'
 
@@ -1003,6 +1012,41 @@ const myDeptIds = computed(() =>
 const isGlobalAdmin = computed(() =>
   authStore.isAdmin || myOrgRoles.value.some(r => r.role === 'admin')
 )
+
+// ─── EHR 同步（状态卡片 + 防重复触发）────────────────────────────────────────
+// 三层防重：本地锁（连点只发一次）、后端 409（cron/他人正在跑）、running 状态（刷新后按钮仍灰）。
+const localSyncing = ref(false)
+const syncInFlight = computed(() => localSyncing.value || Boolean(orgStore.syncStatus?.running))
+
+async function loadSyncStatus() {
+  if (!isGlobalAdmin.value) return
+  try {
+    await orgStore.fetchSyncStatus()
+  } catch {
+    // 权限不足或后端未就绪：卡片安静显示"尚未同步"，不打扰用户
+  }
+}
+
+async function onManualSync() {
+  if (syncInFlight.value) return
+  localSyncing.value = true
+  try {
+    await orgStore.triggerSync()
+    ElMessage.success('EHR 数据同步完成')
+  } catch (e: any) {
+    const code = e?.response?.status
+    if (code === 409) {
+      ElMessage.info('已有同步在执行（可能是凌晨定时任务），请稍后再试')
+    } else if (e?.code === 'ECONNABORTED' || e?.code === 'ETIMEDOUT') {
+      ElMessage.warning('同步请求超过 60 秒未返回，最终结果以后端状态为准')
+    } else {
+      ElMessage.error(e?.response?.data?.message || e?.message || '同步失败')
+    }
+  } finally {
+    localSyncing.value = false
+    await loadSyncStatus()
+  }
+}
 
 // ─── 树 ───────────────────────────────────────────────────────────────────────
 const treeRef    = ref<InstanceType<typeof ElTree>>()
@@ -1641,7 +1685,10 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+onMounted(async () => {
+  await reload()
+  void loadSyncStatus()
+})
 
 // immediate: true 保证跨页首次进入时（数据已缓存）也能正确选中节点；
 // reload() 末尾亦调用，两次调用互不干扰（未找到时直接返回）。

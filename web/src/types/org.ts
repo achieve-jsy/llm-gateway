@@ -112,3 +112,29 @@ export interface OrgTree {
     unmapped_departments: OrgTreeDept[]
   }
 }
+
+// ─── EHR 同步状态（管理页同步卡片）────────────────────────────────────────────
+export interface ProjectionDiff {
+  inserted: number
+  updated: number
+  deleted: number
+}
+
+export interface SyncDiff {
+  studios: ProjectionDiff
+  departments: ProjectionDiff
+  mappings: ProjectionDiff
+}
+
+export interface HubSyncStatus {
+  last_sync_at: string
+  status: '' | 'success' | 'failed'
+  scope: string
+  error: string
+  departments: number
+  employees: number
+  unmapped_departments: number
+  resigned_accounts_disabled: number
+  diff: SyncDiff
+  running: boolean
+}

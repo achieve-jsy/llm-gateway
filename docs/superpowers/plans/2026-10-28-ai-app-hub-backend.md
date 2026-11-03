@@ -1,5 +1,7 @@
 # AI 应用聚合页后端实施计划
 
+> **注意（2026-10-28 修订）**：本计划的 Task 1（工作室/部门仓储）、Task 3（EHR 客户端）、Task 4（同步服务）、Task 10（同步触发）已被 `docs/superpowers/plans/2026-10-28-ai-app-hub-sync.md` 取代，执行时以那份计划为准；本计划其余任务（Task 2、5-9）不变。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让 `GET /api/v1/ai-apps/hub` 从本地表返回「按工作室分组、已排序」的 AI 应用列表，数据由 EHR 同步任务填充。

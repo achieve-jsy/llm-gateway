@@ -34,6 +34,8 @@ type DeptStatus string
 const (
 	DeptStatusActive        DeptStatus = "active"
 	DeptStatusPendingStudio DeptStatus = "pending_studio"
+	// DeptStatusDeleted EHR 里已经不存在的部门：软删除，行保留，用量 join 仍可命中。
+	DeptStatusDeleted DeptStatus = "deleted"
 )
 
 // OrgDepartment 组织视角的部门（扩展字段，与 auth 包中的 Department 共享同一张表）

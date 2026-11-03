@@ -185,6 +185,11 @@ func JWTAuth() gin.HandlerFunc {
 			})
 			return
 		}
+		// user_id 是 users.id（UUID），passport 是 EHR 账号，两者不能互相顶替：
+		// 角色表按 user_id 存，工作室负责人按 passport 存。
+		if passport, ok := claims["passport"].(string); ok && passport != "" {
+			c.Set("user_passport", passport)
+		}
 		if email, ok := claims["email"].(string); ok {
 			c.Set("user_email", email)
 		}

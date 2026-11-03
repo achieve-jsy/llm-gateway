@@ -17,6 +17,7 @@ import (
 
 type fakeSyncService struct {
 	syncErr  error
+	authErr  error
 	allowed  bool
 	gotScope service.SyncScope
 	syncCall int
@@ -31,7 +32,10 @@ func (f *fakeSyncService) Sync(_ context.Context, scope service.SyncScope) (serv
 	return service.HubSyncResult{Scope: string(scope.Kind), Departments: 3, Studios: 2}, nil
 }
 
-func (f *fakeSyncService) Authorize(_ context.Context, _ string, _ service.SyncScope) (bool, error) {
+func (f *fakeSyncService) Authorize(_ context.Context, _, _ string, _ service.SyncScope) (bool, error) {
+	if f.authErr != nil {
+		return false, f.authErr
+	}
 	return f.allowed, nil
 }
 
@@ -104,4 +108,11 @@ func TestSyncHandlerSuccessReturnsResult(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	require.Equal(t, "all", body["scope"])
 	require.Equal(t, float64(3), body["departments"])
+}
+
+func TestSyncHandlerUnknownScopeReturns404(t *testing.T) {
+	svc := &fakeSyncService{allowed: true, authErr: service.ErrScopeNotFound}
+	w := doSync(t, svc, "hezhiguo", "{\"scope\":\"department\",\"id\":\"not-synced\"}")
+	require.Equal(t, http.StatusNotFound, w.Code)
+	require.Zero(t, svc.syncCall)
 }

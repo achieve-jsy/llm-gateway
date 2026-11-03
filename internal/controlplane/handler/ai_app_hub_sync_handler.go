@@ -14,7 +14,7 @@ import (
 // 生产环境传 *service.AIAppHubSyncService。
 type HubSyncService interface {
 	Sync(ctx context.Context, scope service.SyncScope) (service.HubSyncResult, error)
-	Authorize(ctx context.Context, passport string, scope service.SyncScope) (bool, error)
+	Authorize(ctx context.Context, userID, passport string, scope service.SyncScope) (bool, error)
 }
 
 type AIAppHubSyncHandler struct {
@@ -52,8 +52,12 @@ func (h *AIAppHubSyncHandler) Sync(c *gin.Context) {
 	}
 	scope := service.SyncScope{Kind: kind, ID: req.ID}
 
-	allowed, err := h.svc.Authorize(c.Request.Context(), c.GetString("user_id"), scope)
+	allowed, err := h.svc.Authorize(c.Request.Context(), c.GetString("user_id"), c.GetString("user_passport"), scope)
 	if err != nil {
+		if errors.Is(err, service.ErrScopeNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "scope not found"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "authorize failed"})
 		return
 	}
@@ -65,7 +69,11 @@ func (h *AIAppHubSyncHandler) Sync(c *gin.Context) {
 	result, err := h.svc.Sync(c.Request.Context(), scope)
 	if err != nil {
 		status, msg := mapSyncError(err)
-		c.JSON(status, gin.H{"error": msg, "detail": err.Error()})
+		if status == http.StatusBadGateway {
+			c.JSON(status, gin.H{"error": msg, "detail": err.Error()})
+			return
+		}
+		c.JSON(status, gin.H{"error": msg})
 		return
 	}
 	c.JSON(http.StatusOK, result)

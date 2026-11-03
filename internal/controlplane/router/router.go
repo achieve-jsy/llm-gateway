@@ -513,7 +513,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	// AI 应用聚合页的同步触发器（全量 / 单工作室 / 单部门）。
 	hubSyncSvc := newAIAppHubSyncService(db, settingsRepo)
 	hubSyncHandler := handler.NewAIAppHubSyncHandler(hubSyncSvc)
-	if os.Getenv("EHR_API_TOKEN") != "" {
+	if aiAppHubEHRConfigured() {
 		service.StartAIAppHubSyncCron(lifecycleCtx, hubSyncSvc, aiAppHubSyncInterval())
 	}
 
@@ -1166,26 +1166,27 @@ func splitScopes(s string) []string {
 	return strings.Fields(strings.ReplaceAll(s, ",", " "))
 }
 
-// defaultEHRApiTokenEnv 等三个环境变量决定同步任务能不能跑。
-const (
-	ehrBaseURLDefault = "https://open.example.com"
-	ehrPrefixDefault  = "/open-apis/ehr-apic/open-apis/resource/v1"
-	ehrOrgIDDefault   = "1428195512246472704"
-)
+// EHR_PREFIX 有默认值（路由前缀是接口约定），但地址/凭据/组织三者必须显式配置：
+// 只要少一个就不启动同步，避免把生产组织树写进非生产库。
+const ehrPrefixDefault = "/open-apis/ehr-apic/open-apis/resource/v1"
+
+// aiAppHubEHRConfigured 三个变量齐全才认为 EHR 已配置。
+func aiAppHubEHRConfigured() bool {
+	return os.Getenv("EHR_BASE_URL") != "" && os.Getenv("EHR_API_TOKEN") != "" && os.Getenv("EHR_ORG_ID") != ""
+}
 
 // newAIAppHubSyncService 构造同步服务。EHR_API_TOKEN 缺失时不注册真实客户端，
 // 调用会返回 ErrUpstream，接口上能明确看到"没配 token"，而不是 panic。
 func newAIAppHubSyncService(db *gorm.DB, settingsRepo *repository.SettingsRepo) *service.AIAppHubSyncService {
 	repo := repository.NewAIAppHubRepo(db)
-	token := os.Getenv("EHR_API_TOKEN")
-	if token == "" {
+	if !aiAppHubEHRConfigured() {
 		return service.NewAIAppHubSyncService(unconfiguredFetcher{}, repo, settingsRepo, service.DefaultSyncRules())
 	}
 	fetcher := aiapphub.New(aiapphub.Config{
-		BaseURL: envOr("EHR_BASE_URL", ehrBaseURLDefault),
+		BaseURL: os.Getenv("EHR_BASE_URL"),
 		Prefix:  envOr("EHR_PREFIX", ehrPrefixDefault),
-		Token:   token,
-		OrgID:   envOr("EHR_ORG_ID", ehrOrgIDDefault),
+		Token:   os.Getenv("EHR_API_TOKEN"),
+		OrgID:   os.Getenv("EHR_ORG_ID"),
 	})
 	return service.NewAIAppHubSyncService(fetcher, repo, settingsRepo, service.DefaultSyncRules())
 }
@@ -1200,7 +1201,7 @@ func envOr(key, fallback string) string {
 type unconfiguredFetcher struct{}
 
 func (unconfiguredFetcher) FetchDepartments(context.Context) ([]aiapphub.Department, error) {
-	return nil, fmt.Errorf("%w: EHR_API_TOKEN 未配置", aiapphub.ErrUpstream)
+	return nil, fmt.Errorf("%w: EHR_BASE_URL/EHR_API_TOKEN/EHR_ORG_ID 未配置", aiapphub.ErrUpstream)
 }
 
 // aiAppHubSyncInterval 定时同步周期，默认 6 小时，可用 EHR_SYNC_INTERVAL 覆盖（如 30m）。

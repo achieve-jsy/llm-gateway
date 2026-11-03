@@ -793,7 +793,7 @@
   },
   "ai_app_hub": {
     "base_prefix": "/api/v1",
-    "auth": "jwt Bearer <jwt>；scope=all 需 admin/ai_app_admin，scope=studio/department 另允许该工作室负责人",
+    "auth": "jwt Bearer <jwt>；scope=all 需 user_roles.role=admin，scope=studio/department 另允许该工作室负责人（passport）",
     "purpose": "EHR 组织树同步：全量 / 单工作室（工作室+子树）/ 单部门（单节点）",
     "routes": {
       "POST /admin/ai-app-hub/sync": {

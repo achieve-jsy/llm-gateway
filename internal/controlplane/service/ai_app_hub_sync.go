@@ -100,8 +100,9 @@ func NewAIAppHubSyncService(f DepartmentFetcher, repo *repository.AIAppHubRepo, 
 
 // Sync 拉取一次 EHR 组织树，按 scope 决定写库范围。
 //
-// 失败时业务表一行都不写（本地保持上一次成功的数据），只把失败写进状态键。
-func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyncResult, error) {
+// 失败时业务表不写（本地保持上一次成功的数据），并把 failed 写进状态键；
+// 中途失败可能留下半套数据，状态里同样记为 failed，避免管理页显示"成功"。
+func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result HubSyncResult, err error) {
 	if !s.mu.TryLock() {
 		return HubSyncResult{}, ErrSyncInProgress
 	}
@@ -112,9 +113,14 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyn
 	defer cancel()
 
 	start := time.Now()
+	defer func() {
+		if err != nil {
+			s.markStatus(scope, "failed", err.Error())
+		}
+	}()
+
 	items, err := s.fetcher.FetchDepartments(ctx)
 	if err != nil {
-		s.markStatus(scope, "failed", err.Error())
 		return HubSyncResult{}, err
 	}
 
@@ -125,7 +131,6 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyn
 
 	targets, err := s.resolveTargets(ctx, scope, byID)
 	if err != nil {
-		s.markStatus(scope, "failed", err.Error())
 		return HubSyncResult{}, err
 	}
 
@@ -143,12 +148,14 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyn
 			LeaderPassport: it.LeaderPassport,
 			SyncedAt:       time.Now(),
 		}
-		if err := s.repo.UpsertDepartment(ctx, d); err != nil {
+		if err = s.repo.UpsertDepartment(ctx, d); err != nil {
 			return HubSyncResult{}, err
 		}
 	}
 
-	studioIDs, studios, hidden, err := s.syncStudios(ctx, items, targets)
+	var studioIDs map[string]uuid.UUID
+	var studios, hidden int
+	studioIDs, studios, hidden, err = s.syncStudios(ctx, items, targets)
 	if err != nil {
 		return HubSyncResult{}, err
 	}
@@ -158,8 +165,13 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyn
 		if !ok {
 			continue
 		}
-		studioID := nearestStudioID(it, byID, studioIDs)
-		if err := s.repo.SetDepartmentStudio(ctx, id, studioID); err != nil {
+		studioID, resolved := s.nearestStudioID(ctx, it, byID, studioIDs)
+		if !resolved {
+			// 解析不出归属（例如祖先事业部本地还没有行）时保持原值，
+			// 不能把上一轮同步算出的 studio_id 抹成 NULL。
+			continue
+		}
+		if err = s.repo.SetDepartmentStudio(ctx, id, studioID); err != nil {
 			return HubSyncResult{}, err
 		}
 	}
@@ -177,9 +189,10 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyn
 // resolveTargets 计算本次要写哪些部门节点。
 //
 // all 写全部；department 只写那一个节点；studio 写工作室节点加它整棵子树。
+// 空 Kind 视为非法——零值指向"全量"会让忘了传范围的调用方静默执行最重的操作。
 func (s *AIAppHubSyncService) resolveTargets(ctx context.Context, scope SyncScope, nodes map[string]ehrclient.Department) (map[string]bool, error) {
 	switch scope.Kind {
-	case ScopeAll, "":
+	case ScopeAll:
 		targets := make(map[string]bool, len(nodes))
 		for id := range nodes {
 			targets[id] = true
@@ -293,26 +306,38 @@ func (s *AIAppHubSyncService) syncStudios(ctx context.Context, items []ehrclient
 	return ids, studios, hidden, nil
 }
 
-// nearestStudioID 沿 parent 上溯到最近的事业部（type=2）；没有则返回 nil。
-func nearestStudioID(node ehrclient.Department, byID map[string]ehrclient.Department, studioIDs map[string]uuid.UUID) *uuid.UUID {
+// nearestStudioID 沿 parent 上溯到最近的事业部（type=2）。
+//
+// 返回 (studioID, resolved)：resolved=false 表示"这次算不出来"（祖先事业部本地还没有行、
+// 或层级超限），调用方应当保持原值而不是写 NULL；只有真正没有事业部祖先时才返回 (nil, true)。
+func (s *AIAppHubSyncService) nearestStudioID(ctx context.Context, node ehrclient.Department, byID map[string]ehrclient.Department, studioIDs map[string]uuid.UUID) (*uuid.UUID, bool) {
 	current := node
 	for depth := 0; depth < maxAncestorDepth; depth++ {
 		if id, ok := studioIDs[current.ID]; ok {
 			studioID := id
-			return &studioID
+			return &studioID, true
+		}
+		if current.Type == 2 {
+			// 本次没有同步到的 type=2 祖先（例如单部门同步的上级事业部）：查本地已有行。
+			existing, err := s.repo.GetStudioByDepartmentID(ctx, current.ID)
+			if err != nil {
+				return nil, false
+			}
+			studioID := existing.ID
+			return &studioID, true
 		}
 		parentID := normalizeParent(current.ParentID)
 		if parentID == "" {
-			return nil
+			return nil, true
 		}
 		parent, ok := byID[parentID]
 		if !ok {
-			return nil
+			return nil, false
 		}
 		current = parent
 	}
 	slog.Warn("ai_app_hub_sync_ancestor_depth_exceeded", "department_id", node.ID)
-	return nil
+	return nil, false
 }
 
 func normalizeParent(parentID string) string {
@@ -322,21 +347,25 @@ func normalizeParent(parentID string) string {
 	return parentID
 }
 
-// Authorize 判定 passport 能否触发某个范围的同步。
+// Authorize 判定当前用户能否触发某个范围的同步。
 //
-// 全量只给管理员；单工作室/单部门额外允许该工作室负责人自己刷新。
-func (s *AIAppHubSyncService) Authorize(ctx context.Context, passport string, scope SyncScope) (bool, error) {
-	if passport == "" {
+// userID 是 JWT 的 user_id（users.id，用于查 user_roles）；
+// passport 是 EHR 账号（ai_app_studios.leader_passport 用的就是它）。两者不能混用。
+func (s *AIAppHubSyncService) Authorize(ctx context.Context, userID, passport string, scope SyncScope) (bool, error) {
+	if userID == "" && passport == "" {
 		return false, nil
 	}
-	admin, err := s.repo.HasAnyRole(ctx, passport, []string{"admin", "ai_app_admin"})
+	admin, err := s.repo.HasAnyRole(ctx, []string{userID, passport}, []string{"admin"})
 	if err != nil {
 		return false, err
 	}
 	if admin {
 		return true, nil
 	}
+
 	switch scope.Kind {
+	case ScopeAll:
+		return false, nil
 	case ScopeStudio:
 		id, err := uuid.Parse(scope.ID)
 		if err != nil {
@@ -346,20 +375,31 @@ func (s *AIAppHubSyncService) Authorize(ctx context.Context, passport string, sc
 		if err != nil {
 			return false, nil
 		}
-		return studio.LeaderPassport != "" && studio.LeaderPassport == passport, nil
+		return isLeader(studio.LeaderPassport, passport), nil
 	case ScopeDepartment:
 		department, err := s.repo.GetDepartment(ctx, scope.ID)
-		if err != nil || department.StudioID == nil {
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				// 还没同步过的部门：对调用方是"找不到这个范围"，不是"没权限"。
+				return false, ErrScopeNotFound
+			}
+			return false, err
+		}
+		if department.StudioID == nil {
 			return false, nil
 		}
 		studio, err := s.repo.GetStudioByID(ctx, *department.StudioID)
 		if err != nil {
 			return false, nil
 		}
-		return studio.LeaderPassport != "" && studio.LeaderPassport == passport, nil
+		return isLeader(studio.LeaderPassport, passport), nil
 	default:
 		return false, nil
 	}
+}
+
+func isLeader(leaderPassport, passport string) bool {
+	return leaderPassport != "" && passport != "" && leaderPassport == passport
 }
 
 // markStatus 记录最近一次同步结果，管理页据此展示"上次同步时间/结果"。
@@ -372,13 +412,22 @@ func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string)
 		"ai_app_hub.last_sync_status": status,
 		"ai_app_hub.last_sync_scope":  scope.String(),
 	}
-	if errMsg != "" {
-		if len(errMsg) > 500 {
-			errMsg = errMsg[:500]
-		}
-		values["ai_app_hub.last_sync_error"] = errMsg
+	// 成功时显式清空：否则管理页会出现"成功但仍显示上次的错误"。
+	if errMsg == "" {
+		values["ai_app_hub.last_sync_error"] = ""
+	} else {
+		values["ai_app_hub.last_sync_error"] = truncateRunes(errMsg, 500)
 	}
 	if err := s.settings.SetMultiple(values); err != nil {
 		slog.Error("ai_app_hub_sync_status_write_failed", "error", err)
 	}
+}
+
+// truncateRunes 按字符截断：按字节切中文会在 Postgres 产生非法 UTF-8 而整条写入失败。
+func truncateRunes(s string, limit int) string {
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit])
 }

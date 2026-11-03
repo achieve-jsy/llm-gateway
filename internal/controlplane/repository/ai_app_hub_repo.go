@@ -121,15 +121,23 @@ func (r *AIAppHubRepo) SetDepartmentStudio(ctx context.Context, deptID string, s
 		Update("studio_id", studioID).Error
 }
 
-// HasAnyRole 查 legacy 的 user_roles 表。该表只在 migrations/043 里创建，
-// 没有纳入 Atlas 迁移，因此这里直接用表名查询，不建 GORM model。
-func (r *AIAppHubRepo) HasAnyRole(ctx context.Context, passport string, roles []string) (bool, error) {
-	if passport == "" || len(roles) == 0 {
+// HasAnyRole 查 legacy 的 user_roles 表（migrations/043）。真实列名是 user_id，
+// 不是 passport；该表没有纳入 Atlas 迁移，因此直接用表名查询，不建 GORM model。
+//
+// identities 同时接受 JWT 的 user_id（users.id）与 EHR passport：历史 token 可能只有后者。
+func (r *AIAppHubRepo) HasAnyRole(ctx context.Context, identities []string, roles []string) (bool, error) {
+	ids := make([]string, 0, len(identities))
+	for _, id := range identities {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 || len(roles) == 0 {
 		return false, nil
 	}
 	var count int64
 	err := r.db.WithContext(ctx).Table("user_roles").
-		Where("passport = ? AND role IN ?", passport, roles).
+		Where("user_id IN ? AND role IN ?", ids, roles).
 		Count(&count).Error
 	if err != nil {
 		return false, err

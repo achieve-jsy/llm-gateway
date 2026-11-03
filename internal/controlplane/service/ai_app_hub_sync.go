@@ -520,33 +520,59 @@ func (s *AIAppHubSyncService) projectOrg(ctx context.Context, items []ehrclient.
 		}
 	}
 
+	// 事业部先写：部门要靠 studios.id 建外键，一轮里把事业部排在前面就不用等下一轮。
+	// legacyStudioIDs：EHR 事业部 id → 老表 studios.id（不是 ai_app_studios.id，写错就 FK 违规）。
+	legacyStudioIDs := make(map[string]uuid.UUID, 16)
 	for _, it := range items {
-		if !targets[it.ID] {
+		if it.Type != departmentTypeBusinessUnit || !targets[it.ID] {
 			continue
 		}
-		if it.Type == departmentTypeBusinessUnit {
-			name := it.Name
-			if override, ok := s.rules.NameOverrides[it.ID]; ok {
-				name = override
-			}
-			outcome, err := s.legacy.UpsertStudio(ctx, orgrepo.EHRStudioInput{
-				EHRDepartmentID:  it.ID,
-				Name:             name,
-				LeaderName:       it.LeaderName,
-				LeaderPassport:   it.LeaderPassport,
-				LeaderEmployeeID: it.LeaderEmployeeID,
-				Visible:          !s.rules.HiddenDepartmentIDs[it.ID],
-			})
-			if err != nil {
-				return diff, err
-			}
-			count(outcome, &diff.Studios)
-			continue
+		name := it.Name
+		if override, ok := s.rules.NameOverrides[it.ID]; ok {
+			name = override
 		}
+		outcome, err := s.legacy.UpsertStudio(ctx, orgrepo.EHRStudioInput{
+			EHRDepartmentID:  it.ID,
+			Name:             name,
+			LeaderName:       it.LeaderName,
+			LeaderPassport:   it.LeaderPassport,
+			LeaderEmployeeID: it.LeaderEmployeeID,
+			Visible:          !s.rules.HiddenDepartmentIDs[it.ID],
+		})
+		if err != nil {
+			return diff, err
+		}
+		count(outcome, &diff.Studios)
+		if legacyID, idErr := s.legacy.StudioIDByEHRDept(ctx, it.ID); idErr == nil {
+			legacyStudioIDs[it.ID] = legacyID
+		}
+	}
 
-		studioID, resolved := s.nearestStudioID(ctx, it, byID, studioIDs)
+	legacyStudioOf := func(ehrStudioDeptID string) (uuid.UUID, bool) {
+		if id, ok := legacyStudioIDs[ehrStudioDeptID]; ok {
+			return id, true
+		}
+		id, err := s.legacy.StudioIDByEHRDept(ctx, ehrStudioDeptID)
+		if err != nil {
+			return uuid.Nil, false
+		}
+		legacyStudioIDs[ehrStudioDeptID] = id
+		return id, true
+	}
+
+	for _, it := range items {
+		if it.Type == departmentTypeBusinessUnit || !targets[it.ID] {
+			continue
+		}
+		// 老表的归属以"事业部"为准，且必须换成老表自己的 studios.id。
+		var studioID *uuid.UUID
+		if ehrStudioDeptID, resolved := s.nearestStudioEHRDeptID(it, byID); resolved {
+			if legacyID, ok := legacyStudioOf(ehrStudioDeptID); ok {
+				studioID = &legacyID
+			}
+		}
 		status := string(orgmodel.DeptStatusPendingStudio)
-		if resolved {
+		if studioID != nil {
 			status = string(orgmodel.DeptStatusActive)
 		}
 		outcome, err := s.legacy.UpsertDepartment(ctx, orgrepo.EHRDepartmentInput{
@@ -556,7 +582,7 @@ func (s *AIAppHubSyncService) projectOrg(ctx context.Context, items []ehrclient.
 			return diff, err
 		}
 		count(outcome, &diff.Departments)
-		if resolved && studioID != nil {
+		if studioID != nil {
 			mappingOutcome, mErr := s.legacy.UpsertMapping(ctx, it.ID, *studioID, "ehr-sync")
 			if mErr != nil {
 				return diff, mErr
@@ -587,6 +613,27 @@ func (s *AIAppHubSyncService) projectOrg(ctx context.Context, items []ehrclient.
 	}
 	diff.Departments.Deleted = archived
 	return diff, nil
+}
+
+// nearestStudioEHRDeptID 沿父链找到所属事业部的 **EHR 部门 ID**（type=2 的那个节点）。
+// 与 nearestStudioID 的区别：后者返回本地 ai_app_studios.id，老表要的是 studios.id。
+func (s *AIAppHubSyncService) nearestStudioEHRDeptID(node ehrclient.Department, byID map[string]ehrclient.Department) (string, bool) {
+	current := node
+	for depth := 0; depth < maxAncestorDepth; depth++ {
+		if current.Type == departmentTypeBusinessUnit {
+			return current.ID, true
+		}
+		parentID := normalizeParent(current.ParentID)
+		if parentID == "" {
+			return "", false
+		}
+		parent, ok := byID[parentID]
+		if !ok {
+			return "", false
+		}
+		current = parent
+	}
+	return "", false
 }
 
 func (s *AIAppHubSyncService) nearestStudioID(ctx context.Context, node ehrclient.Department, byID map[string]ehrclient.Department, studioIDs map[string]uuid.UUID) (*uuid.UUID, bool) {

@@ -116,6 +116,18 @@ func (r *EHRProjectionRepo) UpsertStudio(ctx context.Context, in EHRStudioInput)
 	return ProjectionUpdated, nil
 }
 
+// StudioIDByEHRDept 按 EHR 事业部 id 取老表 studios.id。
+//
+// 部门投影必须写这个 id：departments.studio_id 上有 FK 指向 studios.id，
+// 拿 ai_app_studios.id 去写会直接违反外键（首轮同步就这么炸的，见 ledger）。
+func (r *EHRProjectionRepo) StudioIDByEHRDept(ctx context.Context, ehrDeptID string) (uuid.UUID, error) {
+	var row model.Studio
+	if err := r.db.WithContext(ctx).Select("id").Where("ehr_department_id = ?", ehrDeptID).Take(&row).Error; err != nil {
+		return uuid.Nil, err
+	}
+	return uuid.Parse(row.ID)
+}
+
 // UpsertDepartment 按 EHR 部门 id 就地更新名称/归属/状态。
 // status=deleted 的部门被 EHR 重新看到时会改回 active（EHR 才是权威）。
 func (r *EHRProjectionRepo) UpsertDepartment(ctx context.Context, in EHRDepartmentInput) (string, error) {

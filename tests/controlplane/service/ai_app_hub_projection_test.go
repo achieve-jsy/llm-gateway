@@ -104,11 +104,16 @@ func TestSyncProjectsDepartmentsAndMappings(t *testing.T) {
 	var dept orgmodel.OrgDepartment
 	require.NoError(t, db.Where("dept_id = ?", "dept-1").Take(&dept).Error)
 	require.NotNil(t, dept.StudioID)
+	// 必须是老表 studios.id：departments.studio_id 有 FK 指向它，写 ai_app_studios.id 会违反外键。
+	var studio orgmodel.Studio
+	require.NoError(t, db.Where("ehr_department_id = ?", "ehr-a").Take(&studio).Error)
+	require.Equal(t, studio.ID, *dept.StudioID)
 	require.Equal(t, string(orgmodel.DeptStatusActive), string(dept.Status))
 
 	var mapping orgmodel.DeptStudioMap
 	require.NoError(t, db.Where("dept_id = ?", "dept-1").Take(&mapping).Error)
 	require.Equal(t, "ehr", mapping.Source)
+	require.Equal(t, studio.ID, mapping.StudioID, "映射的 studio_id 也得是老表 id")
 
 	var orphan orgmodel.OrgDepartment
 	require.NoError(t, db.Where("dept_id = ?", "orphan-1").Take(&orphan).Error)

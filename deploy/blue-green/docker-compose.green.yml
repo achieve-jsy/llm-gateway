@@ -89,6 +89,14 @@ services:
       OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-https://aimeter.xk-devops.com/auth/callback}
       OAUTH_SCOPES: ${OAUTH_SCOPES:-openid profile email}
       FRONTEND_URL: ${FRONTEND_URL:-https://aimeter.xk-devops.com}
+      # EHR 接口中心（AI 应用聚合页同步）。三者齐全才启动每日同步；空值 = 功能关闭。
+      # 值由 GitLab 变量 TEST_*/PROD_*_EHR_* 导出，仓库里不留明文。
+      EHR_BASE_URL: ${EHR_BASE_URL:-}
+      EHR_API_TOKEN: ${EHR_API_TOKEN:-}
+      EHR_ORG_ID: ${EHR_ORG_ID:-}
+      EHR_PREFIX: ${EHR_PREFIX:-/open-apis/ehr-apic/open-apis/resource/v1}
+      AI_APP_HUB_SYNC_CRON: "${AI_APP_HUB_SYNC_CRON:-0 3 * * *}"
+      AI_APP_HUB_SYNC_TZ: ${AI_APP_HUB_SYNC_TZ:-Asia/Shanghai}
       DEV_LOGIN_ENABLED: ${DEV_LOGIN_ENABLED:-false}
       DEV_LOGIN_PROD_ALLOWED: ${DEV_LOGIN_PROD_ALLOWED:-false}
       BUDGET_TIER_MASTER_ENABLED: ${BUDGET_TIER_MASTER_ENABLED:-false}

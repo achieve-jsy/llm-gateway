@@ -75,6 +75,7 @@ func buildProviderEntries(models []controlmodel.Model) ([]gatewaymodel.ProviderE
 				Credentials: extractAPIKey(credentials),
 				Enabled:     true,
 				Models:      make([]string, 0, 4),
+				ModelsV2:    make([]gatewaymodel.ModelEntry, 0, 4),
 			}
 			providerMap[providerID] = entry
 			providerOrder = append(providerOrder, providerID)
@@ -84,6 +85,10 @@ func buildProviderEntries(models []controlmodel.Model) ([]gatewaymodel.ProviderE
 		// 某些上游（如 ZHIPU）期望收到带前缀的完整模型名；
 		// Bedrock 等需要剥前缀的 provider 在各自的 adapter 中处理。
 		entry.Models = append(entry.Models, m.Name)
+		entry.ModelsV2 = append(entry.ModelsV2, gatewaymodel.ModelEntry{
+			Name:            m.Name,
+			UpstreamModelID: m.UpstreamModelID,
+		})
 	}
 
 	entries := make([]gatewaymodel.ProviderEntry, 0, len(providerOrder))

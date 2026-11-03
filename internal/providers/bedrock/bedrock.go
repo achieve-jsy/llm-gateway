@@ -61,10 +61,11 @@ type iamCredentials struct {
 
 // Provider implements core.Provider for Amazon Bedrock.
 type Provider struct {
-	region    string
-	runtime   *bedrockruntime.Client
-	control   *bedrock.Client
-	configErr error
+	region           string
+	runtime          *bedrockruntime.Client
+	control          *bedrock.Client
+	configErr        error
+	modelUpstreamIDs map[string]string // gateway model name → upstream model ID
 }
 
 // New constructs a Bedrock provider from the resolved configuration.
@@ -159,6 +160,7 @@ func New(providerCfg providers.ProviderConfig, _ providers.ProviderOptions) core
 
 	p.runtime = bedrockruntime.NewFromConfig(awsCfg, runtimeOpts)
 	p.control = bedrock.NewFromConfig(awsCfg, controlOpts)
+	p.modelUpstreamIDs = providerCfg.ModelUpstreamIDs
 	return p
 }
 

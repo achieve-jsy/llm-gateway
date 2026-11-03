@@ -471,6 +471,16 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	videoTaskSvc := service.NewVideoTaskService(videoTaskRepo)
 	videoTaskHandler := handler.NewVideoTaskHandler(videoTaskSvc)
 
+	// C7：超时任务清扫（控制面有 DB、网关没有）。把超过 MEDIA_TASK_TIMEOUT_MINUTES
+	// （默认 30，viper 读取、环境变量优先）仍未进入终态的媒体任务置为 expired
+	// （视同 failed、不记账）。legacy Seedance 行不在扫描范围，零回归。
+	mediaTaskSweeper := service.NewMediaTaskSweeper(videoTaskSvc, service.MediaTaskSweeperConfig{
+		TimeoutMinutes:       cfg.MediaTask.TimeoutMinutes,
+		SweepIntervalSeconds: cfg.MediaTask.SweepIntervalSeconds,
+		SweepBatch:           cfg.MediaTask.SweepBatch,
+	})
+	mediaTaskSweeper.Start(lifecycleCtx)
+
 	// 点读服务与 Reader 的构造（规格 §8.1；计划 3/4 任务 5 构造、任务 6 接入既有 trace 端点）。
 	//
 	// 【为什么必须在 adminGroup 之前构造】既有 trace 端点（任务 6）与两条点读端点（任务 5）

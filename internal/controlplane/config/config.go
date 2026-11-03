@@ -21,6 +21,9 @@ type Config struct {
 	Gateway      GatewayConfig
 	Budget       BudgetConfig
 	BudgetTier   BudgetTierConfig
+	// MediaTask 媒体任务平台（C7）：超时 sweeper 的参数。全部为**非密钥**配置，
+	// 有安全默认值 ⇒ 不需要 GitLab CI 变量（遵守 test-env-config skill：只有密钥才进 TEST_*）。
+	MediaTask MediaTaskConfig
 	// TraceBodyRead 是读侧（点读服务）的点读配置：只含 root 与两个解码参数。
 	TraceBodyRead TraceBodyReadConfig
 }
@@ -67,6 +70,21 @@ type BudgetConfig struct {
 	WeekStart string
 }
 
+// MediaTaskConfig 媒体任务平台配置（C7 超时 sweeper）。
+//
+// 环境变量（优先级最高，覆盖 YAML 与代码默认值）：
+//   - MEDIA_TASK_TIMEOUT_MINUTES        非终态任务存活上限（分钟），默认 30
+//   - MEDIA_TASK_SWEEP_INTERVAL_SECONDS 扫描周期（秒），默认 60
+//   - MEDIA_TASK_SWEEP_BATCH            单轮最多处理条数，默认 200
+//
+// 全部为**非密钥**配置且有安全默认值 ⇒ 按 test-env-config skill 第 1 步的判定，
+// 无需新增 GitLab `TEST_*` 变量（仓库内零密钥即可生效）。
+type MediaTaskConfig struct {
+	TimeoutMinutes       int
+	SweepIntervalSeconds int
+	SweepBatch           int
+}
+
 type BudgetTierConfig struct {
 	MasterEnabled              bool
 	AccountingEnabled          bool
@@ -106,6 +124,9 @@ func Load() *Config {
 	v.SetDefault("budget_tier.shadow_enabled", false)
 	v.SetDefault("budget_tier.v2_total_enforcement_enabled", false)
 	v.SetDefault("budget_tier.legacy_total_write_enabled", true)
+	v.SetDefault("media_task.timeout_minutes", 30)
+	v.SetDefault("media_task.sweep_interval_seconds", 60)
+	v.SetDefault("media_task.sweep_batch", 200)
 	v.SetDefault("budget.timezone", "Asia/Shanghai")
 	v.SetDefault("budget.week_start", "monday")
 	// 读侧点读配置（与网关侧同名同前缀：两侧读的是同一个目录）
@@ -141,6 +162,9 @@ func Load() *Config {
 	_ = v.BindEnv("provider.internal_token", "INTERNAL_TOKEN")
 	_ = v.BindEnv("jwt.secret", "JWT_SECRET")
 	_ = v.BindEnv("gateway.url", "GATEWAY_URL")
+	_ = v.BindEnv("media_task.timeout_minutes", "MEDIA_TASK_TIMEOUT_MINUTES")
+	_ = v.BindEnv("media_task.sweep_interval_seconds", "MEDIA_TASK_SWEEP_INTERVAL_SECONDS")
+	_ = v.BindEnv("media_task.sweep_batch", "MEDIA_TASK_SWEEP_BATCH")
 
 	return &Config{
 		Server: ServerConfig{
@@ -183,6 +207,11 @@ func Load() *Config {
 			ShadowEnabled:              v.GetBool("budget_tier.shadow_enabled"),
 			V2TotalEnforcementEnabled:  v.GetBool("budget_tier.v2_total_enforcement_enabled"),
 			LegacyTotalWriteEnabled:    v.GetBool("budget_tier.legacy_total_write_enabled"),
+		},
+		MediaTask: MediaTaskConfig{
+			TimeoutMinutes:       v.GetInt("media_task.timeout_minutes"),
+			SweepIntervalSeconds: v.GetInt("media_task.sweep_interval_seconds"),
+			SweepBatch:           v.GetInt("media_task.sweep_batch"),
 		},
 		TraceBodyRead: func() TraceBodyReadConfig {
 			tbRead, err := LoadTraceBodyReadConfig(v)

@@ -446,7 +446,94 @@ func convertToAnthropicRequest(req *core.ChatRequest) (*anthropicRequest, error)
 		})
 	}
 
+	// Anthropic API 限制整个请求最多 4 个 cache_control 断点。
+	// 客户端（Claude Code 等）在长对话中可能标记超过 4 个，需要裁剪。
+	trimExcessCacheControl(anthropicReq, 4)
+
 	return anthropicReq, nil
+}
+
+// maxCacheControlBreakpoints is the Anthropic API limit on cache_control blocks
+// across the entire request (system + tools + messages combined).
+const maxCacheControlBreakpoints = 4
+
+// cacheControlLocation identifies where a cache_control marker lives so we can
+// selectively remove excess markers.
+type cacheControlLocation struct {
+	kind  int // 0=system, 1=tool, 2=message
+	index int // index within the slice
+	block *anthropicContentBlock
+}
+
+// trimExcessCacheControl ensures the request carries at most `limit` cache_control
+// breakpoints. When the limit is exceeded, it removes markers with the following
+// priority (lowest priority removed first):
+//  1. Earlier message-level markers (keep the latest — most valuable for caching)
+//  2. Tool-level markers
+//  3. System-level markers (always kept — system prompts are large and stable)
+func trimExcessCacheControl(req *anthropicRequest, limit int) {
+	var locations []cacheControlLocation
+
+	// Collect system cache_control locations.
+	if blocks, ok := req.System.([]anthropicContentBlock); ok {
+		for i := range blocks {
+			if len(blocks[i].CacheControl) > 0 {
+				locations = append(locations, cacheControlLocation{kind: 0, index: i, block: &blocks[i]})
+			}
+		}
+	}
+
+	// Collect message cache_control locations.
+	for mi := range req.Messages {
+		if blocks, ok := req.Messages[mi].Content.([]anthropicContentBlock); ok {
+			for bi := range blocks {
+				if len(blocks[bi].CacheControl) > 0 {
+					locations = append(locations, cacheControlLocation{kind: 2, index: mi*10000 + bi, block: &blocks[bi]})
+				}
+			}
+		}
+	}
+
+	if len(locations) <= limit {
+		return
+	}
+
+	// Sort by removal priority: system (kind=0) is highest priority to keep,
+	// messages (kind=2) with lower index are lowest priority to keep.
+	// We remove from the front of the sorted list.
+	// Strategy: keep all system markers; among message markers, keep the LAST ones.
+	var systemLocs, msgLocs []cacheControlLocation
+	for _, loc := range locations {
+		switch loc.kind {
+		case 0:
+			systemLocs = append(systemLocs, loc)
+		default:
+			msgLocs = append(msgLocs, loc)
+		}
+	}
+
+	// How many message markers can we keep?
+	keepMsg := limit - len(systemLocs)
+	if keepMsg < 0 {
+		// Even system exceeds limit (shouldn't happen in practice); trim system too.
+		keepMsg = 0
+		// Remove excess system markers (keep the last ones).
+		removeCount := len(systemLocs) - limit
+		for i := 0; i < removeCount; i++ {
+			systemLocs[i].block.CacheControl = nil
+		}
+		return
+	}
+
+	if len(msgLocs) <= keepMsg {
+		return
+	}
+
+	// Remove the earliest message markers, keep the latest ones.
+	removeCount := len(msgLocs) - keepMsg
+	for i := 0; i < removeCount; i++ {
+		msgLocs[i].block.CacheControl = nil
+	}
 }
 
 // convertResponsesRequestToAnthropic converts a canonical Responses request by

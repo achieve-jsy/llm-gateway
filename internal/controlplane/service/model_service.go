@@ -422,7 +422,9 @@ func applyVideoParams(
 //   - context_length / max_output_tokens / input_price / output_price 全部从 catalog 复制；
 //   - upstream_model_id 复制 catalog.SourceModelID（admin 之后可手工改）；
 //   - 不设 ctx_overridden / max_output_overridden（默认 false），让自动同步任务正常工作；
-//   - description = catalog.DisplayName（占位，admin 可改）。
+//   - description = catalog.DisplayName（占位，admin 可改）；
+//   - model_type = NormalizeCatalogMode(cat.Mode)：catalog mode 与 model_type 不是同一套词表（A12），
+//     mode 无枚举落点时**拒绝创建**（ErrCatalogModeUnsupported），不再把原值写库。
 func (s *ModelService) CreateModelFromCatalog(catalogID, providerID uuid.UUID, name string) (*model.Model, error) {
 	if s.catalogLookup == nil {
 		return nil, fmt.Errorf("catalog lookup not configured")
@@ -449,12 +451,23 @@ func (s *ModelService) CreateModelFromCatalog(catalogID, providerID uuid.UUID, n
 		return nil, ErrModelNameExists
 	}
 
+	// catalog 的 mode 与 models.model_type 不是同一套词表（A12），必须归一后才能写库：
+	// 原样写入会落 image_generation 之类的白名单外值 → 组选择器按 model_type 精确等值筛选时
+	// 静默筛不到（表现为模型组不可用）、编辑该模型时被 oneof 校验拒绝。
+	// 没有枚举落点的 mode（audio_*/search/ocr/moderation/realtime/vector_store 等）显式拒绝，不写脏值。
+	modelType, err := NormalizeCatalogMode(cat.Mode)
+	if err != nil {
+		slog.Warn("拒绝从 catalog 创建模型：mode 无法归一为 model_type",
+			"catalog_id", cat.ID, "mode", cat.Mode, "error", err)
+		return nil, fmt.Errorf("catalog %s: %w", cat.ID, err)
+	}
+
 	enabled := true
 	catID := cat.ID
 	m := &model.Model{
 		Name:            name,
 		ProviderID:      providerID,
-		ModelType:       cat.Mode,
+		ModelType:       modelType,
 		Enabled:         &enabled,
 		UpstreamModelID: cat.SourceModelID,
 		Description:     cat.DisplayName,
@@ -464,9 +477,6 @@ func (s *ModelService) CreateModelFromCatalog(catalogID, providerID uuid.UUID, n
 		OutputPrice:     cat.OutputPricePerMillion,
 		Weight:          1,
 		CatalogID:       &catID,
-	}
-	if m.ModelType == "" {
-		m.ModelType = "chat"
 	}
 	if err := s.modelRepo.Create(m); err != nil {
 		return nil, fmt.Errorf("create model: %w", err)

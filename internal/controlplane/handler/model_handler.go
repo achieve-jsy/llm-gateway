@@ -406,6 +406,15 @@ func (h *ModelHandler) CreateModelFromCatalog(c *gin.Context) {
 			})
 			return
 		}
+		// A12：catalog mode 没有对应的 model_type 枚举落点 → 属请求数据问题，返回 400 而非 500，
+		// 并把 service 层给出的可操作提示（改用「手动创建模型」）原样透出。
+		// 必须排在下面 containsCatalogNotFound 的字符串启发式之前，避免被误判成 404。
+		if errors.Is(err, service.ErrCatalogModeUnsupported) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{"type": "invalid_request", "message": err.Error(), "code": CodeBadRequest},
+			})
+			return
+		}
 		// catalog 找不到时，service 层用 fmt.Errorf("catalog %s not found", ...)，
 		// 通过字符串匹配映射到契约约定的 catalog_not_found
 		if errMsg := err.Error(); len(errMsg) > 0 && (containsCatalogNotFound(errMsg)) {

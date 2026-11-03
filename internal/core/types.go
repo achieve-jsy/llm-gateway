@@ -453,6 +453,7 @@ type ModelsResponse struct {
 type EmbeddingRequest struct {
 	Model          string            `json:"model"`
 	Provider       string            `json:"provider,omitempty"` // Gateway routing hint; stripped before upstream execution.
+	ModelType      string            `json:"-"` // "embedding" or "embedding_vl", used by provider to select API endpoint
 	Input          any               `json:"input"`
 	EncodingFormat string            `json:"encoding_format,omitempty"`
 	Dimensions     *int              `json:"dimensions,omitempty"`

@@ -1,4 +1,4 @@
-h1:fDSvDX9Qae4oSe2CP4VZXLQoBNEm/AGFANMqzS8SWAY=
+h1:r34e8A5ziwRdGCiX9zSyQ1E0Gwz9Nh1vFLumvEAhB2o=
 20260609082623_baseline.sql h1:EypMLzQ+lwKOXInv3+ZdRYfRjDkE8V0LWKJ+7Ul6hMY=
 20260610120000_add_model_status.sql h1:dsiXmqu5v1ClJQJFnN8Ilphj0UtIN0I6bpvUW43i294=
 20260611000000_add_users_login_status.sql h1:IdW/XoVpwI/HIG0nsz+cLsWwQfoIhguaFU3LWMwelMY=
@@ -52,3 +52,4 @@ h1:fDSvDX9Qae4oSe2CP4VZXLQoBNEm/AGFANMqzS8SWAY=
 20260902072000_add_report_snapshot_anomaly_review_offhours_filing.sql h1:E7rFxYb464NLwaxYgyWpikwShwVQkPGjFAWYd/re0hs=
 20260910125402_add_call_logs_quota_rejection_fields.sql h1:pMBbLXGqxWCP4EQUVYN26n97UWX1mRMW34C8vY6Rw2o=
 20260916095738_fix_notifications_source_dedupe.sql h1:bEf6YDwzQY3VwD/ce9qkyhrvGUekHtEO1iO9s+w+3YM=
+20260921064216_add_trace_archive.sql h1:jU2y5wdjO1m33XqHCrdKG0cGgvN/2Kqv+UpeoNYdsHE=

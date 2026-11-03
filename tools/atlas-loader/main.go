@@ -80,6 +80,9 @@ func main() {
 		&cpmmodel.AnomalyReview{},
 		&cpmmodel.OffhoursFiling{},
 
+		// 调用链路正文归档：按天归档的校验清单（含 v3 独立冻结期望集与巡检列）
+		&cpmmodel.TraceArchiveManifest{},
+
 		// auth/model (3 个表)
 		&authmodel.Department{},
 		&authmodel.DevUser{},

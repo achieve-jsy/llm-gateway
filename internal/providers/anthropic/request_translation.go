@@ -47,12 +47,20 @@ func resolveDefaultMaxTokens() int {
 // applyReasoning configures thinking and effort on an anthropicRequest.
 // Opus 4.6 and Sonnet 4.6 use adaptive thinking with output_config.effort.
 // Older models and Haiku 4.6 use manual thinking with budget_tokens.
-func applyReasoning(req *anthropicRequest, model, effort string) {
+//
+// 预算来源优先级：客户端显式给出的 BudgetTokens > 由 Effort 档位反推。
+// 反推只是近似（low 会落到 5000），拿它覆盖显式预算会把预算和 max_tokens
+// 一起放大，直接改变计费口径。
+func applyReasoning(req *anthropicRequest, model string, r *core.Reasoning) {
+	effort := r.Effort
 	if isAdaptiveThinkingModel(model) {
 		req.Thinking = &anthropicThinking{Type: "adaptive"}
 		req.OutputConfig = &anthropicOutputConfig{Effort: normalizeEffort(effort)}
 	} else {
 		budget := reasoningEffortToBudgetTokens(effort)
+		if r.BudgetTokens != nil && *r.BudgetTokens > 0 {
+			budget = *r.BudgetTokens
+		}
 		req.Thinking = &anthropicThinking{
 			Type:         "enabled",
 			BudgetTokens: budget,
@@ -370,7 +378,7 @@ func convertToAnthropicRequest(req *core.ChatRequest) (*anthropicRequest, error)
 	}
 
 	if req.Reasoning != nil && req.Reasoning.Effort != "" {
-		applyReasoning(anthropicReq, modelName, req.Reasoning.Effort)
+		applyReasoning(anthropicReq, modelName, req.Reasoning)
 	}
 
 	tools, err := convertOpenAIToolsToAnthropic(req.Tools)

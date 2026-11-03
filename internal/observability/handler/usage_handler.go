@@ -76,9 +76,12 @@ type DashboardResponse struct {
 	Period    map[string]string        `json:"period"`
 	Summary   DashboardSummary         `json:"summary"`
 	Breakdown []DashboardBreakdownItem `json:"breakdown"`
-	Total     int                      `json:"total"`
-	Page      int                      `json:"page"`
-	PageSize  int                      `json:"page_size"`
+	// UpstreamProtocols 按上游协议聚合的调用分布；空串桶 = 走了 relaykit 转换路径，
+	// 运维据此在同一响应里算原生旁路占比（分子分母同源，不会因筛选条件不同而对不上）。
+	UpstreamProtocols []UpstreamProtocolStat `json:"upstream_protocols"`
+	Total             int                    `json:"total"`
+	Page              int                    `json:"page"`
+	PageSize          int                    `json:"page_size"`
 }
 
 // TraceBodyHydrator 是既有 trace 端点回填归档正文所需的点读服务窄接口。
@@ -680,6 +683,8 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 	modelName := c.Query("model_name")
 	filterStatus := c.Query("status")
 	filterEndpoint := c.Query("endpoint")
+	// 原生旁路筛选：空 = 不筛选（与 endpoint 同约定）。
+	filterUpstreamProtocol := c.Query(UpstreamProtocolParam)
 
 	// 用 Actor 替代手动查 user_roles 的 getEffectiveRole
 	// Guard(PermUsageViewScoped) middleware 已在路由层注入 Actor
@@ -762,6 +767,10 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 	if filterEndpoint != "" {
 		whereClause += " AND cl.inbound_endpoint = ?"
 		args = append(args, filterEndpoint)
+	}
+	if filterUpstreamProtocol != "" {
+		whereClause += " AND cl.upstream_protocol = ?"
+		args = append(args, filterUpstreamProtocol)
 	}
 
 	// studio_admin 钻取 dept scope 时，额外加工作室限制保障数据安全
@@ -922,15 +931,22 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 		})
 	}
 
+	// 原生旁路占比：用 whereClause（不含 dept scope 的 service-key 排除版），
+	// 因为要看的是「全部调用里有多少走了原生」，排除程序调用会失真。
+	startT, _ := time.ParseInLocation("2006-01-02", startStr, time.Local)
+	endT, _ := time.ParseInLocation("2006-01-02", endStr, time.Local)
+	upstreamProtocols, _ := QueryUpstreamProtocolBreakdown(h.db, startT, endT, whereClause, args)
+
 	c.JSON(http.StatusOK, DashboardResponse{
-		Scope:     scope,
-		ID:        id,
-		Period:    map[string]string{"start": startStr, "end": endStr},
-		Summary:   summary,
-		Breakdown: breakdown,
-		Total:     total,
-		Page:      page,
-		PageSize:  pageSize,
+		Scope:             scope,
+		ID:                id,
+		Period:            map[string]string{"start": startStr, "end": endStr},
+		Summary:           summary,
+		Breakdown:         breakdown,
+		UpstreamProtocols: upstreamProtocols,
+		Total:             total,
+		Page:              page,
+		PageSize:          pageSize,
 	})
 }
 
@@ -1190,6 +1206,9 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 	if endpoint := c.Query("endpoint"); endpoint != "" {
 		base = base.Where("call_logs.inbound_endpoint = ?", endpoint)
 	}
+	if proto := c.Query(UpstreamProtocolParam); proto != "" {
+		base = base.Where("call_logs.upstream_protocol = ?", proto)
+	}
 	if filterProvider != "" {
 		base = base.Where("call_logs.provider = ?", filterProvider)
 	}
@@ -1223,7 +1242,7 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 		call_logs.stage_auth_ms, call_logs.stage_route_ms, call_logs.stage_upstream_ms, call_logs.stage_ttfb_ms,
 		call_logs.stream, call_logs.failover_used, call_logs.usage_missing, call_logs.reasoning_effort,
 		call_logs.ip_address, call_logs.user_agent,
-		call_logs.quota_gate, call_logs.quota_layer, call_logs.quota_limit,
+		call_logs.quota_gate, call_logs.quota_layer, call_logs.quota_limit, call_logs.upstream_protocol,
 		COALESCE(NULLIF(substring(call_logs.inbound_endpoint FROM '/v1/contents/generations/tasks/([^/?#]+)'), ''), ct.response_body->>'id', ct.response_body->>'task_id') AS task_id,
 		CASE WHEN jsonb_typeof(ct.request_body->'documents') = 'array'
 			THEN jsonb_array_length(ct.request_body->'documents') ELSE NULL END AS documents_count`

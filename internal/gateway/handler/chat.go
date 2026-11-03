@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
+	"github.com/example/llm-gateway/internal/protocol"
 	"github.com/gin-gonic/gin"
 )
 
@@ -40,6 +42,19 @@ type ChatOrchestratorInterface interface {
 	ChatStream(ctx context.Context, req *core.ChatRequest) (io.ReadCloser, error)
 }
 
+// NativeChatOrchestratorInterface 由支持原生协议旁路的 orchestrator 实现。
+//
+// 独立于 ChatOrchestratorInterface：现有 fake 与测试不必跟着实现新方法，
+// handler 通过 type assert 判定能力，不支持就自动降级到 Chat 路径。
+// 调用方必须先判断 errors.Is(err, core.ErrNativeNotSupported) 再降级，
+// 其他错误仍应原样返回给客户端。
+type NativeChatOrchestratorInterface interface {
+	// ChatNative 执行非流式原生调用，返回上游原始响应体。
+	ChatNative(ctx context.Context, req *core.ChatRequest, body []byte, format core.NativeRelayFormat) ([]byte, error)
+	// ChatNativeStream 执行流式原生调用，返回上游原始 SSE 流。
+	ChatNativeStream(ctx context.Context, req *core.ChatRequest, body []byte, format core.NativeRelayFormat) (io.ReadCloser, error)
+}
+
 // ChatHandler 聊天请求处理器
 type ChatHandler struct {
 	orchestrator  ChatOrchestratorInterface
@@ -52,6 +67,10 @@ type ChatHandler struct {
 	// 内联 base64 视频会把请求体撑到几十 MB，既拖慢网关又要经过整条
 	// 鉴权/配额链路，所以在 bind 之后立刻拦截，引导客户端改用 http(s) URL。
 	maxInlineMediaBytes int64
+	// protocolPolicy 决定是否启用原生旁路（零转换直发）。
+	// nil 或非 active 一律走原有转换路径：Chat 是流量最大的入口，
+	// 默认行为必须与改动前完全一致。
+	protocolPolicy *protocol.Policy
 }
 
 // defaultMaxInlineMediaBytes 内联媒体请求体默认上限（10MiB）。
@@ -108,7 +127,45 @@ func (h *ChatHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
 //	@Failure		500		{object}	map[string]interface{}	"内部错误"
 //	@Security		BearerAuth
 //	@Router			/v1/chat/completions [post]
+//
+// SetProtocolPolicy 注入协议策略，决定是否启用原生旁路。
+func (h *ChatHandler) SetProtocolPolicy(p *protocol.Policy) {
+	h.protocolPolicy = p
+}
+
+// nativeRelayEnabled 判断当前 Key 是否显式开启了 Chat 原生旁路。
+// 默认（legacy/shadow 或未注入策略）一律返回 false，走原有转换路径。
+func (h *ChatHandler) nativeRelayEnabled(c *gin.Context) bool {
+	if h.protocolPolicy == nil {
+		return false
+	}
+	keyID, _ := c.Get("key_id")
+	keyIDStr, _ := keyID.(string)
+	return h.protocolPolicy.ModeFor(keyIDStr, "chat") == protocol.ModeActive
+}
+
 func (h *ChatHandler) Handle(c *gin.Context) {
+	// 原生旁路（零转换直发）需要客户端原始 body。这里先读出再原样还原，
+	// 后续 ShouldBindJSON 及降级路径读到的字节与改动前完全一致。
+	// 只有 orchestrator 声明支持原生格式时才读，不支持的实现保持原有零拷贝路径。
+	var rawBody []byte
+	native, hasNative := h.orchestrator.(NativeChatOrchestratorInterface)
+	// 与 /v1/messages、/v1/responses 保持一致：只有显式 active 才走原生旁路。
+	// 不门控的话上线即全量改变语义——客户端未知字段会被透传给上游（以前被
+	// ChatRequest 结构体丢弃），上游 4xx 也不再由老路径容错。
+	if hasNative && !h.nativeRelayEnabled(c) {
+		hasNative = false
+	}
+	if hasNative && c.Request.Body != nil {
+		var readErr error
+		rawBody, readErr = io.ReadAll(c.Request.Body)
+		if readErr != nil {
+			gatewayerrors.WriteError(c, "request_body_invalid", gatewayerrors.WithMessage(readErr.Error()))
+			return
+		}
+		c.Request.Body = io.NopCloser(bytes.NewReader(rawBody))
+	}
+
 	var req core.ChatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		// 内容片段错误单独成码：客户端能定位到 content[N] 的哪一段、哪个字段，
@@ -206,6 +263,39 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 	// 将 Gin context 注入请求 context，供 orchestrator 写回 provider/token 信息。
 	// baseCtx 不设超时，由各 handle 函数按轮次独立创建超时子 context。
 	baseCtx := orchestrator.WithGinContext(c.Request.Context(), c)
+
+	// 原生旁路：目标渠道能直接吃 OpenAI 原生 body 时零转换直发，响应原样回传；
+	// 只有 ErrNativeNotSupported 才降级到下方原有逻辑（调度/预算/配额均已执行完毕）。
+	if hasNative {
+		if req.Stream {
+			c.Set("stream", true)
+			stream, nativeErr := native.ChatNativeStream(baseCtx, &req, rawBody, core.NativeRelayOpenAIChat)
+			if nativeErr == nil {
+				// 可观测标记：只有原生直发成功才写，空串即代表走了转换路径。
+				c.Set("upstream_protocol", "native_chat")
+				forwardNativeStream(c, stream)
+				return
+			}
+			// 真实错误按 OpenAI 错误格式返回；不能静默降级，否则会对同一请求二次打上游。
+			if !errors.Is(nativeErr, core.ErrNativeNotSupported) {
+				respondNativeChatError(c, nativeErr)
+				return
+			}
+		} else {
+			out, nativeErr := native.ChatNative(baseCtx, &req, rawBody, core.NativeRelayOpenAIChat)
+			if nativeErr == nil {
+				// 原生响应本身就是干净的 OpenAI 格式，不做任何清洗/改写。
+				c.Set("upstream_protocol", "native_chat")
+				c.Set("stream", false)
+				c.Data(http.StatusOK, "application/json", out)
+				return
+			}
+			if !errors.Is(nativeErr, core.ErrNativeNotSupported) {
+				respondNativeChatError(c, nativeErr)
+				return
+			}
+		}
+	}
 
 	if req.Stream {
 		h.handleStream(c, baseCtx, &req, originalModel)
@@ -522,6 +612,16 @@ func respondError(c *gin.Context, ue *model.UnifiedError) {
 	body := gin.H{"error": errObj}
 	middleware.SetTraceResponseObject(c, body)
 	c.JSON(ue.HTTPStatus, body)
+}
+
+// respondNativeChatError 把原生旁路的真实错误（非「不支持原生」）按 OpenAI
+// 错误格式返回，映射规则与 handleNonStream 的收尾保持一致。
+func respondNativeChatError(c *gin.Context, err error) {
+	if ue, ok := err.(*model.UnifiedError); ok {
+		respondError(c, ue)
+		return
+	}
+	respondError(c, model.ErrInternal)
 }
 
 // estimateChatPromptChars 粗略估算 ChatRequest 的 prompt 字符数，用于预算预扣。

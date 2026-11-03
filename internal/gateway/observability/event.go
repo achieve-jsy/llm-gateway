@@ -63,9 +63,12 @@ type UsageEvent struct {
 
 	// 请求元信息
 	InboundEndpoint string // 入站端点路径，如 /v1/chat/completions
-	ReasoningEffort string // low / medium / high
-	UserAgent       string
-	IPAddress       string
+	// UpstreamProtocol 上游实际协议路径：native_chat / native_responses / native_claude / native_gemini；
+	// 空串=走了 relaykit 转换（降级或协议本身不支持原生）。
+	UpstreamProtocol string
+	ReasoningEffort  string // low / medium / high
+	UserAgent        string
+	IPAddress        string
 
 	// 配额拒绝事实（仅被配额闸门拒绝的请求有值）：由 quota.WriteQuotaRejected 写入 gin context，
 	// 供运维直接从 call_logs 判断"被哪个闸门拒绝、限额多少"。
@@ -114,8 +117,9 @@ func (e UsageEvent) ToCallLog() (obsmodel.CallLog, error) {
 		StageRouteMs: e.StageRouteMs, StageUpstreamMs: e.StageUpstreamMs, Stream: e.Stream,
 		FailoverUsed: e.FailoverUsed, RoutedViaGroup: e.RoutedViaGroup, UsageMissing: e.UsageMissing,
 		ReasoningEffort: e.ReasoningEffort, UserAgent: e.UserAgent, IPAddress: e.IPAddress,
-		InboundEndpoint: e.InboundEndpoint, InputPriceSnapshot: &e.InputPriceSnapshot,
-		QuotaGate: e.QuotaGate, QuotaLayer: e.QuotaLayer, QuotaLimit: e.QuotaLimit,
+		InboundEndpoint: e.InboundEndpoint, UpstreamProtocol: e.UpstreamProtocol,
+		InputPriceSnapshot: &e.InputPriceSnapshot,
+		QuotaGate:          e.QuotaGate, QuotaLayer: e.QuotaLayer, QuotaLimit: e.QuotaLimit,
 		OutputPriceSnapshot: &e.OutputPriceSnapshot, InputCostUSD: e.InputCostUSD,
 		OutputCostUSD: e.OutputCostUSD, CacheReadCostUSD: e.CacheReadCostUSD, EstCostUSD: e.EstCostUSD,
 		BudgetTierID: tierID, BudgetTierNameSnapshot: e.BudgetTierNameSnapshot,

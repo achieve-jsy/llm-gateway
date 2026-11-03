@@ -1,0 +1,32 @@
+-- atlas-migrations/20261029130554_add_call_logs_upstream_protocol.sql
+-- Feature: 原生旁路使用率度量（call_logs 增加 upstream_protocol）
+--
+-- 背景：入站协议（chat / responses / messages / gemini）在目标 provider 支持时
+-- 走「原生旁路」：客户端原始 body 零转换直发上游、响应原样回传；否则降级到
+-- relaykit 转换路径。两条路径的成本差异显著，但 call_logs 里没有任何字段能区分，
+-- 运维看板无法回答"这次重构到底带来多少收益"。
+--
+-- 语义：只记录**原生直发成功**的哪一种事实，取值只有四个：
+--   native_chat | native_responses | native_claude | native_gemini
+-- 空串 = 走了 relaykit 转换路径（含所有降级/老路径），因此空串本身就是有意义的取值，
+-- 不能改成 NULL。标记由 handler 在自己知道请求 format 的原生成功分支 c.Set 写入
+-- gin.Context（key: upstream_protocol），再由观测链路透传落库；
+-- provider 层不打标（RelayNative 的 ctx 是入参，标记无法回传调用方）。
+--
+-- 不加索引：本次只做"占比"聚合（GROUP BY upstream_protocol 全窗口扫描），
+-- 没有按该列过滤的查询需求；列基数只有 5，单独索引收益为零。
+--
+-- 为什么是手写 SQL 而不是 make atlas-diff（同 20261021024215 / 20260910125402 的结论，本次已复核）：
+--   atlas migrate diff 在本仓库稳定产出与本次改动无关的存量漂移（本次实测：alert_events /
+--   api_keys / models / users / system_logs 等 20+ 张表的类型与默认值差异，以及
+--   channel_monitor_* / model_status_logs 等只存在于 GORM model 的表），不能混进本 PR。
+--   diff 中唯一与本改动相关的一行是：
+--     ALTER TABLE "call_logs" ADD COLUMN "upstream_protocol" character varying(32) NOT NULL DEFAULT '';
+--   本文件改 IF NOT EXISTS（纯新增列、无回填，可重放），其余一律不取。
+--   ⚠️ 代价：同名但类型不同的历史列会被静默跳过。列类型正确性由 GORM model
+--   （internal/observability/model/call_log.go 的 gorm tag）与本文件逐字对齐保证。
+--
+-- 回滚（本项目不使用 Atlas 的 down 迁移机制；注意目录内放 *.down.sql 会被当独立前向迁移执行）：
+--   ALTER TABLE call_logs DROP COLUMN IF EXISTS upstream_protocol;
+
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS upstream_protocol VARCHAR(32) NOT NULL DEFAULT '';

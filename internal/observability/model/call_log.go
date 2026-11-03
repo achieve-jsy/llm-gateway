@@ -51,6 +51,10 @@ type CallLog struct {
 	CacheReadCostUSD    float64   `gorm:"type:decimal(18,8);not null;default:0"                         json:"cache_read_cost_usd"`
 	EstCostUSD          float64   `gorm:"type:decimal(18,6);not null;default:0"                         json:"est_cost_usd"`
 	InboundEndpoint     string    `gorm:"type:varchar(128)"                                             json:"inbound_endpoint"`
+	// UpstreamProtocol 上游协议事实（仅「原生旁路」直发成功时写入）：
+	// native_chat | native_responses | native_claude | native_gemini；空串代表走了 relaykit 转换路径。
+	// 空串本身就是有意义的取值（= 转换），不能改成 NULL。
+	UpstreamProtocol string `gorm:"type:varchar(32);not null;default:''"                            json:"upstream_protocol,omitempty"`
 	// 配额拒绝事实（仅被配额闸门拒绝、状态码 429 的行写入；其余行三者为空/NULL）：
 	// QuotaGate 取值 rpm | concurrency；QuotaLayer 取值 subject | group | model | default；
 	// QuotaLimit 为该次判定实际生效的限额值。非配额拒绝的行三者为空/NULL。

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/QuantumNous/new-api/relaykit/types"
+
 	"github.com/example/llm-gateway/internal/core"
 	gatewayerrors "github.com/example/llm-gateway/internal/errors"
 	"github.com/example/llm-gateway/internal/gateway/budget"
@@ -19,6 +22,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
+	"github.com/example/llm-gateway/internal/protocol"
 	"github.com/gin-gonic/gin"
 )
 
@@ -27,12 +31,13 @@ import (
 // ChatRequest (OpenAI format), dispatches through the ChatOrchestrator,
 // then converts the response back to Anthropic Messages API format.
 type MessagesHandler struct {
-	orchestrator  ChatOrchestratorInterface
-	groupDispatch *orchestrator.GroupAwareDispatcher
-	budgetDeps    *middleware.BudgetDeps
-	budgetGate    *budget.Gate
-	requestQuota  *quota.QuotaMiddleware
-	quotaGate     *quota.ModelQuotaGate // v0.15: 模型层配额检查
+	orchestrator   ChatOrchestratorInterface
+	groupDispatch  *orchestrator.GroupAwareDispatcher
+	budgetDeps     *middleware.BudgetDeps
+	budgetGate     *budget.Gate
+	requestQuota   *quota.QuotaMiddleware
+	quotaGate      *quota.ModelQuotaGate // v0.15: 模型层配额检查
+	protocolPolicy *protocol.Policy      // relaykit 协议转换策略
 }
 
 // NewMessagesHandler creates a MessagesHandler.
@@ -63,8 +68,34 @@ func (h *MessagesHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
 	h.quotaGate = gate
 }
 
+// SetProtocolPolicy 注入 relaykit 协议策略。
+func (h *MessagesHandler) SetProtocolPolicy(p *protocol.Policy) {
+	h.protocolPolicy = p
+}
+
 // Handle processes POST /v1/messages requests.
 func (h *MessagesHandler) HandleMessages(c *gin.Context) {
+	// relaykit 协议路径分流：active/shadow 走新转换器，legacy 保持原有实现。
+	// 必须在 ShouldBindJSON 之前取原始 body，否则新路径拿不到被 core 结构裁剪掉的字段。
+	if h.protocolPolicy != nil {
+		keyID := c.GetString("key_id")
+		mode := h.protocolPolicy.ModeFor(keyID, "messages")
+		if mode == protocol.ModeActive || mode == protocol.ModeShadow {
+			rawBody, readErr := io.ReadAll(c.Request.Body)
+			if readErr != nil {
+				h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "invalid_request_body", readErr.Error(), nil)
+				return
+			}
+			if mode == protocol.ModeActive {
+				h.handleMessagesRK(c, rawBody)
+				return
+			}
+			// shadow：只离线比对转换结果，客户端仍拿 legacy 输出。
+			h.handleMessagesRKShadow(c, rawBody)
+			c.Request.Body = io.NopCloser(bytes.NewReader(rawBody))
+		}
+	}
+
 	var anthReq core.AnthropicMessagesRequest
 	if err := c.ShouldBindJSON(&anthReq); err != nil {
 		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "invalid_request_body", err.Error(), nil)
@@ -415,6 +446,540 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 // ──────────────────────────────────────────────
 // Token counting endpoint
 // ──────────────────────────────────────────────
+
+// ──────────────────────────────────────────────
+// Relaykit 协议转换路径（active / shadow）
+// ──────────────────────────────────────────────
+
+// handleMessagesRK 使用 relaykit 进行 Claude → OpenAI → Claude 的双向协议转换。
+// 流程：解码 Claude 请求 → relaykit 转换为 OpenAI → 内部 ChatRequest →
+// 走既有调度/预算/配额管线 → 上游调用 → relaykit 回程转换为 Claude 响应。
+func (h *MessagesHandler) handleMessagesRK(c *gin.Context, rawBody []byte) {
+	// 解析基本字段用于验证和路由。
+	var header struct {
+		Model     string `json:"model"`
+		Stream    bool   `json:"stream"`
+		MaxTokens int    `json:"max_tokens"`
+	}
+	if err := json.Unmarshal(rawBody, &header); err != nil {
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "invalid_request_body", err.Error(), nil)
+		return
+	}
+
+	originalModel := header.Model
+	if originalModel == "" {
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "model_required", "model is required", nil)
+		return
+	}
+
+	c.Set("model", originalModel)
+
+	// 1. 解码 Claude 请求。
+	claudeReq, err := protocol.DecodeClaudeRequest(rawBody)
+	if err != nil {
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "invalid_request_body", err.Error(), nil)
+		return
+	}
+
+	// 2. 创建 relaykit 转换会话。
+	session := protocol.NewSession(
+		types.RelayFormatClaude,
+		types.RelayFormatOpenAI,
+		protocol.DefaultConvOptions(),
+		originalModel,
+		originalModel,
+	)
+
+	// 3. relaykit 转换 Claude → OpenAI。
+	result, err := protocol.ConvertRequest(session, claudeReq)
+	if err != nil {
+		h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "conversion_failed", err.Error(), nil)
+		return
+	}
+
+	// 4. 收集诊断信息。
+	bridgeDiags := protocol.HasUnsupportedBlocks(claudeReq)
+	protocol.JoinDiagnostics(session, result, bridgeDiags)
+
+	// 5. 按损失策略判定是否拒绝。
+	if err := protocol.ApplyLossPolicy(types.ConversionLossPolicyAllow, session.Diagnostics); err != nil {
+		var convErr *protocol.ConversionError
+		if errors.As(err, &convErr) {
+			h.respondAnthropicError(c, convErr.HTTPStatus, "invalid_request", "conversion_rejected", convErr.Error(), nil)
+			return
+		}
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "conversion_rejected", err.Error(), nil)
+		return
+	}
+
+	// 6. 桥接为内部 ChatRequest。
+	req, err := protocol.BridgeToChatRequest(session, result)
+	if err != nil {
+		h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "bridge_failed", err.Error(), nil)
+		return
+	}
+
+	// 7. 调度/预算/配额（复用 legacy 管线）。
+	routedModelID := originalModel
+
+	releaseQuota, err := PrepareAuthorizedGates(c, originalModel, func() error {
+		if h.groupDispatch == nil {
+			return nil
+		}
+		decision, dispatchErr := h.groupDispatch.Dispatch(c, originalModel, req)
+		if dispatchErr != nil {
+			return dispatchErr
+		}
+		if decision != nil {
+			req.Model = decision.ModelName
+			routedModelID = decision.ModelUUID
+			if decision.ProviderName != "" {
+				req.Provider = decision.ProviderName
+				middleware.TrackProviderRequest(c, decision.ProviderName)
+			}
+		}
+		return nil
+	}, h.budgetGate, h.requestQuota)
+	if err != nil {
+		if c.IsAborted() {
+			return
+		}
+		if !budget.WriteHTTPError(c, err) {
+			h.respondAnthropicGroupError(c, err)
+		}
+		return
+	}
+	if releaseQuota != nil {
+		defer releaseQuota()
+	}
+
+	// v0.15: 模型层配额检查。
+	if h.quotaGate != nil {
+		subjectType, _ := c.Get("quota_subject_type")
+		subjectID, _ := c.Get("quota_subject_id")
+		if st, ok := subjectType.(string); ok {
+			if si, ok := subjectID.(string); ok {
+				if err := h.quotaGate.BeforeUpstream(c, st, si, routedModelID); err != nil {
+					return
+				}
+			}
+		}
+	}
+
+	baseCtx := orchestrator.WithGinContext(c.Request.Context(), c)
+
+	// 原生旁路：目标渠道能直接吃 Anthropic 原生 body 时零转换直发，
+	// 响应原样回传；只有 ErrNativeNotSupported 才降级到下方 relaykit 转换路径。
+	// 位置必须在 PrepareAuthorizedGates 之后，否则会绕过调度/预算/配额。
+	if native, ok := h.orchestrator.(NativeChatOrchestratorInterface); ok {
+		if header.Stream {
+			c.Set("stream", true)
+			stream, nativeErr := native.ChatNativeStream(baseCtx, req, rawBody, core.NativeRelayClaude)
+			if nativeErr == nil {
+				c.Set("upstream_protocol", "native_claude")
+				forwardNativeStream(c, stream)
+				return
+			}
+			// 真实错误（非“不支持原生”）：按 Anthropic 错误格式返回。
+			// 不能静默降级，否则会对同一请求二次打上游。
+			if !errors.Is(nativeErr, core.ErrNativeNotSupported) {
+				h.respondAnthropicUnifiedError(c, nativeErr)
+				return
+			}
+		} else {
+			c.Set("stream", false)
+			out, nativeErr := native.ChatNative(baseCtx, req, rawBody, core.NativeRelayClaude)
+			if nativeErr == nil {
+				// 原生响应本身就是干净的 Anthropic 格式，不做任何清洗/改写。
+				c.Set("upstream_protocol", "native_claude")
+				c.Data(http.StatusOK, "application/json", out)
+				return
+			}
+			if !errors.Is(nativeErr, core.ErrNativeNotSupported) {
+				h.respondAnthropicUnifiedError(c, nativeErr)
+				return
+			}
+		}
+	}
+
+	if header.Stream {
+		c.Set("stream", true)
+		h.handleMessagesRKStream(c, baseCtx, req, originalModel, session)
+		return
+	}
+
+	c.Set("stream", false)
+	h.handleMessagesRKNonStream(c, baseCtx, req, originalModel, session)
+}
+
+// forwardNativeStream 把上游原生 Anthropic SSE 原样转发给客户端：
+// 只设置 SSE 响应头并逐块 flush，不对字节做任何解析或改写。
+func forwardNativeStream(c *gin.Context, stream io.ReadCloser) {
+	defer stream.Close()
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	c.Writer.WriteHeader(http.StatusOK)
+	c.Writer.Flush()
+
+	// 包一层 flushWriter：每写完一个读块立刻 flush，避免 SSE 帧被缓冲合并。
+	_, _ = io.Copy(flushWriter{c.Writer}, stream)
+}
+
+// flushWriter 每次 Write 后立刻 Flush，保持 SSE 帧的实时性。
+type flushWriter struct {
+	w gin.ResponseWriter
+}
+
+func (f flushWriter) Write(p []byte) (int, error) {
+	n, err := f.w.Write(p)
+	f.w.Flush()
+	return n, err
+}
+
+// handleMessagesRKShadow 在 shadow 模式下运行双路径：
+//   - 主路径：legacy 转换，正常返回客户端。
+//   - 影子路径：relaykit 转换，仅记录诊断日志，不上游。
+func (h *MessagesHandler) handleMessagesRKShadow(c *gin.Context, rawBody []byte) {
+	// 影子 goroutine：仅做 relaykit 解码+转换，记录诊断差异。
+	go func(body []byte) {
+		claudeReq, err := protocol.DecodeClaudeRequest(body)
+		if err != nil {
+			slog.Debug("protocol shadow: decode claude request failed", "error", err)
+			return
+		}
+
+		var model string
+		if claudeReq != nil {
+			model = claudeReq.Model
+		}
+
+		session := protocol.NewSession(
+			types.RelayFormatClaude,
+			types.RelayFormatOpenAI,
+			protocol.DefaultConvOptions(),
+			model,
+			model,
+		)
+
+		result, err := protocol.ConvertRequest(session, claudeReq)
+		if err != nil {
+			slog.Debug("protocol shadow: convert request failed", "error", err)
+			return
+		}
+
+		bridgeDiags := protocol.HasUnsupportedBlocks(claudeReq)
+		protocol.JoinDiagnostics(session, result, bridgeDiags)
+
+		if len(session.Diagnostics) > 0 {
+			slog.Info("protocol shadow: conversion diagnostics",
+				"count", len(session.Diagnostics),
+				"codes", protocol.FormatLossHeader(session.Diagnostics),
+			)
+		}
+
+		_, err = protocol.BridgeToChatRequest(session, result)
+		if err != nil {
+			slog.Debug("protocol shadow: bridge to chat request failed", "error", err)
+			return
+		}
+
+		if len(session.Diagnostics) == 0 {
+			slog.Debug("protocol shadow: conversion successful, no diagnostics")
+		}
+	}(rawBody)
+
+	// 主路径：恢复请求体，走 legacy 管线。
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(rawBody))
+
+	var anthReq core.AnthropicMessagesRequest
+	if err := c.ShouldBindJSON(&anthReq); err != nil {
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "invalid_request_body", err.Error(), nil)
+		return
+	}
+
+	if anthReq.Model == "" {
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "model_required", "model is required", nil)
+		return
+	}
+
+	if len(anthReq.Messages) == 0 {
+		h.respondAnthropicError(c, http.StatusBadRequest, "invalid_request", "messages_required", "messages is required and must not be empty", nil)
+		return
+	}
+
+	c.Set("model", anthReq.Model)
+
+	req, convErr := core.AnthropicToChatRequest(&anthReq)
+	if convErr != nil {
+		h.respondAnthropicConversionError(c, convErr)
+		return
+	}
+
+	originalModel := anthReq.Model
+	routedModelID := anthReq.Model
+
+	releaseQuota, err := PrepareAuthorizedGates(c, originalModel, func() error {
+		if h.groupDispatch == nil {
+			return nil
+		}
+		decision, dispatchErr := h.groupDispatch.Dispatch(c, originalModel, req)
+		if dispatchErr != nil {
+			return dispatchErr
+		}
+		if decision != nil {
+			req.Model = decision.ModelName
+			routedModelID = decision.ModelUUID
+			if decision.ProviderName != "" {
+				req.Provider = decision.ProviderName
+				middleware.TrackProviderRequest(c, decision.ProviderName)
+			}
+		}
+		return nil
+	}, h.budgetGate, h.requestQuota)
+	if err != nil {
+		if c.IsAborted() {
+			return
+		}
+		if !budget.WriteHTTPError(c, err) {
+			h.respondAnthropicGroupError(c, err)
+		}
+		return
+	}
+	if releaseQuota != nil {
+		defer releaseQuota()
+	}
+
+	if h.quotaGate != nil {
+		subjectType, _ := c.Get("quota_subject_type")
+		subjectID, _ := c.Get("quota_subject_id")
+		if st, ok := subjectType.(string); ok {
+			if si, ok := subjectID.(string); ok {
+				if err := h.quotaGate.BeforeUpstream(c, st, si, routedModelID); err != nil {
+					return
+				}
+			}
+		}
+	}
+
+	baseCtx := orchestrator.WithGinContext(c.Request.Context(), c)
+
+	if anthReq.Stream {
+		c.Set("stream", true)
+		h.handleStream(c, baseCtx, req, originalModel)
+		return
+	}
+
+	c.Set("stream", false)
+	h.handleNonStream(c, baseCtx, req, originalModel)
+}
+
+// handleMessagesRKNonStream 处理 relaykit 路径的非流式请求。
+// 与 legacy handleNonStream 结构相同，差异在于成功响应使用
+// BridgeChatResponseToSource 转回 Claude 格式。
+func (h *MessagesHandler) handleMessagesRKNonStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string, session *protocol.Session) {
+	timeout := h.nonStreamTimeout(originalModel)
+	var lastErr error
+
+	for {
+		roundCtx, roundCancel := context.WithTimeout(baseCtx, timeout)
+		resp, err := h.orchestrator.Chat(roundCtx, req)
+		roundCancel()
+
+		if err == nil {
+			if lastErr != nil {
+				c.Set("error_message", "")
+			}
+			// relaykit 回程：ChatResponse → Claude 格式。
+			claudeResult, convErr := protocol.BridgeChatResponseToSource(session, resp)
+			if convErr != nil {
+				h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "response_conversion_failed", convErr.Error(), nil)
+				return
+			}
+			if claudeResult.Value == nil {
+				h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "empty_response", "relaykit produced nil response value", nil)
+				return
+			}
+			c.Set("stream", false)
+			c.Set("resp_object", claudeResult.Value)
+			// 经 protocol 清洗后再输出，避免 relaykit 内部计费字段泄漏到 Anthropic 响应。
+			payload, marshalErr := protocol.MarshalForClient(claudeResult.Value)
+			if marshalErr != nil {
+				h.respondAnthropicError(c, http.StatusInternalServerError, "internal_error", "response_encode_failed", marshalErr.Error(), nil)
+				return
+			}
+			c.Data(http.StatusOK, "application/json; charset=utf-8", payload)
+			return
+		}
+		lastErr = err
+
+		if h.groupDispatch == nil || !c.GetBool("routed_via_group") || !shouldTriggerFailover(err) {
+			break
+		}
+
+		failedID := req.Model
+		if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+			failedID = dc.RoutedModelID
+		}
+		slog.Warn("messages failover: attempt (rk)",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"failed_model", req.Model,
+			"failed_model_id", failedID,
+			"error", err.Error(),
+		)
+
+		h.groupDispatch.NotifyFailure(failedID)
+		if is429Error(err) {
+			h.groupDispatch.SetCooldown(failedID, defaultCooldownDuration)
+		}
+
+		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID, req)
+		if fErr != nil {
+			slog.Error("messages failover: no available target (rk)",
+				"request_id", c.GetString("request_id"),
+				"group", originalModel,
+				"error", fErr.Error(),
+			)
+			break
+		}
+
+		req.Model = decision.ModelName
+		req.Provider = decision.ProviderName
+		c.Set("failover_used", true)
+
+		dc := model.GetDispatchContext(c)
+		if dc != nil && dc.SessionKey != "" {
+			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelName, decision.ProviderName)
+		}
+
+		if h.quotaGate != nil {
+			subjectType, _ := c.Get("quota_subject_type")
+			subjectID, _ := c.Get("quota_subject_id")
+			if st, ok := subjectType.(string); ok {
+				if si, ok := subjectID.(string); ok {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelUUID); err != nil {
+						return
+					}
+				}
+			}
+		}
+
+		slog.Info("messages failover: switching (rk)",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"target_provider", decision.ProviderName,
+			"target_model", decision.ModelName,
+			"target_model_id", decision.ModelID,
+		)
+	}
+
+	h.respondAnthropicUnifiedError(c, lastErr)
+}
+
+// handleMessagesRKStream 处理 relaykit 路径的流式请求。
+// 与 legacy handleStream 结构相同，差异在于使用
+// protocol.NewStreamAdapter 替代 newAnthropicStreamAdapter。
+func (h *MessagesHandler) handleMessagesRKStream(c *gin.Context, baseCtx context.Context, req *core.ChatRequest, originalModel string, session *protocol.Session) {
+	timeout := h.streamTimeout(originalModel)
+
+	openStream := func(r *core.ChatRequest) (io.ReadCloser, context.CancelFunc, error) {
+		streamCtx, cancel := context.WithTimeout(baseCtx, timeout)
+		s, e := h.orchestrator.ChatStream(streamCtx, r)
+		if e != nil {
+			cancel()
+			return nil, nil, e
+		}
+		return s, cancel, nil
+	}
+
+	var lastErr error
+
+	for {
+		rawStream, cancel, err := openStream(req)
+
+		if err == nil {
+			if lastErr != nil {
+				c.Set("error_message", "")
+			}
+			streamAdapter := protocol.NewStreamAdapter(
+				&cancelOnClose{ReadCloser: rawStream, cancel: cancel},
+				session,
+				req.Model,
+				estimatePromptTokens(req.Messages),
+				generateAnthropicID(c),
+			)
+			HandleStreamResponseAs(c, streamAdapter, DialectAnthropic)
+			return
+		}
+		lastErr = err
+
+		if h.groupDispatch == nil || !c.GetBool("routed_via_group") || !shouldTriggerFailover(err) {
+			break
+		}
+
+		failedID := req.Model
+		if dc := model.GetDispatchContext(c); dc != nil && dc.RoutedModelID != "" {
+			failedID = dc.RoutedModelID
+		}
+		slog.Warn("messages failover: attempt (rk stream)",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"failed_model", req.Model,
+			"failed_model_id", failedID,
+			"error", err.Error(),
+		)
+
+		h.groupDispatch.NotifyFailure(failedID)
+		if is429Error(err) {
+			h.groupDispatch.SetCooldown(failedID, defaultCooldownDuration)
+		}
+
+		decision, fErr := h.groupDispatch.HandleFailover(c, originalModel, failedID, req)
+		if fErr != nil {
+			slog.Error("messages failover: no available target (rk stream)",
+				"request_id", c.GetString("request_id"),
+				"group", originalModel,
+				"error", fErr.Error(),
+			)
+			break
+		}
+
+		req.Model = decision.ModelName
+		req.Provider = decision.ProviderName
+		c.Set("failover_used", true)
+
+		dc := model.GetDispatchContext(c)
+		if dc != nil && dc.SessionKey != "" {
+			h.groupDispatch.UpdateSticky(c.Request.Context(), originalModel, dc.SessionKey, decision.ModelName, decision.ProviderName)
+		}
+
+		if h.quotaGate != nil {
+			subjectType, _ := c.Get("quota_subject_type")
+			subjectID, _ := c.Get("quota_subject_id")
+			if st, ok := subjectType.(string); ok {
+				if si, ok := subjectID.(string); ok {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelUUID); err != nil {
+						return
+					}
+				}
+			}
+		}
+
+		slog.Info("messages failover: switching (rk stream)",
+			"request_id", c.GetString("request_id"),
+			"group", originalModel,
+			"target_provider", decision.ProviderName,
+			"target_model", decision.ModelName,
+			"target_model_id", decision.ModelID,
+		)
+	}
+
+	h.respondAnthropicUnifiedError(c, lastErr)
+}
 
 // HandleCountTokens handles a token counting request.
 // Anthropic's /v1/messages/count_tokens endpoint returns approximate token count.

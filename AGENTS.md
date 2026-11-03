@@ -55,7 +55,11 @@ flowchart TB
 
 - **gateway**：`internal/gateway/server/router.go`
   - 公开：`/health`、`/ready`、`/swagger/*`
-  - 鉴权后 `/v1`：`/models`、`/model/info`、`/chat/completions`、`/embeddings`、`/p/:provider/*path`
+  - 鉴权后 `/v1`：`/models`、`/model/info`、`/chat/completions`、`/embeddings`、`/responses`、`/messages`、`/p/:provider/*path`
+  - 鉴权后 `/v1beta`（Gemini 原生入站，与 `/v1` 共用同一条中间件链）：
+    `POST /models/{model}:generateContent`、`:streamGenerateContent[?alt=sse]`、`:countTokens`。
+    `/v1/models/{model}:{action}` 是等价前缀。**nginx 必须同时放行 `location /v1beta/`**，
+    否则请求会落到静态资源而不是 gateway（见 `deploy/docker/nginx*.conf`）。
   - 进程内 auth：`/.well-known/jwks.json`、`/auth/refresh`、`/auth/logout`、`/internal/v1/auth/verify-key`（注册在 `cmd/gateway/main.go`）
 - **control-plane**：`internal/controlplane/router/router.go`
   - `/api/v1/*`（管理面，`JWTAuth`）、`/internal/v1/*`（`InternalAuth` 校验 `X-Internal-Token`）、OAuth `/api/v1/auth/*`、公开 `/api/v1/settings/public`、OpenCode `/api/v1/opencode-config/*`
@@ -66,6 +70,12 @@ flowchart TB
 - **provider 热加载**：控制面 `SaveProviderSnapshot` 写 Redis 并 pub/sub `config:change`；gateway `ProviderLoader` 监听 + 30s reconcile，原子重建 `providers.Router`。
 - **模型 / Catalog / 模型组**：`model_catalog`（LiteLLM 同步，能力/价格/上下文单源）→ `model`（绑定 provider，可关联 catalog）→ `group`（对外模型名，组内多 model）。组能力聚合见 `internal/controlplane/service/model_info_service.go`，**保守语义：组内全部成员都支持才算支持，token 上限取最小正值**。
 - **OpenCode 配置下发**：`internal/controlplane/handler/opencode_config_handler.go` 生成安装脚本并 `go:embed` 插件 bundle；详见 `docs/opencode-models-discovery.md`。
+- **原生旁路（零转换直发）**：入站协议（chat/responses/messages/gemini）在目标 provider 声明
+  `core.NativeRelayProvider` 能力时，把客户端**原始 body** 直接发上游、响应原样回传，只把
+  `body.model` 改写为路由解析后的实际模型名（`providers.Router.prepareNativeRelay`）。
+  降级信号只有一个：`errors.Is(err, core.ErrNativeNotSupported)`；其他错误必须直接返回，
+  **不得二次打上游**。Chat 入口的原生旁路默认关闭，需要 `protocol.Policy` 显式 `active` 才启用
+  （`chat.go:nativeRelayEnabled`），因为未知字段会透传给上游、语义与结构体往返不同。
 
 ## 配置体系
 

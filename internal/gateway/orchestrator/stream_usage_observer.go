@@ -15,13 +15,13 @@ import (
 // 流关闭时直接构造合成 JSON 写入 context，无需 responseBodyWriter 的 buf 双写，
 // 彻底消除流式响应的内存副本。
 type streamUsageObserver struct {
-	gc               *gin.Context
-	start            time.Time
-	firstTokenAt     time.Time
-	usage            *core.Usage
+	gc           *gin.Context
+	start        time.Time
+	firstTokenAt time.Time
+	usage        *core.Usage
 	// 流式回复文本累积（逐 chunk 拼接，避免保留原始字节）
-	contentBuf       strings.Builder
-	reasoningBuf     strings.Builder
+	contentBuf   strings.Builder
+	reasoningBuf strings.Builder
 	// 最后一个 chunk 的元数据（用于合成响应 JSON）
 	lastID      string
 	lastModel   string
@@ -157,49 +157,14 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 	//   - Responses API:     {"response": {"usage": {"input_tokens": ..., "output_tokens": ...}}}
 	usageMap := extractUsageMap(payload)
 	if usageMap != nil {
-		u := core.Usage{
-			PromptTokens:     toInt(usageMap["prompt_tokens"]),
-			CompletionTokens: toInt(usageMap["completion_tokens"]),
-			TotalTokens:      toInt(usageMap["total_tokens"]),
-		}
-		// v0.7: 兼容 Responses API 的 input_tokens/output_tokens 命名
-		// Responses API 不使用 prompt_tokens/completion_tokens，但 usage_collector
-		// 依赖 PromptTokens/CompletionTokens 做成本估算。
-		if u.PromptTokens == 0 {
-			u.PromptTokens = toInt(usageMap["input_tokens"])
-		}
-		if u.CompletionTokens == 0 {
-			u.CompletionTokens = toInt(usageMap["output_tokens"])
-		}
-		if u.TotalTokens == 0 {
-			u.TotalTokens = toInt(usageMap["total_tokens"])
-			if u.TotalTokens == 0 {
-				u.TotalTokens = u.PromptTokens + u.CompletionTokens
-			}
-		}
-		// 提取 OpenAI-compatible / Responses 的 input 明细（含 cached_tokens）
-		if details := firstUsageDetailsMap(usageMap, "prompt_tokens_details", "input_tokens_details"); details != nil {
-			u.PromptTokensDetails = &core.PromptTokensDetails{
-				CachedTokens: toInt(details["cached_tokens"]),
-				AudioTokens:  toInt(details["audio_tokens"]),
-				TextTokens:   toInt(details["text_tokens"]),
-				ImageTokens:  toInt(details["image_tokens"]),
-			}
-		}
-		if details := firstUsageDetailsMap(usageMap, "completion_tokens_details", "output_tokens_details"); details != nil {
-			u.CompletionTokensDetails = &core.CompletionTokensDetails{
-				ReasoningTokens:          toInt(details["reasoning_tokens"]),
-				AudioTokens:              toInt(details["audio_tokens"]),
-				AcceptedPredictionTokens: toInt(details["accepted_prediction_tokens"]),
-				RejectedPredictionTokens: toInt(details["rejected_prediction_tokens"]),
-			}
-		}
+		u := usageFromMap(usageMap)
 		// 提取 DeepSeek / Anthropic / Bedrock 缓存字段到 RawUsage
 		rawKeys := []string{
 			"prompt_cache_hit_tokens",     // DeepSeek
 			"prompt_cache_miss_tokens",    // DeepSeek
 			"cache_read_input_tokens",     // Anthropic / Bedrock
 			"cache_creation_input_tokens", // Anthropic / Bedrock
+			"cachedContentTokenCount",     // Gemini
 		}
 		for _, k := range rawKeys {
 			if v := usageMap[k]; v != nil {
@@ -210,7 +175,35 @@ func (o *streamUsageObserver) OnJSONEvent(payload map[string]any) {
 			}
 		}
 		if u.PromptTokens > 0 || u.CompletionTokens > 0 || u.TotalTokens > 0 {
-			o.usage = &u
+			// 合并而非覆盖：Anthropic 原生流把 input_tokens 放在 message_start、
+			// output_tokens 放在 message_delta，直接覆盖会让后者的 prompt=0
+			// 冲掉前者的 input_tokens（input 通常远大于 output，漏算代价高）。
+			if o.usage == nil {
+				o.usage = &core.Usage{}
+			}
+			if u.PromptTokens > 0 {
+				o.usage.PromptTokens = u.PromptTokens
+			}
+			if u.CompletionTokens > 0 {
+				o.usage.CompletionTokens = u.CompletionTokens
+			}
+			if u.TotalTokens > 0 {
+				o.usage.TotalTokens = u.TotalTokens
+			}
+			if u.PromptTokensDetails != nil {
+				o.usage.PromptTokensDetails = u.PromptTokensDetails
+			}
+			if u.CompletionTokensDetails != nil {
+				o.usage.CompletionTokensDetails = u.CompletionTokensDetails
+			}
+			if u.RawUsage != nil {
+				if o.usage.RawUsage == nil {
+					o.usage.RawUsage = make(map[string]any, len(u.RawUsage))
+				}
+				for k, v := range u.RawUsage {
+					o.usage.RawUsage[k] = v
+				}
+			}
 		}
 	}
 }
@@ -237,6 +230,10 @@ func (o *streamUsageObserver) OnStreamClose() {
 		return
 	}
 	if o.usage != nil {
+		// Anthropic 不返回 total_tokens，用 input+output 补全，避免成本估算读到 0
+		if o.usage.TotalTokens == 0 {
+			o.usage.TotalTokens = o.usage.PromptTokens + o.usage.CompletionTokens
+		}
 		o.gc.Set("usage", *o.usage)
 	}
 	if !o.firstTokenAt.IsZero() {
@@ -311,6 +308,57 @@ func chunkHasContent(payload map[string]any) bool {
 	return false
 }
 
+// usageFromMap 把 usage map 归一化成 core.Usage，兼容三套命名：
+//   - Chat Completions: prompt_tokens / completion_tokens / total_tokens
+//   - Responses API:    input_tokens / output_tokens
+//   - Anthropic:        input_tokens / output_tokens（无 total，用两者之和补全）
+//
+// 非流式与流式都走它，避免两处解析逻辑漂移导致计费口径不一致。
+func usageFromMap(usageMap map[string]any) core.Usage {
+	u := core.Usage{
+		PromptTokens:     toInt(usageMap["prompt_tokens"]),
+		CompletionTokens: toInt(usageMap["completion_tokens"]),
+		TotalTokens:      toInt(usageMap["total_tokens"]),
+	}
+	if u.PromptTokens == 0 {
+		u.PromptTokens = toInt(usageMap["input_tokens"])
+	}
+	if u.PromptTokens == 0 {
+		// Gemini: usageMetadata.promptTokenCount
+		u.PromptTokens = toInt(usageMap["promptTokenCount"])
+	}
+	if u.CompletionTokens == 0 {
+		u.CompletionTokens = toInt(usageMap["output_tokens"])
+	}
+	if u.CompletionTokens == 0 {
+		// Gemini: usageMetadata.candidatesTokenCount
+		u.CompletionTokens = toInt(usageMap["candidatesTokenCount"])
+	}
+	if u.TotalTokens == 0 {
+		u.TotalTokens = toInt(usageMap["totalTokenCount"])
+	}
+	if u.TotalTokens == 0 {
+		u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	}
+	if details := firstUsageDetailsMap(usageMap, "prompt_tokens_details", "input_tokens_details"); details != nil {
+		u.PromptTokensDetails = &core.PromptTokensDetails{
+			CachedTokens: toInt(details["cached_tokens"]),
+			AudioTokens:  toInt(details["audio_tokens"]),
+			TextTokens:   toInt(details["text_tokens"]),
+			ImageTokens:  toInt(details["image_tokens"]),
+		}
+	}
+	if details := firstUsageDetailsMap(usageMap, "completion_tokens_details", "output_tokens_details"); details != nil {
+		u.CompletionTokensDetails = &core.CompletionTokensDetails{
+			ReasoningTokens:          toInt(details["reasoning_tokens"]),
+			AudioTokens:              toInt(details["audio_tokens"]),
+			AcceptedPredictionTokens: toInt(details["accepted_prediction_tokens"]),
+			RejectedPredictionTokens: toInt(details["rejected_prediction_tokens"]),
+		}
+	}
+	return u
+}
+
 // extractUsageMap 从 payload 中提取 usage map，支持两种格式：
 //   - Chat Completions:  payload["usage"]
 //   - Responses API:     payload["response"]["usage"]
@@ -325,6 +373,24 @@ func extractUsageMap(payload map[string]any) map[string]any {
 	if raw, ok := payload["response"]; ok {
 		if resp, ok := raw.(map[string]any); ok {
 			if usage, ok := resp["usage"]; ok {
+				if m, ok := usage.(map[string]any); ok && m != nil {
+					return m
+				}
+			}
+		}
+	}
+	// 格式 4: Gemini — 顶层 usageMetadata（camelCase 计数字段），
+	// 流式每个 chunk 都携带累计值，非流式则在响应根部。
+	if raw, ok := payload["usageMetadata"]; ok {
+		if m, ok := raw.(map[string]any); ok && m != nil {
+			return m
+		}
+	}
+	// 格式 3: Anthropic Messages — message_start 事件把 usage 藏在 message 内层
+	// {"type":"message_start","message":{"usage":{"input_tokens":..,"output_tokens":..}}}
+	if raw, ok := payload["message"]; ok {
+		if msg, ok := raw.(map[string]any); ok {
+			if usage, ok := msg["usage"]; ok {
 				if m, ok := usage.(map[string]any); ok && m != nil {
 					return m
 				}

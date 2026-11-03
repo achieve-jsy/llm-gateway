@@ -10,6 +10,13 @@ import (
 	"github.com/spf13/viper"
 )
 
+// ProtocolConfig 协议转换配置
+type ProtocolConfig struct {
+	DefaultMode string            `mapstructure:"default_mode"`
+	PerKey      map[string]string `mapstructure:"per_key"`
+	PerEntry    map[string]string `mapstructure:"per_entry"`
+}
+
 // Config 网关全局配置
 type Config struct {
 	Server        ServerConfig
@@ -21,6 +28,7 @@ type Config struct {
 	OIDC          OIDCConfig
 	Observability ObservabilityConfig
 	TraceBody     TraceBodyConfig
+	Protocol      ProtocolConfig
 }
 
 // ServerConfig 服务配置
@@ -131,6 +139,7 @@ func Load() *Config {
 	v.SetDefault("oidc.role_claim_path", "groups")
 	v.SetDefault("oidc.admin_match_values", "llm-gateway-admins")
 	v.SetDefault("oidc.default_role", "employee")
+	v.SetDefault("protocol.default_mode", "legacy")
 
 	// 确定环境：APP_ENV 可选 dev / test / prod
 	env := os.Getenv("APP_ENV")
@@ -217,6 +226,11 @@ func Load() *Config {
 		Auth: AuthConfig{
 			URL:   v.GetString("auth.url"),
 			Token: v.GetString("auth.token"),
+		},
+		Protocol: ProtocolConfig{
+			DefaultMode: v.GetString("protocol.default_mode"),
+			PerKey:      v.GetStringMapString("protocol.per_key"),
+			PerEntry:    v.GetStringMapString("protocol.per_entry"),
 		},
 		OIDC: OIDCConfig{
 			IssuerURL:        v.GetString("oidc.issuer_url"),

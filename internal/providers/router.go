@@ -3,6 +3,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -692,6 +693,95 @@ func (r *Router) StreamChatCompletion(ctx context.Context, req *core.ChatRequest
 		},
 	)
 	return stream, err
+}
+
+// prepareNativeRelay 选出渠道、校验原生旁路能力，并把 body.model 改写为解析后的模型名，
+// 返回最终要发给上游的请求体。
+//
+// Router 本身不可变（热更新由 ProviderLoader 整体替换 Router 快照，调用方经
+// routerSnapshot 取当次快照），因此这里不加锁。
+//
+// 不满足条件时一律返回包装了 core.ErrNativeNotSupported 的错误：调用方只需
+// 识别这一个信号即可决定降级，不必区分"没实现接口"还是"该模型不支持该格式"。
+func (r *Router) prepareNativeRelay(ctx context.Context, req *core.ChatRequest, body []byte, format core.NativeRelayFormat) (core.NativeRelayProvider, []byte, error) {
+	if req == nil {
+		return nil, nil, fmt.Errorf("%w: nil chat request", core.ErrNativeNotSupported)
+	}
+	p, selector, err := r.resolveProvider(ctx, req.Model, req.Provider)
+	if err != nil {
+		// 模型不存在/注册表未就绪同样归一到哨兵，避免调用方处理两种失败形态
+		return nil, nil, fmt.Errorf("%w: model %q: %v", core.ErrNativeNotSupported, req.Model, err)
+	}
+	rp, ok := p.(core.NativeRelayProvider)
+	if !ok {
+		return nil, nil, fmt.Errorf("%w: model %q (provider %q)", core.ErrNativeNotSupported, selector.Model, selector.Provider)
+	}
+	// 按解析后的实际模型名判断，而不是请求里的原始 model 名：
+	// 同一渠道可能同时挂原生模型和只能走 Converse 的通用模型。
+	if _, ok := rp.NativeRelayFormatFor(selector.Model, format); !ok {
+		return nil, nil, fmt.Errorf("%w: model %q cannot accept %q", core.ErrNativeNotSupported, selector.Model, format)
+	}
+	rewritten, err := rewriteNativeBodyModel(body, selector.Model)
+	if err != nil {
+		return nil, nil, err
+	}
+	return rp, rewritten, nil
+}
+
+// rewriteNativeBodyModel 把原始请求体里的 model 字段改写为路由解析后的实际模型名。
+//
+// 客户端发的是对外模型名（可能是模型组名），而 provider 的 upstream ID 映射以模型
+// 记录名为 key，provider 自己无法完成这层映射，必须由 Router 定稿。
+// 其余字段（top_k、cache_control、thinking…）以 RawMessage 原样保留，不做协议转换。
+//
+// 任何改写失败都返回哨兵错误：宁可降级走常规 Chat，也不能把错模型发给上游。
+func rewriteNativeBodyModel(body []byte, model string) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, fmt.Errorf("%w: cannot parse native request body: %v", core.ErrNativeNotSupported, err)
+	}
+	if fields == nil {
+		return nil, fmt.Errorf("%w: native request body is not a JSON object", core.ErrNativeNotSupported)
+	}
+	modelJSON, err := json.Marshal(model)
+	if err != nil {
+		return nil, fmt.Errorf("%w: cannot encode model %q: %v", core.ErrNativeNotSupported, model, err)
+	}
+	fields["model"] = modelJSON
+	rewritten, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("%w: cannot rewrite native request body: %v", core.ErrNativeNotSupported, err)
+	}
+	return rewritten, nil
+}
+
+// RelayNative 通过原生旁路执行非流式调用，响应体原样返回。
+// 渠道/模型不支持时返回包装了 core.ErrNativeNotSupported 的错误。
+//
+// ponytail: 单次尝试，不做候选轮转 —— 这是有意的，不是遗留。
+// 原生调用失败时不做 failover，原因有二：
+//   1. 请求已经打到上游，重试会产生第二次调用与重复计费；
+//   2. 「这个渠道不支持原生」由 ErrNativeNotSupported 单独表达，处理器会降级到
+//      转换路径，而转换路径自带完整的组内 failover（chat/messages/responses/gemini 四条都有）。
+// 所以真正需要换渠道时，兜底发生在降级之后的那条路径上。
+// 什么时候要改这里：上游在「已收到原生请求后」返回可重试错误（429/5xx）且
+// 计入成本可接受时，把这里换成遍历候选（参照 resolveProvider 的刷新逻辑）。
+func (r *Router) RelayNative(ctx context.Context, req *core.ChatRequest, body []byte, format core.NativeRelayFormat) ([]byte, error) {
+	rp, rewritten, err := r.prepareNativeRelay(ctx, req, body, format)
+	if err != nil {
+		return nil, err
+	}
+	return rp.RelayNative(ctx, rewritten)
+}
+
+// RelayNativeStream 通过原生旁路执行流式调用，返回上游原始 SSE 流（调用方关闭）。
+// 渠道/模型不支持时返回包装了 core.ErrNativeNotSupported 的错误。
+func (r *Router) RelayNativeStream(ctx context.Context, req *core.ChatRequest, body []byte, format core.NativeRelayFormat) (io.ReadCloser, error) {
+	rp, rewritten, err := r.prepareNativeRelay(ctx, req, body, format)
+	if err != nil {
+		return nil, err
+	}
+	return rp.RelayNativeStream(ctx, rewritten)
 }
 
 // ListModels returns all models from the lookup.

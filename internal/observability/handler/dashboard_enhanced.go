@@ -447,6 +447,9 @@ func (h *UsageHandler) DashboardModelsEnhanced(c *gin.Context) {
 	if endpoint := c.Query("endpoint"); endpoint != "" {
 		q = q.Where("inbound_endpoint = ?", endpoint)
 	}
+	if proto := c.Query(UpstreamProtocolParam); proto != "" {
+		q = q.Where("upstream_protocol = ?", proto)
+	}
 
 	var rawRows []rawModelRow
 	if err := q.Group("model").

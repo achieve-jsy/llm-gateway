@@ -277,8 +277,11 @@ func callLogSchemaReady(db *gorm.DB) bool {
 	if db == nil || !db.Migrator().HasTable(&model.CallLog{}) {
 		return false
 	}
+	// 每加一个 gateway 会写的列，这里都要补一条：探针的意义就是「列没上就退回 Redis-only」，
+	// 漏一条会让 gateway 先于迁移上线时 INSERT 未知列失败，全量 call log 掉 spool。
 	return db.Migrator().HasColumn(&model.CallLog{}, "KeyType") &&
-		db.Migrator().HasColumn(&model.CallLog{}, "BudgetTierConstraintsSnapshot")
+		db.Migrator().HasColumn(&model.CallLog{}, "BudgetTierConstraintsSnapshot") &&
+		db.Migrator().HasColumn(&model.CallLog{}, "UpstreamProtocol")
 }
 
 func (c *Collector) finalProductionReplay() {

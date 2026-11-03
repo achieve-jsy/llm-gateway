@@ -84,7 +84,9 @@
     },
     "quota_effective_fields": [
       "rpm", "max_concurrency", "source", "subject_type", "subject_id",
-      "default_rpm", "default_max_concurrency"
+      "default_rpm", "default_max_concurrency",
+      "configured_rpm", "configured_max_concurrency",
+      "rpm_source", "max_concurrency_source"
     ],
     "source_enum": ["default_user", "default_service_key", "override", "unset"],
     "routes": [

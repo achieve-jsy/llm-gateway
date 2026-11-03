@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -9,6 +10,8 @@ import (
 	authmodel "github.com/example/llm-gateway/internal/auth/model"
 	cpmodel "github.com/example/llm-gateway/internal/controlplane/model"
 	"github.com/example/llm-gateway/internal/controlplane/service"
+	corequota "github.com/example/llm-gateway/internal/core/quota"
+	gwquota "github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -88,6 +91,7 @@ func setupQuotaServiceTestDB(t *testing.T) *gorm.DB {
 		deleted_at DATETIME,
 		name TEXT NOT NULL,
 		description TEXT DEFAULT '',
+		model_type TEXT NOT NULL DEFAULT 'chat',
 		strategy TEXT NOT NULL DEFAULT 'round_robin',
 		enabled INTEGER NOT NULL DEFAULT 1,
 		max_switches INTEGER NOT NULL DEFAULT 2,
@@ -200,6 +204,165 @@ func setupQuotaServiceMiniredis(t *testing.T) (*redis.Client, func()) {
 		rdb.Close()
 		mr.Close()
 	}
+}
+
+func TestRefreshSnapshot_RebuildsCompleteSnapshot(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	quota := 1000
+	user := authmodel.User{
+		ID:                  uuid.New(),
+		Sub:                 "snapshot-user",
+		Name:                "Snapshot User",
+		Email:               "snapshot@example.com",
+		QuotaRPM:            &quota,
+		QuotaMaxConcurrency: &quota,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	staleUserID := uuid.New().String()
+	staleQuota := 1
+	staleSnapshot, err := json.Marshal(service.QuotaSnapshotData{
+		Users: map[string]service.QuotaEntry{
+			staleUserID: {
+				RPM:            &staleQuota,
+				MaxConcurrency: &staleQuota,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, rdb.Set(context.Background(), service.QuotaSnapshotKey, staleSnapshot, 0).Err())
+
+	svc := service.NewQuotaService(db, rdb)
+	require.NoError(t, svc.RefreshSnapshot(context.Background()))
+
+	rawSnapshot, err := rdb.Get(context.Background(), service.QuotaSnapshotKey).Bytes()
+	require.NoError(t, err)
+
+	var snapshot service.QuotaSnapshotData
+	require.NoError(t, json.Unmarshal(rawSnapshot, &snapshot))
+	assert.Equal(t, 60, snapshot.DefaultUserRPM)
+	assert.Equal(t, 10, snapshot.DefaultUserMaxConcurrency)
+	assert.Equal(t, 120, snapshot.DefaultServiceKeyRPM)
+	assert.Equal(t, 20, snapshot.DefaultServiceKeyMaxConcurrency)
+	assert.NotContains(t, snapshot.Users, staleUserID)
+	entry, ok := snapshot.Users[user.ID.String()]
+	require.True(t, ok)
+	require.NotNil(t, entry.RPM)
+	assert.Equal(t, 1000, *entry.RPM)
+	require.NotNil(t, entry.MaxConcurrency)
+	assert.Equal(t, 1000, *entry.MaxConcurrency)
+	assert.False(t, snapshot.UpdatedAt.IsZero())
+}
+
+func TestRefreshSnapshot_UserPartialOverridePreservesInheritedFieldForGateway(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	rpm := 321
+	user := authmodel.User{
+		ID:       uuid.New(),
+		Sub:      "partial-user",
+		Name:     "Partial User",
+		Email:    "partial-user@example.com",
+		QuotaRPM: &rpm,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	svc := service.NewQuotaService(db, rdb)
+	require.NoError(t, svc.RefreshSnapshot(context.Background()))
+
+	rawSnapshot, err := rdb.Get(context.Background(), service.QuotaSnapshotKey).Bytes()
+	require.NoError(t, err)
+	var gatewaySnapshot corequota.QuotaSnapshot
+	require.NoError(t, json.Unmarshal(rawSnapshot, &gatewaySnapshot))
+
+	effective := gwquota.ResolveSubjectLimits(&gatewaySnapshot, "user", user.ID.String())
+	assert.Equal(t, 321, effective.RPM)
+	assert.Equal(t, 10, effective.MaxConcurrency)
+	assert.Equal(t, "override", effective.Source)
+}
+
+func TestRefreshSnapshot_ServiceKeyPartialOverridePreservesInheritedFieldForGateway(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	maxConcurrency := 7
+	key := cpmodel.ApiKey{
+		ID:                  uuid.New(),
+		UserID:              uuid.New(),
+		Name:                "partial-service-key",
+		KeyHash:             "partial-service-key-hash",
+		EncryptedKey:        "partial-service-key-encrypted",
+		KeyType:             cpmodel.KeyTypeService,
+		QuotaMaxConcurrency: &maxConcurrency,
+	}
+	require.NoError(t, db.Create(&key).Error)
+
+	svc := service.NewQuotaService(db, rdb)
+	require.NoError(t, svc.RefreshSnapshot(context.Background()))
+
+	rawSnapshot, err := rdb.Get(context.Background(), service.QuotaSnapshotKey).Bytes()
+	require.NoError(t, err)
+	var gatewaySnapshot corequota.QuotaSnapshot
+	require.NoError(t, json.Unmarshal(rawSnapshot, &gatewaySnapshot))
+
+	effective := gwquota.ResolveSubjectLimits(&gatewaySnapshot, "service_key", key.ID.String())
+	assert.Equal(t, 120, effective.RPM)
+	assert.Equal(t, 7, effective.MaxConcurrency)
+	assert.Equal(t, "override", effective.Source)
+}
+
+func TestRefreshSnapshot_NilRedisIsDisabled(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	svc := service.NewQuotaService(db, nil)
+
+	require.NoError(t, svc.RefreshSnapshot(context.Background()))
+}
+
+func TestRefreshSnapshot_RedisFailureIsReturned(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	cleanup()
+
+	svc := service.NewQuotaService(db, rdb)
+	err := svc.RefreshSnapshot(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "set quota snapshot")
+}
+
+func TestStartSnapshotReconciler_RefreshesImmediatelyAndPeriodically(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	rdb, cleanup := setupQuotaServiceMiniredis(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	svc := service.NewQuotaService(db, rdb)
+	done := svc.StartSnapshotReconciler(ctx, 10*time.Millisecond)
+
+	require.NoError(t, rdb.Get(context.Background(), service.QuotaSnapshotKey).Err())
+
+	require.NoError(t, rdb.Del(context.Background(), service.QuotaSnapshotKey).Err())
+	require.Eventually(t, func() bool {
+		return rdb.Exists(context.Background(), service.QuotaSnapshotKey).Val() == 1
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
 }
 
 // TestSetUserQuota_Success verifies setting user quota updates DB correctly
@@ -396,6 +559,91 @@ func TestGetUserEffectiveQuota_Default(t *testing.T) {
 	assert.Equal(t, 60, effective.RPM)
 	assert.Equal(t, 10, effective.MaxConcurrency)
 	assert.Equal(t, "default_user", effective.Source)
+}
+
+func TestGetUserEffectiveQuota_PartialOverrideReportsRawValuesAndFieldSources(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	svc := service.NewQuotaService(db, nil)
+
+	rpm := 150
+	user := authmodel.User{
+		ID:       uuid.New(),
+		Sub:      "partial-effective-user",
+		Name:     "Partial Effective User",
+		Email:    "partial-effective-user@example.com",
+		QuotaRPM: &rpm,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	effective, err := svc.GetUserEffectiveQuota(context.Background(), user.ID.String())
+	require.NoError(t, err)
+	payload := marshalQuotaEffective(t, effective)
+
+	assert.Equal(t, float64(150), payload["configured_rpm"])
+	assert.Contains(t, payload, "configured_max_concurrency")
+	assert.Nil(t, payload["configured_max_concurrency"])
+	assert.Equal(t, "override", payload["rpm_source"])
+	assert.Equal(t, "default_user", payload["max_concurrency_source"])
+}
+
+func TestGetServiceKeyEffectiveQuota_PartialOverrideReportsRawValuesAndFieldSources(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	svc := service.NewQuotaService(db, nil)
+
+	maxConcurrency := 7
+	key := cpmodel.ApiKey{
+		ID:                  uuid.New(),
+		UserID:              uuid.New(),
+		Name:                "partial-effective-service-key",
+		KeyHash:             "partial-effective-service-key-hash",
+		EncryptedKey:        "partial-effective-service-key-encrypted",
+		KeyType:             cpmodel.KeyTypeService,
+		QuotaMaxConcurrency: &maxConcurrency,
+	}
+	require.NoError(t, db.Create(&key).Error)
+
+	effective, err := svc.GetServiceKeyEffectiveQuota(context.Background(), key.ID.String())
+	require.NoError(t, err)
+	payload := marshalQuotaEffective(t, effective)
+
+	assert.Contains(t, payload, "configured_rpm")
+	assert.Nil(t, payload["configured_rpm"])
+	assert.Equal(t, float64(7), payload["configured_max_concurrency"])
+	assert.Equal(t, "default_service_key", payload["rpm_source"])
+	assert.Equal(t, "override", payload["max_concurrency_source"])
+}
+
+func TestGetGroupEffectiveQuota_PartialOverrideKeepsUnsetFieldUnlimited(t *testing.T) {
+	db := setupQuotaServiceTestDB(t)
+	svc := service.NewQuotaService(db, nil)
+
+	maxConcurrency := 5
+	group := cpmodel.Group{
+		Name:                "partial-effective-group",
+		Strategy:            "round_robin",
+		Enabled:             true,
+		QuotaMaxConcurrency: &maxConcurrency,
+	}
+	require.NoError(t, db.Create(&group).Error)
+
+	effective, err := svc.GetGroupEffectiveQuota(context.Background(), group.ID)
+	require.NoError(t, err)
+	payload := marshalQuotaEffective(t, effective)
+
+	assert.Equal(t, 0, effective.RPM)
+	assert.Contains(t, payload, "configured_rpm")
+	assert.Nil(t, payload["configured_rpm"])
+	assert.Equal(t, "unset", payload["rpm_source"])
+	assert.Equal(t, "override", payload["max_concurrency_source"])
+}
+
+func marshalQuotaEffective(t *testing.T, effective *service.QuotaEffective) map[string]any {
+	t.Helper()
+	data, err := json.Marshal(effective)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(data, &payload))
+	return payload
 }
 
 // TestGetUserEffectiveQuota_Fallback verifies fallback when system settings missing

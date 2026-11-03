@@ -14,10 +14,14 @@ export interface QuotaEffective {
   rpm: number
   max_concurrency: number
   source: 'default_user' | 'default_service_key' | 'override' | 'unset'
+  rpm_source: 'default_user' | 'default_service_key' | 'override' | 'unset'
+  max_concurrency_source: 'default_user' | 'default_service_key' | 'override' | 'unset'
   subject_type: 'user' | 'service_key' | 'group' | 'model'
   subject_id: string
   default_rpm?: number
   default_max_concurrency?: number
+  configured_rpm: number | null
+  configured_max_concurrency: number | null
 }
 
 export interface QuotaCurrentUsage {

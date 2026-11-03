@@ -25,7 +25,10 @@
             controls-position="right"
             style="width: 100%"
           />
-          <span class="quota-hint">0 = 不限制，留空 = 继承默认 ({{ effective?.default_rpm ?? defaultRpm }})</span>
+          <span class="quota-hint">
+            0 = 不限制，<template v-if="inheritsSystemDefault">留空 = 继承系统默认 ({{ displayDefaultRpm }})</template>
+            <template v-else>留空 = 不额外限制</template>
+          </span>
         </el-form-item>
         <el-form-item label="最大并发数">
           <el-input-number
@@ -36,7 +39,10 @@
             controls-position="right"
             style="width: 100%"
           />
-          <span class="quota-hint">0 = 不限制，留空 = 继承默认 ({{ effective?.default_max_concurrency ?? defaultConcurrency }})</span>
+          <span class="quota-hint">
+            0 = 不限制，<template v-if="inheritsSystemDefault">留空 = 继承系统默认 ({{ displayDefaultConcurrency }})</template>
+            <template v-else>留空 = 不额外限制</template>
+          </span>
         </el-form-item>
       </el-form>
       <div v-if="effective" class="quota-effective">
@@ -44,28 +50,40 @@
         <div class="quota-effective-grid">
           <div class="quota-effective-item">
             <span class="label">RPM：</span>
-            <span class="value">{{ effective.rpm === 0 ? '不限制' : effective.rpm }}</span>
+            <span class="value">{{ formatEffectiveValue(effective.rpm) }}</span>
             <el-tag
               size="small"
-              :type="sourceTagInfo.type"
+              :type="sourceTagInfo(effective.rpm_source).type"
               style="margin-left: 6px"
             >
-              {{ sourceTagInfo.label }}
+              {{ sourceTagInfo(effective.rpm_source).label }}
             </el-tag>
           </div>
           <div class="quota-effective-item">
             <span class="label">并发：</span>
-            <span class="value">{{ effective.max_concurrency === 0 ? '不限制' : effective.max_concurrency }}</span>
+            <span class="value">{{ formatEffectiveValue(effective.max_concurrency) }}</span>
+            <el-tag
+              size="small"
+              :type="sourceTagInfo(effective.max_concurrency_source).type"
+              style="margin-left: 6px"
+            >
+              {{ sourceTagInfo(effective.max_concurrency_source).label }}
+            </el-tag>
           </div>
         </div>
       </div>
       <div class="quota-defaults-hint">
-        默认 {{ defaultRpm }} RPM / {{ defaultConcurrency }} 并发
+        <template v-if="inheritsSystemDefault">
+          系统默认 {{ displayDefaultRpm }} RPM / {{ displayDefaultConcurrency }} 并发
+        </template>
+        <template v-else>
+          {{ subjectType === 'group' ? '模型组' : '模型' }}未设置配额时不额外限制，仍受用户或 Service Key 配额约束
+        </template>
       </div>
     </div>
     <template #footer>
       <el-button @click="$emit('update:visible', false)">取消</el-button>
-      <el-popconfirm title="清除配额设置？将恢复为继承默认值" @confirm="clearQuota">
+      <el-popconfirm :title="clearConfirmTitle" @confirm="clearQuota">
         <template #reference>
           <el-button>清除设置</el-button>
         </template>
@@ -96,10 +114,7 @@ interface Props {
   defaultConcurrency?: number
 }
 
-const props = withDefaults(defineProps<Props>(), {
-  defaultRpm: QUOTA_DEFAULTS.user.rpm,
-  defaultConcurrency: QUOTA_DEFAULTS.user.max_concurrency,
-})
+const props = defineProps<Props>()
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
@@ -123,6 +138,31 @@ const form = ref<{ rpm: number | null; max_concurrency: number | null }>({
 const saving = ref(false)
 const effective = ref<QuotaEffective | null>(null)
 
+const inheritsSystemDefault = computed(
+  () => props.subjectType === 'user' || props.subjectType === 'service_key',
+)
+
+const subjectDefaults = computed(() => QUOTA_DEFAULTS[props.subjectType])
+const displayDefaultRpm = computed(
+  () => effective.value?.default_rpm ?? props.defaultRpm ?? subjectDefaults.value.rpm,
+)
+const displayDefaultConcurrency = computed(
+  () => effective.value?.default_max_concurrency
+    ?? props.defaultConcurrency
+    ?? subjectDefaults.value.max_concurrency,
+)
+
+const clearConfirmTitle = computed(() => inheritsSystemDefault.value
+  ? '清除配额设置？清除后将继承系统默认'
+  : '清除配额设置？清除后将不再单独限制')
+
+function formatEffectiveValue(value: number) {
+  if (!inheritsSystemDefault.value && effective.value?.source === 'unset') {
+    return '未单独限制'
+  }
+  return value === 0 ? '不限制' : value
+}
+
 // 后端响应为 { code:0, data:{...} }，axios 再包一层 → 真实对象在 res.data.data
 function unwrap<T = any>(res: any): T | null {
   return (res?.data?.data ?? res?.data ?? null) as T | null
@@ -138,16 +178,26 @@ const dialogTitle = computed(() => {
   }
 })
 
-const sourceTagInfo = computed(() => {
-  const source = effective.value?.source
+function sourceTagInfo(source: QuotaEffective['source']) {
   switch (source) {
     case 'override': return { label: '自定义', type: 'success' as const }
     case 'default_user': return { label: '用户默认', type: 'info' as const }
     case 'default_service_key': return { label: 'SK默认', type: 'info' as const }
-    case 'unset': return { label: '未设置', type: 'info' as const }
+    case 'unset': return {
+      label: inheritsSystemDefault.value ? '继承系统默认' : '未单独限制',
+      type: 'info' as const,
+    }
     default: return { label: '未设置', type: 'info' as const }
   }
-})
+}
+
+function applyEffective(data: QuotaEffective) {
+  effective.value = data
+  form.value = {
+    rpm: data.configured_rpm,
+    max_concurrency: data.configured_max_concurrency,
+  }
+}
 
 watch(
   () => props.visible,
@@ -160,11 +210,7 @@ watch(
         const res = await api.get(props.subjectId)
         const data = unwrap<QuotaEffective>(res)
         if (data) {
-          effective.value = data
-          if (data.source === 'override') {
-            form.value.rpm = data.rpm
-            form.value.max_concurrency = data.max_concurrency
-          }
+          applyEffective(data)
         }
       } catch (e) {
         console.warn('load quota failed:', e)
@@ -197,11 +243,7 @@ async function saveQuota() {
     const res = await api.get(props.subjectId)
     const data = unwrap<QuotaEffective>(res)
     if (data) {
-      effective.value = data
-      if (data.source === 'override') {
-        form.value.rpm = data.rpm
-        form.value.max_concurrency = data.max_concurrency
-      }
+      applyEffective(data)
     }
     emit('saved')
   } catch (e: any) {
@@ -218,7 +260,9 @@ async function clearQuota() {
     const api = getQuotaApi(props.subjectType)
     await api.set(props.subjectId, { rpm: null, max_concurrency: null })
     form.value = { rpm: null, max_concurrency: null }
-    ElMessage.success('已清除，恢复为继承默认')
+    ElMessage.success(inheritsSystemDefault.value
+      ? '已清除，恢复为继承系统默认'
+      : '已清除，不再单独限制')
     const res = await api.get(props.subjectId)
     effective.value = unwrap<QuotaEffective>(res) || null
     emit('saved')

@@ -36,6 +36,52 @@ type HealthCheckConfig struct {
 
 func (HealthCheckConfig) TableName() string { return "health_check_configs" }
 
+// 检测策略的默认值。
+//
+// 这些值此前散落在各处：GORM tag 里一份、health_check_service 的三个调用点
+// 各写一遍 `maxFailures := 3` / `recoveryThreshold := 2`、UI 表单里再一份。
+// 想调一个默认策略要改四五个地方，漏掉任何一处都会造成「配置写 5、代码按 3 跑」。
+// 统一到这里，其余地方只引用常量。
+const (
+	DefaultCheckIntervalSeconds           = 300
+	DefaultFailureThreshold               = 3
+	DefaultModelCheckIntervalSeconds      = 300
+	DefaultModelCheckFailureThreshold     = 3
+	DefaultGroupCheckIntervalSeconds      = 300
+	DefaultModelRecoverySuccessThreshold  = 2
+	DefaultTimeoutSeconds                 = 15
+)
+
+// ApplyDefaults 把零值字段补齐为默认值。
+//
+// 由 repository.GetConfig 在读取后调用，因此所有调用方拿到的都是「已补齐」的
+// 配置，不必在各自的使用点再写一遍 `if x <= 0 { x = 3 }`。
+//
+// 注意：只补 <= 0 的字段，不覆盖任何显式配置。
+func (c *HealthCheckConfig) ApplyDefaults() {
+	if c.IntervalSeconds <= 0 {
+		c.IntervalSeconds = DefaultCheckIntervalSeconds
+	}
+	if c.FailureThreshold <= 0 {
+		c.FailureThreshold = DefaultFailureThreshold
+	}
+	if c.ModelCheckIntervalSeconds <= 0 {
+		c.ModelCheckIntervalSeconds = DefaultModelCheckIntervalSeconds
+	}
+	if c.ModelCheckFailureThreshold <= 0 {
+		c.ModelCheckFailureThreshold = DefaultModelCheckFailureThreshold
+	}
+	if c.GroupCheckIntervalSeconds <= 0 {
+		c.GroupCheckIntervalSeconds = DefaultGroupCheckIntervalSeconds
+	}
+	if c.ModelRecoverySuccessThreshold <= 0 {
+		c.ModelRecoverySuccessThreshold = DefaultModelRecoverySuccessThreshold
+	}
+	if c.TimeoutSeconds <= 0 {
+		c.TimeoutSeconds = DefaultTimeoutSeconds
+	}
+}
+
 // HealthCheckLog 健康检测记录
 type HealthCheckLog struct {
 	ID             uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`

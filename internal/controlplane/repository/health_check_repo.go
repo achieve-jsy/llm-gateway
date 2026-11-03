@@ -22,6 +22,9 @@ func NewHealthCheckRepo(db *gorm.DB) *HealthCheckRepo {
 func (r *HealthCheckRepo) GetConfig() (*model.HealthCheckConfig, error) {
 	var config model.HealthCheckConfig
 	err := r.db.First(&config).Error
+	// 在这里统一补齐默认值，调用方就不必各自兜底。
+	// 这是唯一的读入口，补一次覆盖全部使用点。
+	config.ApplyDefaults()
 	return &config, err
 }
 
@@ -90,10 +93,10 @@ func (r *HealthCheckRepo) GetLogsByTimeRange(since time.Time, targetType string,
 
 // TargetProviderCount 按模型名称统计 provider/key 数量
 type TargetProviderCount struct {
-	TargetName   string `json:"target_name"`
-	TargetType   string `json:"target_type"`
-	ProviderCnt  int    `json:"provider_count"`
-	KeyCnt       int    `json:"key_count"`
+	TargetName  string `json:"target_name"`
+	TargetType  string `json:"target_type"`
+	ProviderCnt int    `json:"provider_count"`
+	KeyCnt      int    `json:"key_count"`
 }
 
 // GetTargetProviderCounts 批量获取模型名称对应的 provider/key 数量
@@ -102,8 +105,8 @@ func (r *HealthCheckRepo) GetTargetProviderCounts(targetNames []string) (map[str
 		return map[string]TargetProviderCount{}, nil
 	}
 	type row struct {
-		Name         string `gorm:"column:target_name"`
-		ProviderCnt  int    `gorm:"column:provider_count"`
+		Name        string `gorm:"column:target_name"`
+		ProviderCnt int    `gorm:"column:provider_count"`
 	}
 	var rows []row
 	err := r.db.Raw(`

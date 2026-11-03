@@ -204,6 +204,17 @@ func (s *HealthCheckService) IsRunning() bool {
 	return s.running
 }
 
+// 三个后台检测的首跑延迟。
+//
+// 依次错开 15 秒是刻意的：三类检测共用同一条上游链路，同时启动会把上游的
+// 启动期抖动放大成一批「全部渠道失败」，进而误触发自动禁用。
+// 之前这三个数字分别硬编码在各自的 goroutine 里，看不出是同一套节奏。
+const (
+	providerCheckStartDelay = 30 * time.Second
+	modelCheckStartDelay    = 45 * time.Second
+	groupCheckStartDelay    = 60 * time.Second
+)
+
 // StartBackground 根据环境变量启动后台定时检测 goroutine
 // HEALTH_CHECK_INTERVAL 单位为分钟，默认 5，0 表示禁用
 func (s *HealthCheckService) StartBackground(ctx context.Context) {
@@ -267,7 +278,7 @@ func (s *HealthCheckService) StartBackground(ctx context.Context) {
 		select {
 		case <-bgCtx.Done():
 			return
-		case <-time.After(30 * time.Second):
+		case <-time.After(providerCheckStartDelay):
 			s.runBackgroundCheck()
 		}
 
@@ -326,7 +337,7 @@ func (s *HealthCheckService) startModelCheckBackground(ctx context.Context, conf
 		select {
 		case <-modelCtx.Done():
 			return
-		case <-time.After(45 * time.Second):
+		case <-time.After(modelCheckStartDelay):
 			s.runBackgroundModelCheck(modelCtx)
 		}
 
@@ -498,18 +509,35 @@ func probeHTTPStatusCode(errMsg string) (int, bool) {
 // 单次重建本身由 ProviderSnapshotRefresher 用独立的超时上下文执行。
 func (s *HealthCheckService) runBackgroundModelCheck(ctx context.Context) {
 	config, _ := s.healthRepo.GetConfig()
-	maxFailures := 3
+	maxFailures := model.DefaultModelCheckFailureThreshold
 	if config != nil && config.ModelCheckFailureThreshold > 0 {
 		maxFailures = config.ModelCheckFailureThreshold
 	}
 
 	recoveryEnabled := false
-	recoveryThreshold := 2
+	recoveryThreshold := model.DefaultModelRecoverySuccessThreshold
 	if config != nil && config.ModelRecoveryEnabled {
 		recoveryEnabled = true
 		if config.ModelRecoverySuccessThreshold > 0 {
 			recoveryThreshold = config.ModelRecoverySuccessThreshold
 		}
+	}
+
+	// 渠道可用性：渠道被自动禁用期间，其下每个模型的请求都必然失败。
+	// 原实现对此一无所知，仍逐个模型探测，制造两样东西：
+	//   1. 大量必然失败的日志与无效上游请求；
+	//   2. 「模型恢复成功、但渠道仍不可用」的矛盾状态 —— 模型从禁用变回启用，
+	//      而它所在的渠道还在 status=3，请求照旧 503。
+	// 渠道能否恢复由渠道级检测负责，模型级在这一层不重复判断。
+	providerUsable := make(map[uuid.UUID]bool)
+	if allProviders, _, err := s.providerRepo.List(repository.ProviderListFilter{}, 0, 1000); err == nil {
+		for i := range allProviders {
+			p := &allProviders[i]
+			providerUsable[p.ID] = p.Enabled && p.Status != model.ProviderStatusAutoDisabled
+		}
+	} else {
+		// 查询失败时不做过滤（宁可多探，也不要把全部模型当成不可用）
+		slog.Warn("model check background: failed to list providers, skip provider filter", "error", err)
 	}
 
 	filter := &repository.ModelListFilter{}
@@ -534,6 +562,10 @@ func (s *HealthCheckService) runBackgroundModelCheck(ctx context.Context) {
 			// status=3 的模型继续检测
 		}
 		if strings.Contains(strings.ToLower(m.ModelType), "audio") {
+			continue
+		}
+		// 所属渠道不可用时跳过（渠道级检测会负责它能否恢复）
+		if usable, known := providerUsable[m.ProviderID]; known && !usable {
 			continue
 		}
 
@@ -882,7 +914,7 @@ func (s *HealthCheckService) CheckAll(ctx context.Context) *CheckAllResult {
 	}
 
 	config, _ := s.healthRepo.GetConfig()
-	maxFailures := 3
+	maxFailures := model.DefaultFailureThreshold
 	checkMode := "connectivity"
 	if config != nil {
 		if config.FailureThreshold > 0 {
@@ -1520,7 +1552,7 @@ func (s *HealthCheckService) CheckOneByID(ctx context.Context, id uuid.UUID) (*C
 	}
 
 	config, _ := s.healthRepo.GetConfig()
-	maxFailures := 3
+	maxFailures := model.DefaultFailureThreshold
 	checkMode := "connectivity"
 	if config != nil {
 		if config.FailureThreshold > 0 {
@@ -2072,7 +2104,7 @@ func (s *HealthCheckService) startGroupCheckBackground(ctx context.Context, conf
 		select {
 		case <-groupCtx.Done():
 			return
-		case <-time.After(60 * time.Second):
+		case <-time.After(groupCheckStartDelay):
 			s.runBackgroundGroupCheck(groupCtx)
 		}
 

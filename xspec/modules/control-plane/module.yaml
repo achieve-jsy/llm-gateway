@@ -1,0 +1,10 @@
+# control-plane 模块元数据
+name: control-plane
+display_name: 控制面
+version: 1.0.0
+module_type: web-backend
+description: 管理面 API：渠道/模型/Key/模型组 CRUD、Catalog 同步、配置下发
+status: active
+created: 2026-06-03
+updated: 2026-06-03
+dependencies: []

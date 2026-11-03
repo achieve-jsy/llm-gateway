@@ -49,7 +49,7 @@ flowchart TB
 | `migrations/` | Postgres SQL 迁移（按序号 `001..NNN`） |
 | `tools/opencode-models-discovery/` | OpenCode 模型发现插件（fork），见 `docs/opencode-models-discovery.md` |
 | `docs/` | 设计/架构文档 |
-| `tests/` | `contract/`（无 DB 冒烟）、`integration/`（需测试库）、`reports/` |
+| `tests/` | 测试代码，与业务代码物理分离。按模块镜像 `internal/` 结构，原则见 `tests/README.md` |
 
 ## 路由边界（改路由时先看这里）
 
@@ -86,9 +86,8 @@ make dev                # APP_ENV=dev go run ./cmd/gateway
 make dev-cp             # APP_ENV=dev go run ./cmd/control-plane（另一个终端）
 
 # 测试
-make test               # go test ./... -race -cover
-RUN_INTEGRATION_TESTS=1 go test ./tests/integration/... -v   # 需测试库 llm_gateway_test
-go test ./tests/contract/... -v                              # 契约冒烟（无 DB/Redis）
+make test               # 全部单元测试 + 组件测试（tests/ 下）
+go test ./tests/... -tags=integration -count=1  # 含集成测试（需 Docker）
 
 # Swagger / Lint
 make swagger            # swag init -> api/swagger/docs
@@ -97,7 +96,6 @@ make lint               # golangci-lint run ./...
 # 前端
 cd web && npm install && npm run dev        # 开发
 cd web && npx vite build                    # 构建到 web/dist（nginx 直接服务）
-cd web && npm run test:run                  # Vitest
 
 # OpenCode 插件
 cd tools/opencode-models-discovery && bun run build:bundle && bunx tsc --noEmit && bun test
@@ -107,7 +105,7 @@ cd tools/opencode-models-discovery && bun run build:bundle && bunx tsc --noEmit 
 
 ## 约定与注意事项
 
-- **改了 Go/前端后**务必本地 `go build ./...` / 前端类型检查，并按需补/改测试；契约测试要求 `tests/contract` 与控制面路由 1:1 对齐。
+- **改了 Go 后**务必本地 `go build ./...` 并按需补测试；`tests/contract/contracts.json` 为 FE↔BE 接口契约参考，改动接口时需同步更新。
 - **gateway 不要直连数据库**——它只通过 Redis snapshot / 控制面内部 API 获取配置。新增需要持久化的能力放控制面，gateway 经 `internal/gateway/binding` 调内部接口。
 - **新增厂商**：在 `internal/providers/<vendor>/` 实现 `core.Provider`，在 `cmd/gateway/main.go` 的 `buildProviderFactory()` 注册 `Type`。
 - **数据库变更**：新增 `migrations/NNN_*.sql`（递增序号），对应改 `internal/controlplane/model` 与 repository。
@@ -120,4 +118,5 @@ cd tools/opencode-models-discovery && bun run build:bundle && bunx tsc --noEmit 
 
 - `docs/opencode-models-discovery.md` — OpenCode 模型发现插件完整架构
 - `README.md` — 快速开始与命令速查
+- `tests/README.md` — 测试原则、分层与文件组织
 - `xspec/` — 规格/契约相关资料

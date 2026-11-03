@@ -1,0 +1,11 @@
+# ops-console 模块元数据
+name: ops-console
+display_name: 管理控制台
+version: 1.0.0
+module_type: web-frontend
+description: 管理后台 SPA：渠道管理、模型管理、Catalog、健康监控、设置
+status: active
+created: 2026-06-03
+updated: 2026-06-03
+dependencies:
+  - control-plane

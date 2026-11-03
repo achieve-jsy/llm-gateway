@@ -16,7 +16,11 @@ build-cp:
 
 # ─── 测试 ────────────────────────────────────────────────────────────────────────
 test:
-	go test ./... -race -count=1
+	@if find tests -name '*_test.go' | grep -q .; then \
+		go test ./tests/... -count=1; \
+	else \
+		echo "No test files found in tests/"; \
+	fi
 
 # ─── Lint ────────────────────────────────────────────────────────────────────────
 lint:

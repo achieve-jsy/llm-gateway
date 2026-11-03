@@ -1,0 +1,10 @@
+# provider-adapters 模块元数据
+name: provider-adapters
+display_name: Provider 适配层
+version: 1.0.0
+module_type: web-backend
+description: 多厂商适配层：17+ 厂商 adapter、模型注册表、pricing 合并
+status: active
+created: 2026-06-03
+updated: 2026-06-03
+dependencies: []

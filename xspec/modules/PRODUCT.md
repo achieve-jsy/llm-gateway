@@ -37,14 +37,34 @@
 
 ## 模块结构
 
-> 模块详细拆分由 `/xf/split` 定义，此处仅列出架构级组件。
+```mermaid
+graph TD
+    OC["ops-console"] -->|REST API| CP["control-plane"]
+    GW["gateway-core"] -->|provider 路由| PA["provider-adapters"]
+    GW -->|verify-key / config snapshot| CP
+    CP -->|provider snapshot via Redis pub/sub| GW
+    OP["opencode-plugin"] -->|拉取 opencode-config| CP
+```
 
-| 组件 | 类型 | 职责 | 状态 |
+### 模块列表
+
+| 模块 | 类型 | 职责描述 | 状态 |
 | :--- | :--- | :--- | :--- |
-| gateway | web-backend | 对外 OpenAI 兼容接口，鉴权→模型组调度→转发上游 | 已实现 |
-| control-plane | web-backend | 管理后台 API、渠道/模型/Key/模型组 CRUD、配置下发 | 已实现 |
-| web | web-frontend | 管理面 SPA（渠道/模型/Catalog/Key/设置） | 已实现 |
-| opencode-plugin | tool | OpenCode 模型发现插件，配置一键下发 | 已实现 |
+| gateway-core | web-backend | 请求转发核心：鉴权→模型组调度→provider 路由→流式转发 | 已实现 |
+| provider-adapters | web-backend | 多厂商适配层：17+ 厂商 adapter、模型注册表、pricing 合并 | 已实现 |
+| control-plane | web-backend | 管理面 API：渠道/模型/Key/模型组 CRUD、Catalog 同步、配置下发 | 已实现 |
+| ops-console | web-frontend | 管理后台 SPA：渠道管理、模型管理、Catalog、健康监控、设置 | 已实现 |
+| opencode-plugin | systems | OpenCode 模型发现插件：配置一键下发、模型自动发现 | 已实现 |
+
+### 模块依赖关系
+
+| 模块 | 依赖 | 依赖类型 | 说明 |
+| :--- | :--- | :--- | :--- |
+| ops-console | control-plane | 接口调用 | 前端通过 REST API 调用管理面 |
+| gateway-core | provider-adapters | 接口调用 | 调度后选择具体厂商 adapter 转发 |
+| gateway-core | control-plane | 数据共享 | 通过 Redis snapshot 获取配置，verify-key 调内部 API |
+| control-plane | gateway-core | 事件通知 | provider snapshot 写入 Redis 并 pub/sub config:change |
+| opencode-plugin | control-plane | 接口调用 | 拉取 /api/v1/opencode-config 获取安装脚本和插件 bundle |
 
 ## 产品边界
 
@@ -93,7 +113,7 @@
 
 | 属性 | 内容 |
 | :--- | :--- |
-| 版本 | 1.0.0 |
+| 版本 | 1.1.0 |
 | 创建日期 | 2026-06-03 |
 | 最后更新 | 2026-06-03 |
 | PRD 来源 | v1.1-docs (2026-05-20) |

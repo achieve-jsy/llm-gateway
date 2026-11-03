@@ -230,10 +230,12 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 			return b
 		}(),
 		InboundEndpoint: ctx.Request.URL.Path,
-		UserAgent:       ctx.Request.UserAgent(),
-		IPAddress:       ctx.ClientIP(),
-		Status:          getInt(ctx, "status"),
-		UpstreamStatus:  getInt(ctx, "upstream_status"),
+		// 原生旁路标记：只有 handler 原生成功分支才写，读不到即空串（= 转换）。
+		UpstreamProtocol: getString(ctx, "upstream_protocol"),
+		UserAgent:        ctx.Request.UserAgent(),
+		IPAddress:        ctx.ClientIP(),
+		Status:           getInt(ctx, "status"),
+		UpstreamStatus:   getInt(ctx, "upstream_status"),
 		// 配额拒绝事实：仅当本请求确实被配额闸门拒绝时（quota_gate 非空）才记录限额，
 		// 避免把"未发生配额判定"的行写成 limit=0 而误导排查。
 		QuotaGate:  getString(ctx, "quota_gate"),

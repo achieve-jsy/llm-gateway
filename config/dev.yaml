@@ -62,3 +62,6 @@ budget_tier:
   shadow_enabled: false
   v2_total_enforcement_enabled: false
   legacy_total_write_enabled: true
+# 协议转换策略（relaykit 集成）
+protocol:
+  default_mode: legacy

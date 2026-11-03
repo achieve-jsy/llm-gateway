@@ -442,6 +442,10 @@ func nativeBaseURLFromOpenAICompatibleBaseURL(baseURL string) (string, bool) {
 // adaptChatRequest rewrites a ChatRequest for Gemini's OpenAI-compatible endpoint.
 // Gemini uses "reasoning_effort" as a top-level string (e.g. "low", "medium", "high"),
 // not the nested "reasoning": {"effort": "..."} format.
+//
+// 注意：这个 OpenAI 兼容端点只接受字符串档位，无法承接数值预算
+// （Reasoning.BudgetTokens）。数值预算只在原生 generateContent 的
+// thinkingConfig.thinkingBudget 上生效，见 thinkingConfigForReasoning。
 func adaptChatRequest(req *core.ChatRequest) (any, error) {
 	if req.Reasoning == nil || req.Reasoning.Effort == "" {
 		return req, nil

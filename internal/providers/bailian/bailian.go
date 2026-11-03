@@ -935,3 +935,21 @@ func (p *Provider) CancelBatch(ctx context.Context, id string) (*core.BatchRespo
 func (p *Provider) GetBatchResults(ctx context.Context, id string) (*core.BatchResultsResponse, error) {
 	return p.compatible.GetBatchResults(ctx, id)
 }
+
+// ─── 原生旁路（NativeRelay）─────────────────────────────
+// 字段委托不会像指针嵌入那样自动继承方法，这里显式转发到 compatible，
+// 避免把同一份实现复制一遍。
+
+func (p *Provider) NativeRelayFormatFor(model string, format core.NativeRelayFormat) (core.NativeRelayFormat, bool) {
+	return p.compatible.NativeRelayFormatFor(model, format)
+}
+
+func (p *Provider) RelayNative(ctx context.Context, body []byte) ([]byte, error) {
+	return p.compatible.RelayNative(ctx, body)
+}
+
+func (p *Provider) RelayNativeStream(ctx context.Context, body []byte) (io.ReadCloser, error) {
+	return p.compatible.RelayNativeStream(ctx, body)
+}
+
+var _ core.NativeRelayProvider = (*Provider)(nil)

@@ -80,8 +80,9 @@ func TestProductionCollector_UsesIndependentPriceRefreshOverride(t *testing.T) {
 		input_price real, output_price real, catalog_id text,
 		cache_read_price real, cache_write_price real
 	)`).Error)
+	// upstream_protocol 是 callLogSchemaReady 探针的检查列之一，fixture 少了它会退回 Redis-only。
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
-		request_id text PRIMARY KEY, key_type text, budget_tier_constraints_snapshot text
+		request_id text PRIMARY KEY, key_type text, budget_tier_constraints_snapshot text, upstream_protocol text
 	)`).Error)
 	require.NoError(t, db.Exec(`INSERT INTO providers(id,name,type) VALUES ('p1','cohere-primary','cohere')`).Error)
 	require.NoError(t, db.Exec(`INSERT INTO model_catalog(

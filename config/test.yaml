@@ -46,3 +46,13 @@ frontend:
 
 gateway:
   url: "http://192.0.2.10:9080"
+
+# 协议转换策略（relaykit 集成）
+#
+# 测试环境默认启用原生旁路，用于验证「原始 body 零转换直发上游」这条链路。
+# 三档语义：legacy = 关原生走转换；shadow = 影子对比但返回转换结果；
+# active = 开原生，仅当渠道声明 ErrNativeNotSupported 时降级。
+#
+# 回退：把 default_mode 改回 legacy 重新发布即可；无需回滚镜像。
+protocol:
+  default_mode: active

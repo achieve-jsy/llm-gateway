@@ -16,6 +16,16 @@ type Reasoning struct {
 	// Effort controls how much reasoning effort the model should use.
 	// Valid values are "none", "minimal", "low", "medium", "high", and "xhigh".
 	Effort string `json:"effort,omitempty"`
+	// BudgetTokens 是客户端显式给出的思考 token 预算（Anthropic 的
+	// thinking.budget_tokens）。必须原样保留：Effort 只是它的粗粒度近似，
+	// 用 Effort 反推会改变预算（如 1024 → 5000），进而放大 max_tokens 与成本。
+	// 来自 relaykit 的 dto.ReasoningConversionState.BudgetTokens。
+	//
+	// json:"-"：这是**网关内部**的传递字段，不属于任何上游 wire 协议。
+	// 部分 provider（groq / cohere / gemini）直接把 *ChatRequest 当作请求体
+	// 序列化发上游；若参与序列化，会把 budget_tokens 泄漏给不认识的 API。
+	// 需要它的 provider（anthropic）显式构造请求体，不依赖 JSON 标签。
+	BudgetTokens *int `json:"-"`
 	// Summary requests a reasoning summary (Responses API). Chat Completions
 	// rejects this field; adapters must strip it or bridge to /responses.
 	Summary string `json:"summary,omitempty"`
@@ -109,8 +119,8 @@ type Choice struct {
 
 // ResponseMessage represents a single assistant message in a chat response.
 type ResponseMessage struct {
-	Role    string         `json:"role"`
-	Content MessageContent `json:"content"`
+	Role          string            `json:"role"`
+	Content       MessageContent    `json:"content"`
 	ContentSchema []ContentPart     `json:"-" swaggerignore:"true"`
 	ToolCalls     []ToolCall        `json:"tool_calls,omitempty"`
 	ExtraFields   UnknownJSONFields `json:"-" swaggerignore:"true"`
@@ -456,7 +466,7 @@ type ModelsResponse struct {
 type EmbeddingRequest struct {
 	Model          string            `json:"model"`
 	Provider       string            `json:"provider,omitempty"` // Gateway routing hint; stripped before upstream execution.
-	ModelType      string            `json:"-"` // "embedding" or "embedding_vl", used by provider to select API endpoint
+	ModelType      string            `json:"-"`                  // "embedding" or "embedding_vl", used by provider to select API endpoint
 	Input          any               `json:"input"`
 	EncodingFormat string            `json:"encoding_format,omitempty"`
 	Dimensions     *int              `json:"dimensions,omitempty"`
@@ -498,9 +508,9 @@ type EmbeddingUsage struct {
 type RerankRequest struct {
 	Model           string            `json:"model"`
 	Provider        string            `json:"provider,omitempty"` // Gateway routing hint; stripped before upstream execution.
-	ModelType       string            `json:"-"`                     // "rerank" or "rerank_vl"；调度后填充，不入 JSON
-	Query           any               `json:"query"`                 // string | {text|image}
-	Documents       []any             `json:"documents"`             // [](string | {text|image|video})
+	ModelType       string            `json:"-"`                  // "rerank" or "rerank_vl"；调度后填充，不入 JSON
+	Query           any               `json:"query"`              // string | {text|image}
+	Documents       []any             `json:"documents"`          // [](string | {text|image|video})
 	TopN            *int              `json:"top_n,omitempty"`
 	ReturnDocuments *bool             `json:"return_documents,omitempty"`
 	MaxChunksPerDoc *int              `json:"max_chunks_per_doc,omitempty"`

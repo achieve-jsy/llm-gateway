@@ -26,6 +26,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/cache"
 	"github.com/example/llm-gateway/internal/gateway/config"
 	"github.com/example/llm-gateway/internal/gateway/infra"
+	"github.com/example/llm-gateway/internal/protocol"
 	"github.com/example/llm-gateway/internal/gateway/loader"
 	"github.com/example/llm-gateway/internal/gateway/middleware"
 	gatewaymodel "github.com/example/llm-gateway/internal/gateway/model"
@@ -92,6 +93,13 @@ func main() {
 
 	// 加载配置
 	cfg := config.Load()
+
+	// 初始化协议转换策略（relaykit 集成）
+	protocolPolicy, err := protocol.LoadPolicy(protocol.PolicyConfig{
+		DefaultMode: cfg.Protocol.DefaultMode,
+		PerKey:      cfg.Protocol.PerKey,
+		PerEntry:    cfg.Protocol.PerEntry,
+	})
 
 	// 按配置覆盖 call_traces 正文裁剪上限（默认不截断文本上下文，供用量/语义分析报告使用）
 	middleware.SetTraceSanitizeLimits(middleware.TraceSanitizeLimits{
@@ -365,6 +373,7 @@ func main() {
 		)
 	}
 	r := server.SetupWithBudgetAlertDispatcher(budgetAlertDispatcher, providerLoader.Router, icache, state, authClient, authJWTManager, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter, redactEngine, bindClient, rdb, tierHolder,
+		protocolPolicy,
 		func(reload func(entries []gatewaymodel.ProviderEntry)) {
 			reloadSeedance = reload
 		},

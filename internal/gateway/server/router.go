@@ -5,11 +5,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
+	acrypto "github.com/example/llm-gateway/internal/auth/crypto"
 	"github.com/example/llm-gateway/internal/configsync"
 	"github.com/example/llm-gateway/internal/core"
-	acrypto "github.com/example/llm-gateway/internal/auth/crypto"
 	"github.com/example/llm-gateway/internal/gateway/binding"
 	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/cache"
@@ -23,6 +24,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/quota"
 	"github.com/example/llm-gateway/internal/gateway/redact"
 	"github.com/example/llm-gateway/internal/gateway/scheduler"
+	"github.com/example/llm-gateway/internal/protocol"
 	"github.com/example/llm-gateway/internal/providers"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -54,10 +56,11 @@ func Setup(
 	bindClient *binding.Client,
 	rdb redisClient,
 	tierHolder *budget.SnapshotHolder,
+	protocolPolicy *protocol.Policy,
 	onSeedanceReloadReady ...func(reload func(entries []gwmodel.ProviderEntry)),
 ) *gin.Engine {
 	return setup(nil, routerGetter, routerCache, state, authClient, jwtManager, controlPlaneURL, internalToken,
-		sch, nameCache, collectorOpt, traceWriterOpt, redactEngine, bindClient, rdb, tierHolder, onSeedanceReloadReady...)
+		sch, nameCache, collectorOpt, traceWriterOpt, redactEngine, bindClient, rdb, tierHolder, protocolPolicy, onSeedanceReloadReady...)
 }
 
 func SetupWithBudgetAlertDispatcher(
@@ -76,10 +79,11 @@ func SetupWithBudgetAlertDispatcher(
 	bindClient *binding.Client,
 	rdb redisClient,
 	tierHolder *budget.SnapshotHolder,
+	protocolPolicy *protocol.Policy,
 	onSeedanceReloadReady ...func(reload func(entries []gwmodel.ProviderEntry)),
 ) *gin.Engine {
 	return setup(alertDispatcher, routerGetter, routerCache, state, authClient, jwtManager, controlPlaneURL, internalToken,
-		sch, nameCache, collectorOpt, traceWriterOpt, redactEngine, bindClient, rdb, tierHolder, onSeedanceReloadReady...)
+		sch, nameCache, collectorOpt, traceWriterOpt, redactEngine, bindClient, rdb, tierHolder, protocolPolicy, onSeedanceReloadReady...)
 }
 
 func setup(
@@ -98,6 +102,7 @@ func setup(
 	bindClient *binding.Client,
 	rdb redisClient,
 	tierHolder *budget.SnapshotHolder,
+	protocolPolicy *protocol.Policy,
 	onSeedanceReloadReady ...func(reload func(entries []gwmodel.ProviderEntry)),
 ) *gin.Engine {
 	var collector []*gwobs.Collector
@@ -159,6 +164,33 @@ func setup(
 		messagesHandler = handler.NewMessagesHandler(orch)
 	}
 
+	var responsesHandler *handler.ResponsesHandler
+	if groupDispatch != nil {
+		responsesHandler = handler.NewResponsesHandlerWithGroup(orch, groupDispatch)
+	} else {
+		responsesHandler = handler.NewResponsesHandler(orch)
+	}
+
+	var geminiHandler *handler.GeminiHandler
+	if groupDispatch != nil {
+		geminiHandler = handler.NewGeminiHandlerWithGroup(orch, groupDispatch)
+	} else {
+		geminiHandler = handler.NewGeminiHandler(orch)
+	}
+
+	if protocolPolicy != nil {
+		messagesHandler.SetProtocolPolicy(protocolPolicy)
+		// responses 的 relaykit 路径需要 policy 决定模式，并复用 chat 编排器
+		// 走 Chat 中转（Responses→Chat→Responses）。
+		responsesHandler.SetProtocolPolicy(protocolPolicy)
+		responsesHandler.SetChatOrchestrator(orch)
+		// Gemini 入站只有 relaykit 一条转换实现，policy 仅用于记录模式。
+		geminiHandler.SetProtocolPolicy(protocolPolicy)
+		// Chat 是流量最大的入口：原生旁路默认关闭，只有显式 active 的 Key
+		// 才会零转换直发，避免上线即全量改变语义。
+		chatHandler.SetProtocolPolicy(protocolPolicy)
+	}
+
 	// 脱敏注入：引擎全局共享（并发安全），每个请求由 handler 内部 NewSession() + defer Close()。
 	// nil / off 时 handler 内部是 no-op。
 	// 只挂 chat / messages / responses / embeddings / rerank 五条纯文本链路；passthrough / batch 未覆盖。
@@ -180,13 +212,6 @@ func setup(
 	modelInfoHandler := handler.NewModelInfoHandler(controlPlaneURL, internalToken)
 	healthHandler := handler.NewHealthHandler(routerCache.Client(), modelsRouter, state, sch)
 	healthHandler.SetBudgetSnapshotHolder(tierHolder)
-	var responsesHandler *handler.ResponsesHandler
-	if groupDispatch != nil {
-		responsesHandler = handler.NewResponsesHandlerWithGroup(orch, groupDispatch)
-	} else {
-		responsesHandler = handler.NewResponsesHandler(orch)
-	}
-
 	// v0.7: 预算预扣依赖（一次构造传给所有 handler）。
 	// Pricing 暂用 fallback（保守单价），后续接入 providers.ModelRegistry 真实 catalog 定价。
 	// FallbackOutputTokens：请求未传 max_tokens 时的保守估计（对齐控制面配置 2048）。
@@ -225,6 +250,7 @@ func setup(
 		rerankHandler.SetBudgetGate(tierBudgetGate)
 		messagesHandler.SetBudgetGate(tierBudgetGate)
 		responsesHandler.SetBudgetGate(tierBudgetGate)
+		geminiHandler.SetBudgetGate(tierBudgetGate)
 	}
 
 	r.GET("/health", healthHandler.Health)
@@ -254,6 +280,7 @@ func setup(
 	rerankHandler.SetRequestQuotaGate(quotaMW)
 	messagesHandler.SetRequestQuotaGate(quotaMW)
 	responsesHandler.SetRequestQuotaGate(quotaMW)
+	geminiHandler.SetRequestQuotaGate(quotaMW)
 
 	// v0.15: 模型层配额检查（路由选定具体 model 之后、转发上游之前）
 	modelQuotaGate := quota.NewModelQuotaGate(quotaHolder, quotaStore)
@@ -262,6 +289,7 @@ func setup(
 	rerankHandler.SetModelQuotaGate(modelQuotaGate)
 	messagesHandler.SetModelQuotaGate(modelQuotaGate)
 	responsesHandler.SetModelQuotaGate(modelQuotaGate)
+	geminiHandler.SetModelQuotaGate(modelQuotaGate)
 
 	// OpenAI 兼容接口（需 API Key 认证）
 	// 初始化视频适配器（从 Redis Provider Snapshot 读取真实凭证；支持热更新）
@@ -276,19 +304,22 @@ func setup(
 	adapters := buildSeedanceAdapters(initialEntries)
 	relayAdapter, volcengineAdapter := adapters.asVideoProviders()
 
-	v1 := r.Group("/v1")
-	v1.Use(middleware.AuthMiddleware(authClient, jwtManager))
-	// 在途字节预算准入：按 Content-Length 排队占用全局 256MB 预算，
-	// 为「并发 × 体积」提供硬上界（语义见 middleware.BodyBudgetLimiter）。
-	// 位置必须恰好在这里：
-	//   - 不能放在 AuthMiddleware 之前：否则未鉴权 / 无效 Key 的请求也会占用预算，
-	//     可以靠垃圾请求把预算占满，反而拖垮正常调用；
-	//   - 不能放在 TraceCapture 之后：请求体读取发生在 TraceCapture，
-	//     预算必须覆盖读取阶段，否则内存峰值在拿到预算前就已经产生，准入形同虚设。
-	v1.Use(middleware.BodyBudgetLimiter(middleware.DefaultBodyBudgetBytes))
-	v1.Use(BillingFactGuard(collectorOpt))
-	// 请求/响应正文捕获（供 trace 记录使用）
-	v1.Use(middleware.TraceCapture())
+	// v1 的中间件链显式构造：/v1beta（Gemini 原生入站）必须复用同一条链，
+	// 否则鉴权/预算/配额/埋点会在另一个前缀上被整段绕过。
+	v1Chain := []gin.HandlerFunc{
+		middleware.AuthMiddleware(authClient, jwtManager),
+		// 在途字节预算准入：按 Content-Length 排队占用全局 256MB 预算，
+		// 为「并发 × 体积」提供硬上界（语义见 middleware.BodyBudgetLimiter）。
+		// 位置必须恰好在这里：
+		//   - 不能放在 AuthMiddleware 之前：否则未鉴权 / 无效 Key 的请求也会占用预算，
+		//     可以靠垃圾请求把预算占满，反而拖垮正常调用；
+		//   - 不能放在 TraceCapture 之后：请求体读取发生在 TraceCapture，
+		//     预算必须覆盖读取阶段，否则内存峰值在拿到预算前就已经产生，准入形同虚设。
+		middleware.BodyBudgetLimiter(middleware.DefaultBodyBudgetBytes),
+		BillingFactGuard(collectorOpt),
+		// 请求/响应正文捕获（供 trace 记录使用）
+		middleware.TraceCapture(),
+	}
 	// 埋点采集中间件放在 OrgCheck 之前，确保 403 拦截的调用也能写入 call_logs
 	if (len(collector) > 0 && collector[0] != nil) || tierBudgetGate != nil {
 		// v0.7: 构造预算核销+告警触发 hook（仅在 Redis 可用时启用）
@@ -301,14 +332,19 @@ func setup(
 			callLogCollector = collector[0]
 		}
 		// 必须带 Redis：运维看板实时 QPS/TPS（ops:qps:* / ops:tps:*）由此写入
-		v1.Use(middleware.UsageCollectorWithRedis(callLogCollector, traceWriterOpt, budgetHook, rdb))
+		v1Chain = append(v1Chain, middleware.UsageCollectorWithRedis(callLogCollector, traceWriterOpt, budgetHook, rdb))
 	}
 	// Provider 并发/限流追踪（写入 Redis 供运维看板读取）
 	// 必须在 UsageCollector 之后，确保 provider 信息已由 orchestrator 写入 context
-	v1.Use(middleware.ProviderTracker(rdb))
 	// 组织归集状态检查：pending_studio 员工调用模型时返回 403
 	// 注意：必须在 UsageCollector 之后，403 才能被记录到调用明细
-	v1.Use(middleware.OrgCheckMiddleware())
+	v1Chain = append(v1Chain, middleware.ProviderTracker(rdb), middleware.OrgCheckMiddleware())
+
+	v1 := r.Group("/v1")
+	v1.Use(v1Chain...)
+	// Gemini 原生入站的第二个前缀：google-genai 客户端默认打 /v1beta。
+	v1beta := r.Group("/v1beta")
+	v1beta.Use(v1Chain...)
 	// v0.7: 预算预扣已改由每个 handler 在解析 body 后主动调用 middleware.Reserve
 	// （不再用 BudgetCheckMiddleware，因为 middleware 拿不到 body 里的 model/max_tokens）
 	{
@@ -333,6 +369,11 @@ func setup(
 		// Anthropic Messages API
 		v1.POST("/messages", messagesHandler.HandleMessages)
 		v1.POST("/messages/count_tokens", messagesHandler.HandleCountTokens)
+
+		// Gemini 原生入站：{model}:generateContent / {model}:streamGenerateContent
+		// 两种前缀 google 客户端都会用（新版 /v1beta，部分客户端/代理改写成 /v1）。
+		v1.POST("/models/:modelAction", geminiHandler.Handle)
+		v1beta.POST("/models/:modelAction", geminiHandler.Handle)
 
 		// Provider passthrough: /v1/p/:provider/*path
 		// v0.7: 默认关闭，仅白名单 Key（access_all_groups=true 的管理员 Key）可用；
@@ -445,9 +486,15 @@ func isBillableRequest(request *http.Request) bool {
 	switch request.URL.Path {
 	case "/v1/chat/completions", "/v1/embeddings", "/v1/rerank", "/v1/responses", "/v1/messages":
 		return true
-	default:
-		return false
 	}
+	// Gemini 原生入站的路径带 {model}:{action}（如 /v1beta/models/gemini-2.5-pro:generateContent），
+	// 无法等值匹配。不加这一段，Gemini 请求在下游计费系统过载时拿不到 503 背压，
+	// 等于这条入口不受 BillingFactGuard 保护。
+	// 注意 /v1/models 的 GET（列模型）不是 POST，已被上面的 Method 检查挡掉。
+	if strings.HasPrefix(request.URL.Path, "/v1beta/models/") || strings.HasPrefix(request.URL.Path, "/v1/models/") {
+		return true
+	}
+	return false
 }
 
 // makePassthroughHandler returns a Gin handler that proxies requests to

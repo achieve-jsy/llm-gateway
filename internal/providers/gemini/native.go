@@ -776,9 +776,9 @@ func geminiGenerationConfig(req *core.ChatRequest) map[string]any {
 	copyStopSequences(req.ExtraFields.Lookup("stop"), cfg)
 	copyResponseFormat(req.ExtraFields.Lookup("response_format"), cfg)
 	copyGoogleThinkingConfig(req.ExtraFields.Lookup("extra_body"), cfg)
-	if req.Reasoning != nil && strings.TrimSpace(req.Reasoning.Effort) != "" {
+	if req.Reasoning != nil {
 		if _, exists := cfg["thinkingConfig"]; !exists {
-			if thinkingConfig := thinkingConfigForEffort(req.Model, req.Reasoning.Effort); len(thinkingConfig) > 0 {
+			if thinkingConfig := thinkingConfigForReasoning(req.Model, req.Reasoning); len(thinkingConfig) > 0 {
 				cfg["thinkingConfig"] = thinkingConfig
 			}
 		}
@@ -879,6 +879,26 @@ func normalizeSnakeMapKeys(src map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+// thinkingConfigForReasoning 优先采用客户端显式给出的思考预算。
+//
+// 与 anthropic 路径同源的问题：只按 effort 档位反推会改写预算。
+// Gemini 2.5 的 thinkingBudget 本身就是数值，可以直接承接客户端的
+// budget_tokens（如 3000），不必被兜进 medium(8192) 这样的档位。
+// 非 2.5 模型用 thinkingLevel 字符串，没有数值预算可承接，退回按档位映射。
+func thinkingConfigForReasoning(model string, r *core.Reasoning) map[string]any {
+	if r == nil {
+		return nil
+	}
+	if r.BudgetTokens != nil && *r.BudgetTokens >= 0 &&
+		strings.Contains(strings.ToLower(model), "gemini-2.5") {
+		return map[string]any{"thinkingBudget": *r.BudgetTokens}
+	}
+	if strings.TrimSpace(r.Effort) == "" {
+		return nil
+	}
+	return thinkingConfigForEffort(model, r.Effort)
 }
 
 func thinkingConfigForEffort(model, effort string) map[string]any {

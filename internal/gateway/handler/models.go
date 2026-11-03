@@ -28,9 +28,9 @@ type ModelsRouterInterface interface {
 
 // ModelsHandler 模型列表处理器
 type ModelsHandler struct {
-	cache    ModelsCacheInterface
-	router   ModelsRouterInterface
-	state    *provider.RuntimeState
+	cache  ModelsCacheInterface
+	router ModelsRouterInterface
+	state  *provider.RuntimeState
 }
 
 // NewModelsHandler 创建 ModelsHandler 实例

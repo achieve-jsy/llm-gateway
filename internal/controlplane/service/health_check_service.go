@@ -503,6 +503,16 @@ func probeHTTPStatusCode(errMsg string) (int, bool) {
 	return code, true
 }
 
+// modelDetectableUnderProvider 判断某模型是否应在本轮模型级检测中被探测。
+//
+// usable 是「渠道 ID -> 渠道当前可用」的映射，由调用方每轮取一次填充。
+// 已知且不可用的渠道下的模型跳过；映射里没有该渠道（查询失败或渠道已删）
+// 时按可用处理——宁可多探一次，也不要因为一次查询失败把所有模型当死。
+func modelDetectableUnderProvider(providerID uuid.UUID, usable map[uuid.UUID]bool) bool {
+	u, known := usable[providerID]
+	return !known || u
+}
+
 // runBackgroundModelCheck 后台执行一轮模型检测。
 //
 // ctx 为轮次上下文（定时器上下文）：仅用于判断「自动禁用/恢复触发的快照重建」是否还有必要，
@@ -565,7 +575,7 @@ func (s *HealthCheckService) runBackgroundModelCheck(ctx context.Context) {
 			continue
 		}
 		// 所属渠道不可用时跳过（渠道级检测会负责它能否恢复）
-		if usable, known := providerUsable[m.ProviderID]; known && !usable {
+		if !modelDetectableUnderProvider(m.ProviderID, providerUsable) {
 			continue
 		}
 

@@ -90,7 +90,7 @@ func TestMediaTaskCreate_Success_FrozenParamsAndPersistence(t *testing.T) {
 	require.Equal(t, testMediaUserID, create.UserID)
 	require.Empty(t, create.IdempotencyKey, "未带 Idempotency-Key 时不得伪造幂等键")
 
-	private, ok := parsePrivate(t, create.PrivateData)
+	private, ok := parsePrivate(t, string(create.PrivateData))
 	require.True(t, ok)
 	require.Equal(t, testMediaUpstream, private["upstream_model"])
 	require.Equal(t, "kling", private["provider_type"])

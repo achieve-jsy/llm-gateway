@@ -96,10 +96,10 @@ func TestMediaTaskRetrieve_CompletedBillsExactlyOnce(t *testing.T) {
 	require.Equal(t, int64(800000), *final.CostMicroUSD)
 	require.NotEmpty(t, final.BilledAt)
 	require.Equal(t, "https://cdn.example.com/a.mp4", final.VideoURL)
-	require.Contains(t, final.Usage, `"output_seconds":8`, "usage jsonb 用 snake_case 键")
+	require.Contains(t, string(final.Usage), `"output_seconds":8`, "usage jsonb 用 snake_case 键")
 
 	var usagePayload map[string]any
-	require.NoError(t, json.Unmarshal([]byte(final.Usage), &usagePayload))
+	require.NoError(t, json.Unmarshal(final.Usage, &usagePayload))
 	costInput, _ := usagePayload["cost_input"].(map[string]any)
 	require.EqualValues(t, 8, costInput["output_seconds"])
 

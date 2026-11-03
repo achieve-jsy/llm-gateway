@@ -130,7 +130,7 @@ func (s *fakeMediaStore) CreateMediaTask(_ context.Context, req infra.MediaCreat
 		DeptID:       req.DeptID,
 		StudioID:     req.StudioID,
 		RequestBody:  req.RequestBody,
-		PrivateData:  infra.JSONText(req.PrivateData),
+		PrivateData:  infra.JSONText(string(req.PrivateData)),
 		CreatedAt:    time.Now().UTC(),
 	}
 	if task.Status == "" {
@@ -200,8 +200,8 @@ func (s *fakeMediaStore) UpdateMediaTask(_ context.Context, taskID string, req i
 	if req.ErrorMessage != "" {
 		task.ErrorMessage = req.ErrorMessage
 	}
-	if req.Usage != "" {
-		task.Usage = infra.JSONText(req.Usage)
+	if len(req.Usage) != 0 {
+		task.Usage = infra.JSONText(string(req.Usage))
 	}
 	if req.CostMicroUSD != nil {
 		task.CostMicroUSD = *req.CostMicroUSD

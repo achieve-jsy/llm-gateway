@@ -97,7 +97,7 @@ func (f *fakeControlPlane) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			UserID:       req.UserID,
 			DeptID:       req.DeptID,
 			StudioID:     req.StudioID,
-			PrivateData:  infra.JSONText(req.PrivateData),
+			PrivateData:  infra.JSONText(string(req.PrivateData)),
 			CreatedAt:    time.Now().UTC(),
 		}
 		if task.Status == "" {
@@ -146,8 +146,8 @@ func (f *fakeControlPlane) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if req.Progress != "" {
 			task.Progress = req.Progress
 		}
-		if req.Usage != "" {
-			task.Usage = infra.JSONText(req.Usage)
+		if len(req.Usage) != 0 {
+			task.Usage = infra.JSONText(string(req.Usage))
 		}
 		if req.CostMicroUSD != nil {
 			task.CostMicroUSD = *req.CostMicroUSD

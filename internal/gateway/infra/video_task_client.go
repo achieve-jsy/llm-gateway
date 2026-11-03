@@ -336,7 +336,10 @@ type MediaCreateRequest struct {
 	VendorTaskID   string `json:"vendor_task_id,omitempty"`  // 上游任务 id（禁止返回给客户端）
 	Progress       string `json:"progress,omitempty"`        // "0-100" 或阶段名
 	IdempotencyKey string `json:"idempotency_key,omitempty"` // 幂等键（客户端 Idempotency-Key 头）
-	PrivateData    string `json:"private_data,omitempty"`    // jsonb 文本：渠道细节，禁止返回用户
+	// PrivateData 是 jsonb 列，线上必须是**裸 JSON 对象**，不能是 JSON 字符串。
+	// 用 json.RawMessage 而不是 string：string 会被 json.Marshal 包成 "\"{...}\""
+	// 的双层引号，而控制面按 map 绑定 → 解不开 → 整条创建请求 400（合并后实测确认）。
+	PrivateData json.RawMessage `json:"private_data,omitempty"` // 渠道细节，禁止返回用户
 	DeptID         string `json:"dept_id,omitempty"`
 	StudioID       string `json:"studio_id,omitempty"`
 }
@@ -360,7 +363,7 @@ type MediaUpdateRequest struct {
 
 	// ── 冻结契约新增字段 ──────────────────────────────────────────────────
 	Progress       string `json:"progress,omitempty"`
-	Usage          string `json:"usage,omitempty"`
+	Usage          json.RawMessage `json:"usage,omitempty"` // jsonb：同 PrivateData，必须是裸对象
 	CostMicroUSD   *int64 `json:"cost_micro_usd,omitempty"`
 	BilledAt       string `json:"billed_at,omitempty"` // RFC3339
 	PollFailures   *int   `json:"poll_failures,omitempty"`

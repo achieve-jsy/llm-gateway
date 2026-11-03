@@ -134,7 +134,7 @@ func TestVideoTaskClient_CreateMediaTask_FrozenRequestShape(t *testing.T) {
 		VendorTaskID:   "vendor_777",
 		Progress:       "0",
 		IdempotencyKey: "idem-1",
-		PrivateData:    `{"upstream_model":"kling-v1-6","provider_type":"kling"}`,
+		PrivateData:    json.RawMessage(`{"upstream_model":"kling-v1-6","provider_type":"kling"}`),
 		DeptID:         "dept-1",
 		StudioID:       "studio-1",
 	}
@@ -149,7 +149,10 @@ func TestVideoTaskClient_CreateMediaTask_FrozenRequestShape(t *testing.T) {
 	require.NotEqual(t, "/internal/v1/media/tasks", last.Path)
 	require.Equal(t, "internal-token-xyz", last.Token)
 
-	// ② 请求体：字段名逐个固化（含新增 delta 字段），private_data 是 JSON **字符串**。
+	// ② 请求体：字段名逐个固化（含新增 delta 字段）。
+	// ⚠️ private_data 是 jsonb 列，线上必须是**裸 JSON 对象**而不是 JSON 字符串：
+	// 字符串形态会被控制面按 map 绑定失败 → 整条创建请求 400（Batch 1 合并时实测）。
+	// 该接缝的独立回归见 tests/contract/media_task_wire_contract_test.go。
 	var sent map[string]any
 	require.NoError(t, json.Unmarshal(last.Body, &sent))
 	require.Equal(t, "task_abc", sent["task_id"])
@@ -162,9 +165,9 @@ func TestVideoTaskClient_CreateMediaTask_FrozenRequestShape(t *testing.T) {
 	require.Equal(t, "studio-1", sent["studio_id"])
 	require.Equal(t, "kling", sent["provider_type"])
 	require.Equal(t, "queued", sent["status"])
-	privateData, ok := sent["private_data"].(string)
-	require.True(t, ok, "private_data 必须以 JSON 字符串上报（jsonb 列），实际类型 %T", sent["private_data"])
-	require.Contains(t, privateData, "kling-v1-6")
+	privateData, ok := sent["private_data"].(map[string]any)
+	require.True(t, ok, "private_data 必须以裸 JSON 对象上报（jsonb 列），实际类型 %T", sent["private_data"])
+	require.Equal(t, "kling-v1-6", privateData["upstream_model"])
 
 	// ③ 201 → Created=true 且任务字段被解析（含 jsonb 文本字段）。
 	require.Equal(t, http.StatusCreated, res.StatusCode)
@@ -289,7 +292,7 @@ func TestVideoTaskClient_UpdateMediaTask_FrozenRequestShape(t *testing.T) {
 		Progress:       "100",
 		VideoURL:       "https://cdn.example.com/v.mp4",
 		ResponseBody:   `{"status":"completed"}`,
-		Usage:          `{"output_seconds":8}`,
+		Usage:          json.RawMessage(`{"output_seconds":8}`),
 		CostMicroUSD:   &cost,
 		BilledAt:       "2026-01-02T03:04:05Z",
 		PollFailures:   &failures,
@@ -314,8 +317,8 @@ func TestVideoTaskClient_UpdateMediaTask_FrozenRequestShape(t *testing.T) {
 	require.EqualValues(t, 800000, sent["cost_micro_usd"], "cost_micro_usd 是整数微美元")
 	require.Equal(t, "2026-01-02T03:04:05Z", sent["billed_at"], "billed_at 是 RFC3339")
 	require.EqualValues(t, 3, sent["poll_failures"])
-	usage, ok := sent["usage"].(string)
-	require.True(t, ok, "usage 必须以 JSON 字符串上报，实际 %T", sent["usage"])
+	usage, ok := sent["usage"].(map[string]any)
+	require.True(t, ok, "usage 必须以裸 JSON 对象上报（jsonb 列），实际 %T", sent["usage"])
 	require.Contains(t, usage, "output_seconds")
 }
 

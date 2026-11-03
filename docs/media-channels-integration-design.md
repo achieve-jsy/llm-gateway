@@ -495,6 +495,21 @@ type MediaTask struct {
 }
 ```
 
+> 🔴 **jsonb 字段的线上表示（Batch 1 合并踩坑后新增，凡 jsonb 字段一律照此实现）**
+>
+> 上表里的 `Usage` / `Data` / `PrivateData` 写的是**数据库列的 Go 类型**——`string` 在这里是合法的（GORM 会把该字符串写进 jsonb 列）。但它**不等于**内部 HTTP API 的线上表示，两者必须分开看：
+>
+> | 层 | `usage` / `private_data` 的形态 |
+> |---|---|
+> | HTTP 请求/响应体（`/internal/v1/video/tasks*`） | **裸 JSON 对象**：`"private_data": {"kind":"video"}` |
+> | 网关客户端字段类型 | `json.RawMessage`（**不能是 `string`**——`json.Marshal` 会把它包成带引号的 JSON 字符串） |
+> | 控制面绑定类型 | `map[string]interface{}`（只能解对象，遇到字符串直接报错） |
+> | 数据库列 | `jsonb`（对象） |
+>
+> **为什么专门写这一条**：Batch 1 合并时实测发现，网关侧按「`string`」实现，于是 `json.Marshal` 产出 `"private_data":"{\"kind\":\"video\"}"`（双层引号），而控制面按 map 绑定解不开 → **每一次 `/v1/videos` 创建请求都 400**。两队各自的门禁当时全绿（网关打的是 fake HTTP server、控制面测的是自己构造的 body），**只有把两侧放进同一进程、对同一份字节做「编码→绑定」才会暴露**。既有回归测试：`tests/contract/media_task_wire_contract_test.go`（含一条反向控制，断言字符串形态必须被拒绝）。
+>
+> 结论：**「Go 列类型」与「HTTP 线上表示」是两件事**，任何 jsonb 字段在内部 API 上都必须是裸对象。
+
 `media_task_events`：`id` / `task_id`(FK, CASCADE) / `event_type` / `event_data` / `created_at`，索引同 `video_task_events`（`atlas-migrations/20260710160000_*.sql`）。
 
 **与 `video_tasks` 的关系**：并存。控制面 ops 看板需要把两个来源**合并展示**（视频统计口径会分成两段，需在前端明确标注 legacy/新）。

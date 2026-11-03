@@ -328,7 +328,7 @@ func (h *MediaTaskHandler) Create(c *gin.Context) {
 		Action:         string(action),
 		Progress:       mediaProgressZero,
 		IdempotencyKey: idempotencyKey,
-		PrivateData:    privateData,
+		PrivateData:    json.RawMessage(privateData),
 		DeptID:         c.GetString("dept_id"),
 		StudioID:       c.GetString("studio_id"),
 	}
@@ -1001,7 +1001,9 @@ func mediaArtifactURL(task *infra.MediaTask) string {
 type mediaCompletionPlan struct {
 	VideoURL     string
 	ResponseBody string
-	Usage        string
+	// Usage 是 jsonb 的线上表示：必须是**裸 JSON 对象**（json.RawMessage），
+	// 不能用 string —— 那会被 json.Marshal 包成双层引号的 JSON 字符串，控制面按 map 绑定会 400。
+	Usage        json.RawMessage
 	CostMicroUSD *int64 // nil = 无价（不写 billed_at，宁可留空也不记 0 元）
 	BilledAt     string // RFC3339
 	CostInput    core.MediaCostInput
@@ -1034,7 +1036,7 @@ func (h *MediaTaskHandler) buildCompletionUpdate(task *infra.MediaTask, st *core
 		CostUSD:     costUSD,
 		CostMissing: missing,
 	}); err == nil {
-		plan.Usage = string(usageJSON)
+		plan.Usage = usageJSON
 	}
 	if missing {
 		slog.Warn("media task: 终态成功但无可计价用量/单价，不写成本（不静默记 0 元）",

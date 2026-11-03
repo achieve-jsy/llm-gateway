@@ -107,12 +107,16 @@ func (h *ChatHandler) SetRedactor(engine *redact.Engine) {
 // nativeRelayBlockedByRedaction 报告脱敏是否要求禁用原生旁路。
 //
 // 原生旁路发的是客户端**原始 body**，脱敏改的是**解析后的 ChatRequest** ——
-// 两者不可能同时成立：走原生等于把未脱敏的原文直发上游，比走转换路径更糟
-// （转换路径的脱敏是生效的）。所以脱敏一旦开启就强制走转换路径，宁可多一次转换。
+// 两者不可能同时成立。所以 mask 模式必须禁用原生：否则未脱敏的原文会直发上游，
+// 比走转换路径更糟（转换路径的脱敏是生效的）。
+//
+// detect 模式不禁用：它只统计命中、不改写请求，转发的本来就是原文，原生旁路
+// 不构成泄漏。代价是该流量不进入脱敏检测统计——这是有意的取舍：测试环境
+// 常驻 detect，若 detect 也禁用原生，原生旁路将永远无法验证。
 //
 // Gemini 入站没有 redactor（整条链路尚未接入脱敏），不在此 guard 覆盖范围。
 func nativeRelayBlockedByRedaction(engine *redact.Engine) bool {
-	return engine != nil && engine.Mode() != redact.ModeOff
+	return engine != nil && engine.Mode() == redact.ModeMask
 }
 
 // SetBudgetDeps 注入预算依赖（router setup 时调用一次）

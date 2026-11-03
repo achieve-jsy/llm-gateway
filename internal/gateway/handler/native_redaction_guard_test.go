@@ -3,9 +3,9 @@ package handler
 // 脱敏 × 原生旁路互斥守卫。
 //
 // 原生旁路发的是客户端原始 body，脱敏改的是解析后的 ChatRequest。
-// 两者同时成立等价于把未脱敏原文直发上游；detect 模式下虽然不改写，
-// 但原生旁路会让检测引擎看不到正文，统计直接失效。
-// 所以除 off 外一律禁用原生旁路。
+// 两者同时成立等价于把未脱敏原文直发上游，所以 mask 必须禁用原生。
+// detect 只统计不改写，转发原文不构成泄漏，因此不禁用（否则测试环境
+// 常驻 detect 会让原生旁路永远无法验证）。
 
 import (
 	"testing"
@@ -21,7 +21,7 @@ func TestNativeRelayBlockedByRedaction(t *testing.T) {
 	}{
 		{"nil engine", "", false},
 		{"off", redact.ModeOff, false},
-		{"detect", redact.ModeDetect, true},
+		{"detect", redact.ModeDetect, false},
 		{"mask", redact.ModeMask, true},
 	}
 

@@ -47,6 +47,14 @@
                 v-if="data.type === 'dept' && data.deptData?.status === 'pending_studio'"
                 type="warning" size="small" class="node-badge"
               >待归属</el-tag>
+              <span v-if="leadersOf(data).length" class="node-leaders">
+                负责人：{{ leadersOf(data).map(l => l.name).join('、') }}
+              </span>
+              <el-button
+                link type="primary" size="small" class="node-add-leader"
+                title="加负责人（花名册工号/姓名）"
+                @click.stop="onAddLeader(data)"
+              >+</el-button>
             </span>
           </template>
         </el-tree>
@@ -621,7 +629,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 Chart.register(...registerables)
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ElTree } from 'element-plus'
 import {
   OfficeBuilding, Folder, Warning, Search,
@@ -629,7 +637,7 @@ import {
 } from '@element-plus/icons-vue'
 import { useOrgStore, type RoleWithUser, type UserSearchResult, type DeptMember } from '@/stores/org'
 import { useAuthStore } from '@/stores/auth'
-import type { Studio, OrgDepartment } from '@/types/org'
+import type { Studio, OrgDepartment, OrgNodeLeader } from '@/types/org'
 import http from '@/services/http'
 import { useRoute, useRouter } from 'vue-router'
 import QuotaEditDialog from '@/components/QuotaEditDialog.vue'
@@ -694,6 +702,7 @@ async function onManualSync() {
   } finally {
     localSyncing.value = false
     await loadSyncStatus()
+    void loadLeaders()
   }
 }
 
@@ -752,6 +761,56 @@ const treeNodes = computed<TreeNode[]>(() => {
       })),
   }))
 })
+
+// ─── 负责人（增量覆盖与保留：同步只追加，手动加的人跨同步保留）──────────────
+const leadersByNode = computed(() => {
+  const m = new Map<string, OrgNodeLeader[]>()
+  for (const l of orgStore.leaders) {
+    const k = l.node_type + ':' + l.node_id
+    const arr = m.get(k) || []
+    arr.push(l)
+    m.set(k, arr)
+  }
+  return m
+})
+
+function leadersOf(node: TreeNode): OrgNodeLeader[] {
+  const id = node.type === 'studio' ? node.studioData?.id : node.deptData?.id
+  return id ? leadersByNode.value.get(node.type + ':' + id) || [] : []
+}
+
+async function loadLeaders() {
+  try {
+    await orgStore.fetchLeaders()
+  } catch {
+    // 负责人读失败不挡组织树
+  }
+}
+
+async function onAddLeader(node: TreeNode) {
+  const id = node.type === 'studio' ? node.studioData?.id : node.deptData?.id
+  if (!id) return
+  let keyword = ''
+  try {
+    const ret = await ElMessageBox.prompt(
+      '按花名册解析：工号精确 / 姓名唯一匹配',
+      '给「' + node.label + '」加负责人',
+      { confirmButtonText: '添加', cancelButtonText: '取消', inputPlaceholder: '工号 / 姓名' },
+    )
+    keyword = String(ret.value || '').trim()
+  } catch {
+    return // 用户取消
+  }
+  if (!keyword) return
+  try {
+    await orgStore.addLeader(node.type, id, keyword)
+    ElMessage.success('负责人已添加')
+    await loadLeaders()
+  } catch (e: any) {
+    if (e?.response?.status === 404) ElMessage.error('花名册查无此人，或节点不存在')
+    else ElMessage.error(e?.response?.data?.error || e?.message || '加负责人失败')
+  }
+}
 
 function filterNode(value: string, data: TreeNode) {
   if (!value) return true
@@ -1053,6 +1112,7 @@ async function reload() {
 onMounted(async () => {
   await reload()
   void loadSyncStatus()
+  void loadLeaders()
 })
 
 // immediate: true 保证跨页首次进入时（数据已缓存）也能正确选中节点；
@@ -1283,6 +1343,21 @@ function onUserQuotaSaved() {
 
 :deep(.el-tree-node.is-current > .el-tree-node__content) {
   background-color: var(--el-color-primary-light-9);
+}
+
+.node-leaders {
+  margin-left: 4px;
+  color: #909399;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.node-add-leader {
+  margin-left: 2px;
+  padding: 0 2px;
+  font-size: 12px;
 }
 
 .tree-node-content {

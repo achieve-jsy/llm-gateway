@@ -543,8 +543,20 @@ func (s *AIAppHubSyncService) projectOrg(ctx context.Context, items []ehrclient.
 			return diff, err
 		}
 		count(outcome, &diff.Studios)
-		if legacyID, idErr := s.legacy.StudioIDByEHRDept(ctx, it.ID); idErr == nil {
-			legacyStudioIDs[it.ID] = legacyID
+		legacyID, idErr := s.legacy.StudioIDByEHRDept(ctx, it.ID)
+		if idErr != nil {
+			continue
+		}
+		legacyStudioIDs[it.ID] = legacyID
+		if leaderIsEmpty(it) {
+			continue
+		}
+		if _, lErr := s.legacy.UpsertLeader(ctx, orgrepo.OrgLeaderInput{
+			NodeType: orgmodel.LeaderNodeStudio, NodeID: legacyID,
+			Name: it.LeaderName, Passport: it.LeaderPassport, EmployeeID: it.LeaderEmployeeID,
+			Source: orgmodel.LeaderSourceEHR,
+		}); lErr != nil {
+			return diff, lErr
 		}
 	}
 
@@ -575,13 +587,22 @@ func (s *AIAppHubSyncService) projectOrg(ctx context.Context, items []ehrclient.
 		if studioID != nil {
 			status = string(orgmodel.DeptStatusActive)
 		}
-		outcome, err := s.legacy.UpsertDepartment(ctx, orgrepo.EHRDepartmentInput{
+		outcome, deptRowID, err := s.legacy.UpsertDepartment(ctx, orgrepo.EHRDepartmentInput{
 			DeptID: it.ID, DeptName: it.Name, StudioID: studioID, Status: status,
 		})
 		if err != nil {
 			return diff, err
 		}
 		count(outcome, &diff.Departments)
+		if !leaderIsEmpty(it) {
+			if _, lErr := s.legacy.UpsertLeader(ctx, orgrepo.OrgLeaderInput{
+				NodeType: orgmodel.LeaderNodeDept, NodeID: deptRowID,
+				Name: it.LeaderName, Passport: it.LeaderPassport, EmployeeID: it.LeaderEmployeeID,
+				Source: orgmodel.LeaderSourceEHR,
+			}); lErr != nil {
+				return diff, lErr
+			}
+		}
 		if studioID != nil {
 			mappingOutcome, mErr := s.legacy.UpsertMapping(ctx, it.ID, *studioID, "ehr-sync")
 			if mErr != nil {
@@ -613,6 +634,11 @@ func (s *AIAppHubSyncService) projectOrg(ctx context.Context, items []ehrclient.
 	}
 	diff.Departments.Deleted = archived
 	return diff, nil
+}
+
+// leaderIsEmpty EHR 节点三个负责人字段全空就不投影，避免插出名/证/工号全空的垃圾行。
+func leaderIsEmpty(d ehrclient.Department) bool {
+	return d.LeaderName == "" && d.LeaderPassport == "" && d.LeaderEmployeeID == ""
 }
 
 // nearestStudioEHRDeptID 沿父链找到所属事业部的 **EHR 部门 ID**（type=2 的那个节点）。

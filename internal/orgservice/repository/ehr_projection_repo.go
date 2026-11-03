@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/example/llm-gateway/internal/orgservice/model"
 	"github.com/google/uuid"
@@ -130,12 +131,13 @@ func (r *EHRProjectionRepo) StudioIDByEHRDept(ctx context.Context, ehrDeptID str
 
 // UpsertDepartment 按 EHR 部门 id 就地更新名称/归属/状态。
 // status=deleted 的部门被 EHR 重新看到时会改回 active（EHR 才是权威）。
-func (r *EHRProjectionRepo) UpsertDepartment(ctx context.Context, in EHRDepartmentInput) (string, error) {
+func (r *EHRProjectionRepo) UpsertDepartment(ctx context.Context, in EHRDepartmentInput) (string, uuid.UUID, error) {
 	var cur model.OrgDepartment
 	err := r.db.WithContext(ctx).Where("dept_id = ?", in.DeptID).Take(&cur).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		id := uuid.New()
 		row := &model.OrgDepartment{
-			ID:       uuid.NewString(),
+			ID:       id.String(),
 			DeptID:   in.DeptID,
 			DeptName: in.DeptName,
 			StudioID: uuidPtrToString(in.StudioID),
@@ -145,12 +147,16 @@ func (r *EHRProjectionRepo) UpsertDepartment(ctx context.Context, in EHRDepartme
 			row.Status = model.DeptStatusPendingStudio
 		}
 		if err := r.db.WithContext(ctx).Create(row).Error; err != nil {
-			return "", err
+			return "", uuid.Nil, err
 		}
-		return ProjectionInserted, nil
+		return ProjectionInserted, id, nil
 	}
 	if err != nil {
-		return "", err
+		return "", uuid.Nil, err
+	}
+	curID, perr := uuid.Parse(cur.ID)
+	if perr != nil {
+		return "", uuid.Nil, perr
 	}
 
 	updates := map[string]any{}
@@ -164,12 +170,99 @@ func (r *EHRProjectionRepo) UpsertDepartment(ctx context.Context, in EHRDepartme
 		updates["status"] = in.Status
 	}
 	if len(updates) == 0 {
-		return ProjectionUnchanged, nil
+		return ProjectionUnchanged, curID, nil
 	}
 	if err := r.db.WithContext(ctx).Model(&model.OrgDepartment{}).Where("id = ?", cur.ID).Updates(updates).Error; err != nil {
+		return "", uuid.Nil, err
+	}
+	return ProjectionUpdated, curID, nil
+}
+
+// OrgLeaderInput 负责人 upsert 入参。身份 = employee_id > passport > name（与唯一索引同表达式）。
+type OrgLeaderInput struct {
+	NodeType   string
+	NodeID     uuid.UUID
+	Name       string
+	Passport   string
+	EmployeeID string
+	Source     string
+}
+
+func leaderIdentity(name, passport, employeeID string) string {
+	switch {
+	case employeeID != "":
+		return employeeID
+	case passport != "":
+		return passport
+	default:
+		return name
+	}
+}
+
+// UpsertLeader 增量覆盖与保留：行存在只更新姓名/证件属性（**source 保持原值**，manual 不被 ehr 洗掉），
+// 不存在才插入；任何路径都不删除 —— 旧 EHR 负责人与手动加的人因此天然保留。
+//
+// ponytail: 身份表达式取"当前输入"的优先级链；若旧行只有 passport、新输入带来 employee_id，
+// 会被当成两个人插第二行。EHR 与花名册对同一人两个字段都稳定带全，实际碰不到；真碰到再补合并。
+func (r *EHRProjectionRepo) UpsertLeader(ctx context.Context, in OrgLeaderInput) (string, error) {
+	identity := leaderIdentity(in.Name, in.Passport, in.EmployeeID)
+	var cur model.OrgNodeLeader
+	err := r.db.WithContext(ctx).
+		Where("node_type = ? AND node_id = ? AND (CASE WHEN employee_id <> '' THEN employee_id WHEN passport <> '' THEN passport ELSE name END) = ?",
+			in.NodeType, in.NodeID, identity).
+		Take(&cur).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		row := &model.OrgNodeLeader{
+			ID: uuid.NewString(), NodeType: in.NodeType, NodeID: in.NodeID.String(),
+			Name: in.Name, Passport: in.Passport, EmployeeID: in.EmployeeID, Source: in.Source,
+		}
+		if err := r.db.WithContext(ctx).Create(row).Error; err != nil {
+			return "", err
+		}
+		return ProjectionInserted, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	updates := map[string]any{}
+	if cur.Name != in.Name {
+		updates["name"] = in.Name
+	}
+	if cur.Passport != in.Passport {
+		updates["passport"] = in.Passport
+	}
+	if cur.EmployeeID != in.EmployeeID {
+		updates["employee_id"] = in.EmployeeID
+	}
+	if len(updates) == 0 {
+		return ProjectionUnchanged, nil
+	}
+	if err := r.db.WithContext(ctx).Model(&model.OrgNodeLeader{}).Where("id = ?", cur.ID).Updates(updates).Error; err != nil {
 		return "", err
 	}
 	return ProjectionUpdated, nil
+}
+
+// ListLeaders 全量返回（量级百行），前端按节点分组。
+func (r *EHRProjectionRepo) ListLeaders(ctx context.Context) ([]model.OrgNodeLeader, error) {
+	var rows []model.OrgNodeLeader
+	err := r.db.WithContext(ctx).Order("node_type, node_id, created_at").Find(&rows).Error
+	return rows, err
+}
+
+// NodeExists 手动加负责人前校验节点真实存在，避免孤儿行。
+func (r *EHRProjectionRepo) NodeExists(ctx context.Context, nodeType string, nodeID uuid.UUID) (bool, error) {
+	var count int64
+	var err error
+	switch nodeType {
+	case model.LeaderNodeStudio:
+		err = r.db.WithContext(ctx).Model(&model.Studio{}).Where("id = ?", nodeID.String()).Count(&count).Error
+	case model.LeaderNodeDept:
+		err = r.db.WithContext(ctx).Model(&model.OrgDepartment{}).Where("id = ?", nodeID.String()).Count(&count).Error
+	default:
+		return false, fmt.Errorf("unknown node_type %q", nodeType)
+	}
+	return count > 0, err
 }
 
 // UpsertMapping 部门→工作室映射以 EHR 为准：任何来源（import/manual）都会被覆盖。

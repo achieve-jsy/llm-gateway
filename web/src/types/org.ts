@@ -78,3 +78,14 @@ export interface HubSyncStatus {
   diff: SyncDiff
   running: boolean
 }
+
+// ─── 组织负责人（增量覆盖与保留：只增不删）──────────────────────────────────
+export interface OrgNodeLeader {
+  id: string
+  node_type: 'studio' | 'dept'
+  node_id: string
+  name: string
+  passport: string
+  employee_id: string
+  source: 'ehr' | 'manual'
+}

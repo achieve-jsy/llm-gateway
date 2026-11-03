@@ -60,7 +60,34 @@ func (d *OrgDepartment) GetStudioID() string {
 	return *d.StudioID
 }
 
-// ─── 部门↔工作室映射 ─────────────────────────────────────────────────────────
+// ─── 组织负责人（多值，增量覆盖与保留）─────────────────
+
+const (
+	LeaderNodeStudio = "studio"
+	LeaderNodeDept   = "dept"
+
+	LeaderSourceEHR    = "ehr"
+	LeaderSourceManual = "manual"
+)
+
+// OrgNodeLeader 工作室/部门的负责人。同步只追加或更新属性，**永不删除**：
+// EHR 换负责人、管理员手动加人，都只会让列表变长（见 specs/2026-11-03-org-leaders-incremental-design.md）。
+type OrgNodeLeader struct {
+	ID       string `gorm:"type:uuid;primaryKey" json:"id"`
+	NodeType string `gorm:"type:varchar(8);not null" json:"node_type"`
+	NodeID   string `gorm:"type:uuid;not null;index:idx_org_node_leaders_node,priority:2" json:"node_id"`
+	Name     string `gorm:"type:varchar(64);not null" json:"name"`
+	Passport string `gorm:"type:varchar(64);not null;default:''" json:"passport"`
+	// EmployeeID 存 EHR 员工 id；手动新增时从花名册带过来，保证与 EHR 后续同步同身份合并。
+	EmployeeID string    `gorm:"type:varchar(64);not null;default:''" json:"employee_id"`
+	Source     string    `gorm:"type:varchar(8);not null" json:"source"`
+	CreatedAt  time.Time `gorm:"not null;autoCreateTime" json:"created_at"`
+	UpdatedAt  time.Time `gorm:"not null;autoUpdateTime" json:"updated_at"`
+}
+
+func (OrgNodeLeader) TableName() string { return "org_node_leaders" }
+
+// ─── 部门↔工作室映射 ──────────────────────────────────────────────────────────
 
 type DeptStudioMap struct {
 	DeptID    string    `gorm:"type:varchar(64);primaryKey" json:"dept_id"`

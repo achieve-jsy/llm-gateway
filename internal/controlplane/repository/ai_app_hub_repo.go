@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/model"
@@ -24,6 +25,30 @@ type AIAppHubRepo struct {
 
 func NewAIAppHubRepo(db *gorm.DB) *AIAppHubRepo {
 	return &AIAppHubRepo{db: db}
+}
+
+// FindEmployeeByKeyword 花名册解析人：employee_id / group_e_number 精确优先，person_name 唯一匹配兜底。
+// 重名或查不到都返回 gorm.ErrRecordNotFound —— 手动加负责人不允许猜人。
+func (r *AIAppHubRepo) FindEmployeeByKeyword(ctx context.Context, kw string) (*model.EHREmployee, error) {
+	if kw == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var emp model.EHREmployee
+	err := r.db.WithContext(ctx).Where("employee_id = ? OR group_e_number = ?", kw, kw).First(&emp).Error
+	if err == nil {
+		return &emp, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	var rows []model.EHREmployee
+	if err := r.db.WithContext(ctx).Where("person_name = ?", kw).Limit(2).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	if len(rows) != 1 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &rows[0], nil
 }
 
 // InsertStudioIfAbsent 按 department_id 插入工作室；已存在时什么都不改，返回 false。

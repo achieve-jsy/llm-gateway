@@ -150,6 +150,7 @@ var auditRouteMap = map[string]routeAction{
 
 	// ── Org: EHR 同步（管理员手动触发，改的是全组织数据）─────────────
 	"POST:/api/v1/admin/ai-app-hub/sync": {audit.Action("org.sync"), audit.Resource("org")},
+	"POST:/api/v1/admin/org/leaders":     {audit.Action("org.leader_add"), audit.Resource("org")},
 
 	// ── Service Keys（补 2 条未手动埋点的写操作）───────────────────
 	"POST:/api/v1/service-keys/:id/groups":            {audit.Action("service_key.update_groups"), audit.ResourceServiceKey},

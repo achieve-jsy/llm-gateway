@@ -1051,6 +1051,10 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		// ── 部门与映射（只读，同上）──────────────────────────────────────────
 		orgGroup.GET("/departments", mappingH.ListDepartments)
 		orgGroup.GET("/departments/unmapped", mappingH.ListUnmappedDepts)
+		// 负责人（增量覆盖与保留）：读全量列表；手动新增是唯一重开的手动入口。
+		leaderH := handler.NewOrgLeaderHandler(orgrepo.NewEHRProjectionRepo(db), repository.NewAIAppHubRepo(db))
+		orgGroup.GET("/leaders", leaderH.List)
+		orgGroup.POST("/leaders", leaderH.Add)
 		orgGroup.GET("/dept-studio-map", mappingH.ListMappings)
 
 		// ── 成员（管理角色可查，部门范围由 Policy 过滤）─────────────────────

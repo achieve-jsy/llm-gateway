@@ -791,6 +791,28 @@
       "attachment_bytes": "图片字节存 feedback_attachments.data（bytea），模型上 json:\"-\"；列表只 select 元数据列，任何 JSON 响应都不含 data 字段"
     }
   },
+  "org_leaders": {
+    "base_prefix": "/api/v1",
+    "auth": "jwt Bearer <jwt>（adminGroup，平台管理员）",
+    "purpose": "组织负责人多值列表：增量覆盖与保留（同步只追加/更新属性，永不删除；手动新增是唯一手动入口）",
+    "routes": {
+      "GET /admin/org/leaders": {
+        "handler": "OrgLeaderHandler.List",
+        "purpose": "全量返回负责人（百行量级），前端按 node_type+node_id 分组挂到组织树节点",
+        "response_keys": ["data[].id", "data[].node_type(studio|dept)", "data[].node_id(studios.id/departments.id)", "data[].name", "data[].passport", "data[].employee_id", "data[].source(ehr|manual)"]
+      },
+      "POST /admin/org/leaders": {
+        "handler": "OrgLeaderHandler.Add",
+        "purpose": "手动加负责人：keyword 按花名册解析（employee_id/group_e_number 精确、person_name 唯一）；重复加同一人幂等",
+        "request_keys": ["node_type(studio|dept)", "node_id(uuid)", "keyword(工号或姓名)"],
+        "errors": {
+          "400": "invalid_body / invalid_node_type / invalid_node_id",
+          "404": "node_not_found / employee_not_found（花名册查无此人或重名）"
+        },
+        "response_keys": ["data.outcome(inserted|updated|unchanged)"]
+      }
+    }
+  },
   "ai_app_hub": {
     "base_prefix": "/api/v1",
     "auth": "jwt Bearer <jwt>；scope=all 需 user_roles.role=admin，scope=studio/department 另允许该工作室负责人（passport）",

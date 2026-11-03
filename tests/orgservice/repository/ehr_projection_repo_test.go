@@ -50,6 +50,21 @@ func openProjectionTestDB(t *testing.T) *gorm.DB {
 		updated_by TEXT NOT NULL,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE org_node_leaders (
+		id TEXT PRIMARY KEY,
+		node_type TEXT NOT NULL,
+		node_id TEXT NOT NULL,
+		name TEXT NOT NULL,
+		passport TEXT NOT NULL DEFAULT '',
+		employee_id TEXT NOT NULL DEFAULT '',
+		source TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX uniq_org_node_leader ON org_node_leaders (
+		node_type, node_id,
+		(CASE WHEN employee_id <> '' THEN employee_id WHEN passport <> '' THEN passport ELSE name END)
+	)`).Error)
 	return db
 }
 
@@ -129,13 +144,13 @@ func TestProjectionDepartmentAndMapping(t *testing.T) {
 	ctx := context.Background()
 	studioID := uuid.New()
 
-	outcome, err := repo.UpsertDepartment(ctx, repository.EHRDepartmentInput{
+	outcome, _, err := repo.UpsertDepartment(ctx, repository.EHRDepartmentInput{
 		DeptID: "dept-1", DeptName: "技术部", StudioID: &studioID, Status: string(model.DeptStatusActive),
 	})
 	require.NoError(t, err)
 	require.Equal(t, repository.ProjectionInserted, outcome)
 
-	outcome, err = repo.UpsertDepartment(ctx, repository.EHRDepartmentInput{
+	outcome, _, err = repo.UpsertDepartment(ctx, repository.EHRDepartmentInput{
 		DeptID: "dept-1", DeptName: "技术部改名", StudioID: &studioID, Status: string(model.DeptStatusActive),
 	})
 	require.NoError(t, err)
@@ -143,7 +158,7 @@ func TestProjectionDepartmentAndMapping(t *testing.T) {
 
 	// status=deleted 的行被 EHR 重新看到 → 复活为 active
 	require.NoError(t, db.Exec(`UPDATE departments SET status = 'deleted' WHERE dept_id = 'dept-1'`).Error)
-	outcome, err = repo.UpsertDepartment(ctx, repository.EHRDepartmentInput{
+	outcome, _, err = repo.UpsertDepartment(ctx, repository.EHRDepartmentInput{
 		DeptID: "dept-1", DeptName: "技术部改名", StudioID: &studioID, Status: string(model.DeptStatusActive),
 	})
 	require.NoError(t, err)
@@ -178,7 +193,7 @@ func TestProjectionReconcile(t *testing.T) {
 	require.NoError(t, err)
 	manualID := uuid.NewString()
 	require.NoError(t, db.Exec(`INSERT INTO studios (id, name, source) VALUES (?, '手工残留', 'manual')`, manualID).Error)
-	_, err = repo.UpsertDepartment(ctx, repository.EHRDepartmentInput{DeptID: "d-a", DeptName: "部门A", Status: string(model.DeptStatusPendingStudio)})
+	_, _, err = repo.UpsertDepartment(ctx, repository.EHRDepartmentInput{DeptID: "d-a", DeptName: "部门A", Status: string(model.DeptStatusPendingStudio)})
 	require.NoError(t, err)
 
 	// 只有 ehr-a 还在；ehr-b 隐藏，manual 行不受影响
@@ -191,7 +206,7 @@ func TestProjectionReconcile(t *testing.T) {
 	require.Equal(t, int64(2), visible, "A 工作室 + manual 残留 可见，B 被隐藏")
 
 	// 部门对账：d-a 还在，d-b 标 deleted 但行保留
-	_, err = repo.UpsertDepartment(ctx, repository.EHRDepartmentInput{DeptID: "d-b", DeptName: "部门B", Status: string(model.DeptStatusActive)})
+	_, _, err = repo.UpsertDepartment(ctx, repository.EHRDepartmentInput{DeptID: "d-b", DeptName: "部门B", Status: string(model.DeptStatusActive)})
 	require.NoError(t, err)
 	archived, err := repo.ArchiveDepartmentsNotIn(ctx, []string{"d-a"})
 	require.NoError(t, err)
@@ -208,4 +223,51 @@ func TestProjectionReconcile(t *testing.T) {
 	archived, err = repo.ArchiveDepartmentsNotIn(ctx, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, archived)
+}
+
+// 负责人增量覆盖与保留：ehr 只追加/更新属性；manual 行不被 ehr 洗掉；旧行永不删。
+func TestUpsertLeaderUnionSemantics(t *testing.T) {
+	db := openProjectionTestDB(t)
+	repo := repository.NewEHRProjectionRepo(db)
+	ctx := context.Background()
+	node := uuid.New()
+
+	outcome, err := repo.UpsertLeader(ctx, repository.OrgLeaderInput{
+		NodeType: model.LeaderNodeStudio, NodeID: node,
+		Name: "甲", Passport: "p1", EmployeeID: "e1", Source: model.LeaderSourceEHR,
+	})
+	require.NoError(t, err)
+	require.Equal(t, repository.ProjectionInserted, outcome)
+
+	// EHR 同人改名再来：只更新属性，仍一行
+	outcome, err = repo.UpsertLeader(ctx, repository.OrgLeaderInput{
+		NodeType: model.LeaderNodeStudio, NodeID: node,
+		Name: "甲改", Passport: "p1", EmployeeID: "e1", Source: model.LeaderSourceEHR,
+	})
+	require.NoError(t, err)
+	require.Equal(t, repository.ProjectionUpdated, outcome)
+
+	// 管理员手动加乙
+	_, err = repo.UpsertLeader(ctx, repository.OrgLeaderInput{
+		NodeType: model.LeaderNodeStudio, NodeID: node,
+		Name: "乙", Passport: "p2", EmployeeID: "e2", Source: model.LeaderSourceManual,
+	})
+	require.NoError(t, err)
+
+	// EHR 也带来乙：source 必须保持 manual
+	_, err = repo.UpsertLeader(ctx, repository.OrgLeaderInput{
+		NodeType: model.LeaderNodeStudio, NodeID: node,
+		Name: "乙", Passport: "p2", EmployeeID: "e2", Source: model.LeaderSourceEHR,
+	})
+	require.NoError(t, err)
+
+	rows, err := repo.ListLeaders(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2, "甲改 + 乙，旧甲不删、乙不重")
+	byName := map[string]model.OrgNodeLeader{}
+	for _, r := range rows {
+		byName[r.Name] = r
+	}
+	require.Equal(t, model.LeaderSourceEHR, byName["甲改"].Source)
+	require.Equal(t, model.LeaderSourceManual, byName["乙"].Source, "manual 不被 ehr 洗掉")
 }

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Studio, OrgDepartment, HubSyncStatus } from '@/types/org'
+import type { Studio, OrgDepartment, HubSyncStatus, OrgNodeLeader } from '@/types/org'
 import http from '@/services/http'
 
 export interface DeptMember {
@@ -79,6 +79,21 @@ export const useOrgStore = defineStore('org', () => {
   // 并发由服务端锁兜住：正在跑时返回 409，调用方按"同步中"处理即可。
   async function triggerSync() {
     const res = await http.post('/api/v1/admin/ai-app-hub/sync', { scope: 'all' }, { timeout: 60000 })
+    return res.data
+  }
+
+  // ─── 组织负责人（增量覆盖与保留）─────────────────────────────────────────
+  const leaders = ref<OrgNodeLeader[]>([])
+
+  async function fetchLeaders(): Promise<OrgNodeLeader[]> {
+    const res = await http.get('/api/v1/admin/org/leaders')
+    leaders.value = res.data?.data || []
+    return leaders.value
+  }
+
+  // 手动新增负责人（唯一手动入口）：keyword 由后端按花名册解析。
+  async function addLeader(nodeType: 'studio' | 'dept', nodeId: string, keyword: string) {
+    const res = await http.post('/api/v1/admin/org/leaders', { node_type: nodeType, node_id: nodeId, keyword })
     return res.data
   }
 
@@ -170,6 +185,7 @@ export const useOrgStore = defineStore('org', () => {
   return {
     studios, departments, unmappedDepts, unmappedCount, loading,
     syncStatus, fetchSyncStatus, triggerSync,
+    leaders, fetchLeaders, addLeader,
     fetchStudios, fetchDepartments, fetchUnmapped,
     fetchDeptMembers, searchUsers, fetchRolePage, fetchAllRoles, grantRole, revokeRole, getUserRoles,
   }

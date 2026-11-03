@@ -11,6 +11,7 @@ import (
 	"github.com/example/llm-gateway/internal/controlplane/service"
 	orgmodel "github.com/example/llm-gateway/internal/orgservice/model"
 	orgrepo "github.com/example/llm-gateway/internal/orgservice/repository"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -182,4 +183,38 @@ func (f runningProbeFetcher) FetchDepartments(context.Context) ([]ehrclient.Depa
 	close(f.started)
 	<-f.release
 	return nil, errors.New("stop")
+}
+
+// 负责人投影：EHR 负责人落库；管理员手动加的人与旧 EHR 负责人在换人后都保留（甲、乙、丙）。
+func TestSyncLeadersIncrementalRetention(t *testing.T) {
+	svc, db, setItems := newProjectionSvc(t, []ehrclient.Department{
+		{ID: "ehr-a", Name: "A 工作室", Type: 2, LeaderName: "甲", LeaderPassport: "p1", LeaderEmployeeID: "e1"},
+	})
+	ctx := context.Background()
+	_, err := svc.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+
+	var studio orgmodel.Studio
+	require.NoError(t, db.Where("ehr_department_id = ?", "ehr-a").Take(&studio).Error)
+	legacy := orgrepo.NewEHRProjectionRepo(db)
+	_, err = legacy.UpsertLeader(ctx, orgrepo.OrgLeaderInput{
+		NodeType: orgmodel.LeaderNodeStudio, NodeID: uuid.MustParse(studio.ID),
+		Name: "乙", Passport: "p2", EmployeeID: "e2", Source: orgmodel.LeaderSourceManual,
+	})
+	require.NoError(t, err, "模拟管理员手动加负责人")
+
+	setItems([]ehrclient.Department{
+		{ID: "ehr-a", Name: "A 工作室", Type: 2, LeaderName: "丙", LeaderPassport: "p3", LeaderEmployeeID: "e3"},
+	})
+	_, err = svc.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+
+	rows, err := legacy.ListLeaders(ctx)
+	require.NoError(t, err)
+	got := map[string]string{}
+	for _, r := range rows {
+		got[r.Name] = r.Source
+	}
+	require.Equal(t, map[string]string{"甲": "ehr", "乙": "manual", "丙": "ehr"}, got,
+		"产品规则：甲、乙、丙 全在；manual 不被洗")
 }

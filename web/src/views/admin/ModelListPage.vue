@@ -348,14 +348,6 @@
           <el-form-item label="默认权重">
             <el-input-number v-model="batchBindGroupForm.weight" :min="1" :max="100" />
           </el-form-item>
-          <el-form-item label="复杂度档位">
-            <el-select v-model="batchBindGroupForm.complexityTier" style="width: 180px">
-              <el-option label="SIMPLE" value="SIMPLE" />
-              <el-option label="MEDIUM" value="MEDIUM" />
-              <el-option label="COMPLEX" value="COMPLEX" />
-              <el-option label="REASONING" value="REASONING" />
-            </el-select>
-          </el-form-item>
         </el-form>
       </div>
       <template #footer>
@@ -400,7 +392,7 @@ import type { Provider } from '@/types/provider'
 import type { ModelTag } from '@/types/model-tag'
 import type { ResettableOverrideField } from '@/types/catalog'
 import { groupsApi } from '@/api/groups'
-import type { ComplexityTier, GroupListItem } from '@/types/group'
+import type { GroupListItem } from '@/types/group'
 import ModelDialog from '@/components/admin/ModelDialog.vue'
 import BatchTagDialog from '@/components/admin/BatchTagDialog.vue'
 import ModelCheckSettingsDialog from '@/components/admin/ModelCheckSettingsDialog.vue'
@@ -453,10 +445,9 @@ const batchTagDialogVisible = ref(false)
 const batchBindGroupDialogVisible = ref(false)
 const batchBindGroupSubmitting = ref(false)
 const groupOptions = ref<GroupListItem[]>([])
-const batchBindGroupForm = ref<{ groupId: number | null; weight: number; complexityTier: ComplexityTier }>({
+const batchBindGroupForm = ref<{ groupId: number | null; weight: number }>({
   groupId: null,
   weight: 1,
-  complexityTier: 'MEDIUM',
 })
 const modelCheckSettingsVisible = ref(false)
 const checkingModelId = ref('')
@@ -714,7 +705,7 @@ function onBatchTagSaved() {
 /** 打开批量绑定模型组对话框 */
 async function openBatchBindGroupDialog() {
   if (selectedModels.value.length === 0) return
-  batchBindGroupForm.value = { groupId: null, weight: 1, complexityTier: 'MEDIUM' }
+  batchBindGroupForm.value = { groupId: null, weight: 1 }
   if (groupOptions.value.length === 0) await loadGroups()
   batchBindGroupDialogVisible.value = true
 }
@@ -724,13 +715,11 @@ async function handleBatchBindGroup() {
   if (!canSubmitBatchBindGroup.value || batchBindGroupForm.value.groupId == null) return
   const modelIds = selectedModelIds.value
   const weights = Object.fromEntries(modelIds.map(id => [id, batchBindGroupForm.value.weight]))
-  const complexityTiers = Object.fromEntries(modelIds.map(id => [id, batchBindGroupForm.value.complexityTier]))
   batchBindGroupSubmitting.value = true
   try {
     await groupsApi.addModelsToGroup(batchBindGroupForm.value.groupId, {
       model_ids: modelIds,
       weights,
-      complexity_tiers: complexityTiers,
     })
     const group = groupOptions.value.find(item => item.id === batchBindGroupForm.value.groupId)
     ElMessage.success(`已将 ${modelIds.length} 个模型绑定到${group ? `「${group.name}」` : '模型组'}`)

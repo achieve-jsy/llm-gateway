@@ -49,10 +49,10 @@ func TestLoadSyncScheduleDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
-	// 2026-11-02 03:00 +08 已成功 → 下一次是 11-03 03:00 +08
-	last := time.Date(2026, 11, 2, 3, 0, 0, 0, time.FixedZone("CST", 8*3600))
-	want := time.Date(2026, 11, 3, 3, 0, 0, 0, time.FixedZone("CST", 8*3600))
-	require.True(t, s.Next(last).Equal(want), "下一次应是明天 03:00（比较时刻，不比较 Location 指针）")
+	// 2026-11-02 02:00 +08 已成功 → 下一次是 11-03 02:00 +08
+	last := time.Date(2026, 11, 2, 2, 0, 0, 0, time.FixedZone("CST", 8*3600))
+	want := time.Date(2026, 11, 3, 2, 0, 0, 0, time.FixedZone("CST", 8*3600))
+	require.True(t, s.Next(last).Equal(want), "下一次应是明天 02:00（比较时刻，不比较 Location 指针）")
 }
 
 func TestLoadSyncScheduleDisabledWhenCronEmpty(t *testing.T) {

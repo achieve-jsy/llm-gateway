@@ -95,7 +95,7 @@ services:
       EHR_API_TOKEN: ${EHR_API_TOKEN:-}
       EHR_ORG_ID: ${EHR_ORG_ID:-}
       EHR_PREFIX: ${EHR_PREFIX:-/open-apis/ehr-apic/open-apis/resource/v1}
-      AI_APP_HUB_SYNC_CRON: "${AI_APP_HUB_SYNC_CRON:-0 3 * * *}"
+      AI_APP_HUB_SYNC_CRON: "${AI_APP_HUB_SYNC_CRON:-0 2 * * *}"
       AI_APP_HUB_SYNC_TZ: ${AI_APP_HUB_SYNC_TZ:-Asia/Shanghai}
       # 本镜像的构建/部署时间戳（秒）。蓝绿两色都跑定时同步，靠它让更新的构建先跑、
       # 旧构建让位，避免备用色用旧代码写掉当天已有数据。空值 = 不参与比较。

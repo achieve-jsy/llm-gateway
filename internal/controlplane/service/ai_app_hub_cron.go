@@ -20,8 +20,8 @@ type SyncRunner interface {
 }
 
 const (
-	// defaultSyncCron 每天 03:00（配合 defaultSyncTZ 即北京时间）。
-	defaultSyncCron = "0 3 * * *"
+	// defaultSyncCron 每天 02:00（配合 defaultSyncTZ 即北京时间）。
+	defaultSyncCron = "0 2 * * *"
 	defaultSyncTZ   = "Asia/Shanghai"
 
 	envSyncCron = "AI_APP_HUB_SYNC_CRON"
@@ -76,7 +76,7 @@ func (s *SyncSchedule) Next(lastSuccess time.Time) time.Time {
 
 // IsDue 判断现在是否已经越过"上一次成功之后的那一次触发"。
 //
-// 这也是补跑判据：重启发生在 03:00 之后时，Next(昨天成功) = 今天 03:00 ≤ now → 该跑。
+// 这也是补跑判据：重启发生在 02:00 之后时，Next(昨天成功) = 今天 02:00 ≤ now → 该跑。
 func (s *SyncSchedule) IsDue(lastSuccess, now time.Time) bool {
 	return !now.In(s.loc).Before(s.Next(lastSuccess))
 }

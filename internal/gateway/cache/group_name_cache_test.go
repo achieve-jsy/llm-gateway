@@ -21,6 +21,8 @@ const (
 	cpModeOK int32 = iota
 	cpModeServerError
 	cpModeBadJSON
+	// cpModeEmpty 返回 200 + 空 data：控制面权威地表示「当前没有任何启用组」。
+	cpModeEmpty
 )
 
 // fakeControlPlane 是可切换响应的假控制面，用于覆盖刷新成功/失败/非法 JSON 等场景。
@@ -60,6 +62,10 @@ func (f *fakeControlPlane) handle(w http.ResponseWriter, r *http.Request) {
 	case cpModeBadJSON:
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data": [`))
+	case cpModeEmpty:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[]}`))
 	default:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -438,5 +444,58 @@ func TestNextFailureIntervalBackoffSequence(t *testing.T) {
 	// steady 小于 fast 时不放大：直接封顶在 steady
 	if got := nextFailureInterval(time.Hour, time.Second, 3); got != time.Second {
 		t.Fatalf("steady 小于 fast 时应封顶在 steady=1s，实际 %v", got)
+	}
+}
+
+// 控制面 200 + 空 data 是权威事实（全部组被停用）：必须照常清空并保持就绪。
+// 与「Redis 快照里空 group_names（可能是旧控制面不写该字段）」的语义刻意不同：
+// 后者由 ApplySnapshotGroupNames 处理且**不得覆盖**已有组名。
+func TestRefreshEmptyDataClearsAndStaysReady(t *testing.T) {
+	cp := newFakeControlPlane()
+	defer cp.Close()
+
+	gc := NewGroupNameCache(testInternalToken)
+	if err := gc.Refresh(context.Background(), cp.URL()); err != nil {
+		t.Fatalf("首次刷新应成功: %v", err)
+	}
+	assertReadyWithNames(t, gc)
+
+	cp.SetMode(cpModeEmpty)
+	if err := gc.Refresh(context.Background(), cp.URL()); err != nil {
+		t.Fatalf("控制面返回空列表仍是成功刷新: %v", err)
+	}
+	if !gc.IsInitialized() {
+		t.Fatal("控制面权威地表示没有启用组时，缓存必须保持就绪（否则 /ready 会永久 503）")
+	}
+	if gc.Len() != 0 {
+		t.Fatalf("空 data 应清空缓存，实际 Len=%d", gc.Len())
+	}
+	if gc.IsGroupName("gpt-5.6-terra") {
+		t.Fatal("控制面已移除的组名不应残留")
+	}
+	if gc.Source() != GroupNameCacheSourceControlPlane {
+		t.Fatalf("来源应为 control-plane，实际 %q", gc.Source())
+	}
+}
+
+// nil 接收者安全：HealthHandler 可能拿到「非 nil 接口包 nil 指针」，
+// 三个观测/就绪方法都不得 panic（否则 /ready 会 500 而不是 503）。
+func TestNilReceiverSafety(t *testing.T) {
+	var gc *GroupNameCache // 故意为 nil
+
+	if gc.IsInitialized() {
+		t.Fatal("nil 缓存不得报告就绪")
+	}
+	if gc.Len() != 0 {
+		t.Fatalf("nil 缓存的组名数量应为 0，实际 %d", gc.Len())
+	}
+	if gc.Source() != "" {
+		t.Fatalf("nil 缓存的来源应为空串，实际 %q", gc.Source())
+	}
+	if gc.ApplySnapshotGroupNames([]string{"g1"}, 1) {
+		t.Fatal("nil 缓存不得写入成功")
+	}
+	if gc.ApplySnapshotGroupNames(nil, 1) {
+		t.Fatal("nil 输入不得写入成功")
 	}
 }

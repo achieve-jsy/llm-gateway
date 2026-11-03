@@ -54,12 +54,20 @@ func (gc *GroupNameCache) IsGroupName(name string) bool {
 	return ok
 }
 
+// IsInitialized 报告缓存是否已完成至少一次成功加载。
+// nil 接收者返回 false：HealthHandler 可能拿到「非 nil 接口包 nil 指针」，不得因此 panic。
 func (gc *GroupNameCache) IsInitialized() bool {
+	if gc == nil {
+		return false
+	}
 	return gc.initialized.Load()
 }
 
-// Len 返回当前缓存的组名数量（供 /ready details.group_cache_count 观测）。
+// Len 返回当前缓存的组名数量（供 /ready details.group_cache_count 观测）。nil 接收者返回 0。
 func (gc *GroupNameCache) Len() int {
+	if gc == nil {
+		return 0
+	}
 	gc.mu.RLock()
 	defer gc.mu.RUnlock()
 	return len(gc.names)
@@ -67,7 +75,11 @@ func (gc *GroupNameCache) Len() int {
 
 // Source 返回最近一次写入的来源（GroupNameCacheSourceRedisSnapshot /
 // GroupNameCacheSourceControlPlane）；从未写入过时返回空串，调用方按「未知」呈现。
+// nil 接收者同样返回空串。
 func (gc *GroupNameCache) Source() string {
+	if gc == nil {
+		return ""
+	}
 	gc.mu.RLock()
 	defer gc.mu.RUnlock()
 	return gc.source

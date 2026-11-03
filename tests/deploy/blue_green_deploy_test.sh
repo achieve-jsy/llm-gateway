@@ -53,6 +53,11 @@ EOF
 #!/bin/bash
 url="${*: -1}"
 echo "curl $url" >> "$CALLS_LOG"
+# 模拟真实 curl 的 -f/--fail 语义（本测试关心状态码路径，而不是真实网络）。
+# 真实脚本用 `curl -fsS .../ready`：HTTP 非 2xx 时退出码 22 且不输出 body。
+flags="${*% *}"
+fail_on_error=false
+case "$flags" in *f*) fail_on_error=true ;; esac
 case "$url" in
     http://localhost:8080/ready|http://localhost:8082/ready)
         count_file="${CALLS_LOG}.ready-count"
@@ -75,6 +80,20 @@ case "$url" in
             missing) group_cache_field="" ;;
             *)       group_cache_field=",\"group_cache\":\"${READY_GROUP_CACHE:-ok}\"" ;;
         esac
+        # 真实网关在组名缓存未就绪时返回 503（见 internal/gateway/handler/health.go）；
+        # FORCE_READY_HTTP_OK=true 时强制 200，用于单独验证「即使 /ready 以 200 报告未就绪，
+        # 切流门禁也必须拒绝」这条防御性路径。
+        http_status=200
+        if [ "${READY_GROUP_CACHE:-ok}" = "not_initialized" ] && [ "${FORCE_READY_HTTP_OK:-false}" != "true" ]; then
+            http_status=503
+        fi
+        if [ "$http_status" != "200" ]; then
+            if [ "$fail_on_error" = "true" ]; then
+                echo "curl: (22) The requested URL returned error: $http_status" >&2
+                exit 22
+            fi
+            exit 0
+        fi
         printf '{"status":"ready","checks":{"redis":"ok","registry":"ok","scheduler":"ok"%s},"details":{"version":%s,"model_count":%s,"source":"redis-snapshot","loaded_at":"2026-07-17T00:00:00Z"},"capabilities":{"tier_snapshot_schema":1,"redis_v2":true,"snapshot_revision":4}}\n' "$group_cache_field" "$version" "$model_count"
         ;;
     http://localhost:8081/healthz|http://localhost:8083/healthz)
@@ -184,7 +203,12 @@ test_empty_ready_models_blocks_cutover() {
 
 # 冷启动组名缓存未就绪（checks.group_cache=not_initialized）必须阻断切流 ——
 # 这是 2026-10-16 线上蓝绿事故（绿网关组名缓存为空仍被切流、合法组名请求被误判直连）的门禁回归。
-test_group_cache_not_initialized_blocks_cutover() {
+#
+# 真实链路是「fail-closed 的两道闸」：未就绪时 /ready 返回 503 → health_check 的
+# `curl -fsS /ready` 退出码 22 → 目标颜色健康检查失败 → 直接 abort（此时根本走不到切流门禁）。
+# 因此本用例断言的是 health_check 这道闸，而不是切流指纹门禁；「/ready 以 200 报告未就绪」
+# 这条防御性路径由 test_group_cache_not_initialized_rejected_by_gate 单独覆盖。
+test_group_cache_not_initialized_fails_health_check() {
     local fixture
     fixture=$(new_fixture cache-not-initialized)
 
@@ -195,9 +219,26 @@ test_group_cache_not_initialized_blocks_cutover() {
     [ "$(cat "${fixture}/deploy/.active-color")" = "blue" ] || fail "active color changed with group_cache=not_initialized"
     assert_contains "${fixture}/upstream-active.conf" "127.0.0.1:8080"
     assert_not_contains "${fixture}/calls.log" "nginx -s reload"
-    # 目标环境必须先起来并通过 health_check，否则失败原因就不是切流门禁。
+    # 目标环境必须先起来，否则失败原因就不是健康检查。
     assert_contains "${fixture}/calls.log" "compose -f ${fixture}/deploy/docker-compose.green.yml -p llm-green up -d"
-    # 失败原因必须是 cutover-ready 门禁本身，而不是健康检查 / capabilities / 锁竞争等其它原因。
+    # 失败原因：/ready 503 → 健康检查失败 → 终止（流量仍在 blue）。
+    assert_contains "${fixture}/deploy.log" "Health check failed for green"
+    assert_not_contains "${fixture}/deploy.log" "green gateway /ready payload not cutover-ready yet"
+    assert_not_contains "${fixture}/deploy.log" "Timed out waiting for another deployment"
+}
+
+# 防御性路径：即使 /ready 以 200 报告 group_cache=not_initialized（例如未来 /ready 的就绪判定
+# 发生变化），切流门禁也必须独立拒绝——门禁不依赖 /ready 的状态码。
+test_group_cache_not_initialized_rejected_by_gate() {
+    local fixture
+    fixture=$(new_fixture cache-not-initialized-http-200)
+
+    if run_deploy "$fixture" READY_GROUP_CACHE=not_initialized FORCE_READY_HTTP_OK=true HEALTH_RETRIES=2 >"${fixture}/deploy.log" 2>&1; then
+        fail "deployment should fail when cutover gate sees group_cache=not_initialized at HTTP 200"
+    fi
+
+    [ "$(cat "${fixture}/deploy/.active-color")" = "blue" ] || fail "active color changed with group_cache=not_initialized at HTTP 200"
+    assert_not_contains "${fixture}/calls.log" "nginx -s reload"
     assert_contains "${fixture}/deploy.log" "green gateway /ready payload not cutover-ready yet"
     assert_contains "${fixture}/deploy.log" "did not become cutover-ready; deploy aborted"
     assert_not_contains "${fixture}/deploy.log" "Health check failed for green"
@@ -257,7 +298,8 @@ test_success_keeps_old_environment
 test_failed_smoke_restores_previous_upstream
 test_flapping_ready_version_blocks_cutover
 test_empty_ready_models_blocks_cutover
-test_group_cache_not_initialized_blocks_cutover
+test_group_cache_not_initialized_fails_health_check
+test_group_cache_not_initialized_rejected_by_gate
 test_missing_group_cache_field_blocks_cutover
 test_concurrent_deploy_waits_then_times_out
 test_retained_target_is_removed_before_replacement

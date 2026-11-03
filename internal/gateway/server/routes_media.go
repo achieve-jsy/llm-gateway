@@ -11,8 +11,15 @@ package server
 // 设计依据：docs/media-channels-integration-design.md §2（总体架构）、§6.3（路由与处理流程）。
 
 import (
+	"log/slog"
+	"sync/atomic"
+	"time"
+
+	"github.com/example/llm-gateway/internal/core"
 	"github.com/example/llm-gateway/internal/gateway/budget"
 	"github.com/example/llm-gateway/internal/gateway/handler"
+	"github.com/example/llm-gateway/internal/gateway/infra"
+	gwmodel "github.com/example/llm-gateway/internal/gateway/model"
 	gwobs "github.com/example/llm-gateway/internal/gateway/observability"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/quota"
@@ -41,7 +48,10 @@ type MediaDeps struct {
 	GroupDispatch *orchestrator.GroupAwareDispatcher
 
 	// ControlPlaneURL / InternalToken 控制面内部 API 地址与凭证。
-	// **gateway 不直连数据库**：任务读写一律走 /internal/v1/media-tasks（防护栏 A1）。
+	// **gateway 不直连数据库**：任务读写一律走**既有**内部端点
+	// `/internal/v1/video/tasks`（防护栏 A1）。冻结契约刻意复用该路径而不是新建
+	// `/internal/v1/media/tasks`，避免滚动发布窗口内新旧控制面不匹配 → 404；
+	// tests/contract/contracts.json 里写的 media-tasks 是早期设计稿，以冻结契约为准。
 	ControlPlaneURL string
 	InternalToken   string
 
@@ -135,24 +145,169 @@ func registerMediaImageRoutes(deps MediaDeps) {
 
 // registerMediaTaskRoutes 注册「任务平台链路」路由（设计文档 §2.1、§6.3）。
 //
-// 负责人：C 队（Batch 1）。**当前为空实现**，只登记待办清单，不得在此写业务逻辑。
+// 负责人：C 队（Batch 1）。
 //
-// 待注册（C5）：
+// 注册（C5）：
 //
-//	POST /v1/videos                 → media_task_handler.go 创建任务
-//	GET  /v1/videos/:task_id        → 查询任务（归属校验 + 终态缓存 + CAS + 记账）
-//	GET  /v1/videos/:task_id/content→ 产物（Phase 1-4 为 302 直跳上游，Phase 5 改代理）
+//	POST /v1/videos                  → media_task_handler.go 创建任务
+//	GET  /v1/videos/:task_id         → 查询任务（归属校验 + 终态缓存 + CAS + 记账）
+//	GET  /v1/videos/:task_id/content → 产物（Phase 1-4 为 302 直跳上游，Phase 5 改代理）
 //
-// 实现时必须遵守：
+// 实现约束（逐条对应任务书）：
 //   - 路由挂在 deps.V1 上，沿用既有中间件链（鉴权/埋点/配额/预算）；
-//   - 先做 `if deps.V1 == nil { return }` 之类的降级判断；
 //   - 创建流程先过 PrepareAuthorizedGates（deps.BudgetGate + deps.RequestQuotaGate +
 //     deps.ModelQuotaGate），组调度走 deps.GroupDispatch；
 //   - 任务读写走控制面内部 API（deps.ControlPlaneURL / deps.InternalToken），
 //     **gateway 禁止直连数据库**（防护栏 A1）；写失败必须返回 5xx，禁止 fire-and-forget；
 //   - 适配器从 deps.MediaAdapterRegistry.Get(providerType) 取（可能为 nil → 501），
 //     热更新由 MediaAdapterRegistry() 在 config:change 时 Swap（C4）；
-//   - 注意与既有 Seedance 路由 /v1/contents/generations/tasks（router.go）并存，不要互相顶替。
+//   - 与既有 Seedance 路由 /v1/contents/generations/tasks（router.go）路径前缀不同，
+//     两条链路**并存**、不互相顶替（D1 决策）。
 func registerMediaTaskRoutes(deps MediaDeps) {
-	// TODO(C 队 · C5/C6): 见上方待注册清单与约束。
+	if deps.V1 == nil {
+		slog.Warn("media task routes not registered: /v1 group is nil")
+		return
+	}
+
+	policy := currentMediaTaskPolicy()
+	timeout := time.Duration(policy.TimeoutMinutes) * time.Minute
+
+	// 只在配置了控制面地址时才注入持久化客户端：否则 handler 返回 503（未接线），
+	// 而不是伪装成「控制面 502」。
+	var store handler.MediaTaskStore
+	if deps.ControlPlaneURL != "" {
+		store = infra.NewVideoTaskClient(deps.ControlPlaneURL, deps.InternalToken)
+	}
+
+	// 注意：把「值为 nil 的具体类型指针」赋给接口会得到**非 nil 接口**，
+	// 调用时直接 panic。必须先判空再赋值。
+	var dispatcher handler.VideoGroupDispatcher
+	if deps.GroupDispatch != nil {
+		dispatcher = deps.GroupDispatch
+	}
+
+	h := handler.NewMediaTaskHandler(handler.MediaTaskHandlerConfig{
+		Store:           store,
+		Registry:        deps.MediaAdapterRegistry,
+		GroupDispatch:   dispatcher,
+		RouterGetter:    deps.RouterGetter,
+		BudgetGate:      deps.BudgetGate,
+		RequestQuota:    deps.RequestQuotaGate,
+		ModelQuotaGate:  deps.ModelQuotaGate,
+		Pricing:         policy.PricingResolver,
+		Timeout:         timeout,
+		MaxPollFailures: policy.PollMaxFailures,
+	})
+
+	deps.V1.POST("/videos", h.Create)
+	deps.V1.GET("/videos/:task_id", h.Retrieve)
+	deps.V1.GET("/videos/:task_id/content", h.Content)
+
+	slog.Info("media task routes registered",
+		"paths", []string{"/v1/videos", "/v1/videos/:task_id", "/v1/videos/:task_id/content"},
+		"media_adapters", deps.MediaAdapterRegistry.Len(),
+		"timeout", timeout.String(),
+		"poll_max_failures", policy.PollMaxFailures,
+	)
+}
+
+// RegisterMediaTaskRoutes 是 registerMediaTaskRoutes 的导出入口，仅供 tests/ 下的
+// 组件测试在最小 gin 引擎上验证「注册结果与整体接线」（生产路径由 setup() 调用
+// 未导出的 registerMediaTaskRoutes，两者是同一个函数、不存在行为差异）。
+func RegisterMediaTaskRoutes(deps MediaDeps) {
+	registerMediaTaskRoutes(deps)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// C4：异步媒体适配器注册表的接线（整表原子替换 + config:change 热更新）
+// ════════════════════════════════════════════════════════════════════════════
+
+// MediaAdapterFactory 把 provider snapshot entries 编译成**整张**
+// 「providerType → 适配器」表（以及展示名表）。
+//
+// 为什么用工厂注册而不是在 routes_media.go 里 switch providerType：
+// 每个渠道适配器由 D 队在自己的包内实现（Vidu/Kling…），C 队不做渠道翻译层。
+// 工厂由渠道侧（或 cmd/gateway）在启动期注册一次，C 队只负责「按 snapshot 整表重建
+// + 一次性 Swap + 未接线时 nil → 501」这条链路。
+//
+// 返回 nil/nil 表示本次 snapshot 没有任何可用的媒体渠道 —— Swap 会把注册表清空
+// （渠道被删除/停用时必须真的消失，否则会继续用旧凭证打上游）。
+type MediaAdapterFactory func(entries []gwmodel.ProviderEntry) (map[string]core.MediaTaskProvider, map[string]string)
+
+var mediaAdapterFactory atomic.Pointer[MediaAdapterFactory]
+
+// RegisterMediaAdapterFactory 注册整表构建器（传 nil 表示取消注册）。
+func RegisterMediaAdapterFactory(factory MediaAdapterFactory) {
+	if factory == nil {
+		mediaAdapterFactory.Store(nil)
+		return
+	}
+	mediaAdapterFactory.Store(&factory)
+}
+
+// ReloadMediaAdapters 按 provider snapshot 重建整张适配器表并**一次性 Swap**。
+//
+// 由 cmd/gateway 挂在既有的 provider 热更新链路（ProviderLoader 的 onReload 回调，
+// 与 seedance 适配器同一条 config:change 链路）上，改渠道后无需重启 gateway。
+//
+// 语义：**整表替换，不是增量 merge**（见 MediaAdapterRegistry.Swap 的注释）。
+func ReloadMediaAdapters(entries []gwmodel.ProviderEntry) {
+	var adapters map[string]core.MediaTaskProvider
+	var names map[string]string
+	if factory := mediaAdapterFactory.Load(); factory != nil && *factory != nil {
+		adapters, names = (*factory)(entries)
+	}
+	mediaAdapterRegistry.Swap(adapters, names)
+	slog.Info("media adapters reloaded",
+		"count", mediaAdapterRegistry.Len(),
+		"provider_types", mediaAdapterRegistry.ProviderTypes(),
+	)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// C7/C8：任务平台的运行策略（超时/轮询上限/价表）
+// ════════════════════════════════════════════════════════════════════════════
+
+// MediaTaskPolicy 是任务平台的运行策略，由 cmd/gateway 在启动期注入一次。
+//
+// 为什么不走 MediaDeps 字段：router.go 的 newMediaDeps 签名由 A 队锁定（B/C 队
+// 不得改动 setup()），而这两个值来自配置（MEDIA_TASK_TIMEOUT_MINUTES /
+// MEDIA_POLL_MAX_FAILURES），启动期才有。这里用与 MediaAdapterRegistry() 同样的
+// 「包级单例 + 显式注入」范式。
+type MediaTaskPolicy struct {
+	// TimeoutMinutes 任务超时阈值（分钟；<=0 时回退 30）。
+	TimeoutMinutes int
+	// PollMaxFailures 轮询失败上限（<=0 时回退 20）。
+	PollMaxFailures int
+	// PricingResolver 媒体价表解析器（与准入闸门同源；可为 nil → 记不上成本）。
+	PricingResolver gwobs.PricingResolver
+}
+
+var mediaTaskPolicyHolder atomic.Pointer[MediaTaskPolicy]
+
+// ConfigureMediaTaskPolicy 注入任务平台运行策略（启动期调用一次；测试可直接调用）。
+func ConfigureMediaTaskPolicy(policy MediaTaskPolicy) {
+	mediaTaskPolicyHolder.Store(&policy)
+}
+
+// MediaTaskPolicyDefaults 返回未注入策略时的兜底值（与 gateway 配置默认值一致）。
+//
+// 导出是为了让启动自检与组件测试能断言「代码默认值 == 配置默认值」，避免两处漂移。
+func MediaTaskPolicyDefaults() MediaTaskPolicy {
+	return MediaTaskPolicy{TimeoutMinutes: 30, PollMaxFailures: 20}
+}
+
+// currentMediaTaskPolicy 读取策略并做安全兜底（未注入时用与配置默认值一致的 30/20）。
+func currentMediaTaskPolicy() MediaTaskPolicy {
+	policy := MediaTaskPolicy{TimeoutMinutes: 30, PollMaxFailures: 20}
+	if stored := mediaTaskPolicyHolder.Load(); stored != nil {
+		policy = *stored
+	}
+	if policy.TimeoutMinutes <= 0 {
+		policy.TimeoutMinutes = 30
+	}
+	if policy.PollMaxFailures <= 0 {
+		policy.PollMaxFailures = 20
+	}
+	return policy
 }

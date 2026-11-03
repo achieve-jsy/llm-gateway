@@ -138,6 +138,14 @@ func main() {
 		if reloadSeedance != nil {
 			reloadSeedance(entries)
 		}
+		// 异步媒体任务适配器（C4）：与 seedance 适配器挂在**同一条** config:change
+		// 热更新链路上，按 snapshot entries **整表重建后一次性 Swap**（渠道增删即时生效）。
+		//
+		// 前置条件：渠道侧（D 队）的「整表构建器」必须已经通过
+		// server.RegisterMediaAdapterFactory(...) 注册，且要发生在首次 loadProviders 之前
+		// （建议与 buildProviderFactory 放在一起）。未注册时注册表保持为空，
+		// /v1/videos 三件套返回 501 not_implemented（未接线），不会 panic。
+		server.ReloadMediaAdapters(entries)
 	})
 
 	// Load providers: try Redis snapshot first, then control-plane HTTP.
@@ -271,6 +279,29 @@ func main() {
 		"require_pricing", mediaPricingGate.RequirePricing(),
 		"env_override", "MEDIA_REQUIRE_PRICING",
 	)
+
+	// 媒体任务平台运行策略（C7/C8）：任务超时阈值、轮询失败上限、终态记账价表。
+	// 价表与上面的准入闸门**同源**，保证「准入判有价」与「终态算得出钱」一致。
+	server.ConfigureMediaTaskPolicy(server.MediaTaskPolicy{
+		TimeoutMinutes:  cfg.Media.TaskTimeoutMinutes,
+		PollMaxFailures: cfg.Media.PollMaxFailures,
+		PricingResolver: providerPricing,
+	})
+	slog.Info("media task policy ready",
+		"timeout_minutes", cfg.Media.TaskTimeoutMinutes,
+		"poll_max_failures", cfg.Media.PollMaxFailures,
+	)
+
+	// 启动期再显式播种一次媒体适配器：providerLoader 首次 Build 的回调发生在
+	// Setup 之前，而渠道侧的工厂注册时机由 D 队决定，这里补一次保证「注册顺序」
+	// 不会导致 /v1/videos 在启动后一直是 501。
+	if rdb != nil {
+		if snapshot, err := configsync.LoadProviderSnapshot(ctx, rdb); err == nil {
+			server.ReloadMediaAdapters(snapshot.Entries)
+		} else {
+			slog.Warn("media adapters startup seed skipped: provider snapshot unavailable", "error", err)
+		}
+	}
 	var traceWriter *gwobs.TraceWriter
 	// traceBodySpooler 必须在**外层**声明：它的生命周期归关停编排（取消 ctx → 等写入侧
 	// 排空 → Close），不能由 spooler.Run 在 ctx.Done 时自行 Close（评审必修 1）。

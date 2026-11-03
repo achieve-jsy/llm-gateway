@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="af7f4b61-a5e3-4748-bcf3-e1eb914177d5" name="Changes" comment="feat(scheduler): 添加内部令牌认证和健康状态过滤功能&#10;&#10;- 添加 InternalToken 配置项用于控制平面通信认证&#10;- 实现 ConfigSyncer 使用内部令牌进行 API 请求验证&#10;- 添加 slog 日志记录配置同步和路由调试信息&#10;- 改进 GroupHandler 支持 X-Internal-Token 头部认证&#10;- 扩展控制面响应数据结构兼容性转换逻辑&#10;- 实现模型仓库和提供商仓库依赖注入查询&#10;- 更新 GatewayNameCache 使用内部令牌认证&#10;- 移除 HealthStore 中无用的健康状态过滤逻辑&#10;- 完善路由器日志输出和错误处理机制&#10;- 优化模型加载检查条件避免空提供商情况&#10;- 更新 GroupModel 数据结构增加模型名称和渠道类型字段">
+    <list default="true" id="af7f4b61-a5e3-4748-bcf3-e1eb914177d5" name="Changes" comment="chore(ci): 更新部署目录路径配置&#10;&#10;- 将 WEB_DIR 变量从 &quot;/opt/llm-gateway/web-dist&quot; 修改为 &quot;/var/www/aimeter/dist&quot;&#10;- 更新 GitLab CI 部署配置以匹配新的静态文件存放路径">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -15,7 +15,7 @@
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
-        <entry key="$PROJECT_DIR$" value="dev_20260521_v0.1版本开发" />
+        <entry key="$PROJECT_DIR$" value="dev" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
@@ -28,23 +28,23 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.com.insyncwithfoo.pyright.configurations.converters.pyrightls.ConfigurationsConverter&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.com.insyncwithfoo.pyright.configurations.converters.v1.ConfigurationsConverter&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;dev&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/Users/jsy/Public/self_code/llm-gateway/web/public/images&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;http.proxy&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.com.insyncwithfoo.pyright.configurations.converters.pyrightls.ConfigurationsConverter": "true",
+    "RunOnceActivity.com.insyncwithfoo.pyright.configurations.converters.v1.ConfigurationsConverter": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "dev__20260527__v3.0版本开发",
+    "last_opened_file_path": "/Users/jsy/Public/self_code/llm-gateway/web/public/images",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "http.proxy",
+    "vue.rearranger.settings.migration": "true"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/web/public/images" />
@@ -170,7 +170,15 @@
       <option name="project" value="LOCAL" />
       <updated>1779803459759</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="chore(ci): 更新部署目录路径配置&#10;&#10;- 将 WEB_DIR 变量从 &quot;/opt/llm-gateway/web-dist&quot; 修改为 &quot;/var/www/aimeter/dist&quot;&#10;- 更新 GitLab CI 部署配置以匹配新的静态文件存放路径">
+      <option name="closed" value="true" />
+      <created>1779805373760</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1779805373760</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -197,6 +205,7 @@
     <MESSAGE value="feat(auth): 实现 SSO 登录和 API Key 管理功能&#10;&#10;- 添加 OIDC SSO 登录功能，支持公司账号认证&#10;- 实现 API Key 的创建、列表、启用/禁用和删除功能&#10;- 添加 API Key 鉴权中间件替换原有硬编码 token 方式&#10;- 集成用户和部门信息绑定，支持身份追溯&#10;- 更新前端菜单结构，添加员工和管理功能模块&#10;- 增加系统设置和用户信息显示功能&#10;- 添加模型列表缓存版本控制功能&#10;- 完善模型目录同步和搜索功能&#10;- 优化界面样式和响应式布局" />
     <MESSAGE value="chore(config): 更新环境配置和工作区设置&#10;&#10;- 配置 OAuth2 SSO 认证参数，包括客户端ID、密钥和回调地址&#10;- 设置 JWT 密钥和前端URL指向生产环境域名&#10;- 更新工作区 Git 分支信息为开发版本分支&#10;- 优化 IDE 工作空间配置，添加最新任务历史记录&#10;- 清理临时文件路径配置，调整 Git widget 显示名称" />
     <MESSAGE value="feat(scheduler): 添加内部令牌认证和健康状态过滤功能&#10;&#10;- 添加 InternalToken 配置项用于控制平面通信认证&#10;- 实现 ConfigSyncer 使用内部令牌进行 API 请求验证&#10;- 添加 slog 日志记录配置同步和路由调试信息&#10;- 改进 GroupHandler 支持 X-Internal-Token 头部认证&#10;- 扩展控制面响应数据结构兼容性转换逻辑&#10;- 实现模型仓库和提供商仓库依赖注入查询&#10;- 更新 GatewayNameCache 使用内部令牌认证&#10;- 移除 HealthStore 中无用的健康状态过滤逻辑&#10;- 完善路由器日志输出和错误处理机制&#10;- 优化模型加载检查条件避免空提供商情况&#10;- 更新 GroupModel 数据结构增加模型名称和渠道类型字段" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat(scheduler): 添加内部令牌认证和健康状态过滤功能&#10;&#10;- 添加 InternalToken 配置项用于控制平面通信认证&#10;- 实现 ConfigSyncer 使用内部令牌进行 API 请求验证&#10;- 添加 slog 日志记录配置同步和路由调试信息&#10;- 改进 GroupHandler 支持 X-Internal-Token 头部认证&#10;- 扩展控制面响应数据结构兼容性转换逻辑&#10;- 实现模型仓库和提供商仓库依赖注入查询&#10;- 更新 GatewayNameCache 使用内部令牌认证&#10;- 移除 HealthStore 中无用的健康状态过滤逻辑&#10;- 完善路由器日志输出和错误处理机制&#10;- 优化模型加载检查条件避免空提供商情况&#10;- 更新 GroupModel 数据结构增加模型名称和渠道类型字段" />
+    <MESSAGE value="chore(ci): 更新部署目录路径配置&#10;&#10;- 将 WEB_DIR 变量从 &quot;/opt/llm-gateway/web-dist&quot; 修改为 &quot;/var/www/aimeter/dist&quot;&#10;- 更新 GitLab CI 部署配置以匹配新的静态文件存放路径" />
+    <option name="LAST_COMMIT_MESSAGE" value="chore(ci): 更新部署目录路径配置&#10;&#10;- 将 WEB_DIR 变量从 &quot;/opt/llm-gateway/web-dist&quot; 修改为 &quot;/var/www/aimeter/dist&quot;&#10;- 更新 GitLab CI 部署配置以匹配新的静态文件存放路径" />
   </component>
 </project>

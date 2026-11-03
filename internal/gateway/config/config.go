@@ -79,7 +79,7 @@ func Load() *Config {
 	v.SetDefault("otlp.enabled", false)
 	v.SetDefault("provider.internal_token", "")
 	v.SetDefault("provider.control_plane_url", "http://localhost:8081")
-	v.SetDefault("auth.url", "http://localhost:8082")
+	v.SetDefault("auth.url", "http://localhost:8080")
 	v.SetDefault("auth.token", "")
 	v.SetDefault("oidc.issuer_url", "")
 	v.SetDefault("oidc.client_id", "")

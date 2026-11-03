@@ -620,6 +620,42 @@ lead 复核：
 2. **鉴权守卫 → 采用 `PermUsageViewScoped`**（与既有媒体任务统计系列一致）。改成纯运维面
    `PermOpsView` 只需改 router 一行，但会造成同一系列端点权限不一致，不做。
 
+### E5 最终验收闸门（第 13 轮 · lead 亲自执行）
+
+集成分支 `feat/media-channels`，相对 `main` **83 个提交 / 163 个文件 / +31281 −3602 行**。
+
+| 闸门 | 命令 | 结果 |
+|---|---|---|
+| 编译 | `make build` | **exit 0**（gateway / control-plane / trace-sealer 三目标；**不用** `go build ./...`，根 `test/bedrock_model_id_check.go` 是既有死代码） |
+| 测试 | `make test` | **exit 0，50 包 ok / 0 FAIL**（基线 48 + `tests/providers/kling` + `tests/providers/vidu`） |
+| 静态检查 | `golangci-lint run --timeout 30m ./cmd/... ./internal/... ./tests/...` | **total 125**，逐项 `staticcheck 9 / ineffassign 12 / gosimple 4 / unused 50 / errcheck 50` —— **与基线逐项一致，零新增** |
+| 迁移校验 | `atlas migrate validate` | **exit 0** |
+| 漂移对拍 | `atlas migrate diff` vs 期望态 | **60 条语句，`media|video` 提及 0**（与基线一致，无新增漂移） |
+
+**接线核对（结构性验收）**：
+- `cmd/gateway/main.go:143` 的 `server.RegisterMediaAdapterFactory(server.BuildMediaAdapters)`
+  在**首次 loadProviders 之前**注册 ✓
+- `internal/gateway/server/media_adapters.go:23-24` 的工厂表已含 Kling 与 Vidu 两行 ✓
+- `internal/providers/{kling,vidu}/` **均无「尚未实现」骨架残留** ✓
+
+#### 尚未完成的项（如实列出，不粉饰）
+
+| 项 | 状态 | 阻塞原因 |
+|---|---|---|
+| **E3 前端**（媒体价格展示/编辑 + 看板前端） | ❌ 未开始 | 后端契约已就绪（见 E-dash 报告 §4 的冻结契约），可随时开工 |
+| **E2 媒体探活**（Kling/Vidu 连通性+鉴权探针） | ❌ 未开始 | **硬阻塞**：生产库没有任何 Kling/Vidu 渠道与凭据，无法验证探针真的能通过 |
+| **真实上游联调**（Kling/Vidu） | ❌ 未做 | **硬阻塞**：同上无凭据。两渠道的全部验证都是契约测试 + `httptest` 假上游回放 |
+| **A11 迁移 + 5 个待执行迁移** | ❌ 未执行 | 运维动作，需低峰窗口（A11 在 13GB 热表上） |
+| **安全分支**（清理泄露的生产库密码） | ⏸ 独立分支待处理 | `fix/remove-leaked-debug-creds`；**凭证轮换是人工动作**，且该分支需先合 `fix/baseline-tests-build` 才能过 `make test` |
+| **看板 90d 索引** | ⏸ 延后决策 | 无成本证据（`call_type` 列尚不存在，EXPLAIN 跑不通）；应与 A11 窗口合并安排 |
+
+#### 仍待产品/上游确认的开放问题
+
+1. **Vidu 各 resolution 档位单价**——未给出，故 Vidu 计价目前只能「按请求参数退化」近似（已在代码注释与报告标注，**未用估算值冒充上游用量**）。
+2. **Kling「任务不存在」的业务码形态**——实现只认 HTTP 404。若上游实际用 `200 + 业务码` 表达 not-found，会被归类为可重试而非立即放弃。**没有可靠业务码表，猜表比不猜更危险**，故留作开放项。
+3. **产物 URL 的 TTL / 防盗链**——`artifacts` 直接给出上游 URL，其有效期与是否需要代理转签未确认。
+4. **是否把 legacy Seedance 链路迁移到 `core.MediaTaskProvider`** —— 目前两套并存（状态词表也是两套）。
+
 ## 3. 批次与依赖图
 
 ```mermaid

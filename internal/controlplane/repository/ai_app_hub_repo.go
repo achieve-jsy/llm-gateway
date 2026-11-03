@@ -121,6 +121,24 @@ func (r *AIAppHubRepo) SetDepartmentStudio(ctx context.Context, deptID string, s
 		Update("studio_id", studioID).Error
 }
 
+// HideStudiosNotInDepartments 把"EHR 里已经不存在"的 EHR 来源工作室隐藏（visible=false）。
+//
+// 只动 source='ehr' 且有 department_id 的行：manual 覆盖行与手工工作室（department_id IS NULL）
+// 永不参与对账；不做物理删除，ai_apps 挂在工作室行下。keep 为空表示"没有任何部门存活"，
+// 调用方（同步服务）负责保证上游异常时不传空。
+func (r *AIAppHubRepo) HideStudiosNotInDepartments(ctx context.Context, keep []string) (int64, error) {
+	q := r.db.WithContext(ctx).Model(&model.AIAppStudio{}).
+		Where("source = ?", "ehr").
+		Where("department_id IS NOT NULL").
+		Where("department_id <> ''").
+		Where("visible = ?", true)
+	if len(keep) > 0 {
+		q = q.Where("department_id NOT IN ?", keep)
+	}
+	res := q.Updates(map[string]any{"visible": false, "updated_at": time.Now()})
+	return res.RowsAffected, res.Error
+}
+
 // HasAnyRole 查 legacy 的 user_roles 表（migrations/043）。真实列名是 user_id，
 // 不是 passport；该表没有纳入 Atlas 迁移，因此直接用表名查询，不建 GORM model。
 //

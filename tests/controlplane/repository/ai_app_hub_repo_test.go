@@ -92,3 +92,46 @@ func TestUpdateStudioEHRFieldsLeavesVisibility(t *testing.T) {
 	require.Equal(t, "emp-1", after.LeaderEmployeeID)
 	require.False(t, after.Visible, "可见性属运营字段，同步不得覆盖")
 }
+
+func TestHideStudiosNotInDepartmentsHidesOnlyVanishedEHRRows(t *testing.T) {
+	db := newAIHubRepoTestDB(t)
+	repo := repository.NewAIAppHubRepo(db)
+	ctx := context.Background()
+	keepDept, goneDept, manualDept := "keep-1", "gone-1", "gone-manual"
+	for _, s := range []model.AIAppStudio{
+		{DepartmentID: &keepDept, Name: "保留", Source: "ehr", Visible: true},
+		{DepartmentID: &goneDept, Name: "撤销", Source: "ehr", Visible: true},
+		{DepartmentID: &manualDept, Name: "手工", Source: "manual", Visible: true},
+	} {
+		_, err := repo.InsertStudioIfAbsent(ctx, &s)
+		require.NoError(t, err)
+	}
+
+	n, err := repo.HideStudiosNotInDepartments(ctx, []string{keepDept})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n, "只隐藏 source=ehr 且不在 keep 里的行")
+
+	kept, err := repo.GetStudioByDepartmentID(ctx, keepDept)
+	require.NoError(t, err)
+	require.True(t, kept.Visible)
+
+	gone, err := repo.GetStudioByDepartmentID(ctx, goneDept)
+	require.NoError(t, err)
+	require.False(t, gone.Visible)
+
+	manual, err := repo.GetStudioByDepartmentID(ctx, manualDept)
+	require.NoError(t, err)
+	require.True(t, manual.Visible, "manual 行永不被同步改动")
+}
+
+func TestHideStudiosNotInDepartmentsIgnoresEmptyDepartmentID(t *testing.T) {
+	db := newAIHubRepoTestDB(t)
+	repo := repository.NewAIAppHubRepo(db)
+	ctx := context.Background()
+	_, err := repo.InsertStudioIfAbsent(ctx, &model.AIAppStudio{Name: "手工工作室", Source: "ehr", Visible: true})
+	require.NoError(t, err)
+
+	n, err := repo.HideStudiosNotInDepartments(ctx, []string{"any"})
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n, "department_id IS NULL 的行不参与对账")
+}

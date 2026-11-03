@@ -273,12 +273,22 @@ func (c *Collector) runProductionPipeline(
 	}
 }
 
+// callLogSchemaReady 判断 call_logs 是否已具备写入所需的列。
+//
+// 为什么必须逐列判定而不是"表存在就行"：GORM 的 INSERT 会把 model 里**所有**字段列进语句，
+// 少任何一列都会让**整行**写入失败（连带丢失调用明细）。而代码先于迁移上线（滚动/蓝绿、
+// CI migrate 与 deploy 的先后）是常态，所以这里显式等列到位——迁移期间事件留在 Redis spool
+// 里，列一出现就自动重放，不丢数据（见 runProductionPipeline 的重连/重放循环）。
+//
+// CallType 与 KeyType、BudgetTierConstraintsSnapshot 同理：都是"后加进 GORM model"的列，
+// 必须等迁移（20261016120000）落地后才允许开写。
 func callLogSchemaReady(db *gorm.DB) bool {
 	if db == nil || !db.Migrator().HasTable(&model.CallLog{}) {
 		return false
 	}
 	return db.Migrator().HasColumn(&model.CallLog{}, "KeyType") &&
-		db.Migrator().HasColumn(&model.CallLog{}, "BudgetTierConstraintsSnapshot")
+		db.Migrator().HasColumn(&model.CallLog{}, "BudgetTierConstraintsSnapshot") &&
+		db.Migrator().HasColumn(&model.CallLog{}, "CallType")
 }
 
 func (c *Collector) finalProductionReplay() {

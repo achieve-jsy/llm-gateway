@@ -51,6 +51,11 @@ type CallLog struct {
 	CacheReadCostUSD              float64                        `gorm:"type:decimal(18,8);not null;default:0"                         json:"cache_read_cost_usd"`
 	EstCostUSD                    float64                        `gorm:"type:decimal(18,6);not null;default:0"                         json:"est_cost_usd"`
 	InboundEndpoint               string                         `gorm:"type:varchar(128)"                                             json:"inbound_endpoint"`
+	// CallType 端点归一化后的操作类型（chat / video.create / video.asset.CreateAssetGroup / ...）。
+	// 由 gateway 采集侧 observability.DeriveCallType(method, path) 计算后写入；未登记端点写**空串**
+	// （不做猜测），历史行由迁移 20261016120100 按「端点优先、model 后缀兜底」回填。
+	// 列宽 varchar(64) 与 observability.maxCallTypeLen 对齐：超长会让整行 call_logs INSERT 失败。
+	CallType                      string                         `gorm:"type:varchar(64)"                                              json:"call_type,omitempty"`
 	// 配额拒绝事实（仅被配额闸门拒绝、状态码 429 的行写入；其余行三者为空/NULL）：
 	// QuotaGate 取值 rpm | concurrency；QuotaLayer 取值 subject | group | model | default；
 	// QuotaLimit 为该次判定实际生效的限额值。非配额拒绝的行三者为空/NULL。

@@ -85,8 +85,11 @@ func TestProductionCollector_UsesIndependentPriceRefreshOverride(t *testing.T) {
 		input_price real, output_price real, catalog_id text,
 		cache_read_price real, cache_write_price real
 	)`).Error)
+	// 手写的 call_logs 夹具需覆盖 callLogSchemaReady 判定用到的列（key_type /
+	// budget_tier_constraints_snapshot / call_type）——GORM 的 INSERT 会带上 model 的全部字段，
+	// 少一列会让流水线认为 schema 未就绪，从而连不上 sink（本用例随后便取不到 DB 价格）。
 	require.NoError(t, db.Exec(`CREATE TABLE call_logs (
-		request_id text PRIMARY KEY, key_type text, budget_tier_constraints_snapshot text
+		request_id text PRIMARY KEY, key_type text, budget_tier_constraints_snapshot text, call_type text
 	)`).Error)
 	require.NoError(t, db.Exec(`INSERT INTO providers(id,name,type) VALUES ('p1','cohere-primary','cohere')`).Error)
 	require.NoError(t, db.Exec(`INSERT INTO model_catalog(

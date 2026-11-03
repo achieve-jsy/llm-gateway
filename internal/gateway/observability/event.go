@@ -68,6 +68,9 @@ type UsageEvent struct {
 
 	// 请求元信息
 	InboundEndpoint string // 入站端点路径，如 /v1/chat/completions
+	// CallType 端点归一化后的操作类型（chat / video.create / video.asset.{Action} / ...）。
+	// 由 NewUsageEvent 调 DeriveCallType(method, path) 得出；未登记端点为空串（不猜测）。
+	CallType        string
 	ReasoningEffort string // low / medium / high
 	UserAgent       string
 	IPAddress       string
@@ -119,8 +122,9 @@ func (e UsageEvent) ToCallLog() (obsmodel.CallLog, error) {
 		StageRouteMs: e.StageRouteMs, StageUpstreamMs: e.StageUpstreamMs, Stream: e.Stream,
 		FailoverUsed: e.FailoverUsed, RoutedViaGroup: e.RoutedViaGroup, UsageMissing: e.UsageMissing,
 		ReasoningEffort: e.ReasoningEffort, UserAgent: e.UserAgent, IPAddress: e.IPAddress,
-		InboundEndpoint: e.InboundEndpoint, InputPriceSnapshot: &e.InputPriceSnapshot,
-		QuotaGate: e.QuotaGate, QuotaLayer: e.QuotaLayer, QuotaLimit: e.QuotaLimit,
+		InboundEndpoint: e.InboundEndpoint, CallType: e.CallType,
+		InputPriceSnapshot: &e.InputPriceSnapshot,
+		QuotaGate:          e.QuotaGate, QuotaLayer: e.QuotaLayer, QuotaLimit: e.QuotaLimit,
 		OutputPriceSnapshot: &e.OutputPriceSnapshot, InputCostUSD: e.InputCostUSD,
 		OutputCostUSD: e.OutputCostUSD, CacheReadCostUSD: e.CacheReadCostUSD, EstCostUSD: e.EstCostUSD,
 		BudgetTierID: tierID, BudgetTierNameSnapshot: e.BudgetTierNameSnapshot,

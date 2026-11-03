@@ -197,6 +197,10 @@ func (c *Collector) Wait(ctx context.Context) error {
 // NewUsageEvent 从 gin.Context 提取字段构造 UsageEvent
 func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 	now := time.Now()
+	// 入站端点与其归一化操作类型。call_type 在采集侧唯一算一次（DeriveCallType）：方法参与判定
+	// ——POST /v1/contents/generations/tasks 是创建、GET 同前缀 + task_id 是查询。未登记端点
+	// DeriveCallType 返回空串（不猜测、不写 "unknown" 之类的兜底值），读侧按 inbound_endpoint 兜底。
+	inboundPath := ctx.Request.URL.Path
 	event := UsageEvent{
 		RequestID: getString(ctx, "request_id"),
 		Timestamp: now,
@@ -229,7 +233,8 @@ func (c *Collector) NewUsageEvent(ctx *gin.Context) UsageEvent {
 			b, _ := v.(bool)
 			return b
 		}(),
-		InboundEndpoint: ctx.Request.URL.Path,
+		InboundEndpoint: inboundPath,
+		CallType:        DeriveCallType(ctx.Request.Method, inboundPath),
 		UserAgent:       ctx.Request.UserAgent(),
 		IPAddress:       ctx.ClientIP(),
 		Status:          getInt(ctx, "status"),

@@ -280,3 +280,59 @@ func TestStartSyncCronTicksAndStopsOnCancel(t *testing.T) {
 	time.Sleep(60 * time.Millisecond)
 	require.Equal(t, stopped, runner.count())
 }
+func TestRunSyncCycleWaitsAfterFailure(t *testing.T) {
+	runner := &flakyRunner{errs: []error{errors.New("a"), errors.New("b"), errors.New("c")}}
+	now := time.Date(2026, 11, 2, 10, 20, 0, 0, time.UTC)
+	opts, _ := cronOptsForTest(t, runner, now)
+
+	_, _, err := service.RunSyncCycle(context.Background(), opts)
+	require.Error(t, err)
+	require.Equal(t, 3, runner.count())
+
+	// 上游还宕着：紧接着的 tick 不许再打（否则一天能打上千次）
+	ran, _, err := service.RunSyncCycle(context.Background(), opts)
+	require.NoError(t, err)
+	require.False(t, ran)
+	require.Equal(t, 3, runner.count(), "失败后的冷却是硬约束，不是尽力而为")
+
+	// 冷却时间过去后重新尝试（上游仍然挂着）
+	runner.errs = append(runner.errs, errors.New("d"), errors.New("e"), errors.New("f"))
+	opts.Now = func() time.Time { return now.Add(31 * time.Minute) }
+	_, _, err = service.RunSyncCycle(context.Background(), opts)
+	require.Error(t, err)
+	require.Equal(t, 6, runner.count())
+}
+
+func TestSyncStateStoreReleaseKeepsForeignLock(t *testing.T) {
+	store, mr := newSyncStateStoreForTest(t)
+	ctx := context.Background()
+	release, ok := store.TryLock(ctx)
+	require.True(t, ok)
+
+	// 锁过期后被别人抢走：我方 release 不能把别人的锁删掉
+	mr.Set("ai_app_hub:sync:leader", "another-instance")
+	release()
+	val, err := mr.Get("ai_app_hub:sync:leader")
+	require.NoError(t, err)
+	require.Equal(t, "another-instance", val)
+}
+func TestLoadSyncScheduleHonoursNonLocalTimezone(t *testing.T) {
+	s, err := service.LoadSyncSchedule(func(k string) (string, bool) {
+		switch k {
+		case "AI_APP_HUB_SYNC_CRON":
+			return "0 3 * * *", true
+		case "AI_APP_HUB_SYNC_TZ":
+			return "UTC", true
+		}
+		return "", false
+	})
+	require.NoError(t, err)
+	require.NotNil(t, s)
+
+	// 与宿主机时区无关：03:00 UTC 就是配置的触发点
+	last := time.Date(2026, 11, 2, 3, 0, 0, 0, time.UTC)
+	require.True(t, s.Next(last).Equal(time.Date(2026, 11, 3, 3, 0, 0, 0, time.UTC)))
+	require.False(t, s.IsDue(last, time.Date(2026, 11, 2, 20, 0, 0, 0, time.UTC)), "还没到 11-03 03:00Z，不该跑（若错用 Asia/Shanghai 这里会真）")
+	require.True(t, s.IsDue(last, time.Date(2026, 11, 3, 3, 0, 30, 0, time.UTC)), "03:00Z 之后就该跑")
+	require.False(t, s.IsDue(last, time.Date(2026, 11, 3, 2, 59, 0, 0, time.UTC)))
+}

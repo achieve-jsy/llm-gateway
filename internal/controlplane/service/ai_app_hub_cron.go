@@ -33,7 +33,6 @@ var syncCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Mo
 //
 // 字段私有：外部只该用 IsDue/Next，避免调用方自己拼时间比较把时区搞错。
 type SyncSchedule struct {
-	expr  string
 	loc   *time.Location
 	sched cron.Schedule
 }
@@ -65,7 +64,7 @@ func LoadSyncSchedule(getenv func(string) (string, bool)) (*SyncSchedule, error)
 		slog.Warn("ai_app_hub_sync_tz_fallback", "error", err, "fallback", time.Local.String())
 		loc = time.Local
 	}
-	return &SyncSchedule{expr: expr, loc: loc, sched: sched}, nil
+	return &SyncSchedule{loc: loc, sched: sched}, nil
 }
 
 // Next 返回 lastSuccess 之后的下一次触发时刻（已在配置时区内）。
@@ -88,6 +87,9 @@ const (
 	syncLastSuccessKey = "ai_app_hub:sync:last_success"
 	// syncLeaderKey 多实例/蓝绿互斥的 leader 锁。
 	syncLeaderKey = "ai_app_hub:sync:leader"
+	// syncLastFailureKey 最近一次彻底失败的时间。失败后冷却一段时间再试，
+	// 避免上游宕机时每个 tick 都重跑一整轮重试。
+	syncLastFailureKey = "ai_app_hub:sync:last_failure"
 
 	syncLastSuccessTTL = 30 * 24 * time.Hour
 	syncLeaderTTL      = 10 * time.Minute
@@ -113,7 +115,11 @@ func NewSyncStateStore(rdb *redis.Client) *SyncStateStore {
 
 // LastSuccess 读最近一次成功时间；键不存在返回 (zero, false, nil)。
 func (s *SyncStateStore) LastSuccess(ctx context.Context) (time.Time, bool, error) {
-	raw, err := s.rdb.Get(ctx, syncLastSuccessKey).Result()
+	return s.readTime(ctx, syncLastSuccessKey)
+}
+
+func (s *SyncStateStore) readTime(ctx context.Context, key string) (time.Time, bool, error) {
+	raw, err := s.rdb.Get(ctx, key).Result()
 	if err == redis.Nil {
 		return time.Time{}, false, nil
 	}
@@ -123,14 +129,27 @@ func (s *SyncStateStore) LastSuccess(ctx context.Context) (time.Time, bool, erro
 	t, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
 		// 值坏了等价于没有记录：宁可多跑一次，也不要因为脏值卡住调度。
-		slog.Warn("ai_app_hub_sync_last_success_corrupt", "value", raw, "error", err)
+		slog.Warn("ai_app_hub_sync_state_corrupt", "key", key, "value", raw, "error", err)
 		return time.Time{}, false, nil
 	}
 	return t, true, nil
 }
 
 func (s *SyncStateStore) MarkSuccess(ctx context.Context, t time.Time) error {
+	// 成功即清掉失败标记，避免冷却窗口继续挡着下一轮。
+	if err := s.rdb.Del(ctx, syncLastFailureKey).Err(); err != nil {
+		slog.Warn("ai_app_hub_sync_clear_failure_failed", "error", err)
+	}
 	return s.rdb.Set(ctx, syncLastSuccessKey, t.UTC().Format(time.RFC3339), syncLastSuccessTTL).Err()
+}
+
+func (s *SyncStateStore) MarkFailure(ctx context.Context, t time.Time) error {
+	return s.rdb.Set(ctx, syncLastFailureKey, t.UTC().Format(time.RFC3339), syncLastSuccessTTL).Err()
+}
+
+// LastFailure 最近一次彻底失败的时间；(zero,false,nil) 表示没有记录。
+func (s *SyncStateStore) LastFailure(ctx context.Context) (time.Time, bool, error) {
+	return s.readTime(ctx, syncLastFailureKey)
 }
 
 // TryLock 抢本轮执行权；拿不到返回 (nil, false)。SetNX 报错也按"本轮跳过"处理：
@@ -149,18 +168,13 @@ func (s *SyncStateStore) TryLock(ctx context.Context) (func(), bool) {
 	}, true
 }
 
-func envOr(getenv func(string) (string, bool), key, def string) string {
-	if v, ok := getenv(key); ok && v != "" {
-		return v
-	}
-	return def
-}
-
 // ---------- 调度周期 ----------
 
 const (
 	defaultSyncTick     = time.Minute
 	defaultSyncAttempts = 3
+	// defaultSyncRetryAfter 失败后至少隔这么久再开始下一轮（上游长时间宕机时的自我限流）。
+	defaultSyncRetryAfter = 30 * time.Minute
 )
 
 var defaultSyncBackoff = []time.Duration{30 * time.Second, 2 * time.Minute}
@@ -168,14 +182,15 @@ var defaultSyncBackoff = []time.Duration{30 * time.Second, 2 * time.Minute}
 // SyncCronOptions 定时同步的全部可调参数。零值可用：Tick/Attempts/Backoff/Now/Sleep
 // 都有默认值，测试只覆盖需要固定的那几个。
 type SyncCronOptions struct {
-	Schedule *SyncSchedule
-	State    *SyncStateStore
-	Runner   SyncRunner
-	Tick     time.Duration
-	Attempts int
-	Backoff  []time.Duration
-	Now      func() time.Time
-	Sleep    func(context.Context, time.Duration) error
+	Schedule   *SyncSchedule
+	State      *SyncStateStore
+	Runner     SyncRunner
+	Tick       time.Duration
+	Attempts   int
+	RetryAfter time.Duration
+	Backoff    []time.Duration
+	Now        func() time.Time
+	Sleep      func(context.Context, time.Duration) error
 }
 
 func (o SyncCronOptions) withDefaults() SyncCronOptions {
@@ -184,6 +199,9 @@ func (o SyncCronOptions) withDefaults() SyncCronOptions {
 	}
 	if o.Attempts <= 0 {
 		o.Attempts = defaultSyncAttempts
+	}
+	if o.RetryAfter <= 0 {
+		o.RetryAfter = defaultSyncRetryAfter
 	}
 	if len(o.Backoff) == 0 {
 		o.Backoff = defaultSyncBackoff
@@ -230,6 +248,13 @@ func RunSyncCycle(ctx context.Context, opts SyncCronOptions) (ran bool, attempts
 		return false, 0, nil
 	}
 
+	// 失败冷却：上游宕着的时候，每个 tick 都重试只会把 3 次尝试放大成上千次拉取。
+	if failedAt, hasFailure, ferr := opts.State.LastFailure(ctx); ferr == nil && hasFailure {
+		if opts.Now().Before(failedAt.Add(opts.RetryAfter)) {
+			return false, 0, nil
+		}
+	}
+
 	release, locked := opts.State.TryLock(ctx)
 	if !locked {
 		slog.Info("ai_app_hub_sync_cycle_skipped", "reason", "lock held")
@@ -260,6 +285,9 @@ func RunSyncCycle(ctx context.Context, opts SyncCronOptions) (ran bool, attempts
 				return true, i, sleepErr
 			}
 		}
+	}
+	if markErr := opts.State.MarkFailure(ctx, opts.Now()); markErr != nil {
+		slog.Warn("ai_app_hub_sync_mark_failure_failed", "error", markErr)
 	}
 	return true, opts.Attempts, err
 }

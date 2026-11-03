@@ -87,6 +87,7 @@
 - 任一次成功即结束，写 `status=success`；3 次全失败写 `status=failed` + `last_sync_error`（截断 500 字），等下一次到点。
 - 重试只对"上游失败"生效；`ErrSyncInProgress`（手动触发正在进行）直接跳过本轮，不算失败。
 - 退避通过注入 `sleepFn` 便于测试，不真 sleep。
+- **失败冷却**：3 次全失败后写 `ai_app_hub:sync:last_failure`，30 分钟内不再起新的一轮（否则上游宕机时每 1 分钟 tick 都会再打 3 次，一天上千次）。成功会清掉这个键。
 
 ## 6. 删除对账（仅 `scope=all`）
 
@@ -112,6 +113,7 @@ UPDATE ai_app_studios
 安全护栏：
 
 - `items` 为空时**不做任何隐藏**（`ehrclient` 已把空结果转成 `ErrEmptyResult`，服务层再防一次），避免"接口返回空 → 全部隐藏"。
+- **部分树护栏**：EHR 是单次不分页调用，"200 但条目少了一大截"（上游部分故障、org 范围/权限变化）与"真的撤并"无法区分。因此本次 `len(items)` 低于上次成功部门数的 80%（且上次 ≥ 10 个）时，本轮跳过隐藏并记 `slog.Error`；成功同步把 `len(items)` 写进 `ai_app_hub.last_sync_departments` 作为下次的基线。代价：真出现一次性大规模撤并（>20%）需要连着跑两次或手工同步才生效。
 - 只动 `source='ehr'` 且有 `department_id` 的行：手工工作室（`department_id IS NULL`）与 `manual` 覆盖行完全不受影响。
 - 不物理删除 `ai_app_studios` 与 `ai_apps`：应用挂在工作室下，删行会丢运营数据；`visible=false` 即可从 H5 消失。
 - 隐藏是可逆的：运营在管理端把 `visible` 打开即可恢复。

@@ -141,10 +141,18 @@ func TestSyncNonAllScopeDoesNotHide(t *testing.T) {
 	_, err := svc.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
 	require.NoError(t, err)
 
+	// 公共关系事业部这条本来按规则隐藏，先手动点亮：这样"错把 scope 内的对账套到全员"
+	// 才会真的命中它（否则 UPDATE 打不到 visible=false 的行，测试恒真）。
+	require.NoError(t, db.Exec("UPDATE ai_app_studios SET visible = 1 WHERE department_id = ?", pubDeptID).Error)
+
 	// 只同步 xlab 单部门：公共关系事业部不在 targets，但也绝不能因此被隐藏
 	got, err := svc.Sync(ctx, service.SyncScope{Kind: service.ScopeDepartment, ID: xlabDeptID})
 	require.NoError(t, err)
 	require.Zero(t, got.DeletedStudios)
+
+	kept, err := repo.GetStudioByDepartmentID(ctx, pubDeptID)
+	require.NoError(t, err)
+	require.True(t, kept.Visible, "scope=department 不得做全量对账")
 }
 
 func TestSyncDoesNotReviveManuallyHiddenStudio(t *testing.T) {
@@ -164,3 +172,25 @@ func TestSyncDoesNotReviveManuallyHiddenStudio(t *testing.T) {
 	require.False(t, still.Visible, "同步不得把运营关闭的工作室改回可见")
 }
 
+func TestSyncAllSkipsReconcileWhenDepartmentCountDropsSharply(t *testing.T) {
+	db, settings := newAIHubTestDBWithSettings(t)
+	repo := repository.NewAIAppHubRepo(db)
+	ctx := context.Background()
+	svc := service.NewAIAppHubSyncService(fakeFetcher{items: threeNodes()}, repo, settings, service.DefaultSyncRules())
+	_, err := svc.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+
+	// 上次成功记到 40 个部门，这次上游只回 1 个（战略发展中心消失）：按"部分树"处理
+	require.NoError(t, settings.SetMultiple(map[string]string{"ai_app_hub.last_sync_departments": "40"}))
+	partial := service.NewAIAppHubSyncService(fakeFetcher{items: []ehrclient.Department{
+		{ID: pubDeptID, Name: "公共关系事业部", Type: 2, LeaderPassport: "fandongbo"},
+	}}, repo, settings, service.DefaultSyncRules())
+
+	got, err := partial.Sync(ctx, service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+	require.Zero(t, got.DeletedStudios, "部门数从 40 掉到 1 属于上游异常，不得批量隐藏")
+
+	still, err := repo.GetStudioByDepartmentID(ctx, xlabDeptID)
+	require.NoError(t, err)
+	require.True(t, still.Visible, "工作室必须都还在")
+}

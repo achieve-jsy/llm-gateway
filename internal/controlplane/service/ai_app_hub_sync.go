@@ -24,6 +24,20 @@ var ErrSyncInProgress = errors.New("sync in progress")
 // syncTimeout 单次同步上限。全量 99 条实测 1-3 秒，30 秒足够兜住网络抖动。
 const syncTimeout = 30 * time.Second
 
+const (
+	// lastSyncDepartmentsKey 上次成功同步到的部门数，用于识别"上游只回了部分树"。
+	lastSyncDepartmentsKey = "ai_app_hub.last_sync_departments"
+	// lastSyncDeletedKey 上次对账隐藏的工作室数（管理页展示）。
+	lastSyncDeletedKey = "ai_app_hub.last_sync_deleted_studios"
+
+	// syncReconcileMinRatio 本次部门数 / 上次成功部门数 低于它 → 认为上游只给了部分树，
+	// 本轮跳过隐藏对账：宁可漏隐藏，也不要因为上游抽风把整棵组织树藏掉。
+	// ponytail: 0.8 是拍的阈值，真观测到合法的大规模撤并再调（或改成"连续两次一致才隐藏"）。
+	syncReconcileMinRatio = 0.8
+	// syncReconcileMinPrev 上次部门数少于此值时不设阈值：小树与测试库里比例噪声太大。
+	syncReconcileMinPrev = 10
+)
+
 // ScopeKind 同步范围。三种范围都只拉一次 EHR 全量（EHR 没有单节点接口），
 // 差别只在写库范围。
 type ScopeKind string
@@ -118,7 +132,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 	start := time.Now()
 	defer func() {
 		if err != nil {
-			s.markStatus(scope, "failed", err.Error(), 0)
+			s.markStatus(scope, "failed", err.Error(), 0, 0)
 		}
 	}()
 
@@ -182,7 +196,13 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 	// 全量同步收尾对账：EHR 里已经不存在的工作室隐藏。空结果代表上游异常
 	// （ehrclient 已把空 items 转成 ErrEmptyResult），绝不据此隐藏任何东西。
 	var deleted int64
-	if scope.Kind == ScopeAll && len(items) > 0 {
+	switch {
+	case scope.Kind != ScopeAll || len(items) == 0:
+		// 非全量不参与对账；空结果代表上游异常（ehrclient 已转成 ErrEmptyResult）。
+	case s.reconcileLooksPartial(len(items)):
+		slog.Error("ai_app_hub_sync_reconcile_skipped",
+			"reason", "department count dropped", "current", len(items))
+	default:
 		keep := make([]string, 0, len(items))
 		for _, it := range items {
 			keep = append(keep, it.ID)
@@ -193,7 +213,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		}
 	}
 
-	s.markStatus(scope, "success", "", int(deleted))
+	s.markStatus(scope, "success", "", int(deleted), len(items))
 	return HubSyncResult{
 		Scope:          string(scope.Kind),
 		Departments:    len(targets),
@@ -420,8 +440,33 @@ func isLeader(leaderPassport, passport string) bool {
 	return leaderPassport != "" && passport != "" && leaderPassport == passport
 }
 
+// lastSyncedDepartments 上次成功同步的部门数；没记录或值坏了返回 (0, false)。
+func (s *AIAppHubSyncService) lastSyncedDepartments() (int, bool) {
+	if s.settings == nil {
+		return 0, false
+	}
+	raw, err := s.settings.GetValue(lastSyncDepartmentsKey)
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// reconcileLooksPartial 本次部门数比上次成功少太多，判定上游只返回了部分树。
+func (s *AIAppHubSyncService) reconcileLooksPartial(current int) bool {
+	prev, ok := s.lastSyncedDepartments()
+	if !ok || prev < syncReconcileMinPrev {
+		return false
+	}
+	return float64(current) < float64(prev)*syncReconcileMinRatio
+}
+
 // markStatus 记录最近一次同步结果，管理页据此展示"上次同步时间/结果"。
-func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string, deleted int) {
+func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string, deleted, departments int) {
 	if s.settings == nil {
 		return
 	}
@@ -433,7 +478,8 @@ func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string,
 	// 成功时显式清空：否则管理页会出现"成功但仍显示上次的错误"。
 	if errMsg == "" {
 		values["ai_app_hub.last_sync_error"] = ""
-		values["ai_app_hub.last_sync_deleted_studios"] = strconv.Itoa(deleted)
+		values[lastSyncDeletedKey] = strconv.Itoa(deleted)
+		values[lastSyncDepartmentsKey] = strconv.Itoa(departments)
 	} else {
 		values["ai_app_hub.last_sync_error"] = truncateRunes(errMsg, 500)
 	}

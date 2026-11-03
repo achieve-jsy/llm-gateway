@@ -814,6 +814,6 @@
         }
       }
     },
-    "status_keys": ["ai_app_hub.last_sync_at", "ai_app_hub.last_sync_status", "ai_app_hub.last_sync_scope", "ai_app_hub.last_sync_error", "ai_app_hub.last_sync_deleted_studios"]
+    "status_keys": ["ai_app_hub.last_sync_at", "ai_app_hub.last_sync_status", "ai_app_hub.last_sync_scope", "ai_app_hub.last_sync_error", "ai_app_hub.last_sync_deleted_studios", "ai_app_hub.last_sync_departments"]
   }
 }

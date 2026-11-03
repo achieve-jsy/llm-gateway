@@ -103,7 +103,7 @@ export function filterFieldsFor(
   return {
     group: true,
     model: true,
-    keySelect: false,
+    keySelect: true,
     keyName: true,
     status: false,
     provider: true,

@@ -53,7 +53,21 @@
     <div class="ufb-row ufb-row--dims">
       <div v-if="fields.group" class="ufb-chip">
         <span class="ufb-label">模型组</span>
+        <el-select
+          v-if="groupOptions.length"
+          v-model="groupName"
+          placeholder="全部"
+          clearable
+          filterable
+          size="small"
+          class="ufb-select"
+          @change="emit('change')"
+          @clear="emit('change')"
+        >
+          <el-option v-for="g in groupOptions" :key="g" :label="g" :value="g" />
+        </el-select>
         <el-input
+          v-else
           v-model="groupName"
           placeholder="模型组"
           clearable
@@ -292,6 +306,7 @@ const props = withDefaults(defineProps<{
   capability: UsageCapability
   datePresets: Array<{ label: string; days: number }>
   dateMode?: 'date' | 'datetime'
+  groupOptions?: string[]
   modelOptions?: string[]
   keyOptions?: Array<{ label: string; value: string }>
   providerOptions?: string[]
@@ -300,6 +315,7 @@ const props = withDefaults(defineProps<{
   activeCount?: number
 }>(), {
   dateMode: 'date',
+  groupOptions: () => [],
   modelOptions: () => [],
   keyOptions: () => [],
   providerOptions: () => [],

@@ -30,6 +30,7 @@
       v-model:active-preset="activePreset"
       v-model:group-name="filterGroupName"
       v-model:model-name="filterModelName"
+      v-model:key-id="filterKeyId"
       v-model:key-name="filterKeyName"
       v-model:key-type="filterKeyType"
       v-model:status="filterStatus"
@@ -37,6 +38,9 @@
       v-model:user-name="filterUserName"
       v-model:dept-name="filterDeptName"
       v-model:studio-id="filterStudioId"
+      :group-options="groupOptions"
+      :model-options="modelOptions"
+      :key-options="keyOptions"
       :provider-options="providerOptions"
       :dept-options="deptOptions"
       :studio-options="studioOptions"
@@ -326,6 +330,7 @@ import {
   Chart, BarController, LineController, CategoryScale, LinearScale, BarElement, LineElement,
   PointElement, Tooltip, Legend, Filler
 } from 'chart.js'
+import { groupsApi } from '@/api/groups'
 import http from '@/services/http'
 import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
@@ -624,11 +629,20 @@ const keyOptions     = ref<{ value: string; label: string }[]>([])
 const deptOptions    = ref<{ value: string; label: string }[]>([])
 const studioOptions  = ref<{ value: string; label: string }[]>([])
 const providerOptions = ref<string[]>([])
+const groupOptions   = ref<string[]>([])
+const modelOptions   = ref<string[]>([])
 
 async function loadOptions() {
   try {
     const r = await http.get('/api/v1/usage/options')
     providerOptions.value = r.data.providers || []
+    groupOptions.value = r.data.groups || []
+    modelOptions.value = r.data.models || []
+    if (r.data.keys?.length) {
+      keyOptions.value = r.data.keys.map((k: any) => ({
+        value: k.id, label: k.name || k.id
+      }))
+    }
     if (r.data.depts?.length) {
       deptOptions.value = r.data.depts.map((d: any) => ({
         value: d.id, label: d.name || d.id
@@ -642,13 +656,28 @@ async function loadOptions() {
   } catch { /* ignore */ }
 }
 
+async function loadGroupOptions() {
+  try {
+    const res = await groupsApi.listGroups({ page_size: 200 })
+    groupOptions.value = (res.data.data || []).map(g => g.name).filter(Boolean)
+  } catch { /* ignore */ }
+}
+
 function refreshFilterOptions(rows: StatsRow[], gb: string) {
   if (gb === 'key') {
-    const seen = new Set<string>()
-    keyOptions.value = rows
-      .filter(r => r.key_id && !seen.has(r.key_id) && seen.add(r.key_id))
-      .map(r => ({ value: r.key_id!, label: r.key_name || maskKey(r.key_id) }))
+    const seen = new Set(keyOptions.value.map(k => k.value))
+    for (const r of rows) {
+      if (r.key_id && !seen.has(r.key_id)) {
+        seen.add(r.key_id)
+        keyOptions.value.push({ value: r.key_id, label: r.key_name || maskKey(r.key_id) })
+      }
+    }
   }
+  const seenModels = new Set(modelOptions.value)
+  for (const r of rows) {
+    if (r.model && r.model.trim()) seenModels.add(r.model.trim())
+  }
+  modelOptions.value = Array.from(seenModels).sort((a, b) => a.localeCompare(b))
 }
 
 // ── Load ──
@@ -825,6 +854,7 @@ watch(currency, async () => { await nextTick(); if (statsRows.value.length) { re
 
 // init
 loadOptions()
+loadGroupOptions()
 loadAll()
 </script>
 

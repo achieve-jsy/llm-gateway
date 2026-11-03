@@ -34,6 +34,8 @@
       v-model:key-id="filterKeyId"
       v-model:status="filterStatus"
       v-model:provider="filterProvider"
+      :group-options="groupOptions"
+      :model-options="modelOptions"
       :key-options="myKeyOptions"
       :provider-options="providerOptions"
       :active-count="activeFilterCount"
@@ -339,6 +341,7 @@ import {
   LineElement, PointElement, ArcElement, BarElement,
   Tooltip, Legend, Filler
 } from 'chart.js'
+import { groupsApi } from '@/api/groups'
 import http from '@/services/http'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
@@ -463,6 +466,8 @@ const filterProvider  = ref('')
 const filterEndpoint  = ref('')
 const activeTab = ref('chat')
 const providerOptions = ref<string[]>([])
+const groupOptions = ref<string[]>([])
+const modelOptions = ref<string[]>([])
 
 const videoModelParam = computed(() =>
   videoModelNameParam(filterGroupName.value, filterModelName.value),
@@ -472,6 +477,15 @@ async function loadProviderOptions() {
   try {
     const r = await http.get('/api/v1/usage/options')
     providerOptions.value = r.data.providers || []
+    groupOptions.value = r.data.groups || []
+    modelOptions.value = r.data.models || []
+  } catch { /* ignore */ }
+}
+
+async function loadGroupOptions() {
+  try {
+    const res = await groupsApi.listGroups({ page_size: 200 })
+    groupOptions.value = (res.data.data || []).map(g => g.name).filter(Boolean)
   } catch { /* ignore */ }
 }
 
@@ -810,6 +824,11 @@ async function loadStats() {
     statsTotal.value     = tableRes.data.total || null
     dayStatsRows.value   = dayRes.data.rows || []
     modelStatsRows.value = modelRes.data.rows || []
+    const seenModels = new Set(modelOptions.value)
+    for (const r of modelStatsRows.value) {
+      if (r.model && r.model.trim()) seenModels.add(r.model.trim())
+    }
+    modelOptions.value = Array.from(seenModels).sort((a, b) => a.localeCompare(b))
     await loadPrevPeriodStats()
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.details || e?.response?.data?.error || '用量查询失败')
@@ -1169,6 +1188,7 @@ onUnmounted(() => {
 
 loadMyKeys()
 loadProviderOptions()
+loadGroupOptions()
 loadAll()
 
 if (typeof MutationObserver !== 'undefined') {

@@ -277,7 +277,7 @@ func main() {
 			server.BudgetAlertDispatcherConfig{},
 		)
 	}
-	r := server.SetupWithBudgetAlertDispatcher(budgetAlertDispatcher, providerLoader.Router, icache, state, authClient, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter, bindClient, rdb, tierHolder,
+	r := server.SetupWithBudgetAlertDispatcher(budgetAlertDispatcher, providerLoader.Router, icache, state, authClient, os.Getenv("JWT_SECRET"), authJWTManager, controlPlaneURL, internalToken, sch, nameCache, collector, traceWriter, bindClient, rdb, tierHolder,
 		func(reload func(entries []gatewaymodel.ProviderEntry)) {
 			reloadSeedance = reload
 		},

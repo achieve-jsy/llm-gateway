@@ -728,18 +728,25 @@ func (s *ArchiveService) streamExport(ctx context.Context, d time.Time, w *archi
 
 // exportReadSession 在【关闭并行】的事务中执行归档导出读，返回结果。
 //
-// 【为什么必须关并行 —— 生产事故固化，见实现报告 §10】
+// 【这是纵深防御，不是修复已观测到的归档溢出 —— 实测证据见实现报告 §10】
 //
-// 并行 worker 要把元组经共享内存队列交回 leader，而【跨进程传递必须先把 TOAST 值 detoast】
-// （TOAST 指针指向源进程的缓冲区，在别的进程里无效）。于是 call_traces 的正文
-// （生产实测约 226 KB/行）在排序之前就被展开，leader 的 top-N 排序再把这些展开后的元组
-// 物化到临时文件 —— 生产实测单次批处理即可产生 GB 级临时文件。配合生产默认的
-// temp_file_limit = -1（无上限），足以写满 /data 并危及 PostgreSQL：
+// 测试环境 PG 18.4 上的对照实测（30000 行 × 226KB 正文，TOAST 7.0 GB，
+// 均带 LIMIT 与 ORDER BY request_id COLLATE "C"，temp_file_limit 设 3GB 作保险丝）：
 //
-//	ERROR: could not write to file "base/pgsql_tmp/...": No space left on device
+//	查询形状                                    LIMIT     临时文件
+//	json_build_object(...)::text 投影正文        25000     超过 3GB（撞保险丝报错）
+//	本函数逐列取原始列（无投影）                  25000     2.8 MB
 //
-// 关闭并行后，Sort 拿到的是【含 TOAST 指针】的元组，top-N 只保留指针（约 18 字节/列），
-// 正文仅在行真正被投影出去时逐行 detoast（流式），因此几乎不产生临时文件。
+// 机理：并行 worker 经共享内存队列把元组交回 leader 时【必须先把 TOAST 值 detoast】
+// （TOAST 指针指向源进程的缓冲区，在别的进程里无效）。因此排序的输入若已含展开后的正文，
+// 物化量就是正文总量（生产 226 KB/行 → GB 级）；若只是原始列，排序里是 TOAST 指针
+// （约 18 字节/列），正文仅在行真正被投影出去时逐行 detoast（流式）。
+//
+// 结论：本函数只取原始列，本来就不在该危害的主路径上（生产 batch_rows 默认 1000，
+// 实测量级为 MB 而非 GB）。关并行是廉价的纵深防御 —— call_traces 上
+//「排序 + 对正文做投影」这一类查询已被实测证明足以写满 /data（生产 temp_file_limit = -1
+// 无上限，一旦写满会导致 PostgreSQL 报 ENOSPC），将来若有人在 SELECT 列表里加了计算列，
+// 本保护仍然成立。
 //
 // 用 SET LOCAL 限定在本次事务内，不污染连接池中连接上的后续查询。
 // 注：max_parallel_workers_per_gather 的 context 是 user，普通应用角色即可设置

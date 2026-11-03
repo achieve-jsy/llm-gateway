@@ -393,6 +393,14 @@ viper 对未知 key 不报错 → **全部走代码默认值**。`archive.read.e
 
 **⑦ P1 回填缺位；D-1/D-2/D-3 未确认。**
 
+**已评估并排除的候选阻断项 —— §10（导出临时文件溢出）**
+
+§10 曾被判定为归档的致命隐患（「整天批处理会反复产生 GB 级临时文件」）。
+**该判断已于 2026-09-22 用对照实验推翻**：归档的 `fetchBatch` 只取原始列，在同等参数下
+实测溢出仅 **2.8 MB**；GB 级溢出只发生在**对正文做投影**的查询上（详见 §10.2）。
+因此 **§10 不构成归档的上线阻断**。但**建议**落实 `temp_file_limit` 安全网——
+它防的是运维/排查时写的即席查询，那类查询在生产上确已写满过一次 `/data`（§10.1）。
+
 ### 8.2 时间窗口：`/data` 已无腾挪余地
 
 ```
@@ -514,7 +522,7 @@ ALTER TABLE probe SET TABLESPACE ts_probe;   → Time: 4201 ms   (≈245 MB/s)
 
 ---
 
-## 10. ⚠️ 生产测量事故与由此发现的归档致命隐患（2026-09-21）
+## 10. ⚠️ 生产测量事故与「排序 + 正文投影」隐患（2026-09-21；结论于 09-22 用对照实验修正）
 
 ### 10.1 事故经过（我方造成，已自动恢复）
 
@@ -540,52 +548,57 @@ ERROR: could not write to file "base/pgsql_tmp/pgsql_tmp979357.14": No space lef
 
 > 教训：在这张表上「只读」不等于「无害」。任何 `ORDER BY` / 聚合都可能产生 GB 级磁盘溢出。
 
-### 10.2 由此发现的真相：归档自己的查询带着同一个隐患
+### 10.2 ⚠️ 重大修正：归档自身**不在**该隐患的主路径上（2026-09-22 对照实验推翻原判断）
 
-生产 `call_traces` 的排序参数与计划：
+本节旧版曾断言「归档自己的查询带着同一个隐患，整天批处理会反复产生 GB 级临时文件」。
+**这个结论是错的。** 下面是对照实验，它同时给出了正确结论。
 
-```
-work_mem         = 4 MB        ← 极小，排序极易溢出
-temp_file_limit  = -1          ← 【无上限】，溢出可以吃满整个 /data
-call_traces PK   = (request_id)，btree，数据库默认 collation（非 "C"）
-索引             = call_traces_pkey(request_id), idx_call_traces_ts(ts)
-无 (request_id COLLATE "C") 索引
-```
+实验设计（测试环境 PG 18.4；30000 行 × 226KB 正文；`SET STORAGE EXTERNAL` 强制正文走行外
+TOAST，实测 TOAST 7.0 GB / heap 3.4 MB；两个查询都带 `ORDER BY request_id COLLATE "C"`
+与相同 `LIMIT`；会话内 `SET temp_file_limit='3GB'` 作保险丝，超限即报错，既安全又能证明
+「它到底想要多少」）：
 
-**整天窗口（归档的真实场景）的计划是并行的**：
+| 查询形状 | LIMIT | 临时文件 | 说明 |
+|---|---|---|---|
+| `json_build_object(…)::text`，**对正文做投影** | 25000 | **> 3 GB**（撞保险丝：`temporary file size exceeds "temp_file_limit"`） | 复现了 §10.1 事故的形状 |
+| 归档 `fetchBatch` 的**原始列**（无任何投影） | 25000 | **2.8 MB** | 归档的真实形状 |
 
-```
-Limit (rows=3000)
-  -> Gather Merge
-       -> Sort (Sort Key: request_id COLLATE "C", rows=18070)
-            -> Parallel Bitmap Heap Scan on call_traces
-                 -> Bitmap Index Scan on idx_call_traces_ts
-```
+**结论（基于证据，不是推理）：**
 
-**危险机制**：并行 worker 要把元组经共享内存队列交给 leader，而**跨进程传递必须 detoast**
-（TOAST 指针在别的进程里无效）。于是每个 worker 在排序前就把正文（可达 ~226 KB/行）解压展开，
-leader 的 top-N 排序再把这些展开后的元组物化到磁盘：
+1. GB 级溢出**是真实的**，但触发条件是「**排序的输入里已经含有展开后的正文**」，
+   即查询在排序路径上对正文做了**投影或计算**（如 `json_build_object(...)::text`）。
+   §10.1 的事故正是这种形状——**溢出是我那条测量查询自己造成的**。
+2. **归档的 `fetchBatch` 只取原始列**（`request_id, ts, request_headers, request_body,
+   response_body, error_code, error_message`），排序中流动的是含 TOAST 指针的小元组
+   （EXPLAIN 实测 `width=103`；正文只在行被投影出去时逐行 detoast）。生产 `archive.batch_rows`
+   默认 **1000**（实测 `config/prod.yaml` 未覆盖该键），实测量级是 **MB 而非 GB**。
+3. 因此**归档没有这个致命隐患**。真正的隐患属于**运维/排查场景**：
+   任何人在这张表上写「`ORDER BY` + 对正文投影」的即席查询（这正是排查问题时最自然的写法），
+   都可能写满 `/data`。**§10.1 的事故应当被记作「运维查询隐患」，而不是「归档缺陷」。**
+4. 并行计划本身不足以造成溢出：归档的导出查询在 20 万行量级**确实会走**
+   `Gather Merge → Sort → Parallel Seq Scan`（已实测），但只要排序的输入是原始列，
+   溢出就只有 MB 级。
 
-```
-LIMIT 3000  × ~226 KB/行 ≈ 680 MB / worker
-× 2~3 个 worker + leader  →  单次 fetchBatch 可溢出约 2 GB
-```
+### 10.3 应对（按性价比排序）
 
-这正是我那条 `LIMIT 25000` 查询能溢出到 43 GB 的同一机制（25000 × 226 KB ≈ 5.6 GB/worker）。
-**结论：归档在生产的整天批处理会反复产生 GB 级临时文件；配合 `temp_file_limit=-1`，
-完全可能再次写满 /data 并危及 PG。**
-
-### 10.3 修复（已确认可行）
-
-| 措施 | 权限 | 说明 |
+| 措施 | 权限 | 定位与说明 |
 |---|---|---|
-| `SET max_parallel_workers_per_gather = 0` | **普通角色可改**（实测返回 `SET` / `0`） | 关掉并行 → 非并行计划下 Sort 拿到的是**含 TOAST 指针**的元组，top-N 只留指针，几乎不溢出；正文在投影/发送时才逐个 detoast。**这是最小、最直接的修复。** |
-| 全局设 `temp_file_limit`（如 5–10 GB） | **需超级用户**（app 角色实测 `permission denied to set parameter`） | 把「写满 /data 可能导致 PG panic」降级为「查询报错」。**属于独立于本特性的生产安全网，建议尽快加。** |
-| 建 `(request_id COLLATE "C")` 索引 | schema 变更 | 从根上消除 Sort。但 `ts` 范围 + `request_id` 排序无法用同一棵 btree，需权衡。 |
+| 全局 `temp_file_limit`（如 5–10 GB） | **需超级用户**（app 角色实测 `permission denied to set parameter`） | **这才是真正的安全网。** 它把「写满 `/data` 可能导致 PG 崩溃」降级为「查询报错」，且防的是**任何**查询——包括人写的即席查询——而不只是归档。**建议优先落实。**（测试环境已验证 `ALTER SYSTEM SET … ; SELECT pg_reload_conf();` 可即时生效、无需重启，`RESET` 可干净回退。） |
+| 归档导出会话 `SET LOCAL max_parallel_workers_per_gather = 0` | 普通角色可改（`context = user`） | **纵深防御，不是修复。** 归档本来只溢出 MB 级；此举把那点开销也去掉，并在将来有人往 `SELECT` 列表里加计算列时依然成立。已实现于 `exportReadSession`（`internal/observability/service/archive_service.go`），并有两条例行回归测试守护（经变异验证）。实现注释已按本节证据改写。 |
+| 建 `(request_id COLLATE "C")` 索引 | schema 变更 | 从根上消除 Sort。但 `ts` 范围过滤与 `request_id` 排序无法共用同一棵 btree，需权衡收益。 |
 
-**在 10.3 的前两项落实之前，不应在生产运行归档。**
+**归档不再因为本节的隐患而阻断上线**（此前 §8 把 §10 列为阻断项 ⑤，该判断已撤销）。
+但 `temp_file_limit` 安全网**强烈建议**在任何人在生产上做正文排查之前落实。
 
-### 10.4 压缩测量结果（**保真度有保留**）
+### 10.4 伴随发现的残留项（未验证，待确认）
+
+导出的每一个批次，GORM 的 `Scan(&rows)` 会把整批行连同正文一次性收进 Go 内存：
+生产 `batch_rows = 1000`，正文约 226 KB/行 → **单批约 226 MB 的 Go 堆**。
+`streamExport` 是逐批处理（每批写完即释放），因此这是**有界的**，但 226 MB 的瞬时占用
+对控制面进程仍值得确认。**上生产前建议实测一次控制面的 RSS 峰值**；
+若偏高，调小 `archive.batch_rows` 即可线性降低（代价是批次数变多）。
+
+### 10.5 压缩测量结果（**保真度有保留**）
 
 带熔断的安全测量（去掉 ORDER BY，10000 行）：
 

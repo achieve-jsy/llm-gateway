@@ -170,5 +170,11 @@ func (o *ChatOrchestrator) Embeddings(ctx context.Context, req *core.EmbeddingRe
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
 
+	if gc := ginContextFrom(ctx); gc != nil {
+		gc.Set("stream", false)
+		gc.Set("usage", resp.Usage)
+		gc.Set("resp_object", resp)
+	}
+
 	return resp, nil
 }

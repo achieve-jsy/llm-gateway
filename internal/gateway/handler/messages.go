@@ -94,10 +94,12 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 	baseCtx := orchestrator.WithGinContext(c.Request.Context(), c)
 
 	if anthReq.Stream {
+		c.Set("stream", true)
 		h.handleStream(c, baseCtx, req, originalModel)
 		return
 	}
 
+	c.Set("stream", false)
 	h.handleNonStream(c, baseCtx, req, originalModel)
 }
 
@@ -161,6 +163,8 @@ func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Contex
 			if anthResp.ID == "" {
 				anthResp.ID = generateAnthropicID(c)
 			}
+			c.Set("stream", false)
+			c.Set("resp_object", anthResp)
 			c.JSON(http.StatusOK, anthResp)
 			return
 		}
@@ -325,9 +329,10 @@ func (h *MessagesHandler) HandleCountTokens(c *gin.Context) {
 		estimatedTokens = 1
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"input_tokens": estimatedTokens,
-	})
+	respBody := gin.H{"input_tokens": estimatedTokens}
+	c.Set("stream", false)
+	c.Set("resp_object", respBody)
+	c.JSON(http.StatusOK, respBody)
 }
 
 // ──────────────────────────────────────────────
@@ -336,13 +341,15 @@ func (h *MessagesHandler) HandleCountTokens(c *gin.Context) {
 
 // respondAnthropicError sends an error in Anthropic format.
 func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, errType string, message string) {
-	c.JSON(httpStatus, gin.H{
+	body := gin.H{
 		"type": "error",
 		"error": gin.H{
 			"type":    errType,
 			"message": message,
 		},
-	})
+	}
+	middleware.SetTraceResponseObject(c, body)
+	c.JSON(httpStatus, body)
 }
 
 // respondAnthropicGroupError handles group dispatch errors.

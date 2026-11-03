@@ -97,7 +97,7 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		}
 	}
 
-	resp, err := h.orchestrator.Embeddings(c.Request.Context(), &req)
+	resp, err := h.orchestrator.Embeddings(orchestrator.WithGinContext(c.Request.Context(), c), &req)
 	if err != nil {
 		if ue, ok := err.(*model.UnifiedError); ok {
 			respondError(c, ue)
@@ -114,6 +114,7 @@ func (h *EmbeddingsHandler) Handle(c *gin.Context) {
 		TotalTokens:  resp.Usage.TotalTokens,
 	})
 	c.Set("stream", false)
+	c.Set("resp_object", resp)
 
 	c.JSON(http.StatusOK, resp)
 }

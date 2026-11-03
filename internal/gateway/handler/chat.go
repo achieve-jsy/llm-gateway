@@ -378,13 +378,15 @@ func (h *ChatHandler) respondGroupError(c *gin.Context, err error) {
 
 // respondError 返回统一错误响应 JSON
 func respondError(c *gin.Context, ue *model.UnifiedError) {
-	c.JSON(ue.HTTPStatus, gin.H{
+	body := gin.H{
 		"error": gin.H{
 			"type":    ue.Type,
 			"code":    ue.Code,
 			"message": ue.Message,
 		},
-	})
+	}
+	middleware.SetTraceResponseObject(c, body)
+	c.JSON(ue.HTTPStatus, body)
 }
 
 // estimateChatPromptChars 粗略估算 ChatRequest 的 prompt 字符数，用于预算预扣。

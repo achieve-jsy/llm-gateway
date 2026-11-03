@@ -344,7 +344,10 @@ func TestDoRaw_Timeout_IsTerminal(t *testing.T) {
 // TestIsNoRetry_DerivedContextKeepsMark 验证标记随 ctx 派生存活：
 // provider 到 llmclient 之间会经过 WithValue/WithTimeout 等派生，标记不能在途中丢失。
 func TestIsNoRetry_DerivedContextKeepsMark(t *testing.T) {
-	assert.False(t, llmclient.IsNoRetry(nil), "nil ctx 不应携带标记")
+	// 故意传 nil context 验证 nil 安全：用类型化 nil 变量而非 nil 字面量，
+	// 语义完全相同（都是 nil 接口值），但不会触发 staticcheck SA1012。
+	var nilCtx context.Context
+	assert.False(t, llmclient.IsNoRetry(nilCtx), "nil ctx 不应携带标记")
 	assert.False(t, llmclient.IsNoRetry(context.Background()), "普通 ctx 默认不带标记")
 
 	ctx := llmclient.WithNoRetry(context.Background())

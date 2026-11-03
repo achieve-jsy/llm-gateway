@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/example/llm-gateway/internal/gateway/orchestrator"
 	"github.com/example/llm-gateway/internal/gateway/quota"
+	"github.com/example/llm-gateway/internal/gateway/redact"
 	"github.com/gin-gonic/gin"
 )
 
@@ -29,6 +31,9 @@ type RerankHandler struct {
 	budgetGate    *budget.Gate
 	requestQuota  *quota.QuotaMiddleware
 	quotaGate     *quota.ModelQuotaGate
+	// redactor 是进程内共享的脱敏引擎（并发安全）。nil 或 off 时所有方法 no-op。
+	// 每个请求在 Handle 内 NewSession()，defer Close()，绝不跨请求复用。
+	redactor *redact.Engine
 }
 
 // NewRerankHandler creates a new RerankHandler.
@@ -57,6 +62,11 @@ func (h *RerankHandler) SetRequestQuotaGate(gate *quota.QuotaMiddleware) {
 // SetModelQuotaGate injects the model quota gate (called once during router setup).
 func (h *RerankHandler) SetModelQuotaGate(gate *quota.ModelQuotaGate) {
 	h.quotaGate = gate
+}
+
+// SetRedactor 注入脱敏引擎（router setup 时调用一次；nil 表示不脱敏）。
+func (h *RerankHandler) SetRedactor(engine *redact.Engine) {
+	h.redactor = engine
 }
 
 const (
@@ -170,6 +180,31 @@ func (h *RerankHandler) Handle(c *gin.Context) {
 		}
 	}
 
+	// 隐私脱敏：请求侧只处理纯文本形态，放在转发上游前的最后一步。
+	// 没有 failover 循环，天然只脱敏一次。
+	// engine 为 nil 或 off 时不创建 session（所有方法本就 no-op）。
+	var session *redact.Session
+	if h.redactor != nil && h.redactor.Mode() != redact.ModeOff {
+		session = h.redactor.NewSession()
+		defer session.Close() // 每个请求一个 session，绝不复用
+
+		if perr := protectRerankInput(c.Request.Context(), session, &req); perr != nil {
+			// fail-closed：保护失败绝不能把原文发给上游。只记错误种类，不记正文。
+			slog.Error("privacy: protect rerank request failed, request aborted (fail-closed)",
+				"request_id", c.GetString("request_id"),
+				"model", req.Model,
+				"error", perr.Error(),
+			)
+			respondError(c, &model.UnifiedError{
+				Type:       model.ErrorTypeInternal,
+				Code:       "redaction_failed",
+				Message:    "privacy protection failed; request not forwarded",
+				HTTPStatus: http.StatusInternalServerError,
+			})
+			return
+		}
+	}
+
 	resp, err := h.orchestrator.Rerank(orchestrator.WithGinContext(c.Request.Context(), c), &req)
 	if err != nil {
 		if ue, ok := err.(*model.UnifiedError); ok {
@@ -180,6 +215,10 @@ func (h *RerankHandler) Handle(c *gin.Context) {
 		return
 	}
 
+	// 响应可能回显原文档（return_documents=true）：上游拿到的是占位符，
+	// 回显文本里也是占位符，客户端看到的必须是原文。
+	restoreRerankResponse(session, resp)
+
 	c.Set("usage", core.Usage{
 		TotalTokens: resp.Usage.TotalTokens,
 	})
@@ -188,6 +227,62 @@ func (h *RerankHandler) Handle(c *gin.Context) {
 	c.Set("resp_object", resp)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// protectRerankInput 就地脱敏 query 与 documents 的文本形态。
+// 调用点在 normalize + validate 之后，此时 query 只可能是 string|{text|image}，
+// document 只可能是 string|{text|image|video}；未知形态原样保留。
+func protectRerankInput(ctx context.Context, session *redact.Session, req *core.RerankRequest) error {
+	if req == nil {
+		return nil
+	}
+	q, err := protectRerankPart(ctx, session, req.Query)
+	if err != nil {
+		return err
+	}
+	req.Query = q
+	for i := range req.Documents {
+		d, err := protectRerankPart(ctx, session, req.Documents[i])
+		if err != nil {
+			return err
+		}
+		req.Documents[i] = d
+	}
+	return nil
+}
+
+// protectRerankPart 脱敏单个 query/document：string 与 {text} 走 ProtectText，
+// {image} / {video} 是 URL 或 base64，一律不动（视觉模态没有纯文本语义）。
+func protectRerankPart(ctx context.Context, session *redact.Session, v any) (any, error) {
+	switch x := v.(type) {
+	case string:
+		return session.ProtectText(ctx, x)
+	case map[string]any:
+		text, ok := x["text"].(string)
+		if !ok {
+			return x, nil // image / video：原样返回
+		}
+		out, err := session.ProtectText(ctx, text)
+		if err != nil {
+			return nil, err
+		}
+		x["text"] = out
+		return x, nil
+	default:
+		return v, nil
+	}
+}
+
+// restoreRerankResponse 还原回显文档里的占位符（detect 模式无映射，等同于 no-op）。
+func restoreRerankResponse(session *redact.Session, resp *core.RerankResponse) {
+	if session == nil || resp == nil {
+		return
+	}
+	for i := range resp.Results {
+		if d := resp.Results[i].Document; d != nil && d.Text != "" {
+			d.Text = session.RestoreText(d.Text)
+		}
+	}
 }
 
 // normalizeRerankRequest 在校验前做兼容整形，尽量对齐硅基流动常见写法。

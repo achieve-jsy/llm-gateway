@@ -29,6 +29,10 @@ const (
 	lastSyncDepartmentsKey = "ai_app_hub.last_sync_departments"
 	// lastSyncDeletedKey 上次对账隐藏的工作室数（管理页展示）。
 	lastSyncDeletedKey = "ai_app_hub.last_sync_deleted_studios"
+	// personStatusResigned EHR 里"离职"的 person_status 取值。
+	// 实测 128 人取 3，其中 121 人从未用过 Key，4 人近 2 个月还有活动 → 3 = 离职。
+	personStatusResigned = 3
+
 	// lastSyncEmployeesKey 上次成功写入的人员档案数。
 	lastSyncEmployeesKey = "ai_app_hub.last_sync_employees"
 	// lastSyncUnmappedKey 归属不到工作室的部门数（聚合页不可见，非 0 要查数据）。
@@ -72,6 +76,8 @@ type HubSyncResult struct {
 	Hidden      int    `json:"hidden"`
 	// Employees 本轮写入的人员档案数（只有实现 EmployeeFetcher 的 fetcher 才会统计）。
 	Employees int `json:"employees"`
+	// ResignedAccounts 本轮关停的离职账号数（Key 关停 + login_status=disabled）。
+	ResignedAccounts int `json:"resigned_accounts_disabled"`
 	// UnmappedDepartments 归属不到任何工作室的部门数（EHR 里没有父节点的孤儿部门）。
 	// 这些部门在聚合页不可见，非 0 时看日志里的名字确认是数据问题还是配置问题。
 	UnmappedDepartments int `json:"unmapped_departments"`
@@ -198,7 +204,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 
 	// 人员档案：EHR 没授权"列全部人员"的路由，只能靠已知标识批量反查。
 	// 失败只告警：组织树已经写完了，不值得为辅助数据整轮回滚。
-	employees := s.syncEmployees(ctx, scope, byID, targets)
+	employees, resignedAccounts := s.syncEmployees(ctx, scope, byID, targets)
 
 	var studioIDs map[string]uuid.UUID
 	var studios, hidden int
@@ -257,6 +263,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		Studios:             studios,
 		Hidden:              hidden,
 		Employees:           employees,
+		ResignedAccounts:    resignedAccounts,
 		UnmappedDepartments: len(unmapped),
 		DeletedStudios:      int(deleted),
 		DurationMs:          time.Since(start).Milliseconds(),
@@ -539,10 +546,10 @@ func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string,
 // 第二段（仅全量同步）：拿本地账号的工号/passport 反查，覆盖部门节点根本点不到的普通员工。
 //
 // 每段各自容错：一段失败不影响另一段，也不影响组织树。
-func (s *AIAppHubSyncService) syncEmployees(ctx context.Context, scope SyncScope, byID map[string]ehrclient.Department, targets map[string]bool) int {
+func (s *AIAppHubSyncService) syncEmployees(ctx context.Context, scope SyncScope, byID map[string]ehrclient.Department, targets map[string]bool) (int, int) {
 	ef, ok := s.fetcher.(EmployeeFetcher)
 	if !ok {
-		return 0
+		return 0, 0
 	}
 
 	ids := make([]string, 0, len(targets))
@@ -563,12 +570,36 @@ func (s *AIAppHubSyncService) syncEmployees(ctx context.Context, scope SyncScope
 		}
 	}
 
-	n, err := s.repo.UpsertEmployees(ctx, toEmployeeModels(dedupeEmployees(emps)))
+	emps = dedupeEmployees(emps)
+	n, err := s.repo.UpsertEmployees(ctx, toEmployeeModels(emps))
 	if err != nil {
 		slog.Warn("ai_app_hub_employees_upsert_failed", "error", err)
+		return 0, 0
+	}
+	return n, s.disableResigned(ctx, emps)
+}
+
+// disableResigned 把 EHR 标记为离职的人在本地的账号关停。
+// 失败只告警不中断：同步的价值在数据，封号是附加动作，不该让它整轮失败。
+func (s *AIAppHubSyncService) disableResigned(ctx context.Context, emps []ehrclient.Employee) int {
+	numbers := make([]string, 0, len(emps))
+	for _, e := range emps {
+		if e.PersonStatus == personStatusResigned && e.GroupENumber != "" {
+			numbers = append(numbers, e.GroupENumber)
+		}
+	}
+	if len(numbers) == 0 {
 		return 0
 	}
-	return n
+	stats, err := s.repo.DisableResignedAccounts(ctx, numbers)
+	if err != nil {
+		slog.Warn("ai_app_hub_disable_resigned_failed", "error", err, "candidates", len(numbers))
+		return 0
+	}
+	slog.Info("ai_app_hub_disabled_resigned_accounts",
+		"users", stats.UsersDisabled, "keys", stats.KeysDisabled,
+		"skipped_recent_usage", stats.SkippedRecent, "resigned_people", len(numbers))
+	return stats.UsersDisabled
 }
 
 // fetchRoster 按本地账号反查档案：有工号就用工号，没有才用 passport，避免同一批人查两遍。

@@ -107,6 +107,65 @@ type UserIdentity struct {
 // ListUserIdentities 取本地全部账号的工号与 passport。
 //
 // 人员同步靠它反查档案：EHR 没授权"列全部人员"的路由，工号/passport 是仅有的两个可反查键。
+// ResignedAccountStats 离职账号关停的统计。
+type ResignedAccountStats struct {
+	// UsersDisabled 被标记为 disabled 的账号数。
+	UsersDisabled int
+	// KeysDisabled 被关停的 Key 数。
+	KeysDisabled int
+	// SkippedRecent 最近还在用 Key、因而被放过的账号数（EHR 说离职但人还在跑流量）。
+	SkippedRecent int
+}
+
+// resignedUsageWindow 误判保护窗口：最近这么久还在用 Key 的账号不封。
+const resignedUsageWindow = 30 * 24 * time.Hour
+
+// DisableResignedAccounts 关停离职员工的账号：Key 置 enabled=false、login_status 置 disabled。
+//
+// 为什么关 Key 而不是删用户：网关 verify-key 只看 api_keys.enabled/expires_at
+// （internal/gateway/middleware/auth.go 里 status != active 直接 401），Key 缓存 15 秒失效，
+// 关 Key 才是真正能挡住流量的那一刀；users 表没有 deleted_at，软删除要动 schema 和三处读路径。
+//
+// 误判保护：最近 30 天还在用 Key 的人不动 —— 先记日志交人工核对，别把在跑业务的人踢下线。
+// 恢复（再入职/误判）走人工：把 enabled / login_status 改回去。
+//
+// ponytail: 30 天窗口是拍的，线上先观察一轮再定；要更细的规则（例如只封 0 流量的）再加。
+func (r *AIAppHubRepo) DisableResignedAccounts(ctx context.Context, numbers []string) (ResignedAccountStats, error) {
+	var stats ResignedAccountStats
+	if len(numbers) == 0 {
+		return stats, nil
+	}
+	cutoff := time.Now().Add(-resignedUsageWindow)
+
+	// 最近还在用的账号：只统计、不封。
+	if err := r.db.WithContext(ctx).Raw(
+		"SELECT count(DISTINCT u.id) FROM users u JOIN api_keys k ON k.user_id = u.id "+
+			"WHERE u.employee_id IN ? AND k.last_used_at > ?", numbers, cutoff).Scan(&stats.SkippedRecent).Error; err != nil {
+		return stats, err
+	}
+
+	guard := "NOT EXISTS (SELECT 1 FROM api_keys k WHERE k.user_id = users.id AND k.last_used_at > ?)"
+
+	keyRes := r.db.WithContext(ctx).Exec(
+		"UPDATE api_keys SET enabled = false, updated_at = ? WHERE enabled AND user_id IN "+
+			"(SELECT id FROM users WHERE employee_id IN ? AND "+guard+")",
+		time.Now(), numbers, cutoff)
+	if keyRes.Error != nil {
+		return stats, keyRes.Error
+	}
+	stats.KeysDisabled = int(keyRes.RowsAffected)
+
+	userRes := r.db.WithContext(ctx).Exec(
+		"UPDATE users SET login_status = 'disabled', updated_at = ? WHERE employee_id IN ? "+
+			"AND login_status <> 'disabled' AND "+guard,
+		time.Now(), numbers, cutoff)
+	if userRes.Error != nil {
+		return stats, userRes.Error
+	}
+	stats.UsersDisabled = int(userRes.RowsAffected)
+	return stats, nil
+}
+
 func (r *AIAppHubRepo) ListUserIdentities(ctx context.Context) ([]UserIdentity, error) {
 	var rows []UserIdentity
 	err := r.db.WithContext(ctx).Table("users").

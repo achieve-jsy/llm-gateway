@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/example/llm-gateway/internal/aiapphub/ehrclient"
 	"github.com/example/llm-gateway/internal/controlplane/model"
@@ -130,6 +131,49 @@ func TestSyncAllBackfillsRosterByIdentity(t *testing.T) {
 	require.Equal(t, "广州", byName["周甜"].Location, "工号反查到的人要落库")
 	require.Equal(t, "BF00014", byName["周甜"].GroupENumber)
 	require.Equal(t, "olduser", byName["老账号"].Passport, "没工号的走 passport 反查")
+}
+
+// 离职（person_status=3）的账号要关停：Key 关掉（网关 15 秒内 401）+ login_status=disabled。
+// 最近 30 天还在用 Key 的人放过 —— EHR 说离职但人还在跑流量，先交人工核对。
+func TestSyncDisablesResignedAccounts(t *testing.T) {
+	db, settings := newAIHubTestDBWithSettings(t)
+	repo := repository.NewAIAppHubRepo(db)
+	require.NoError(t, db.Exec("INSERT INTO users (id, sub, employee_id, name, login_status) VALUES ('u-left','left','BF00100','走了的人','active'), ('u-live','live','BF00200','还在跑的人','active')").Error)
+	require.NoError(t, db.Exec("INSERT INTO api_keys (user_id, name, enabled) VALUES ('u-left','k1',1), ('u-live','k2',1)").Error)
+	// u-live 最近在用 Key
+	require.NoError(t, db.Exec("UPDATE api_keys SET last_used_at = ? WHERE user_id = 'u-live'", time.Now().Add(-24*time.Hour)).Error)
+
+	fetcher := &employeeFetcher{
+		items: deptWithPeople(),
+		employees: []ehrclient.Employee{
+			{OrgID: "org", EmployeeID: "emp-left", PersonName: "走了的人", GroupENumber: "BF00100", PersonStatus: 3},
+			{OrgID: "org", EmployeeID: "emp-live", PersonName: "还在跑的人", GroupENumber: "BF00200", PersonStatus: 3},
+			{OrgID: "org", EmployeeID: "emp-ok", PersonName: "在职的人", GroupENumber: "BF00300", PersonStatus: 1},
+		},
+	}
+	svc := service.NewAIAppHubSyncService(fetcher, repo, settings, service.DefaultSyncRules())
+
+	got, err := svc.Sync(context.Background(), service.SyncScope{Kind: service.ScopeAll})
+	require.NoError(t, err)
+	require.Equal(t, 1, got.ResignedAccounts, "只封真正封得动的那一个")
+
+	var leftKey, liveKey struct {
+		Enabled bool
+		UserID  string
+	}
+	require.NoError(t, db.Raw("SELECT enabled, user_id FROM api_keys WHERE user_id = 'u-left'").Scan(&leftKey).Error)
+	require.False(t, leftKey.Enabled, "离职账号的 Key 要关掉")
+	require.NoError(t, db.Raw("SELECT enabled, user_id FROM api_keys WHERE user_id = 'u-live'").Scan(&liveKey).Error)
+	require.True(t, liveKey.Enabled, "最近还在用的先不动")
+
+	var statuses []struct {
+		Sub         string
+		LoginStatus string
+	}
+	require.NoError(t, db.Raw("SELECT sub, login_status FROM users ORDER BY sub").Scan(&statuses).Error)
+	require.Equal(t, []string{"left", "live"}, []string{statuses[0].Sub, statuses[1].Sub})
+	require.Equal(t, "disabled", statuses[0].LoginStatus)
+	require.Equal(t, "active", statuses[1].LoginStatus, "有近 30 天流量的不封")
 }
 
 // 单部门/单工作室同步不该顺手把全公司的人都拉一遍。

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -76,11 +77,11 @@ type OIDCEndpoints struct {
 
 func NewHandler(cfg *Config, db *gorm.DB, rdb *redis.Client) *Handler {
 	h := &Handler{
-		config:    cfg,
-		db:        db,
-		rdb:       rdb,
-		userRepo:  arepo.NewUserRepository(db),
-		deptRepo:  arepo.NewDeptRepository(db),
+		config:   cfg,
+		db:       db,
+		rdb:      rdb,
+		userRepo: arepo.NewUserRepository(db),
+		deptRepo: arepo.NewDeptRepository(db),
 	}
 	_ = h.tryInit()
 	return h
@@ -204,7 +205,16 @@ func (h *Handler) Callback(c *gin.Context) {
 		return
 	}
 
-	user, deptID, deptName := h.upsertUser(userInfo)
+	user, deptID, deptName, err := h.upsertUser(userInfo)
+	if err != nil {
+		if errors.Is(err, errAccountDisabled) {
+			c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"type": "account_disabled", "message": "账号已停用（HR 花名册标记为离职），如有疑问请联系管理员", "code": "account_disabled"}})
+			return
+		}
+		slog.Error("sso upsert user failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "internal_error", "message": "failed to upsert user", "code": "user_upsert_failed"}})
+		return
+	}
 
 	// SSO 登录可能引起部门迁移，异步同步该用户的 api_keys org 字段
 	if h.orgSyncer != nil {
@@ -254,7 +264,13 @@ func (h *Handler) Callback(c *gin.Context) {
 	})
 }
 
-func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string) {
+// errAccountDisabled 账号被标记停用（EHR 花名册同步把离职人员置成 login_status=disabled）。
+var errAccountDisabled = errors.New("account disabled")
+
+// loginStatusDisabled users.login_status 的"停用"取值，由 EHR 同步写入。
+const loginStatusDisabled = "disabled"
+
+func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string, error) {
 	role := "user"
 	deptID := info.EhrDeptID
 	deptName := info.EhrDeptName
@@ -280,6 +296,11 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 
 	existingUser, err := h.userRepo.FindBySub(info.Passport)
 	if err == nil && existingUser != nil {
+		// 离职账员（EHR 同步关停）直接拒绝：下面会把 LoginStatus 改成 active，
+		// 必须在这里拦住，否则一封一放等于没做。
+		if existingUser.LoginStatus == loginStatusDisabled {
+			return nil, "", "", errAccountDisabled
+		}
 		existingUser.Name = info.Name
 		existingUser.Email = info.Email
 
@@ -306,7 +327,7 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 				if updateErr := h.userRepo.Update(existingUser); updateErr != nil {
 					slog.Warn("failed to update user", "error", updateErr)
 				}
-				return existingUser, deptID, deptName
+				return existingUser, deptID, deptName, nil
 			}
 
 			// dept_source=sso（默认）：按 SSO claims 正常迁移
@@ -317,7 +338,7 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 		if updateErr := h.userRepo.Update(existingUser); updateErr != nil {
 			slog.Warn("failed to update user", "error", updateErr)
 		}
-		return existingUser, deptID, deptName
+		return existingUser, deptID, deptName, nil
 	}
 
 	// sub 未命中 → 检查是否有按邮箱导入的 pending 用户，激活之
@@ -332,7 +353,7 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 		if updateErr := h.userRepo.Update(pendingUser); updateErr != nil {
 			slog.Warn("failed to activate pending user", "error", updateErr)
 		}
-		return pendingUser, deptID, deptName
+		return pendingUser, deptID, deptName, nil
 	}
 
 	newUser := &amodel.User{
@@ -348,7 +369,7 @@ func (h *Handler) upsertUser(info *DaQunUserInfo) (*amodel.User, string, string)
 	if createErr := h.userRepo.Create(newUser); createErr != nil {
 		slog.Warn("failed to create user", "error", createErr)
 	}
-	return newUser, deptID, deptName
+	return newUser, deptID, deptName, nil
 }
 
 // mergeImportDept 将导入创建的部门（dept_id 为 import: 前缀或名称）合并到 SSO 的 dept_id

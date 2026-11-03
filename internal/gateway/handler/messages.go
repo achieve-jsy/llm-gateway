@@ -99,7 +99,7 @@ func (h *MessagesHandler) HandleMessages(c *gin.Context) {
 		}
 		if decision != nil {
 			req.Model = decision.ModelName
-			routedModelID = decision.ModelID
+			routedModelID = decision.ModelUUID
 			// 传递 provider hint，确保 Router 在同名模型多渠道场景下
 			// 选择 scheduler 指定的渠道，避免走裸 model ID「先注册者赢」。
 			if decision.ProviderName != "" {
@@ -263,7 +263,7 @@ func (h *MessagesHandler) handleNonStream(c *gin.Context, baseCtx context.Contex
 			subjectID, _ := c.Get("quota_subject_id")
 			if st, ok := subjectType.(string); ok {
 				if si, ok := subjectID.(string); ok {
-					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelUUID); err != nil {
 						return // BeforeUpstream 已写入 429 响应
 					}
 				}
@@ -362,7 +362,7 @@ func (h *MessagesHandler) handleStream(c *gin.Context, baseCtx context.Context, 
 			subjectID, _ := c.Get("quota_subject_id")
 			if st, ok := subjectType.(string); ok {
 				if si, ok := subjectID.(string); ok {
-					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelID); err != nil {
+					if err := h.quotaGate.BeforeUpstream(c, st, si, decision.ModelUUID); err != nil {
 						return // BeforeUpstream 已写入 429 响应
 					}
 				}

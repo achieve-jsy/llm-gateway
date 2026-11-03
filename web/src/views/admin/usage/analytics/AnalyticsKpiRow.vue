@@ -55,11 +55,9 @@ const props = defineProps<{
   metrics: InsightMetrics | null
   /** model-users summary（补人数/调用次数 → 人均、单次成本） */
   summary: ModelUsersSummary | null
-  /** 区间天数（预算 = BUDGET_PER_DAY × 天数） */
+  /** 区间天数（日均费用展示用） */
   days: number
 }>()
-
-const BUDGET_PER_DAY = 1400
 
 const totalUsers = computed(() => props.summary?.total_users ?? 0)
 const totalCalls = computed(() => props.summary?.total_calls ?? 0)
@@ -84,13 +82,13 @@ const perUserDelta = computed(() => {
 const budgetTxt = computed(() => {
   const m = props.metrics
   if (!m) return '– / –'
-  const budget = BUDGET_PER_DAY * props.days
-  return `${fmtC(m.cost)} / ${fmtC(budget)}`
+  if (!m.budget_configured) return '未配置'
+  return `${fmtC(m.cost)} / ${fmtC(m.budget ?? 0)}`
 })
 const budgetPct = computed(() => {
   const m = props.metrics
-  if (!m) return 0
-  const budget = BUDGET_PER_DAY * props.days
+  if (!m || !m.budget_configured) return 0
+  const budget = m.budget ?? 0
   return budget > 0 ? Math.min(100, (m.cost / budget) * 100) : 0
 })
 const budgetCls = computed(() => {

@@ -42,7 +42,7 @@ const verdict = computed<VerdictView | null>(() => {
   const { delta_pct, budget_pct, high_tier_pct, cost, prev_cost } = m
   const d = delta_pct ?? 0
   const absD = Math.abs(d)
-  const over = budget_pct >= 100
+  const over = (m.budget_configured && (budget_pct ?? 0) >= 100)
   const hiHp = (high_tier_pct ?? 0) >= 65
   const hiDelta = d > 12
 

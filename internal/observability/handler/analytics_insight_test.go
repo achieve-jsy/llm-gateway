@@ -31,7 +31,8 @@ func TestBuildInsight_CompanyDeterministic(t *testing.T) {
 		ScopeDisplay: "全司",
 		RangeLabel:   "07-28~07-30",
 		Days:         3,
-		Budget:       BUDGET_PER_DAY * 3,
+		Budget:       4200,
+		BudgetConfigured: true,
 		Cost:         2000,
 		PrevCost:     1300,
 		HighCost:     500,
@@ -147,7 +148,7 @@ func TestBuildInsight_DeptScope(t *testing.T) {
 		ScopeDisplay: "研发部",
 		RangeLabel:   "07-28~07-30",
 		Days:         3,
-		Budget:       BUDGET_PER_DAY * 3,
+		Budget:       4200,
 		Cost:         1500,
 		PrevCost:     1200,
 		HighCost:     600,
@@ -188,7 +189,7 @@ func TestBuildInsight_DeptScope(t *testing.T) {
 func TestBuildInsight_EmptyRange(t *testing.T) {
 	resp := buildInsight(insightMetrics{
 		ScopeKind: "company", ScopeLabel: "全司", ScopeDisplay: "全司",
-		Days: 3, Budget: BUDGET_PER_DAY * 3,
+		Days: 3, Budget: 4200,
 	})
 	if len(resp.Segments.Facts) != 1 {
 		t.Fatalf("empty range should emit one no-data fact, got %d", len(resp.Segments.Facts))
@@ -198,6 +199,35 @@ func TestBuildInsight_EmptyRange(t *testing.T) {
 	}
 	if len(resp.Segments.Causes) != 0 || len(resp.Segments.Suggestions) != 0 {
 		t.Fatal("empty range should have no causes/suggestions")
+	}
+}
+
+// TestBuildInsight_BudgetUnconfigured 未配置预算(company 无预算分配)时:
+// budget=0、budget_configured=false、budget_pct=0,事实段文案显示「未配置」。
+func TestBuildInsight_BudgetUnconfigured(t *testing.T) {
+	m := insightMetrics{
+		ScopeKind:    "company",
+		ScopeLabel:   "全司",
+		ScopeDisplay: "全司",
+		RangeLabel:   "07-28~07-30",
+		Days:         3,
+		Cost:         2000,
+		PrevCost:     1300,
+		HighCost:     500,
+		Gmed:         250,
+		Models: []insightModel{
+			{Model: "model-a", Tier: "L2-Advanced", Cost: 2000, PrevCost: 1300},
+		},
+	}
+
+	resp := buildInsight(m)
+
+	if resp.Metrics.Budget != 0 || resp.Metrics.BudgetConfigured || resp.Metrics.BudgetPct != 0 {
+		t.Fatalf("unconfigured budget should yield budget=0/configured=false/pct=0, got %+v", resp.Metrics)
+	}
+	budgetFact := resp.Segments.Facts[0].Text
+	if !strings.Contains(budgetFact, "预算 未配置") {
+		t.Fatalf("budget fact should say 未配置, got: %s", budgetFact)
 	}
 }
 

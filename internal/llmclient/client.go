@@ -722,8 +722,13 @@ func (c *Client) buildRequest(ctx context.Context, req Request) (*http.Request, 
 		return nil, core.NewInvalidRequestError("failed to create request", err)
 	}
 
-	// Set default content type for requests with body
-	if req.Body != nil {
+	// Set default content type for requests with body.
+	// RawBody 也必须算进来：原生旁路（ChatNative / RelayNativeRaw*）正是用 RawBody
+	// 直发客户端原始报文，此前只判 Body 会让这类请求不带 Content-Type，上游直接
+	// 415 "Expected request with Content-Type: application/json"。
+	// RawBodyReader 刻意不在此列：它承载 passthrough 透传（可能是 multipart 或任意
+	// 内容），Content-Type 必须由调用方按原始语义显式给出。
+	if req.Body != nil || len(req.RawBody) > 0 {
 		httpReq.Header.Set("Content-Type", "application/json")
 	}
 

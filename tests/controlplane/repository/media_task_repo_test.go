@@ -642,6 +642,39 @@ func TestScopedQueriesStillUseRenamedTable(t *testing.T) {
 	if _, err := repo.GetMediaTask("absent"); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("缺失任务应返回 ErrRecordNotFound，实际 %v", err)
 	}
+
+	// GetByIDScoped 与 StatsDistributionScoped 同样经过 applyScope 的裸 SQL
+	// （`media_tasks.user_id IN (...)`）—— 改名后这两条路径最容易被漏掉，
+	// 而它们正是看板/详情页的入口。任一残留旧表名，sqlite 会直接
+	// `no such table: video_tasks`，把缺陷摁在闸门里。
+	if got, err := repo.GetByIDScoped("task-a", repository.VideoTaskScope{UserID: "user-a"}); err != nil {
+		t.Fatalf("GetByIDScoped 个人范围失败（裸 SQL 表名？）: %v", err)
+	} else if got.TaskID != "task-a" {
+		t.Fatalf("GetByIDScoped 返回了错误任务: %s", got.TaskID)
+	}
+	if _, err := repo.GetByIDScoped("task-a", repository.VideoTaskScope{UserID: "user-b"}); err == nil {
+		t.Fatalf("GetByIDScoped 不应让他人读到任务详情")
+	}
+
+	dist, err := repo.StatsDistributionScoped("", "", "", "", "", repository.VideoTaskScope{StudioIDs: []string{"studio-a"}})
+	if err != nil {
+		t.Fatalf("StatsDistributionScoped 工作室范围失败（裸 SQL 表名？）: %v", err)
+	}
+	if len(dist.Statuses) != 1 || dist.Statuses[0].Status != model.MediaTaskStatusQueued {
+		t.Fatalf("工作室范围状态分布不符: %+v", dist.Statuses)
+	}
+	if len(dist.Models) != 1 || dist.Models[0].Model != "m" {
+		t.Fatalf("工作室范围模型分布不符: %+v", dist.Models)
+	}
+	if len(dist.Providers) != 1 || dist.Providers[0].ProviderName != "p" {
+		t.Fatalf("工作室范围渠道分布不符: %+v", dist.Providers)
+	}
+	// 越权范围必须取不到任何行（applyScope 的兜底 `1 = 0` 分支）。
+	if empty, err := repo.StatsDistributionScoped("", "", "", "", "", repository.VideoTaskScope{StudioIDs: []string{"studio-z"}}); err != nil {
+		t.Fatalf("越权工作室范围应返回空集: %v", err)
+	} else if len(empty.Statuses) != 0 {
+		t.Fatalf("越权工作室范围不应看到任何任务: %+v", empty.Statuses)
+	}
 }
 
 func intPtr(v int) *int { return &v }

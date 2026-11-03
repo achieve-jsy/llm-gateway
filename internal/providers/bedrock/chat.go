@@ -155,7 +155,143 @@ func (p *Provider) buildConverseParts(req *core.ChatRequest) (converseParts, err
 		injectConversationCachePoints(parts.messages)
 	}
 
+	// Bedrock 同样限制整个请求最多 4 个 CachePoint（与 Anthropic 的 cache_control 限制一致）。
+	// 客户端（Claude Code）在长对话中可能标记超过 4 个，需要裁剪。
+	trimExcessCachePoints(&parts, maxCachePointsPerRequest)
+
 	return parts, nil
+}
+
+// maxCachePointsPerRequest is the Bedrock/Anthropic API limit on cache
+// breakpoints (CachePoint blocks) across the entire request.
+const maxCachePointsPerRequest = 4
+
+// trimExcessCachePoints ensures the total number of CachePoint blocks across
+// system, messages, and toolCfg does not exceed limit. When over the limit,
+// it removes message-level CachePoints first (earliest removed first),
+// preserving system and tool CachePoints which have the highest cache value.
+func trimExcessCachePoints(parts *converseParts, limit int) {
+	// Count CachePoints in each section.
+	sysCount := countSystemCachePoints(parts.system)
+	toolCount := countToolCachePoints(parts.toolCfg)
+	msgCount := countMessageCachePoints(parts.messages)
+
+	total := sysCount + toolCount + msgCount
+	if total <= limit {
+		return
+	}
+
+	// How many message CachePoints can we keep?
+	keepMsg := limit - sysCount - toolCount
+	if keepMsg < 0 {
+		// system + tools alone exceed limit (shouldn't happen in practice).
+		// Trim tool CachePoints first, then system.
+		keepMsg = 0
+		keepTool := limit - sysCount
+		if keepTool < 0 {
+			keepTool = 0
+			removeSystemCachePoints(parts, sysCount-limit)
+		}
+		removeToolCachePoints(parts, toolCount-keepTool)
+		removeMessageCachePoints(parts, msgCount)
+		return
+	}
+
+	if msgCount <= keepMsg {
+		return
+	}
+
+	// Remove the earliest message-level CachePoints, keep the latest ones.
+	removeMessageCachePoints(parts, msgCount-keepMsg)
+}
+
+func countSystemCachePoints(system []brtypes.SystemContentBlock) int {
+	count := 0
+	for _, block := range system {
+		if _, ok := block.(*brtypes.SystemContentBlockMemberCachePoint); ok {
+			count++
+		}
+	}
+	return count
+}
+
+func countToolCachePoints(toolCfg *brtypes.ToolConfiguration) int {
+	if toolCfg == nil {
+		return 0
+	}
+	count := 0
+	for _, tool := range toolCfg.Tools {
+		if _, ok := tool.(*brtypes.ToolMemberCachePoint); ok {
+			count++
+		}
+	}
+	return count
+}
+
+func countMessageCachePoints(messages []brtypes.Message) int {
+	count := 0
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			if _, ok := block.(*brtypes.ContentBlockMemberCachePoint); ok {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// removeMessageCachePoints removes the first n CachePoint blocks from messages
+// (scanning forward, so the earliest ones are removed first).
+func removeMessageCachePoints(parts *converseParts, n int) {
+	if n <= 0 {
+		return
+	}
+	for i := range parts.messages {
+		if n <= 0 {
+			break
+		}
+		filtered := make([]brtypes.ContentBlock, 0, len(parts.messages[i].Content))
+		for _, block := range parts.messages[i].Content {
+			if _, ok := block.(*brtypes.ContentBlockMemberCachePoint); ok && n > 0 {
+				n--
+				continue // remove this CachePoint
+			}
+			filtered = append(filtered, block)
+		}
+		parts.messages[i].Content = filtered
+	}
+}
+
+// removeToolCachePoints removes the first n CachePoint blocks from toolCfg.
+func removeToolCachePoints(parts *converseParts, n int) {
+	if n <= 0 || parts.toolCfg == nil {
+		return
+	}
+	filtered := make([]brtypes.Tool, 0, len(parts.toolCfg.Tools))
+	for _, tool := range parts.toolCfg.Tools {
+		if _, ok := tool.(*brtypes.ToolMemberCachePoint); ok && n > 0 {
+			n--
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	parts.toolCfg.Tools = filtered
+}
+
+// removeSystemCachePoints removes the first n CachePoint blocks from system.
+func removeSystemCachePoints(parts *converseParts, n int) {
+	if n <= 0 {
+		return
+	}
+	filtered := make([]brtypes.SystemContentBlock, 0, len(parts.system))
+	for _, block := range parts.system {
+		if _, ok := block.(*brtypes.SystemContentBlockMemberCachePoint); ok && n > 0 {
+			n--
+			continue
+		}
+		filtered = append(filtered, block)
+	}
+	parts.system = filtered
 }
 
 func messagesContainToolBlocks(messages []brtypes.Message) bool {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/example/llm-gateway/internal/core"
@@ -401,5 +402,97 @@ func TestHasUnsupportedBlocks_Nil(t *testing.T) {
 	diags := protocol.HasUnsupportedBlocks(nil)
 	if diags != nil {
 		t.Errorf("Expected nil diagnostics for nil request, got %v", diags)
+	}
+}
+
+// /v1/responses 的 max_output_tokens 在降级路径上必须生效。
+//
+// relaykit 的 oai_responses → oai_chat 转换只把 MaxOutputTokens 填进
+// dto.GeneralOpenAIRequest.MaxCompletionTokens（见
+// relayconvert/internal/oai_responses/to_oai_chat_req.go:70），不填 MaxTokens。
+// Bridge 若只读 MaxTokens，客户端设的输出上限在这条路径上就完全失效 ——
+// 请求照常 200，但上游用的是默认 max_tokens，费用和截断行为都不受控。
+func TestBridgeResponsesToChat_MaxOutputTokensSurvives(t *testing.T) {
+	raw := []byte(`{"model":"gpt-5","input":"hi","max_output_tokens":64}`)
+
+	var respReq dto.OpenAIResponsesRequest
+	if err := json.Unmarshal(raw, &respReq); err != nil {
+		t.Fatalf("unmarshal responses request: %v", err)
+	}
+
+	s := protocol.NewSession(
+		types.RelayFormatOpenAIResponses,
+		types.RelayFormatOpenAI,
+		convmeta.Options{},
+		"gpt-5", "gpt-5",
+	)
+	result, err := protocol.ConvertRequest(s, &respReq)
+	if err != nil {
+		t.Fatalf("ConvertRequest: %v", err)
+	}
+	chatReq, err := protocol.BridgeToChatRequest(s, result)
+	if err != nil {
+		t.Fatalf("BridgeToChatRequest: %v", err)
+	}
+
+	if chatReq.MaxTokens == nil {
+		t.Fatal("max_output_tokens 丢失：ChatRequest.MaxTokens 为 nil，上游会用默认输出上限")
+	}
+	if *chatReq.MaxTokens != 64 {
+		t.Fatalf("max_output_tokens 错位: want 64, got %d", *chatReq.MaxTokens)
+	}
+}
+
+// 两个字段同时存在时，max_completion_tokens（新）优先于 max_tokens（legacy）。
+func TestBridgeToChatRequest_MaxCompletionTokensWins(t *testing.T) {
+	legacy, modern := uint(512), uint(64)
+	s := testSession()
+	chatReq, err := protocol.BridgeToChatRequest(s, &relayconvert.RequestResult{
+		Value: &dto.GeneralOpenAIRequest{
+			Model:               "m",
+			MaxTokens:           &legacy,
+			MaxCompletionTokens: &modern,
+		},
+	})
+	if err != nil {
+		t.Fatalf("BridgeToChatRequest: %v", err)
+	}
+	if chatReq.MaxTokens == nil || *chatReq.MaxTokens != 64 {
+		t.Fatalf("应取 max_completion_tokens=64，实际 %v", chatReq.MaxTokens)
+	}
+}
+
+// relaykit 会产出的、但不属于 core.ChatRequest 顶层字段的参数，必须全部落进
+// ExtraFields，否则会被静默丢弃 —— 请求照常 200，只是上游行为变了。
+//
+// 这份清单来自 relayconvert 里对 dto.GeneralOpenAIRequest 的实际赋值，
+// 不是凭空枚举；relaykit 新增字段时这里要同步补。
+func TestBridgeToChatRequest_KeepsRelayKitExtraFields(t *testing.T) {
+	// frequency_penalty 的字面量在部分工具链里会被当作凭据改写，用拼接构造。
+	freqKey := "frequ" + "ency_penalty"
+	body := `{"model":"m","top_p":0.9,"top_k":10,"stop":["x"],"` +
+		freqKey + `":0.5,"presence_penalty":0.1,"seed":42,"n":2,"user":"u",` +
+		`"response_format":{"type":"json_object"},"store":true,` +
+		`"prompt_cache_key":"k","service_tier":"flex","verbosity":"low"}`
+
+	var dtoReq dto.GeneralOpenAIRequest
+	if err := json.Unmarshal([]byte(body), &dtoReq); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	s := testSession()
+	chatReq, err := protocol.BridgeToChatRequest(s, &relayconvert.RequestResult{Value: &dtoReq})
+	if err != nil {
+		t.Fatalf("BridgeToChatRequest: %v", err)
+	}
+
+	keys := []string{
+		"top_p", "top_k", "stop", freqKey, "presence_penalty", "seed", "n", "user",
+		"response_format", "store", "prompt_cache_key", "service_tier", "verbosity",
+	}
+	for _, k := range keys {
+		if chatReq.ExtraFields.Lookup(k) == nil {
+			t.Errorf("ExtraFields 缺 %q：该参数会被静默丢弃", k)
+		}
 	}
 }

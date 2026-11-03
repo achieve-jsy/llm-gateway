@@ -41,8 +41,16 @@ func BridgeToChatRequest(session *Session, result *relayconvert.RequestResult) (
 		chatReq.Temperature = oaiReq.Temperature
 	}
 
-	// MaxTokens: relaykit 使用 *uint，core 使用 *int
-	if oaiReq.MaxTokens != nil {
+	// MaxTokens: relaykit 有两个来源 —— legacy 的 MaxTokens，以及 responses 路径
+	// 产出的 MaxCompletionTokens（oai_responses → oai_chat 只填后者，见
+	// relayconvert/internal/oai_responses/to_oai_chat_req.go）。两者都要认，
+	// 否则 /v1/responses 的 max_output_tokens 在降级路径上会静默失效。
+	// 新字段优先：OpenAI 语义里 max_completion_tokens 是 max_tokens 的替代。
+	switch {
+	case oaiReq.MaxCompletionTokens != nil:
+		mt := int(*oaiReq.MaxCompletionTokens)
+		chatReq.MaxTokens = &mt
+	case oaiReq.MaxTokens != nil:
 		mt := int(*oaiReq.MaxTokens)
 		chatReq.MaxTokens = &mt
 	}
@@ -165,6 +173,27 @@ func BridgeToChatRequest(session *Session, result *relayconvert.RequestResult) (
 	// User
 	if len(oaiReq.User) > 0 && string(oaiReq.User) != "null" {
 		addExtra("user", oaiReq.User)
+	}
+
+	// 以下四个由 relaykit 在特定转换中搬运（chat ↔ responses、claude → chat），
+	// core.ChatRequest 没有对应顶层字段，只能落 ExtraFields 透传上游：
+	//   - store / prompt_cache_key：responses ↔ chat 互转时搬运；
+	//   - service_tier：claude → responses 搬运（影响计费档位）；
+	//   - verbosity：claude → chat 搬运（gpt-5 系列的输出详细度）。
+	// 丢掉它们不会报错，只会静默改变上游行为，所以必须显式带上。
+	if len(oaiReq.Store) > 0 {
+		addExtra("store", oaiReq.Store)
+	}
+	if oaiReq.PromptCacheKey != "" {
+		if b, err := json.Marshal(oaiReq.PromptCacheKey); err == nil {
+			addExtra("prompt_cache_key", b)
+		}
+	}
+	if len(oaiReq.ServiceTier) > 0 {
+		addExtra("service_tier", oaiReq.ServiceTier)
+	}
+	if len(oaiReq.Verbosity) > 0 {
+		addExtra("verbosity", oaiReq.Verbosity)
 	}
 
 	if len(extra) > 0 {

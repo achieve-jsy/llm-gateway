@@ -361,6 +361,7 @@
 | 项 | 落点 | 关键约束 |
 |---|---|---|
 | **E1** 看板与告警 | 控制面 ops 统计 API + `web/` | 任务状态分布 / 成功率 / P50–P99 时长 / 成本；`usage_missing` 与「无价拒绝」计数告警。**因采用方案 D（单表）→ 看板不需要 union，只需加 `kind` 维度过滤**（这是 D 方案相对原「新建表」方案省下来的工作量） |
+| **E1-补充** | `internal/controlplane/service/model_info_service.go` 的 `aggregateVideoCaps` | 它把 `info.VideoAPIEndpoint` **写死为 `POST /v1/contents/generations/tasks`**（Seedance 旧端点）。但 D1 决策新增了通用 `/v1/videos`（Kling/Vidu 走这条），且 Seedance 旧端点要保留 → **同一字段无法同时表达两种视频组**。需 E 队定稿：① 按组内成员的渠道判断报哪个端点，还是 ② 报新端点 `/v1/videos` 并让 Seedance 组另设字段，或 ③ 两者都报（如 `video_api_endpoint` + `video_api_endpoints[]`）。**这是对外契约，定稿后要同步 `docs/media-api.md` 与前端** |
 | **E2** 探活（**不真出图/出视频**） | 沿用 `internal/controlplane/service/test_handler.go` 的 **connectivity + auth only** 范式 | 硬要求：探活**不得产生上游生成费用**——必须用抓请求/打桩断言证明只做了连通性与鉴权探测 |
 | **E2-补充** 🔴 | `internal/controlplane/service/group_check_service.go` | **A5 打开 `model_type=image` 后新暴露的路径**：`isVideoGroupModelType`（`:106,135-139`）**只跳过 video 组** → **image 组会落到 `buildProbeRequest`（`:270 default`）去发 `/v1/chat/completions`**，上游必然报错 → **看板/健康检查必然误报失败**。必须让 image（及后续同类非 chat 媒体类型）**同样跳过组级 chat 探针**，改用 E2 的媒体探活范式 |
 | **E3** 前端 | `web/src`（渠道与模型配置页） | 复用既有 `VideoSupported*` 元数据；**新增媒体单价的展示与编辑**（复用既有 `PerSecond*`/`PerImage`/`PerRequest` 字段族，**不要新造价格字段**）；前端校验必须与后端 binding 一致；`npx vite build` 必须通过 |

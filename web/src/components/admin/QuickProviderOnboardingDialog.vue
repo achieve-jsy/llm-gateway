@@ -153,8 +153,9 @@
                 </el-form-item>
               </el-col>
               <el-col :span="12">
-                <el-form-item label="用途">
-                  <el-input v-model="formData.purpose" placeholder="可选，如：坐席、备用、研发" />
+                <el-form-item label="渠道名前缀">
+                  <el-input v-model="formData.name_prefix" placeholder="可选，如：qwen-agent" />
+                  <div class="form-hint">后端会自动追加 001、002，并避让已有重名。</div>
                 </el-form-item>
               </el-col>
             </el-row>
@@ -229,7 +230,7 @@ interface FormData {
   definition_id: string
   endpoint: string
   tag: string
-  purpose: string
+  name_prefix: string
   credential_key: string
   keys_text: string
   models_text: string
@@ -261,7 +262,7 @@ const formData = ref<FormData>({
   definition_id: '',
   endpoint: '',
   tag: '',
-  purpose: '',
+  name_prefix: '',
   credential_key: '',
   keys_text: '',
   models_text: '',
@@ -309,7 +310,7 @@ watch(
 )
 
 watch(
-  () => [formData.value.definition_id, formData.value.endpoint, formData.value.keys_text, formData.value.models_text, formData.value.credential_key, formData.value.tag, formData.value.purpose, formData.value.model_type],
+  () => [formData.value.definition_id, formData.value.endpoint, formData.value.keys_text, formData.value.models_text, formData.value.credential_key, formData.value.tag, formData.value.name_prefix, formData.value.model_type],
   () => {
     serverPreviewRows.value = []
     previewWarnings.value = []
@@ -327,7 +328,7 @@ function resetForm() {
     definition_id: '',
     endpoint: '',
     tag: '',
-    purpose: '',
+    name_prefix: '',
     credential_key: '',
     keys_text: '',
     models_text: '',
@@ -415,7 +416,7 @@ function buildPayload(): QuickOnboardPayload {
       remark: `快速接入创建：${selectedDef.value?.display_name || formData.value.definition_id}`
     },
     provider_slug: selectedDef.value?.id || formData.value.definition_id,
-    purpose: formData.value.purpose || '',
+    name_prefix: formData.value.name_prefix || undefined,
     credentials: parsedKeys.value.map(key => ({ credentials: buildCredentials(key) })),
     models: parsedModels.value.map(modelName => ({
       name: modelName,
@@ -434,7 +435,7 @@ function maskKey(key: string): string {
 
 function buildLocalPreviewRows(): QuickOnboardProviderPlan[] {
   if (!selectedDef.value) return []
-  const prefix = [selectedDef.value.id, formData.value.tag].filter(Boolean).join('-') || selectedDef.value.id
+  const prefix = slugifyNamePrefix(formData.value.name_prefix || selectedDef.value.id)
   return parsedKeys.value.map((key, index) => ({
     index,
     name: `${prefix}-${String(index + 1).padStart(3, '0')}`,
@@ -443,6 +444,11 @@ function buildLocalPreviewRows(): QuickOnboardProviderPlan[] {
     model_count: parsedModels.value.length,
     will_create: true
   }))
+}
+
+function slugifyNamePrefix(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return normalized || 'provider'
 }
 
 async function refreshPreview(): Promise<boolean> {

@@ -15,6 +15,7 @@ import (
 type HubSyncService interface {
 	Sync(ctx context.Context, scope service.SyncScope) (service.HubSyncResult, error)
 	Authorize(ctx context.Context, userID, passport string, scope service.SyncScope) (bool, error)
+	Status(ctx context.Context) (service.HubSyncStatus, error)
 }
 
 type AIAppHubSyncHandler struct {
@@ -81,6 +82,27 @@ func (h *AIAppHubSyncHandler) Sync(c *gin.Context) {
 
 // mapSyncError 把同步错误翻译成 HTTP 语义。502 保留 detail，
 // 前端据此提示"接口中心未授权该路由"。
+// Status 管理页同步卡片的数据源：上次同步结果 + 是否正在同步。
+// 权限与手动触发一致（scope=all 只给管理员），避免普通用户看到上游错误详情。
+func (h *AIAppHubSyncHandler) Status(c *gin.Context) {
+	allowed, err := h.svc.Authorize(c.Request.Context(), c.GetString("user_id"), c.GetString("user_passport"),
+		service.SyncScope{Kind: service.ScopeAll})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "authorize failed"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	st, err := h.svc.Status(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "status failed"})
+		return
+	}
+	c.JSON(http.StatusOK, st)
+}
+
 func mapSyncError(err error) (int, string) {
 	switch {
 	case errors.Is(err, service.ErrSyncInProgress):

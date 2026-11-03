@@ -39,6 +39,10 @@ func (f *fakeSyncService) Authorize(_ context.Context, _, _ string, _ service.Sy
 	return f.allowed, nil
 }
 
+func (f *fakeSyncService) Status(context.Context) (service.HubSyncStatus, error) {
+	return service.HubSyncStatus{}, nil
+}
+
 func newSyncRouter(svc handler.HubSyncService, passport string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

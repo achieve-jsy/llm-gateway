@@ -18,11 +18,11 @@ import (
 
 // fakeModelSvcForBatch 仅覆盖批量注册 handler 所需方法。
 type fakeModelSvcForBatch struct {
-	batchRes       *service.BatchCreateResult
-	batchErr       error
-	batchCatalogRes *service.BatchCreateResult
-	batchCatalogErr error
-	lastBatchInput  *service.BatchCreateModelsInput
+	batchRes         *service.BatchCreateResult
+	batchErr         error
+	batchCatalogRes  *service.BatchCreateResult
+	batchCatalogErr  error
+	lastBatchInput   *service.BatchCreateModelsInput
 	lastCatalogInput *service.BatchCreateFromCatalogInput
 }
 

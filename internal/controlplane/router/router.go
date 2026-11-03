@@ -541,6 +541,7 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	{
 		// 渠道定义（Registry）
 		adminGroup.POST("/admin/ai-app-hub/sync", hubSyncHandler.Sync)
+		adminGroup.GET("/admin/ai-app-hub/sync-status", hubSyncHandler.Status)
 		adminGroup.GET("/provider-definitions", guard(rbac.PermProviderManage), defHandler.ListDefinitions)
 		adminGroup.GET("/provider-definitions/:id", guard(rbac.PermProviderManage), defHandler.GetDefinition)
 

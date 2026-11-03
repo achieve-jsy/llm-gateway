@@ -40,6 +40,8 @@ const (
 	lastSyncEmployeesKey = "ai_app_hub.last_sync_employees"
 	// lastSyncDiffKey 上次投影到老表的差量（JSON），管理页直接展示。
 	lastSyncDiffKey = "ai_app_hub.last_diff"
+	// lastSyncResignedKey 上次关停的离职账号数。
+	lastSyncResignedKey = "ai_app_hub.last_sync_resigned_accounts"
 	// lastSyncUnmappedKey 归属不到工作室的部门数（聚合页不可见，非 0 要查数据）。
 	lastSyncUnmappedKey = "ai_app_hub.last_sync_unmapped_departments"
 
@@ -110,6 +112,56 @@ type SyncDiff struct {
 
 // departmentTypeBusinessUnit EHR 里"事业部"的 departmentType，对应老表 studios。
 const departmentTypeBusinessUnit = 2
+
+// HubSyncStatus 管理页同步卡片读的状态。来源是 system_configs 里的 ai_app_hub.* 键 + 进程内锁。
+type HubSyncStatus struct {
+	LastSyncAt          string   `json:"last_sync_at"`
+	Status              string   `json:"status"` // success | failed | ""（从未同步）
+	Scope               string   `json:"scope"`
+	Error               string   `json:"error"`
+	Departments         int      `json:"departments"`
+	Employees           int      `json:"employees"`
+	UnmappedDepartments int      `json:"unmapped_departments"`
+	ResignedAccounts    int      `json:"resigned_accounts_disabled"`
+	Diff                SyncDiff `json:"diff"`
+	// Running 进程内是否已有同步在跑（含 cron）。页面刷新后靠它把按钮留在"同步中"。
+	Running bool `json:"running"`
+}
+
+// Status 读上次同步结果。settings 缺失（未初始化）时只返回 Running，页面显示"尚未同步"。
+func (s *AIAppHubSyncService) Status(_ context.Context) (HubSyncStatus, error) {
+	st := HubSyncStatus{Running: s.Running()}
+	if s.settings == nil {
+		return st, nil
+	}
+	get := func(key string) string {
+		v, err := s.settings.GetValue(key)
+		if err != nil {
+			return ""
+		}
+		return v
+	}
+	st.LastSyncAt = get("ai_app_hub.last_sync_at")
+	st.Status = get("ai_app_hub.last_sync_status")
+	st.Scope = get("ai_app_hub.last_sync_scope")
+	st.Error = get("ai_app_hub.last_sync_error")
+	st.Departments = atoiOrZero(get(lastSyncDepartmentsKey))
+	st.Employees = atoiOrZero(get(lastSyncEmployeesKey))
+	st.UnmappedDepartments = atoiOrZero(get(lastSyncUnmappedKey))
+	st.ResignedAccounts = atoiOrZero(get(lastSyncResignedKey))
+	if raw := get(lastSyncDiffKey); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &st.Diff)
+	}
+	return st, nil
+}
+
+func atoiOrZero(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
+}
 
 // SyncRules 业务规则：哪些部门不展示、哪些要改名。写死在代码里，
 // 由产品确认后修改，避免散落在数据库配置中难以追溯。
@@ -207,7 +259,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 	start := time.Now()
 	defer func() {
 		if err != nil {
-			s.markStatus(scope, "failed", err.Error(), 0, 0, 0, 0, SyncDiff{})
+			s.markStatus(scope, "failed", err.Error(), 0, 0, 0, 0, 0, SyncDiff{})
 		}
 	}()
 
@@ -308,7 +360,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (result
 		// 打日志 + 计数，别让它静默消失。
 		slog.Warn("ai_app_hub_sync_departments_without_studio", "count", len(unmapped), "names", unmapped)
 	}
-	s.markStatus(scope, "success", "", int(deleted), len(items), employees, len(unmapped), diff)
+	s.markStatus(scope, "success", "", int(deleted), len(items), employees, len(unmapped), resignedAccounts, diff)
 	return HubSyncResult{
 		Scope:               string(scope.Kind),
 		Departments:         len(targets),
@@ -658,7 +710,7 @@ func (s *AIAppHubSyncService) reconcileLooksPartial(current int) bool {
 }
 
 // markStatus 记录最近一次同步结果，管理页据此展示"上次同步时间/结果"。
-func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string, deleted, departments, employees, unmapped int, diff SyncDiff) {
+func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string, deleted, departments, employees, unmapped, resigned int, diff SyncDiff) {
 	if s.settings == nil {
 		return
 	}
@@ -674,6 +726,7 @@ func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string,
 		values[lastSyncDepartmentsKey] = strconv.Itoa(departments)
 		values[lastSyncEmployeesKey] = strconv.Itoa(employees)
 		values[lastSyncUnmappedKey] = strconv.Itoa(unmapped)
+		values[lastSyncResignedKey] = strconv.Itoa(resigned)
 		if raw, mErr := json.Marshal(diff); mErr == nil {
 			values[lastSyncDiffKey] = string(raw)
 		}

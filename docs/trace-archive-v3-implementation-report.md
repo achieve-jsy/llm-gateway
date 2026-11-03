@@ -238,6 +238,83 @@ fix(migrations): 删除乱序的 atlas 迁移文件避免生产部署失败
 
 ---
 
+### 6.2 U3 结论：TOAST 空间可被 VACUUM 回收（**是**），但默认 autovacuum 节奏跟不上
+
+**U3 是**。在测试环境 **PG 18.4（与生产同版）** 上用同形替身表做了 A/B 对照实验
+（唯一变量 = 是否 VACUUM；`STORAGE EXTERNAL` 关闭压缩以确保正文真的进 TOAST，
+并关闭 autovacuum 以免干扰）：
+
+| 表 | 置空后 TOAST | VACUUM 后 | 插入第二批 100 MB 后 |
+|---|---|---|---|
+| `u3_novac`（不 VACUUM） | 104 MB | — | **208 MB（翻倍，零复用）** |
+| `u3_vac`（VACUUM） | 104 MB | **0 KB（文件被截断）** | **104 MB（零增长）** |
+
+部分置空模型（4000 行中仅 1000 行有正文，贴近生产 24% 的形态）结果一致：
+不 VACUUM → 208 MB；VACUUM 后 → 0 KB，再插入恰好回到一批的量。
+
+三条被实测证实的机制（此前都是假设）：
+
+1. `UPDATE SET body=NULL` **不会**让 TOAST 变小（104 MB → 104 MB，纹丝不动）
+2. `VACUUM <表>` **会递归处理 TOAST 子表**——VACUUM VERBOSE 直接打印
+   `INFO: vacuuming "pg_toast.pg_toast_307884"`，且报告 `142 currently deleted, 142 reusable`
+3. `vacuum_truncate=on` 时，全死的 TOAST 文件**会被截断并把空间还给操作系统**
+
+**生产侧的回收可行性（只读核查，未执行 VACUUM）**
+
+| 检查项 | 结果 | 含义 |
+|---|---|---|
+| 复制槽 | 无 | 不拖住 xmin |
+| 从库 | 无 | 不拖住 xmin |
+| 两阶段事务 | 0 | 不拖住 xmin |
+| 最长运行事务 | 0 秒 | 不拖住 xmin |
+| `vacuum_truncate` | on | 尾部空页可还给 OS |
+| `call_traces` 预留 | total 286 GB（heap 2.1 GB + **TOAST 280 GB**） | 可回收量级 ≈ 280 GB |
+| `/data` | 344G，已用 299G，**仅剩 43G（88%）** | 约 4 天见底 |
+
+→ **没有任何阻断因素，VACUUM 在生产上能正常回收。**
+
+**⚠️ 但这里有一个会让整个方案失效的运维陷阱**
+
+`autovacuum_vacuum_scale_factor = 0.2`（全局默认，`call_traces` 无表级覆盖），
+表内 533 万行 → 自动清理触发阈值 **≈ 50 + 0.2 × 5,333,741 ≈ 107 万死元组**。
+
+而归档是**按天**置空，每天产生约 **10 万**死元组（生产实测近期行几乎行行有正文）。
+两者一比：
+
+```
+每天产生死元组      ≈ 10.1 万
+autovacuum 触发阈值 ≈ 107 万
+→ 攒够一次要        ≈ 10.6 天
+```
+
+**即：默认配置下，每约 10 天才自动回收一次，而 /data 每天涨 11 GB —— 这 10 天里会涨掉约 110 GB，
+远超当前仅剩的 43 GB。方案会在回收生效前就把盘写满。**
+
+**必须做的补救（二选一，建议都做）**
+
+1. **表级 autovacuum 调参**（推荐，一次投入长期生效）——让回收节奏跟上置空节奏：
+   ```sql
+   ALTER TABLE call_traces SET (
+     autovacuum_vacuum_scale_factor = 0.0,
+     autovacuum_vacuum_threshold    = 20000
+   );
+   ```
+   调后约每 2 万死元组触发一次（≈ 数小时一次），与每日置空节奏匹配。
+
+2. **归档周期内显式执行 VACUUM**——在 janitor 完成当日置空后执行
+   `VACUUM (ANALYZE) call_traces`。手工 VACUUM 不受 autovacuum 的 cost 限流，
+   速度更快；但要注意它与 autovacuum 的并发争抢。
+
+   > 注：`maintenance_work_mem` 当前为默认 **64 MB**，对 280 GB 级 TOAST 偏小。
+   > 首次大规模回收建议在会话内临时提高（如 `SET maintenance_work_mem='1GB'`）以缩短单次耗时。
+
+**首次回收的量级预期**：若把 126 万个有正文行的正文全部置空后 VACUUM，
+TOAST 中已无活引用，`vacuum_truncate=on` 会把大部分文件截断还给 OS ——
+`/data` 可用空间有望从 43 GB 回升到 **300 GB 量级**，而非仅仅"止住增长"。
+（实际值取决于置空完成度与截断能覆盖的尾部空页范围。）
+
+---
+
 ## 7. 上线前置清单
 
 1. **迁移**：**无前置阻断**（D6 已推翻，见 §6.1）——生产 revisions 正常，唯一待应用的就是
@@ -245,5 +322,9 @@ fix(migrations): 删除乱序的 atlas 迁移文件避免生产部署失败
    该迁移在 5,315,983 行的 `call_traces` 上使用 PG 11+ **快速默认值**，不触发表重写。
 2. **开关**：`archive.write.enabled=false`、`archive.read.enabled=true` 上线，验证 writer no-op 后再开写。
 3. **磁盘**：`/datalog` 需合账（归档 + leakscan 189 GB + 保留期），`archive.retention_days` 建议 180 而非 365（v3 §7.2）。
-4. **/data 时间窗**：`VACUUM call_traces` 是止涨的关键动作，优先于 `pg_repack`（后者需约 532 GiB，当前不可行 —— v3 §6.3）。
+4. **`/data` 止血（U3 已验，见 §6.2）**：`VACUUM call_traces` 能真正回收 TOAST 空间，
+   优先于 `pg_repack`（后者需约 532 GiB，当前不可行 —— v3 §6.3）。**但必须同时调 autovacuum**：
+   默认阈值约 107 万死元组、而每天只产生约 10 万 → 攒够一次要 10 天，
+   这 10 天里 `/data` 会涨掉约 110 GB，**超过当前仅剩的 43 GB**。
+   上线前必须执行 §6.2 的表级 autovacuum 调参，否则方案会在回收生效前把盘写满。
 5. **决策**：D-1/D-2/D-3 三项（见 v3 §2）与 P1 回填是否纳入本期。

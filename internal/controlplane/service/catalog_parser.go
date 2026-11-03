@@ -30,6 +30,7 @@ type ModelCatalogParsed struct {
 	OutputPriceAboveTier            *float64
 	SupportsFunctionCalling         bool
 	SupportsVision                  bool
+	SupportsVideoInput              bool
 	SupportsPromptCaching           bool
 	SupportsResponseSchema          bool
 	SupportsToolChoice              bool
@@ -157,6 +158,7 @@ func parseOne(sourceID string, payload json.RawMessage) (*ModelCatalogParsed, er
 	// 能力位
 	entry.SupportsFunctionCalling = boolField(m, "supports_function_calling")
 	entry.SupportsVision = boolField(m, "supports_vision")
+	entry.SupportsVideoInput = boolField(m, "supports_video_input")
 	entry.SupportsPromptCaching = boolField(m, "supports_prompt_caching")
 	entry.SupportsResponseSchema = boolField(m, "supports_response_schema")
 	entry.SupportsToolChoice = boolField(m, "supports_tool_choice")

@@ -341,6 +341,7 @@ func parsedToModel(p *ModelCatalogParsed, source string, syncedAt time.Time) *mo
 		OutputPriceAboveTier:            p.OutputPriceAboveTier,
 		SupportsFunctionCalling:         p.SupportsFunctionCalling,
 		SupportsVision:                  p.SupportsVision,
+		SupportsVideoInput:              p.SupportsVideoInput,
 		SupportsPromptCaching:           p.SupportsPromptCaching,
 		SupportsResponseSchema:          p.SupportsResponseSchema,
 		SupportsToolChoice:              p.SupportsToolChoice,

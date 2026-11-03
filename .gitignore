@@ -56,3 +56,6 @@ tools/atlas-loader/atlas-loader
 
 # ── 用量报告批量产物（本地生成，不入库） ───────────────────────────────────
 out/
+
+# 本地 worktree 目录（防止把整个工作树提交进仓库）
+.worktrees/

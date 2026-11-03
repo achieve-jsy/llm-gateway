@@ -328,3 +328,96 @@ TOAST 中已无活引用，`vacuum_truncate=on` 会把大部分文件截断还�
    这 10 天里 `/data` 会涨掉约 110 GB，**超过当前仅剩的 43 GB**。
    上线前必须执行 §6.2 的表级 autovacuum 调参，否则方案会在回收生效前把盘写满。
 5. **决策**：D-1/D-2/D-3 三项（见 v3 §2）与 P1 回填是否纳入本期。
+
+---
+
+## 8. 部署就绪度核查（2026-09-21，结论：**当前不能直接部署**）
+
+### 8.1 阻断项
+
+**① 没有任何可部署的产物包含归档接线**
+
+`deploy/blue-green/docker-compose.{blue,green}.yml` 里的 `/datalog` 挂载与 `ARCHIVE_ENABLED`
+**在 main 上不存在**，只是主工作区的**未提交改动**；`config/prod.yaml` 的 `archive` 段同样未提交。
+旁证：当前生产在跑的 `llm-{blue,green}-control-plane` 容器**没有任何 `ARCHIVE_*` 环境变量**。
+
+更危险的是主工作区的状态：所在分支是 **`fix/budget-next-period-409`**（与 main 无关），
+**219 个未提交改动文件** + 3 个 stash。从这个状态发布是不可接受的。
+
+**② `ARCHIVE_ENABLED:-true` 是一个真实陷阱**
+
+那份未提交的 compose 写着 `ARCHIVE_ENABLED: ${ARCHIVE_ENABLED:-true}`，而 v3 保留了
+`archive.enabled` 作兼容读取：
+
+```go
+// internal/controlplane/config/config.go:222-225
+archiveWriteEnabled := v.GetBool("archive.write.enabled")   // 默认 false
+if v.IsSet("archive.enabled") && v.GetBool("archive.enabled") {
+    archiveWriteEnabled = true     // 兼容映射 → 写路径开启
+}
+```
+
+环境变量优先级高于 `config/prod.yaml`，所以 `ARCHIVE_ENABLED=true` 会**覆盖** yaml 里的
+`archive.enabled: false` → **部署即开启写路径**。
+
+所幸门闸⑥ 会硬挡置空（`archive_inspect.go:736`）：
+
+```go
+if strings.TrimSpace(j.cfg.offhostMarker) == "" {
+    return false, "offhost_copy_marker 未配置"
+}
+```
+
+而 prod 配置是 `require_offhost_copy: true` + `offhost_copy_marker: ""`。
+**净结果：开始往 /datalog 写归档，但永远不会置空 —— `/data` 照涨，`/datalog` 白占空间。**
+不会丢数据，但**完全解决不了问题，还消耗窗口**。
+
+**③ `config/prod.yaml` 是 v2 schema，与 v3 代码不匹配（静默失效）**
+
+| prod.yaml 的 key | 在 v3 里的状态 |
+|---|---|
+| `gzip_level: 6` | **已不存在**（v3 用 zstd）→ 静默忽略 |
+| `disk_watermark_mb: 80` | **已改名为** `disk_watermark_percent`（默认 80）→ 静默忽略旧名 |
+| `backfill_once: false` | v3 已废弃（B14 修复改为独立回填通道）→ 静默忽略 |
+| `enabled: false` | 兼容映射到 `WriteEnabled`，但被 ② 的 env 覆盖 |
+| 缺失 v3 所需的 | `write.enabled` / `read.enabled` / `chunk_mb` / `zstd_level` / `zstd_window_mb` / `days_per_night` / `encoder_concurrency` / `max_concurrent_reads` / `verify_sample_rows` / `inspect_freshness_hours` / `inspect_per_cycle` / `retention_days` / `disk_watermark_percent` / `offhost_marker_freshness_hours` |
+
+viper 对未知 key 不报错 → **全部走代码默认值**。`archive.read.enabled` 默认 false，
+意味着置空后点读会返回 503（当前因门闸⑥ 挡住置空而未触发）。
+
+**④ 迁移未应用**：生产 `call_traces` 无归档列、无 `trace_archive_manifests` → 必须迁移先行。
+
+**⑤ autovacuum 未调参** → 即使置空跑通，回收节奏也跟不上（§6.2）。
+
+**⑥ 容器化部署从未验证过**：CI、镜像构建、env 注入、`/datalog` 卷权限、cron 真实触发，全都未验。
+
+**⑦ P1 回填缺位；D-1/D-2/D-3 未确认。**
+
+### 8.2 时间窗口：`/data` 已无腾挪余地
+
+```
+/data      344G  已用 299G  可用 43G (88%)   ← 约 4 天
+  └ /data/1panel  299G
+      └ PG 数据目录 298.4G（pg_wal 仅 1.0G）
+  非 PG 内容：仅 /data/web 108M + /data/litellm 47M
+/datalog   590G  已用 193G  可用 368G (35%)
+/          57G   已用 23G   可用 32G (42%)  ← 镜像拉取无虞
+```
+
+**`/data` 上 299G 里 299G 都是 PG，没有任何可搬走的东西。**
+唯一出路就是在 PG 内部回收 —— 即 归档 → 置空 → VACUUM，这需要功能完整上线。
+
+### 8.3 最短安全路径
+
+1. 迁移先行（加列/建表/建部分索引；该索引初建时 `archive_status=1` 行数为 0，代价极小）
+2. 归档接线**先提交**（compose 的 `/datalog` 挂载 + `ARCHIVE_ENABLED` 显式设为 `false`、
+   `config/prod.yaml` 的 archive 段按 **v3 schema** 重写）
+3. 以 `write=false` 部署，验证容器可写 `/datalog`、cron 触发、无 SQL 报错
+4. 开启 write → 归档历史天到 `/datalog`
+5. **建立真实的离机副本**并配置 `offhost_copy_marker`（门闸⑥ 的硬性前置）
+6. 调 autovacuum（§6.2）→ 置空 → VACUUM
+7. 首次大回收建议会话内 `SET maintenance_work_mem='1GB'` 以提高单次效率
+
+> **关键提醒**：第 5 步需要一个真实的离机备份通道。在它建立之前，门闸⑥ 会一直挡住置空，
+> `/data` 不会有任何缓解。**这个通道本身可能就是最长的一条关键路径，需要尽早决策。**
+

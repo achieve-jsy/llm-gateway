@@ -25,6 +25,8 @@ services:
       PRIVACY_MODE: ${PRIVACY_MODE:-off}
       # 仅 mask 模式需要：指到一份多副本共享的密钥文件，否则占位符逐请求变化、上游前缀缓存全失效。
       PRIVACY_KEY_PATH: ${PRIVACY_KEY_PATH:-}
+      # mask 默认 8MB 上限；超限是 fail-closed（500 redaction_failed），大请求多的环境调高。
+      PRIVACY_MAX_INPUT_BYTES: ${PRIVACY_MAX_INPUT_BYTES:-8388608}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL required}
       CONTROL_PLANE_URL: http://127.0.0.1:8081
       AUTH_URL: http://127.0.0.1:8081

@@ -1,7 +1,9 @@
 package redact
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -115,5 +117,45 @@ func TestStructuredFieldsUntouched(t *testing.T) {
 	}
 	if req.Tools[0]["function"].(map[string]any)["name"] != sampleSecret {
 		t.Fatal("工具定义被改动")
+	}
+}
+
+// trace 落库的正文也必须脱敏：否则 mask 只保护了「出网」，call_traces 里还是明文。
+func TestProtectTraceBodyMasksPersistedRequest(t *testing.T) {
+	e := newEngine(t, ModeMask)
+	s := e.NewSession()
+	defer s.Close()
+
+	// 先走 typed 路径拿到占位符，trace 必须复用同一个，否则两边对不上。
+	masked, err := s.ProtectText(context.Background(), "token 是 "+sampleSecret)
+	if err != nil {
+		t.Fatalf("ProtectText: %v", err)
+	}
+	placeholder := strings.TrimPrefix(masked, "token 是 ")
+
+	raw := []byte(`{"model":"gpt-x","messages":[{"role":"user","content":"token 是 ` + sampleSecret + `"}],"system":"备用 ` + sampleSecret + `"}`)
+	out := s.ProtectTraceBody(context.Background(), raw)
+
+	if bytes.Contains(out, []byte(sampleSecret)) {
+		t.Fatalf("trace 正文仍有明文: %s", out)
+	}
+	if !bytes.Contains(out, []byte(placeholder)) {
+		t.Fatalf("trace 正文没有复用上游的占位符 %s: %s", placeholder, out)
+	}
+	if !json.Valid(out) {
+		t.Fatalf("trace 正文被写坏成非 JSON: %s", out)
+	}
+}
+
+// off / detect 不改写 trace：detect 时上游拿到的本来就是原文，trace 与之一致才是事实。
+func TestProtectTraceBodyNoopOutsideMask(t *testing.T) {
+	for _, mode := range []string{ModeOff, ModeDetect} {
+		e := newEngine(t, mode)
+		s := e.NewSession()
+		raw := []byte(`{"a":"` + sampleSecret + `"}`)
+		if got := s.ProtectTraceBody(context.Background(), raw); !bytes.Equal(got, raw) {
+			t.Fatalf("%s 模式不该改写 trace 正文: %s", mode, got)
+		}
+		s.Close()
 	}
 }

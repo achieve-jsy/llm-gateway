@@ -157,10 +157,12 @@ privacy:
   （例如加空格、换行），还原会失败并原样返回占位符（不报错、不泄漏原文）。
 - **模型可能伪造占位符**：模型学会了占位符格式后可能自己编一个（`{{EMAIL_xxxxxxxx}}`）。引擎只还原自己映射表里
   有的占位符，其余原样返回，客户端会看到假占位符文本。这是这类方案的固有副作用，靠观测（restore 未命中）发现。
-- **日志落库的是还原后的原文**：`TraceCapture` 在 handler 之前就抓走了请求体，因此 `call_logs` /
-  `call_traces` 里始终是用户原文（mask 只影响发往上游的内容）。本地双进程 E2E 实测：9/9 条
-  `call_traces.request_body` 含明文凭证、0 条含占位符。如果合规要求库里也只存脱敏版，需要把脱敏上移到中间件并改写
-  `c.Request.Body`——这是产品决策，不是实现细节。
+- **日志落库的正文也脱敏了（仅 mask 模式）**：`TraceCapture` 是中间件，在 handler 之前就把请求体抓进了
+  gin context，所以 handler 里用同一个 session 把那份字节也过一遍（`protectTraceBody` → `Session.ProtectTraceBody`），
+  落库内容与上游一致。代价是 JSON 层会把 typed 层刻意不动的字段（工具参数、`metadata` 等）也遮上——
+  宁可多遮，不能把凭证写进自己的库。detect/off 模式不改写：那两个模式下上游拿到的本来就是原文，trace 与之一致才是事实。
+  E2E 已断言：mask 期间 `call_traces` 含占位符、明文 0 条。
+  注意这只覆盖 `/v1/chat/completions` 等 5 个接线过的端点；`/p/:provider/*` 透传等路径仍由上游自行记录。
 - **命中只进日志**：适配层每次请求会打一行 `privacy_hits`（含 `mode`、`engine_version`、`count` 与按 Kind
   聚合的 `kinds`，**不含任何原文**）。要进指标/审计库需要另外接 `Session.HitsByKind()`，目前没有埋点看板。
 
@@ -181,16 +183,22 @@ bash tests/e2e/privacy/run.sh
 ```
 
 脚本会：重建 `llm_gateway_priv_e2e` 库（**不会碰 `llm_gateway`**，库名可用 `E2E_DB_NAME` 改）→
-`atlas migrate apply` → 起 control-plane → `tests/e2e/privacy/seed` 写最小数据集（admin 用户、
-固定 API Key、openai 兼容渠道、chat 模型、模型组）→ 起假上游与网关 → 断言 → 收尾。
+`atlas migrate apply` → `tests/e2e/privacy/seed` 写最小数据集（admin 用户、固定 API Key、openai 兼容渠道、
+chat 模型、模型组）→ 起假上游 → 起 control-plane → 起网关 → 断言 → 收尾。
 
-五个用例断言的都是**字节**，不是"函数被调用过"：
+**顺序不能反**：control-plane 只在启动那一刻把「可用模型快照」写一次 Redis，之后要等 provider 变更才再写。
+先起 CP 再灌数据，网关拿到的就是空快照，请求会 404 `unknown_model`。之前脚本能过，只是因为共用了一个长期
+存活的 Redis，里面残留着上一轮的快照——换台干净机器或 Redis 被清过就必炸。
+
+用例断言的都是**字节**，不是"函数被调用过"：
 
 1. **mask 非流式**：上游 body 里只有 `{{GITLAB_TOKEN_xxxxxxxx}}`，客户端拿回原文；
 2. **跨请求占位符稳定**：两次请求同一凭证得到同一占位符（`privacy.key_path` 生效，上游前缀缓存不被打散）；
 3. **流式跨 chunk**：假上游故意把占位符从中间切成两个 SSE chunk，客户端仍拼回完整原文；
 4. **detect**：原文照发上游，同时落一行 `privacy_hits`；
-5. **block**：HTTP 500 `redaction_failed`，且上游请求计数不增加（fail-closed 真的没发出去）。
+5. **block**：HTTP 500 `redaction_failed`，且上游请求计数不增加（fail-closed 真的没发出去）；
+6. **trace 落库**（夹在 mask 用例之后）：`call_traces.request_body` 含占位符、含明文 0 条——落库的正文
+   与发往上游的一致（trace 落库是异步的，脚本会轮询等它写完）。
 
 这条 E2E 也顺手逼出了一个独立问题：`atlas-migrations` 相对代码缺表缺列（orgservice 的 `studios` /
 `user_roles` / `dept_studio_map`、配额列 `quota_rpm`、`encryption_keys` 等），从零建库后服务一启动就报

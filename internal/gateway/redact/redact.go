@@ -176,6 +176,24 @@ func (s *Session) ProtectText(ctx context.Context, text string) (string, error) 
 	return out, nil
 }
 
+// ProtectTraceBody 用同一会话把「落库用」的原始请求字节也脱敏。
+//
+// 只认 mask 模式：detect 模式下上游拿到的本来就是原文，trace 与之一致才是事实；
+// off 模式没有会话，直接返回原字节。
+// 失败返回占位标记而不是原文——trace 是旁路，不能拖垮请求，但也绝不能把凭证写进自己的库。
+// 顺带的好处：trace 里的占位符与上游看到的一致；typed 层刻意不动的地方（工具参数等）
+// 在 trace 里会被 JSON 层补上，宁可多遮不可漏。
+func (s *Session) ProtectTraceBody(ctx context.Context, raw []byte) []byte {
+	if s == nil || s.s == nil || s.mode != ModeMask || len(raw) == 0 {
+		return raw
+	}
+	res, err := s.s.ProtectJSON(ctx, raw)
+	if err != nil {
+		return []byte(`{"_redaction":"failed"}`)
+	}
+	return res.Body
+}
+
 // RestoreText 还原一段文本里的占位符。未知占位符原样保留。
 func (s *Session) RestoreText(text string) string {
 	if s == nil || s.s == nil || text == "" {

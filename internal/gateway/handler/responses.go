@@ -146,6 +146,7 @@ func (h *ResponsesHandler) Handle(c *gin.Context) {
 	if h.redactor != nil && h.redactor.Mode() != redact.ModeOff {
 		session = h.redactor.NewSession()
 		defer session.Close() // 每个请求一个 session，绝不复用
+		protectTraceBody(c, session)
 
 		if perr := h.protectRequest(c, &req, session); perr != nil {
 			// fail-closed：保护失败绝不能把原文发给上游，也不能 failover——

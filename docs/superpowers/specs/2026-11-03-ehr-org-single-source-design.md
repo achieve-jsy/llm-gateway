@@ -97,6 +97,8 @@ CREATE UNIQUE INDEX uniq_studios_ehr_dept ON studios (ehr_department_id)
 
 **关键**：两张表都**不用** `gorm.DeletedAt`。用普通列 + 组织接口显式过滤，否则用量 join 会被全局软删过滤掉。
 
+**`visible` 是单向开关**：同步和对账只能把它置 `false`（EHR 消失），**永远不自动置回 `true`**。人工隐藏的工作室（元气工作室、公共关系事业部）因此不会在某次同步后被"复活"。恢复只能人工 UPDATE。
+
 ### 3.4 两套视图
 
 | 视图 | 过滤 | 效果 |
@@ -160,12 +162,18 @@ SSO 登录时 `upsertUser` 遇到部门行缺失仍会兜底 INSERT（只补 `de
 -- 改名认领（示例：XLab ↔ AI-Lab）
 UPDATE studios SET ehr_department_id = '<EHR事业部ID>' WHERE id = '<老工作室uuid>';
 
--- 隐藏/删除残留
+-- EHR 里存在但人工隐藏：仍是 source='ehr'，只是 visible=false（同步照常更新它的 name）
+UPDATE studios SET visible = false WHERE name IN ('元气工作室','公共关系事业部');
+
+-- 老表独有的手工残留：不再属于任何同步来源
 UPDATE studios SET visible = false, source = 'manual'
- WHERE name IN ('元气工作室','公共关系事业部','test','测试工作室AI');
+ WHERE name IN ('test','测试工作室AI','互娱事业部','创新事业部','战略发展中心','数字内容创新工作室');
+-- 注意：XLab 若确认为 AI-Lab 的旧名，走上面的"改名认领"，不要放这里
 ```
 
-`source='manual'` 的行同步不覆盖、只忽略。
+- `source='ehr'` 的行：同步负责更新 name / leader_*，但不改 `visible`
+- `source='manual'` 的行：同步完全忽略（不更新、不参与对账）
+- **老表独有且未认领的手工工作室一律 `visible=false`**，否则页面会永久悬挂一批没有人的空工作室；确需保留的由人工单独指定
 
 ### 5.3 引用检查
 
@@ -257,7 +265,7 @@ RBAC 权限位（`PermStudioCreate/Delete`、`PermMappingEdit`、`PermEmployeeIm
 ② 人工回填（dry-run → 确认改名 → 回填 ehr_department_id → 隐藏名单）
 ③ 部署阶段 A：同步写老表 + 双写 ai_app_*（回滚保险）+ 砍 7 入口 + 状态接口/按钮
 ④ 验证两天（组织树/成员/用量/差量统计）
-⑤ 迁移 2 + 删 aws 相关代码（拆 ai_app_studios/ai_app_departments）
+⑤ 迁移 2 + 删同步里 ai_app_* 相关代码（拆 ai_app_studios/ai_app_departments）
 ```
 
 - ② 必须先于 ③：否则第一天同步会把 15 个事业部建成新行

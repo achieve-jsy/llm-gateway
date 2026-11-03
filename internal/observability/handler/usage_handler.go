@@ -437,7 +437,8 @@ func (h *UsageHandler) GetDashboard(c *gin.Context) {
 	filterEndpoint := c.Query("endpoint")
 
 	// 用 Actor 替代手动查 user_roles 的 getEffectiveRole
-	// Guard(PermUsageViewScoped) middleware 已在路由层注入 Actor
+	// Guard(PermUsageViewScoped) middleware 已在路由层注入 Actor（admin 或管辖范围内管理角色，
+	// 且只由 /usage/dashboard 使用 —— 预算管理页的成员用量列依赖它）
 	userID := c.GetString("user_id")
 	actor := rbac.GetActor(c)
 	usagePolicy := policy.UsagePolicy{}
@@ -854,7 +855,7 @@ func (h *UsageHandler) ScopedLogs(c *gin.Context) {
 
 	db := h.db.WithContext(c.Request.Context())
 
-	// 用 Actor 过滤：Guard(PermUsageViewScoped) 已在路由层注入 Actor
+	// 用 Actor 过滤：Guard(PermUsageViewAll) 已在路由层注入 Actor（仅 admin 可达）
 	actor := rbac.GetActor(c)
 	usagePol := policy.UsagePolicy{}
 

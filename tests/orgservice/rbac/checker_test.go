@@ -178,3 +178,40 @@ func TestGuard_StudioScopeResolutionFailureBlocksGlobalOperation(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 	require.JSONEq(t, `{"code":"org.scope_unavailable","message":"审批范围暂时不可用，请稍后重试"}`, w.Body.String())
 }
+
+// 用量统计：跨用户视角（用量看板 / 使用分析报告 / 调用明细）仅 admin。
+// dept_admin / studio_admin 访问 PermUsageViewAll 必须 403；而 /usage/dashboard 的
+// PermUsageViewScoped（预算管理页成员用量列依赖）仍应放行。
+func TestGuard_UsageStatsAdminOnlyButScopedDashboardAllowed(t *testing.T) {
+	db := openCheckerTestDB(t)
+	require.NoError(t, db.Exec(`
+		INSERT INTO user_roles (user_id, role, scope_type, scope_id, granted_by) VALUES
+		('u-dept', 'dept_admin', 'dept', 'dept-a', 'admin'),
+		('u-studio', 'studio_admin', 'studio', 'studio-a', 'admin')
+	`).Error)
+
+	newRouter := func(userID string) *gin.Engine {
+		checker := rbac.NewChecker(repository.NewRoleRepo(db), repository.NewUserOrgRepo(db))
+		router := gin.New()
+		router.Use(func(c *gin.Context) { c.Set("user_id", userID) })
+		router.GET("/usage-all", checker.Guard(rbac.PermUsageViewAll), func(c *gin.Context) {
+			c.Status(http.StatusNoContent)
+		})
+		router.GET("/usage-dashboard", checker.Guard(rbac.PermUsageViewScoped), func(c *gin.Context) {
+			c.Status(http.StatusNoContent)
+		})
+		return router
+	}
+
+	for _, userID := range []string{"u-dept", "u-studio"} {
+		router := newRouter(userID)
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/usage-all", nil))
+		require.Equal(t, http.StatusForbidden, w.Code, "%s 不应能访问跨用户用量端点", userID)
+
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/usage-dashboard", nil))
+		require.Equal(t, http.StatusNoContent, w.Code, "%s 应能访问管辖范围内的 /usage/dashboard", userID)
+	}
+}

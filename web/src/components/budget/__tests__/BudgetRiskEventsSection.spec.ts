@@ -18,6 +18,13 @@ vi.mock('@element-plus/icons-vue', () => ({
   Refresh: { template: '<i />' },
 }))
 
+// 用量统计仅 admin 可见：桩掉 auth store，测试内可切换角色
+const authMock = vi.hoisted(() => ({ isAdmin: true }))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => authMock,
+}))
+
 const mockListBudgetRisks = vi.fn()
 const mockGetBudgetRiskSummary = vi.fn()
 const mockNotifyBudgetOwner = vi.fn()
@@ -109,6 +116,7 @@ describe('BudgetRiskEventsSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers()
+    authMock.isAdmin = true
     Object.keys(routeQuery).forEach((key) => delete routeQuery[key])
     localStorage.setItem('budget-risk-auto-refresh', '0')
     mockListBudgetRisks.mockResolvedValue({ ...samplePage })
@@ -199,6 +207,17 @@ describe('BudgetRiskEventsSection', () => {
         path: '/admin/usage/dashboard',
         query: expect.objectContaining({ scope_type: 'member', scope_id: 'user-1' }),
       }))
+    })
+
+    it('非 admin 不显示「查看用量」入口（用量看板仅 admin 可见）', async () => {
+      authMock.isAdmin = false
+      const wrapper = mountSection()
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="risk-inline-usage"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('查看用量')
+      // 预算调整仍可用
+      expect(wrapper.find('[data-test="risk-inline-adjust"]').exists()).toBe(true)
     })
   })
 

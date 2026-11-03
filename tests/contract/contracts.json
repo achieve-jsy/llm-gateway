@@ -69,7 +69,8 @@
     "base_prefix": "/api/v1",
     "auth": {
       "admin": "Bearer <jwt>",
-      "scoped": "Bearer <jwt> + RBAC PermUsageViewScoped"
+      "scoped": "Bearer <jwt> + RBAC PermUsageViewScoped（管辖范围）：用量统计里仅 /usage/dashboard 保留，供预算管理页取成员聚合用量（成本/token/次数，无调用明细）",
+      "self_only": "Bearer <jwt>；后端按登录 user_id 强制隔离（/my/usage、/my/usage/logs 等）。其余用量类端点（/usage/dashboard/trend|models|users|user-detail|model-detail、/usage/scoped/logs、/usage/report*）均为 PermUsageViewAll，非 admin 返回 403 且前端不暴露入口"
     },
     "log_row_fields": [
       "request_id", "ts",
@@ -133,7 +134,8 @@
       {
         "method": "GET",
         "path": "/api/v1/usage/scoped/logs",
-        "auth": "scoped",
+        "auth": "admin",
+        "$comment": "跨用户调用明细，仅 admin；非 admin 访问返回 403（前端不暴露入口）",
         "handler": "UsageHandler.ScopedLogs",
         "query_params_optional": [
           "start", "end", "page", "page_size",

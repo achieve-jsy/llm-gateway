@@ -978,22 +978,33 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		orgGroup.PUT("/users/:id/department", guard(rbac.PermDeptChange), deptAssignH.ChangeDepartment)
 		orgGroup.PUT("/users/:id/department/follow-sso", guard(rbac.PermSSORevert), deptAssignH.FollowSSO)
 
-		// ── 用量看板：dashboard/scoped-logs 需 Guard 注入 Actor ─────────────
+		// ── 用量统计：跨用户视角基本仅 admin 可见 ──────────────────────────
+		// 产品口径：除 admin 外任何角色都只能在界面上看「自己的用量」（/my/usage 系列），
+		// 因此用量看板/分析报告类端点一律用 PermUsageViewAll（仅 admin）。
+		//
+		// 例外：/usage/dashboard 保留 PermUsageViewScoped（管辖范围），因为
+		// 预算管理页（dept_admin / studio_admin 可进）的「成员近7天消耗 / 7天日均」
+		// 列就是靠它按 actor 范围取成员聚合成本。它只返回聚合行（成本/token/次数），
+		// 不返回调用明细；明细类端点（/usage/scoped/logs、user-detail 等）仍为 admin-only。
+		//
 		// usageH2 复用同一 DB，仅在此处注册带 Guard 的路由
 		usageH2 := obshandler.NewUsageHandler(obssvc.NewRollupService(db), db)
 		adminGroup.GET("/usage/dashboard", guard(rbac.PermUsageViewScoped), usageH2.GetDashboard)
-		adminGroup.GET("/usage/dashboard/trend", guard(rbac.PermUsageViewScoped), usageH2.DashboardTrend)
-		adminGroup.GET("/usage/dashboard/models", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelsEnhanced)
-		adminGroup.GET("/usage/dashboard/users", guard(rbac.PermUsageViewScoped), usageH2.DashboardUsersEnhanced)
-		adminGroup.GET("/usage/dashboard/user-top-models", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserTopModels)
-		adminGroup.GET("/usage/dashboard/user-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardUserDetail)
-		adminGroup.GET("/usage/dashboard/model-detail", guard(rbac.PermUsageViewScoped), usageH2.DashboardModelDetail)
-		adminGroup.GET("/usage/scoped/logs", guard(rbac.PermUsageViewScoped), usageH2.ScopedLogs)
+		adminGroup.GET("/usage/dashboard/trend", guard(rbac.PermUsageViewAll), usageH2.DashboardTrend)
+		adminGroup.GET("/usage/dashboard/models", guard(rbac.PermUsageViewAll), usageH2.DashboardModelsEnhanced)
+		adminGroup.GET("/usage/dashboard/users", guard(rbac.PermUsageViewAll), usageH2.DashboardUsersEnhanced)
+		adminGroup.GET("/usage/dashboard/user-top-models", guard(rbac.PermUsageViewAll), usageH2.DashboardUserTopModels)
+		adminGroup.GET("/usage/dashboard/user-detail", guard(rbac.PermUsageViewAll), usageH2.DashboardUserDetail)
+		adminGroup.GET("/usage/dashboard/model-detail", guard(rbac.PermUsageViewAll), usageH2.DashboardModelDetail)
+		adminGroup.GET("/usage/scoped/logs", guard(rbac.PermUsageViewAll), usageH2.ScopedLogs)
+		// 三级用量周报：部门 Service Key 环比/主用模型/Owner、工作室/部门预算执行
+		adminGroup.GET("/usage/report/service-keys", guard(rbac.PermUsageViewAll), usageH2.ReportServiceKeys)
+		adminGroup.GET("/usage/report/budget-exec", guard(rbac.PermUsageViewAll), usageH2.ReportBudgetExec)
 		// Token 使用分析报告：Report JSON / 四象限成员点集 / 严重异常待核查反馈回写
 		reportH := obshandler.NewReportHandler(db)
-		adminGroup.GET("/usage/report", guard(rbac.PermUsageViewScoped), reportH.Report)
-		adminGroup.GET("/usage/report/members", guard(rbac.PermUsageViewScoped), reportH.Members)
-		adminGroup.POST("/usage/report/anomaly/:user_id/feedback", guard(rbac.PermUsageViewScoped), reportH.AnomalyFeedback)
+		adminGroup.GET("/usage/report", guard(rbac.PermUsageViewAll), reportH.Report)
+		adminGroup.GET("/usage/report/members", guard(rbac.PermUsageViewAll), reportH.Members)
+		adminGroup.POST("/usage/report/anomaly/:user_id/feedback", guard(rbac.PermUsageViewAll), reportH.AnomalyFeedback)
 	}
 
 	// 内部接口（InternalAuth 已在 internalGroup 上，复用）

@@ -23,7 +23,8 @@ import (
 //   - GET  /api/v1/usage/report/members        → 四象限成员点集（轻量 payload，隔离大 scope）
 //   - POST /api/v1/usage/report/anomaly/:user_id/feedback → 严重异常待核查反馈回写
 //
-// 全部复用 UsagePolicy.EffectiveScope/QueryScope 做 RBAC（usage:view:scoped，管理角色），不新建权限模型。
+// 全部复用 UsagePolicy.EffectiveScope/QueryScope 做 RBAC；路由挂 usage:view:all（仅 admin 可达），
+// handler 内的 scope 收敛与越权校验作为纵深防御保留。
 type ReportHandler struct {
 	db       *gorm.DB
 	snapshot *cpsvc.ReportSnapshotService

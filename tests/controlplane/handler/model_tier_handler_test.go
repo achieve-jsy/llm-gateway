@@ -325,6 +325,14 @@ func (f *fakeGroupBudgetTierService) GetByID(uint) (*model.Group, error) {
 	return f.group, nil
 }
 
+// ListEnabledGroupsWithModels 补齐 GroupBudgetTierServiceInterface 的第 4 个方法。
+// 接口在 model_tier_handler.go:33-40 为只读端点 model-tier-hierarchy 增加了该方法，
+// 但本 fake 未同步，导致 tests/controlplane/handler 整包编译失败（origin/main 上即为红）。
+// 使用本 fake 的两个用例只测 SetBudgetTier*，不涉及层级映射，故返回 nil 即可。
+func (f *fakeGroupBudgetTierService) ListEnabledGroupsWithModels() ([]model.Group, error) {
+	return nil, nil
+}
+
 func TestModelTierHandlerSetGroupBudgetTierReturns200(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tierID := uuid.New()

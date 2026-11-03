@@ -326,6 +326,16 @@ func TestAddDummyToolResults(t *testing.T) {
 			},
 			checkLen: 2,
 		},
+		{
+			name: "dummy inserted immediately after assistant (Bedrock requirement)",
+			input: []Message{
+				{Role: "user", Content: "start"},
+				{Role: "assistant", Content: "", ToolCalls: []ToolCall{{ID: "call_x", Type: "function", Function: FunctionCall{Name: "test", Arguments: "{}"}}}},
+				{Role: "user", Content: "continue"},
+				{Role: "assistant", Content: "done"},
+			},
+			checkLen: 5, // original 4 + 1 dummy
+		},
 	}
 
 	for _, tt := range tests {
@@ -359,6 +369,49 @@ func TestAddDummyToolResults(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ──────────────────────────────────────────────
+// addDummyToolResults position test (Bedrock-specific)
+// ──────────────────────────────────────────────
+
+func TestAddDummyToolResultsInsertedImmediatelyAfterAssistant(t *testing.T) {
+	// Simulates a multi-turn conversation where an assistant tool_call is
+	// followed by user messages before any tool result. Bedrock Converse API
+	// requires toolResult in the message directly after the assistant's toolUse.
+	input := []Message{
+		{Role: "user", Content: "start"},
+		{Role: "assistant", Content: "", ToolCalls: []ToolCall{
+			{ID: "call_1", Type: "function", Function: FunctionCall{Name: "search", Arguments: "{}"}},
+			{ID: "call_2", Type: "function", Function: FunctionCall{Name: "read", Arguments: "{}"}},
+		}},
+		// call_1 has a result, call_2 does not
+		{Role: "tool", ToolCallID: "call_1", Content: "search result"},
+		{Role: "user", Content: "continue"},
+		{Role: "assistant", Content: "done"},
+	}
+
+	got := addDummyToolResults(input)
+
+	// Expected: user, assistant(2 calls), tool(call_1 existing), tool(call_2 dummy), user, assistant
+	if len(got) != 6 {
+		t.Fatalf("len(got)=%d, want 6", len(got))
+	}
+	// Position 2 must be the existing tool result for call_1
+	if got[2].Role != "tool" || got[2].ToolCallID != "call_1" {
+		t.Errorf("got[2] = {Role:%s, ToolCallID:%s}, want tool/call_1", got[2].Role, got[2].ToolCallID)
+	}
+	// Position 3 must be the dummy for call_2 (immediately after existing tool results)
+	if got[3].Role != "tool" || got[3].ToolCallID != "call_2" {
+		t.Errorf("got[3] = {Role:%s, ToolCallID:%s}, want tool/call_2", got[3].Role, got[3].ToolCallID)
+	}
+	if got[3].Content != "." {
+		t.Errorf("got[3].Content = %q, want '.'", got[3].Content)
+	}
+	// Position 4 must be the user "continue" message (NOT a dummy)
+	if got[4].Role != "user" || got[4].Content != "continue" {
+		t.Errorf("got[4] = {Role:%s, Content:%s}, want user/continue", got[4].Role, got[4].Content)
 	}
 }
 

@@ -645,34 +645,66 @@ func dropOrphanedToolResults(msgs []Message) []Message {
 // addDummyToolResults inserts a dummy tool result for each tool_call that
 // lacks a matching tool-role response, ensuring tool call/result pairing.
 func addDummyToolResults(msgs []Message) []Message {
-	// Collect tool_call IDs from assistant messages.
-	pendingIDs := make(map[string]struct{})
-	for _, m := range msgs {
-		for _, tc := range m.ToolCalls {
-			pendingIDs[tc.ID] = struct{}{}
+	// Insert dummy tool results immediately after the assistant message that
+	// contains tool_calls without corresponding tool results. This is critical
+	// for Bedrock Converse API which requires toolResult blocks to appear in
+	// the message directly following the assistant's toolUse blocks.
+	//
+	// Strategy: after an assistant message with tool_calls, first preserve any
+	// existing consecutive tool result messages, then append dummy results for
+	// any tool_call IDs that are missing.
+	result := make([]Message, 0, len(msgs))
+	for i := 0; i < len(msgs); i++ {
+		result = append(result, msgs[i])
+
+		// Only process assistant messages with tool_calls.
+		if msgs[i].Role != "assistant" || len(msgs[i].ToolCalls) == 0 {
+			continue
+		}
+
+		// Collect tool_call IDs from this assistant message.
+		callIDs := make([]string, 0, len(msgs[i].ToolCalls))
+		for _, tc := range msgs[i].ToolCalls {
+			if tc.ID != "" {
+				callIDs = append(callIDs, tc.ID)
+			}
+		}
+		if len(callIDs) == 0 {
+			continue
+		}
+
+		// Look ahead to find consecutive tool result messages and track which
+		// IDs are already covered.
+		found := make(map[string]bool, len(callIDs))
+		j := i + 1
+		for j < len(msgs) && msgs[j].Role == "tool" {
+			found[msgs[j].ToolCallID] = true
+			j++
+		}
+		// j now points to the first non-tool message after the assistant.
+		// Advance i to consume the existing tool results in the main loop,
+		// but we need to append them to result first, then add dummies.
+
+		// Append existing tool results to result (they'll be skipped in the
+		// main loop because we advance i below).
+		for k := i + 1; k < j; k++ {
+			result = append(result, msgs[k])
+		}
+		// Skip these messages in the outer loop.
+		i = j - 1 // -1 because the loop will do i++
+
+		// Append dummy results for missing IDs right after existing tool results.
+		for _, id := range callIDs {
+			if !found[id] {
+				result = append(result, Message{
+					Role:       "tool",
+					ToolCallID: id,
+					Content:    ".",
+				})
+			}
 		}
 	}
-	if len(pendingIDs) == 0 {
-		return msgs
-	}
-	// Remove IDs that already have a matching tool result.
-	for _, m := range msgs {
-		if m.Role == "tool" && m.ToolCallID != "" {
-			delete(pendingIDs, m.ToolCallID)
-		}
-	}
-	if len(pendingIDs) == 0 {
-		return msgs
-	}
-	// Append dummy tool results at the end.
-	for id := range pendingIDs {
-		msgs = append(msgs, Message{
-			Role:       "tool",
-			ToolCallID: id,
-			Content:    ".",
-		})
-	}
-	return msgs
+	return result
 }
 
 // mergeConsecutiveSameRole merges adjacent messages with the same role

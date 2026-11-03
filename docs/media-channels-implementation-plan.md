@@ -426,6 +426,89 @@
 - **本机就有 New API 的真实 Go 实现**可同语言对拍：`new-api/relay/channel/task/kling/adaptor.go`（387 行）与 `.../vidu/adaptor.go`。已从其中提取出设计文档遗漏的真实细节：**端点极性陷阱**（`TaskActionGenerate` 指 image2video）、**查询必须复用与提交相同的 action 段**、Kling 支持 `image_tail` 首尾帧、`cfg_scale` 固定 0.5、`model`+`model_name` 同值、多产物数组需全取、`final_unit_deduction` 用量。
 - 仍在的硬约束：**生产库没有任何 Kling/Vidu 渠道、也没有 `image` 类型模型** → 两队只能做到契约测试 + fake 回放，**真实联调需先由运维配置凭证**（Kling 的 AK/SK 可直接复用既有 `api_key` 字段，无需改数据结构）。
 
+### Batch 2 / Batch 3 交付与合并记录（第 9–10 轮）
+
+集成分支 `feat/media-channels`，当前 HEAD `8a12bb91`，相对 `main` **69 个提交**。
+
+| 队伍 | 分支 | 提交 | 状态 | 备注 |
+|---|---|---|---|---|
+| **D1 Kling 适配器** | `feat/media-d1` | 3 | ✅ 已合并 | 见下「lead 复核」 |
+| **E-docs 契约文档** | `feat/media-e1` | 1 | ✅ 已合并 | **进程中断后由 lead 收尾** |
+| **E-obs 观测控制面** | `feat/media-e2` | 3 | ✅ 已合并 | **进程中断后由 lead 收尾**（E1-补充、E2-补充完成；E1 任务 4 转派） |
+| **D2 Vidu 适配器** | `feat/media-d2` | 0 | ⏳ 卡住 | 长时间零产出，已催办 |
+| **E-dash 看板 API** | `feat/media-e3` | — | ⏳ 进行中 | 承接 E1 任务 4（看板后端统计） |
+
+#### lead 对 D1 的独立复核（不照单全收）
+
+- 先自行跑闸门：`make build`=0、`make test` 49 包 0 FAIL、lint 精确基线、漂移 60 条 0 新增、**`go.mod`/`vendor` 零改动**（确认未新增依赖，JWT 用的是仓内已 vendored 的 `golang-jwt/jwt/v5`）。
+- 读码验证其最冒险的决策「把 action 编码进 vendorTaskID」：**成立，且理由比任务书更强**。任务书只提示「查询路径的 action 段必须与提交时一致」；D1 给出了一条更硬的生产级论据——网关是**蓝绿/多副本部署**，任务在 A 实例 Submit、B 实例 Retrieve 时包内 map 必然 miss，**该任务从此永远轮询不到，只能等超时被判 failed**。无状态编码完全避开。边界也已核实：`vendor_task_id` 只由该适配器生产消费、控制面当不透明字符串存（varchar(191)）、网关对外响应结构体 `mediaTaskResponse` 里**没有**该字段（不泄露）。
+- 发现的开放项（已带入最终交付说明）：没有真实 Kling 凭据，全部验证基于假上游；「任务不存在」只认 HTTP 404，若上游实际用 `200 + 业务码` 表达 not-found 会被归类为可重试——D1 选择**不猜业务码表**（猜错比不猜更危险）。
+
+#### 🔴 lead 在自己建的接缝里查出的缺陷（已修，`204e9b69`）
+
+`provider_loader.go:155` 把**未经 Enabled 过滤**的 entries 下发给 onReload 回调，而 lead 写的
+`BuildMediaAdapters` **完全没看 `entry.Enabled`** → 运维停用某个媒体渠道后，chat 链路会停
+（loader 有 `if !entry.Enabled { continue }`），但**媒体任务仍会打到该渠道**；而渠道被停用
+往往正是因为它凭证泄露或费用失控。
+
+**严重性定性（不夸大）**：控制面产出快照的两条路径目前都硬编码 `Enabled: true`
+（`provider_snapshot_service.go:85`、`gateway/infra/config_loader.go`），且
+`modelRepo.ListAvailable()` 已按 `providers.enabled = true` 过滤，故**今天不会命中**；
+修复是为了在快照 Enabled 语义将来变真实时两条链路不会静默分叉。
+
+同时补上接缝建立者欠的测试 `tests/gateway/server/media_adapters_test.go`（9 Test / 14 用例），
+最要紧的一条是**凭据缺失必须跳过渠道**（6 种非法凭据全覆盖）：若哪天被改成返回占位适配器，
+后果不是报错而是**静默产生真实上游生成费用**。
+
+#### 两个 agent 进程中断后的抢救（诚实记录）
+
+E-docs 与 E-obs 都在**完成度很高**时进程中断、无总结、产出留在工作区未提交。lead 的处理：
+先评估遗留状态（可编译性、改动范围、是否越界），再**独立复验内容**后由其收尾提交，
+提交信息里明确标注「本提交来自中断的 agent，lead 复核后提交」。
+
+复验要点（不是照单全收）：
+- **E-docs**：验证它改的契约三处纠错**每条都能在代码里找到实现**——两个 503 错误码确认真实
+  （`mediaErrUnavailable` @ `media_task_handler.go:120`；`BillingFactGuard` @ `server/router.go:276,420`），
+  而不是像原契约那样写了代码不返回的错误码。`progress` 归一化实现符合「不得谎报进度」要求
+  （认不出取区间下界 0，且明确注释「必须与 status 一起读才是完整语义」），并**主动标注了
+  「progress 不保证单调」的局限**——这是正确的工程判断（该由适配器统一上报口径，而不是在响应层造假收敛）。
+- **E-obs**：🔴 lead 一度**误判**它违反了 Q3（以为新测试放在 `internal/` 下），实际是误读了
+  `git show --stat` 的缩略路径——它把新测试放在 `tests/controlplane/service/`（`package service_test`），
+  **并把既有的 in-package 测试 `internal/controlplane/repository/video_task_repo_test.go` 迁到了 `tests/`**，
+  是对 Q3 的**改进**。它还把接缝函数 `PlanGroupProbe`/`BuildGroupProbeRequest` 导出，
+  正是为了让测试能落在 `tests/` 下。
+
+  背景校正：仓库 base **已有 169 个 in-package 测试**（Q3 是「新增走 tests/」的方向，不是既成事实），
+  任务书里「禁止 internal/**/*_test.go」的措辞比仓库实际约定更严。
+
+#### E2-补充 的缺陷与其回归守卫（已修，`f4574d34`）
+
+缺陷：`group_check_service.go` 原实现只跳过 video 组，于是 A5 打开 `model_type=image` 后，
+image 组落到 `buildProbeRequest` 的 **default 分支**去发 `POST /v1/chat/completions` —— 图像模型
+不实现对话补全，上游必然报错 → **看板/健康检查把健康的 image 组持续报成故障**。
+
+修复：把「组类型 → 探针走向」收敛成唯一映射 `PlanGroupProbe`，改为**白名单语义**
+（只有明确属于 chat/embedding/rerank 族的类型才发探针，其余一律 Skip）；`BuildGroupProbeRequest`
+的 default **不再兜底 chat** 而是返回空端点。方向是刻意选的：漏跳的代价是持续误报，
+漏发的代价只是少一个探针。video 组的跳过文案保持**逐字不变**（既有看板消费方已见）。
+
+**lead 的变异测试**（证明守卫有牙齿，不是永远绿灯）：把 image 改回 chat → 3 个测试失败；
+把 BuildGroupProbeRequest 的 default 兜底改回 chat → 负向对照失败；还原后全绿。
+
+#### 🔴 两次操作事故（已修复并写成铁律）
+
+1. **lead 用 `git stash` 做「基线对拍」**，误弹出别人的 WIP。根因：`git stash` 是**仓库级共享**的，
+   不是 worktree 级的；本仓库长期有 10+ 条历史 stash。工作区**干净**时 `git stash push`
+   不新建条目，随后的 `pop` 就会弹出 `stash@{0}: WIP on codex/from-main`，污染
+   `tools/usage-report/client/usage_client.go` 并复活两个已删除的测试文件。
+   **已完整恢复**：`reset --hard` 复原工作区，逐一核验 HEAD、`git status`、
+   **`stash@{0}` 哈希未变**（别人的 WIP 未丢），`make test` 49 包 0 FAIL。
+   → 已写成防护栏 **P4**（禁止用 stash 对拍，改用独立 worktree / `git archive`；附补救顺序，
+   明确**绝不** `git stash drop`）。
+2. **lint 从 125 涨到 126**（staticcheck 9→10）：E-obs 新测试里 `ids = append(ids, id)` 的结果
+   从未被使用（SA4010），是纯死代码（`models` map 已按 id 索引）。已删除并复验回到精确基线。
+   → 教训：**合并后必须重跑 lint 并逐 linter 对拍**，只对拍总数会漏掉「一项降一项升」的情况。
+
 ## 3. 批次与依赖图
 
 ```mermaid

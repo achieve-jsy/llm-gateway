@@ -1,5 +1,6 @@
 stages:
   - build
+  - test
   - migrate
   - deploy
   - verify
@@ -739,3 +740,53 @@ verify-test:
   dependencies: []
   rules:
     - if: $CI_COMMIT_BRANCH == "test"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEST — 回归判据（组名缓存冷启动 / 蓝绿切流门禁）
+#
+# 说明：本阶段 job 未加入 deploy-prod / deploy-app-test 的 needs，
+# 因此测试失败不会阻断部署（deploy 侧用 needs 跳过阶段顺序）。
+# 如需「测试不过就不许发布」，把对应 job 追加进 deploy-prod.needs 即可。
+# 之所以不默认硬门禁：coldstart 判据含秒级时序断言，在负载高的 runner 上有抖动风险。
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 组名缓存冷启动 + provider 快照组名判据（CGO_ENABLED=0，无需 DB/Redis）。
+# 背景：2026-10-16 蓝绿发布期间网关组名缓存为空，切流后 126 笔合法组名请求
+# 被误判为直连模型（403 direct_model_not_allowed）。
+test-regression-gateway:
+  stage: test
+  image: ${REGISTRY}/${BACKEND_CI_IMAGE}:${BACKEND_CI_IMAGE_TAG}
+  tags: [docker]
+  variables:
+    GOCACHE: "/cache/llm-gateway/go-build"
+    GOMODCACHE: "/cache/llm-gateway/go-mod"
+  script:
+    - export PATH="/go/bin:/usr/local/go/bin:${PATH}"
+    - go version
+    - mkdir -p "$GOCACHE" "$GOMODCACHE"
+    - CGO_ENABLED=0 go test -mod=vendor -count=1 ./internal/gateway/cache/... ./internal/configsync/... ./tests/gateway/coldstart/...
+  dependencies: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == "test" || $CI_COMMIT_BRANCH == "staging" || $CI_COMMIT_BRANCH == "main"
+      changes:
+        - "internal/**/*"
+        - "cmd/**/*"
+        - "tests/**/*"
+        - "go.mod"
+        - "go.sum"
+
+# 蓝绿切流门禁脚本的回归（纯 bash：mock docker/nginx/curl/flock，不接触真实环境）。
+# 用 deploy-tools 镜像执行，与真实部署同镜像，保证 jq/python3 门禁解析路径一致。
+test-blue-green-gate:
+  stage: test
+  image: ${REGISTRY}/deploy-tools:latest
+  tags: [deploy]
+  script:
+    - bash tests/deploy/blue_green_deploy_test.sh
+  dependencies: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == "test" || $CI_COMMIT_BRANCH == "staging" || $CI_COMMIT_BRANCH == "main"
+      changes:
+        - "deploy/blue-green/**/*"
+        - "tests/deploy/**/*"
+        - ".gitlab-ci.yml"

@@ -57,8 +57,8 @@ func newStabilityStoreFastFail(t *testing.T) (*miniredis.Miniredis, *RedisStore,
 		t.Fatalf("miniredis: %v", err)
 	}
 	rdb := redis.NewClient(&redis.Options{
-		Addr:       mr.Addr(),
-		MaxRetries: -1, // 不重试，连接失败立即返回 error
+		Addr:        mr.Addr(),
+		MaxRetries:  -1, // 不重试，连接失败立即返回 error
 		DialTimeout: 200 * time.Millisecond,
 	})
 	t.Cleanup(func() {
@@ -98,13 +98,13 @@ func setupMiddlewareTestFastFail(t *testing.T) (*miniredis.Miniredis, *QuotaMidd
 // emptySnapshot 构造一个四层 map 都初始化的快照，避免 nil map 误判。
 func emptySnapshot() *quota.QuotaSnapshot {
 	return &quota.QuotaSnapshot{
-		Version:           1,
+		Version:        1,
 		DefaultUserRPM: 1000, DefaultUserMaxConcurrency: 1000,
 		DefaultServiceKeyRPM: 1000, DefaultServiceKeyMaxConcurrency: 1000,
-		Users:             map[string]quota.LayerLimits{},
-		ServiceKeys:       map[string]quota.LayerLimits{},
-		Groups:            map[string]quota.LayerLimits{},
-		Models:            map[string]quota.LayerLimits{},
+		Users:       map[string]quota.LayerLimits{},
+		ServiceKeys: map[string]quota.LayerLimits{},
+		Groups:      map[string]quota.LayerLimits{},
+		Models:      map[string]quota.LayerLimits{},
 	}
 }
 
@@ -126,14 +126,16 @@ func doReqWithBody(r *gin.Engine, body string) *httptest.ResponseRecorder {
 }
 
 // concVal 读取并发键当前值（int），键不存在返回 0。
+// concVal 读取并发键当前「未过期的租约条数」。
+//
+// 租约式实现下并发键是 ZSET（member=租约 id，score=到期时间戳），旧的 GET/INCR 语义已不存在：
+// 这里用 ZCARD 统计条数，键不存在（读 err=redis.Nil 或 WRONGTYPE）一律视为 0。
 func concVal(t *testing.T, rdb *redis.Client, key string) int64 {
 	t.Helper()
-	v, err := rdb.Get(context.Background(), key).Int64()
-	if err == redis.Nil {
-		return 0
-	}
+	v, err := rdb.ZCard(context.Background(), key).Result()
 	if err != nil {
-		t.Fatalf("get %s: %v", key, err)
+		// 键不存在 / 类型不符（例如断言「豁免主体未被触碰」时键本就不存在）一律按 0 处理
+		return 0
 	}
 	return v
 }
@@ -160,9 +162,9 @@ func TestStability_RPM_RejectThenWindowRecovery(t *testing.T) {
 	mr, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultUserRPM: 3, DefaultUserMaxConcurrency: 0,
-		Users:       map[string]quota.LayerLimits{},
-		Groups:      map[string]quota.LayerLimits{},
-		Models:      map[string]quota.LayerLimits{},
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{},
+		Models: map[string]quota.LayerLimits{},
 	})
 	id := identityOf("u-rpm", "", "personal")
 	r := newTestRouter(mw, id, "")
@@ -201,24 +203,31 @@ func TestStability_Concurrency_FillRejectReleaseRecover(t *testing.T) {
 	mr, store, rdb := newStabilityStore(t)
 	key := "test:conc:recover"
 
-	// 占满 limit=2
+	// 占满 limit=2（记录租约 id 用于精确释放）
+	leases := make([]string, 0, 2)
 	for i := 0; i < 2; i++ {
-		if err := store.AcquireConcurrency(context.Background(), key, 2); err != nil {
+		leaseID, err := store.AcquireConcurrency(context.Background(), key, 2)
+		if err != nil {
 			t.Fatalf("acquire %d: %v", i+1, err)
 		}
+		leases = append(leases, leaseID)
 	}
 	// 第 3 次拒绝
-	if err := store.AcquireConcurrency(context.Background(), key, 2); err == nil {
+	if _, err := store.AcquireConcurrency(context.Background(), key, 2); err == nil {
 		t.Fatal("3rd acquire should be rejected")
 	}
 	// Release 一个 → 恢复
-	store.ReleaseConcurrency(context.Background(), key)
-	if err := store.AcquireConcurrency(context.Background(), key, 2); err != nil {
+	store.ReleaseConcurrency(context.Background(), key, leases[0])
+	lease3, err := store.AcquireConcurrency(context.Background(), key, 2)
+	if err != nil {
 		t.Fatalf("after release should recover, got %v", err)
 	}
+	// 当前在途：leases[1] + lease3
 	// 全部释放后键归零并被删除
-	store.ReleaseConcurrency(context.Background(), key)
-	store.ReleaseConcurrency(context.Background(), key)
+	store.ReleaseConcurrency(context.Background(), key, leases[1])
+	store.ReleaseConcurrency(context.Background(), key, lease3)
+	// 重复释放同一个租约 id 不得影响他人槽位，也不得让键复活
+	store.ReleaseConcurrency(context.Background(), key, leases[0])
 	if v := concVal(t, rdb, key); v != 0 {
 		t.Fatalf("after full release key should be gone (0), got %d", v)
 	}
@@ -227,26 +236,27 @@ func TestStability_Concurrency_FillRejectReleaseRecover(t *testing.T) {
 	}
 }
 
-// TestStability_Concurrency_OverRelease_NeverNegative Release 次数 > Acquire
-// 不应使计数变负。多次过度释放后，键应被清理且后续 Acquire 仍正确从 1 计数。
+// TestStability_Concurrency_OverRelease_NeverNegative 释放次数 > 获取次数
+// 不得误删他人的租约。多次过度释放后，键应被清理且后续 Acquire 仍正确从 1 计数。
 func TestStability_Concurrency_OverRelease_NeverNegative(t *testing.T) {
 	_, store, rdb := newStabilityStore(t)
 	key := "test:conc:over-release"
 
 	// Acquire 1 次
-	if err := store.AcquireConcurrency(context.Background(), key, 10); err != nil {
+	leaseID, err := store.AcquireConcurrency(context.Background(), key, 10)
+	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
-	// Release 3 次（过度释放 2 次）
-	for i := 0; i < 3; i++ {
-		store.ReleaseConcurrency(context.Background(), key)
-	}
-	// 不能为负：键应已归零被删
+	// Release 3 次（首次按真实租约 id，其余为「不存在的租约」模拟过度释放）
+	store.ReleaseConcurrency(context.Background(), key, leaseID)
+	store.ReleaseConcurrency(context.Background(), key, "stale-lease-1")
+	store.ReleaseConcurrency(context.Background(), key, "stale-lease-2")
+	// 不能残留：键应已归零被删
 	if v := concVal(t, rdb, key); v != 0 {
-		t.Fatalf("over-release must not go negative, got %d", v)
+		t.Fatalf("over-release must not leave entries, got %d", v)
 	}
 	// 后续 Acquire 应从 1 开始（不是从负数 +1 = 0 再 +1）
-	if err := store.AcquireConcurrency(context.Background(), key, 10); err != nil {
+	if _, err := store.AcquireConcurrency(context.Background(), key, 10); err != nil {
 		t.Fatalf("acquire after over-release: %v", err)
 	}
 	if v := concVal(t, rdb, key); v != 1 {
@@ -260,9 +270,9 @@ func TestStability_Middleware_Concurrency_ReleaseMidFlight(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultUserRPM: 0, DefaultUserMaxConcurrency: 1,
-		Users:       map[string]quota.LayerLimits{},
-		Groups:      map[string]quota.LayerLimits{},
-		Models:      map[string]quota.LayerLimits{},
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{},
+		Models: map[string]quota.LayerLimits{},
 	})
 	id := identityOf("u-conc", "", "personal")
 
@@ -295,6 +305,69 @@ func TestStability_Middleware_Concurrency_ReleaseMidFlight(t *testing.T) {
 	}
 }
 
+// TestStability_Middleware_Handler_ReleasesOnPanic 回归 QuotaMiddleware.Handler() 的 defer 修复：
+// 下游 handler panic 时也必须归还并发租约，否则槽位只能等租约到期才自愈。
+// （修复前 Handler 在 c.Next() 之后直接调用 AfterUpstream，panic 会跳过释放。）
+func TestStability_Middleware_Handler_ReleasesOnPanic(t *testing.T) {
+	_, mw, holder := setupMiddlewareTest(t)
+	holder.Set(&quota.QuotaSnapshot{
+		DefaultUserRPM: 0, DefaultUserMaxConcurrency: 1,
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{},
+		Models: map[string]quota.LayerLimits{},
+	})
+	id := identityOf("u-panic", "", "personal")
+	r := gin.New()
+	r.POST("/v1/chat/completions", func(c *gin.Context) {
+		c.Set("identity", id)
+	}, mw.Handler(), func(c *gin.Context) {
+		panic("boom") // 模拟 handler 内部 panic
+	})
+
+	func() {
+		defer func() { _ = recover() }() // panic 会冒泡出 gin，这里吞掉以便继续断言
+		doReq(r)
+	}()
+
+	// 槽位必须已被归还（键被删除），不能靠租约到期兜底
+	key := ConcurrencyKey("user", "u-panic", "", "")
+	if v := concVal(t, mw.store.rdb, key); v != 0 {
+		t.Fatalf("handler panic must not leak the concurrency lease, got %d active leases", v)
+	}
+}
+
+// TestStability_ConcurrencyLease_SelfHealsOnLostRelease 本缺陷的核心回归（middleware 层）：
+// 请求获取了并发租约但归还丢失（进程被强杀、15s 优雅退出强断长流式请求），
+// 租约到期后必须自动腾出槽位，用户不会被虚高的计数钉死在限额上。
+func TestStability_ConcurrencyLease_SelfHealsOnLostRelease(t *testing.T) {
+	_, store, _ := newStabilityStore(t)
+	key := ConcurrencyKey("user", "u-leak-lease", "", "")
+	const limit = 2
+
+	// 注入可控时钟：租约判定基于脚本入参 now 与成员 score 的比较（见 RedisStore.now 注释）
+	fakeNow := time.Now()
+	store.now = func() time.Time { return fakeNow }
+
+	// 模拟 2 个请求成功占用后归还丢失（不调用 ReleaseConcurrency）
+	for i := 0; i < limit; i++ {
+		if _, err := store.AcquireConcurrency(context.Background(), key, limit); err != nil {
+			t.Fatalf("acquire %d: %v", i+1, err)
+		}
+	}
+	// 顶到限额：后续请求被拒（用户侧表现就是持久 429）
+	if _, err := store.AcquireConcurrency(context.Background(), key, limit); err == nil {
+		t.Fatalf("limit=%d fully occupied by leaked leases, should reject", limit)
+	}
+
+	// 时间推进到租约到期之后
+	fakeNow = fakeNow.Add(concurrencyLease + time.Second)
+
+	// 自愈：无需任何人工干预，槽位自动回收
+	if _, err := store.AcquireConcurrency(context.Background(), key, limit); err != nil {
+		t.Fatalf("leaked lease must self-heal after expiry, got %v", err)
+	}
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // 场景 3：四层叠加 —— 单请求同时过 subject+group+model，各层独立触顶不串扰
 // ──────────────────────────────────────────────────────────────────────────────
@@ -314,10 +387,10 @@ func TestStability_FourLayers_IndependentCounting(t *testing.T) {
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultUserRPM: 100, DefaultUserMaxConcurrency: 100,
 		DefaultServiceKeyRPM: 100, DefaultServiceKeyMaxConcurrency: 100,
-		Users:             map[string]quota.LayerLimits{},
-		ServiceKeys:       map[string]quota.LayerLimits{"sk-1": {RPM: 2, MaxConcurrency: 0}},
-		Groups:            map[string]quota.LayerLimits{"gpt-4": {RPM: 2, MaxConcurrency: 0}},
-		Models:            map[string]quota.LayerLimits{"m-uuid": {RPM: 2, MaxConcurrency: 0}},
+		Users:       map[string]quota.LayerLimits{},
+		ServiceKeys: map[string]quota.LayerLimits{"sk-1": {RPM: 2, MaxConcurrency: 0}},
+		Groups:      map[string]quota.LayerLimits{"gpt-4": {RPM: 2, MaxConcurrency: 0}},
+		Models:      map[string]quota.LayerLimits{"m-uuid": {RPM: 2, MaxConcurrency: 0}},
 	})
 
 	// 构造一条 Post 链：middleware -> handler(内调 ModelQuotaGate) -> ok
@@ -375,9 +448,9 @@ func TestStability_FourLayers_ServiceKeySubject_Independent(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultServiceKeyRPM: 100, DefaultServiceKeyMaxConcurrency: 100,
-		ServiceKeys:       map[string]quota.LayerLimits{"sk-A": {RPM: 1, MaxConcurrency: 0}},
-		Groups:            map[string]quota.LayerLimits{},
-		Models:            map[string]quota.LayerLimits{},
+		ServiceKeys: map[string]quota.LayerLimits{"sk-A": {RPM: 1, MaxConcurrency: 0}},
+		Groups:      map[string]quota.LayerLimits{},
+		Models:      map[string]quota.LayerLimits{},
 	})
 	skA := identityOf("u-x", "sk-A", "service")
 	skB := identityOf("u-x", "sk-B", "service") // 不同 key，独立计数
@@ -418,9 +491,9 @@ func TestStability_ModelConcurrencyToken_Released(t *testing.T) {
 	gate := &ModelQuotaGate{holder: holder, store: mw.store}
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultUserRPM: 0, DefaultUserMaxConcurrency: 0,
-		Users:       map[string]quota.LayerLimits{},
-		Groups:      map[string]quota.LayerLimits{},
-		Models:      map[string]quota.LayerLimits{"m-uuid": {RPM: 0, MaxConcurrency: 2}},
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{},
+		Models: map[string]quota.LayerLimits{"m-uuid": {RPM: 0, MaxConcurrency: 2}},
 	})
 	id := identityOf("u-leak", "", "personal")
 	r := gin.New()
@@ -461,9 +534,9 @@ func TestStability_FourLayers_HappyPath_WithinLimits(t *testing.T) {
 	gate := &ModelQuotaGate{holder: holder, store: mw.store}
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultUserRPM: 0, DefaultUserMaxConcurrency: 0,
-		Users:       map[string]quota.LayerLimits{},
-		Groups:      map[string]quota.LayerLimits{"gpt-4": {RPM: 0, MaxConcurrency: 2}},
-		Models:      map[string]quota.LayerLimits{"m-uuid": {RPM: 0, MaxConcurrency: 2}},
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{"gpt-4": {RPM: 0, MaxConcurrency: 2}},
+		Models: map[string]quota.LayerLimits{"m-uuid": {RPM: 0, MaxConcurrency: 2}},
 	})
 	id := identityOf("u-happy", "", "personal")
 	r := gin.New()
@@ -498,9 +571,9 @@ func TestStability_Exemption_DoesNotTouchCounters(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultUserRPM: 1, DefaultUserMaxConcurrency: 1,
-		Users:       map[string]quota.LayerLimits{},
-		Groups:      map[string]quota.LayerLimits{},
-		Models:      map[string]quota.LayerLimits{},
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{},
+		Models: map[string]quota.LayerLimits{},
 		Exemptions: []quota.QuotaExemption{
 			{SubjectType: "user", SubjectID: "u-exempt", Reason: "emergency", ExpiresAt: time.Now().Add(1 * time.Hour)},
 		},
@@ -538,9 +611,9 @@ func TestStability_FailOpen_RedisDown_ConcurrentAndRelease(t *testing.T) {
 	mr, mw, holder := setupMiddlewareTestFastFail(t)
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultUserRPM: 1, DefaultUserMaxConcurrency: 1,
-		Users:       map[string]quota.LayerLimits{},
-		Groups:      map[string]quota.LayerLimits{},
-		Models:      map[string]quota.LayerLimits{},
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{},
+		Models: map[string]quota.LayerLimits{},
 	})
 	id := identityOf("u-failopen", "", "personal")
 	r := newTestRouter(mw, id, "")
@@ -571,9 +644,9 @@ func TestStability_FailOpen_RedisDown_ConcurrentAndRelease(t *testing.T) {
 		t.Fatalf("fail-open: %d requests did not pass / panicked", bad.Load())
 	}
 
-	// ReleaseConcurrency 在 Redis down 下也不 panic
+	// ReleaseConcurrency 在 Redis down 下也不 panic（租约 id 任意）
 	store := mw.store
-	store.ReleaseConcurrency(context.Background(), "quota:conc:user:u-failopen")
+	store.ReleaseConcurrency(context.Background(), "quota:conc:lease:user:u-failopen", "lease-x")
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -586,9 +659,9 @@ func TestStability_SnapshotHotUpdate_ImmediateEffect(t *testing.T) {
 	// 初始宽松：RPM=1000
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultUserRPM: 1000, DefaultUserMaxConcurrency: 0,
-		Users:       map[string]quota.LayerLimits{},
-		Groups:      map[string]quota.LayerLimits{},
-		Models:      map[string]quota.LayerLimits{},
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{},
+		Models: map[string]quota.LayerLimits{},
 	})
 	id := identityOf("u-hot", "", "personal")
 	r := newTestRouter(mw, id, "")
@@ -601,9 +674,9 @@ func TestStability_SnapshotHotUpdate_ImmediateEffect(t *testing.T) {
 	// 热替换为严格：RPM=1（已用 1 → 下一个应即拒）
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultUserRPM: 1, DefaultUserMaxConcurrency: 0,
-		Users:       map[string]quota.LayerLimits{},
-		Groups:      map[string]quota.LayerLimits{},
-		Models:      map[string]quota.LayerLimits{},
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{},
+		Models: map[string]quota.LayerLimits{},
 	})
 	if w := doReq(r); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("after hot-update to RPM=1, next req should be 429, got %d", w.Code)
@@ -669,12 +742,12 @@ func TestStability_LimitZero_vs_MissingInherit(t *testing.T) {
 	// 并发 limit=0 同理不计数
 	keyc0 := "test:conc:zero"
 	for i := 0; i < 20; i++ {
-		if err := store.AcquireConcurrency(context.Background(), keyc0, 0); err != nil {
+		if _, err := store.AcquireConcurrency(context.Background(), keyc0, 0); err != nil {
 			t.Fatalf("limit=0 conc req %d should pass, got %v", i+1, err)
 		}
 	}
 	if v := concVal(t, rdb, keyc0); v != 0 {
-		t.Errorf("limit=0 must NOT INCR concurrency, got %d", v)
+		t.Errorf("limit=0 must NOT occupy a concurrency slot, got %d", v)
 	}
 
 	// 缺省继承非对称（resolver 层，纯函数）：
@@ -682,9 +755,9 @@ func TestStability_LimitZero_vs_MissingInherit(t *testing.T) {
 	snap := &quota.QuotaSnapshot{
 		DefaultUserRPM: 42, DefaultUserMaxConcurrency: 7,
 		DefaultServiceKeyRPM: 99, DefaultServiceKeyMaxConcurrency: 11,
-		Users:             map[string]quota.LayerLimits{},
-		Groups:            map[string]quota.LayerLimits{},
-		Models:            map[string]quota.LayerLimits{},
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{},
+		Models: map[string]quota.LayerLimits{},
 	}
 	if r := ResolveSubjectLimits(snap, "user", "absent"); r.RPM != 42 || r.MaxConcurrency != 7 || r.Source != "default_user" {
 		t.Errorf("subject missing must inherit default_user, got %+v", r)
@@ -718,13 +791,14 @@ func TestStability_ConcurrencyStress_AcquireRelease_CountAccurate(t *testing.T) 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := store.AcquireConcurrency(context.Background(), key, limit); err != nil {
+			leaseID, err := store.AcquireConcurrency(context.Background(), key, limit)
+			if err != nil {
 				rejected.Add(1)
 				return
 			}
 			acquired.Add(1)
-			// 模拟短持有时长后释放
-			store.ReleaseConcurrency(context.Background(), key)
+			// 模拟短持有时长后按自己的租约 id 释放
+			store.ReleaseConcurrency(context.Background(), key, leaseID)
 		}()
 	}
 	wg.Wait()
@@ -790,8 +864,8 @@ func TestStability_Store_RedisDown_NoPanic(t *testing.T) {
 				}
 			}()
 			_ = store.CheckRPM(context.Background(), "k", 10)
-			_ = store.AcquireConcurrency(context.Background(), "k", 10)
-			store.ReleaseConcurrency(context.Background(), "k")
+			_, _ = store.AcquireConcurrency(context.Background(), "k", 10)
+			store.ReleaseConcurrency(context.Background(), "k", "lease-x")
 		}()
 	}
 }
@@ -800,7 +874,7 @@ func TestStability_Store_RedisDown_NoPanic(t *testing.T) {
 // 从真实 request body 的 model 字段解析出组名，使 group 层配额在生产链路下生效。
 //
 // 修复前：extractModelParam 读 c.Get("request_model")（无人 set）+ c.Query("model")
-//（body 里的 model 不在 query）→ groupName 恒空 → group 层 check 被跳过。
+// （body 里的 model 不在 query）→ groupName 恒空 → group 层 check 被跳过。
 // 修复后：优先复用 trace_req_body / 回退自行读 body 解析 model，group 层正常检查。
 //
 // 本用例**不再** c.Set("request_model", ...)，改用真实 JSON body 携带 model 字段，
@@ -809,9 +883,9 @@ func TestStability_GroupLayer_ParsesModelFromBody(t *testing.T) {
 	_, mw, holder := setupMiddlewareTest(t)
 	holder.Set(&quota.QuotaSnapshot{
 		DefaultUserRPM: 100, DefaultUserMaxConcurrency: 100,
-		Users:       map[string]quota.LayerLimits{},
-		Groups:      map[string]quota.LayerLimits{"gpt-4": {RPM: 2, MaxConcurrency: 0}},
-		Models:      map[string]quota.LayerLimits{},
+		Users:  map[string]quota.LayerLimits{},
+		Groups: map[string]quota.LayerLimits{"gpt-4": {RPM: 2, MaxConcurrency: 0}},
+		Models: map[string]quota.LayerLimits{},
 	})
 
 	id := identityOf("u-grp", "", "personal")

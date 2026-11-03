@@ -461,29 +461,61 @@ type QuotaCurrentUsage struct {
 	MaxConcurrency int `json:"max_concurrency"`
 }
 
-// GetUserCurrentUsage 查询用户当前 RPM 和并发使用量
+// currentConcKey 返回用户的并发租约键。
+//
+// 键格式来自**唯一权威定义** corequota.ConcurrencyKey（internal/core/quota），
+// 不得在本文件硬编码字面量：网关侧的并发键曾从 quota:conc: 迁移为
+// quota:conc:lease:（ZSET 租约），本读取端当时未同步，导致
+// 「用户当前并发使用量」恒为 0，并持续输出 "quota usage: GET failed" 告警，
+// 把正常的键不存在误报成 Redis 故障。
+func currentConcKey(userID string) string {
+	return corequota.ConcurrencyKeySubject("user", userID)
+}
+
+// getUserConcurrencyUsage 统计用户当前**在飞**并发数（只读、非破坏性）。
+//
+// 并发键是租约式 ZSET：member = 租约 id，score = 该租约的到期时间戳（毫秒）。
+// 因此「当前在飞」= score > now 的成员数，用 ZCOUNT (now +inf 统计：
+//   - 不用 ZCARD：它会把「已过期但尚未被清理」的成员一起算进来，向上虚报占用；
+//   - 不做 ZREMRANGEBYSCORE：本路径是控制面只读展示，绝不能顺手清理数据；
+//   - 边界与写入侧对齐：网关获取脚本按 `-inf now` 清理，故 score == now 视为已到期，
+//     区间用左开括号（由 corequota.ConcurrencyInFlightRange 统一给出）。
+//
+// 键不存在时 ZCOUNT 返回 0（不产生 redis.Nil），属正常情况——用户当前没有在途请求——
+// 返回 0 且不告警。
+func getUserConcurrencyUsage(ctx context.Context, rdb *redis.Client, userID string) int {
+	concKey := currentConcKey(userID)
+	min, max := corequota.ConcurrencyInFlightRange(time.Now())
+	cnt, err := rdb.ZCount(ctx, concKey, min, max).Result()
+	if err != nil {
+		// ZCOUNT 在键不存在时返回 0 而非 redis.Nil，故此处 err 只可能是真实故障
+		// （连接失败 / WRONGTYPE 等），需要告警；对外仍降级返回 0，不影响接口可用性。
+		slog.Warn("quota usage: concurrency ZCOUNT failed",
+			"key", concKey, "error", err, "user_id", userID)
+		return 0
+	}
+	return int(cnt)
+}
+
+// GetUserCurrentUsage 查询用户当前 RPM 和并发使用量（只读，不改动任何 Redis 数据）
 func (s *QuotaService) GetUserCurrentUsage(ctx context.Context, userID string) (*QuotaCurrentUsage, error) {
 	if s.rdb == nil {
 		return &QuotaCurrentUsage{}, nil
 	}
-	rpmKey := fmt.Sprintf("quota:rpm:user:%s", userID)
-	concKey := fmt.Sprintf("quota:conc:user:%s", userID)
 
-	rpmVal, err := s.rdb.ZCard(ctx, rpmKey).Result()
+	// RPM 键也是 ZSET：窗口内 = score 严格大于 (now - RPMWindowMS) 的成员。
+	// 同样不用 ZCARD —— 窗口外但尚未过期/尚未被写入侧清理的残留成员会被算进来而虚报。
+	// 键不存在时 ZCOUNT 返回 0（不产生 redis.Nil），属正常情况，不告警。
+	rpmKey := corequota.RPMKey("user", userID, "", "")
+	rpmMin, rpmMax := corequota.RPMInFlightRange(time.Now())
+	rpmVal, err := s.rdb.ZCount(ctx, rpmKey, rpmMin, rpmMax).Result()
 	if err != nil {
-		slog.Warn("quota usage: ZCARD failed", "key", rpmKey, "error", err)
+		slog.Warn("quota usage: rpm ZCOUNT failed", "key", rpmKey, "error", err, "user_id", userID)
 	}
-	concStr, err := s.rdb.Get(ctx, concKey).Result()
-	if err != nil && err != redis.Nil {
-		slog.Warn("quota usage: GET failed", "key", concKey, "error", err)
-	}
-	concVal := 0
-	if concStr != "" {
-		fmt.Sscanf(concStr, "%d", &concVal)
-	}
+
 	return &QuotaCurrentUsage{
 		RPM:            int(rpmVal),
-		MaxConcurrency: concVal,
+		MaxConcurrency: getUserConcurrencyUsage(ctx, s.rdb, userID),
 	}, nil
 }
 

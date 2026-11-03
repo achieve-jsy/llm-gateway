@@ -61,6 +61,23 @@ func (a Actor) HasDirectDept(id string) bool {
 	return false
 }
 
+// CanManageDeptBudgetPool 判断用户是否有权写入部门预算池额度
+// （scope_type = dept_daily / dept_service）。
+//
+// 权限遵循「上级配置下级」：部门预算池额度由工作室管理员或平台管理员下发，
+// 部门管理员对自身部门额度只读，扩容须走扩容审批。
+// 档位子额度（budget_tier_limits）与本规则共用同一判定，避免同一资源两条路径权限不一致。
+func (a Actor) CanManageDeptBudgetPool(deptID string) bool {
+	if a.IsGlobal {
+		return true
+	}
+	// 仅持有 dept_admin（无任何工作室管理范围）时，不得修改本部门额度
+	if len(a.StudioIDs) == 0 {
+		return false
+	}
+	return a.HasDept(deptID)
+}
+
 // IsManager 是否持有任意管理角色
 func (a Actor) IsManager() bool {
 	return a.IsGlobal || len(a.StudioIDs) > 0 || len(a.DeptIDs) > 0

@@ -55,22 +55,13 @@ func (h *BudgetHandler) handleTotalBatch(c *gin.Context, preview bool) {
 	h.rbac.BuildAndInjectActor(c)
 	actor := rbac.GetActor(c)
 	for _, item := range input.Items {
-		allowed := actor.IsGlobal
-		switch item.ScopeType {
-		case model.BudgetScopeStudio:
-			allowed = allowed || actor.HasStudio(item.ScopeID)
-		case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
-			allowed = allowed || actor.HasDept(item.ScopeID)
-		case model.BudgetScopeMember:
-			ok, err := h.svc.MemberInDeptIDs(item.ScopeID, actor.DeptIDs)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			allowed = allowed || ok
+		status, message := h.checkBudgetScopeWrite(actor, item.ScopeType, item.ScopeID)
+		if status == http.StatusForbidden {
+			c.JSON(status, gin.H{"error": "无权批量调整所选预算：" + message})
+			return
 		}
-		if !allowed {
-			c.JSON(http.StatusForbidden, gin.H{"error": "无权批量调整所选预算"})
+		if status != 0 {
+			c.JSON(status, gin.H{"error": message})
 			return
 		}
 	}
@@ -293,6 +284,41 @@ func (h *BudgetHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
+// checkBudgetScopeWrite 校验 actor 是否有权写入指定预算作用域。
+// status == 0 表示允许；否则 status/message 为应返回给前端的拒绝响应。
+//
+// 权限遵循「上级配置下级」：dept_daily / dept_service 是部门预算池额度，
+// 由工作室管理员或平台管理员下发，部门管理员只读、扩容走扩容审批。
+// 本判定与档位子额度（budget_tier_batch_service.canManageBatchAllocation）
+// 共用 Actor.CanManageDeptBudgetPool，保证同一资源两条写入路径权限一致。
+func (h *BudgetHandler) checkBudgetScopeWrite(actor rbac.Actor, scopeType, scopeID string) (int, string) {
+	if actor.IsGlobal {
+		return 0, ""
+	}
+	switch scopeType {
+	case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
+		if !actor.CanManageDeptBudgetPool(scopeID) {
+			return http.StatusForbidden, "部门预算池额度由工作室负责人配置，如需扩容请提交扩容申请"
+		}
+	case model.BudgetScopeStudio:
+		if !actor.HasStudio(scopeID) {
+			return http.StatusForbidden, "无权设置该工作室预算"
+		}
+	case model.BudgetScopeCompany:
+		// 公司层只有 admin 能改
+		return http.StatusForbidden, "只有平台管理员可以设置公司层预算"
+	case model.BudgetScopeMember:
+		ok, err := h.svc.MemberInDeptIDs(scopeID, actor.DeptIDs)
+		if err != nil {
+			return http.StatusInternalServerError, err.Error()
+		}
+		if !ok {
+			return http.StatusForbidden, "无权设置该成员预算"
+		}
+	}
+	return 0, ""
+}
+
 // Set PUT /api/v1/budgets
 // 设置/更新预算额度（按管辖域 RBAC 过滤）。
 func (h *BudgetHandler) Set(c *gin.Context) {
@@ -337,33 +363,9 @@ func (h *BudgetHandler) Set(c *gin.Context) {
 	}
 
 	// RBAC 数据范围校验
-	if !actor.IsGlobal {
-		switch req.ScopeType {
-		case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
-			if !actor.HasDept(req.ScopeID) {
-				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该部门预算"})
-				return
-			}
-		case model.BudgetScopeStudio:
-			if !actor.HasStudio(req.ScopeID) {
-				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该工作室预算"})
-				return
-			}
-		case model.BudgetScopeCompany:
-			// 公司层只有 admin 能改
-			c.JSON(http.StatusForbidden, gin.H{"error": "只有平台管理员可以设置公司层预算"})
-			return
-		case model.BudgetScopeMember:
-			ok, err := h.svc.MemberInDeptIDs(req.ScopeID, actor.DeptIDs)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			if !ok {
-				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该成员预算"})
-				return
-			}
-		}
+	if status, message := h.checkBudgetScopeWrite(actor, req.ScopeType, req.ScopeID); status != 0 {
+		c.JSON(status, gin.H{"error": message})
+		return
 	}
 
 	actorID, _ := uuid.Parse(c.GetString("user_id"))
@@ -462,32 +464,9 @@ func (h *BudgetHandler) SetMultiPeriod(c *gin.Context) {
 	}
 
 	// RBAC 数据范围校验（与 Set 保持一致）
-	if !actor.IsGlobal {
-		switch req.ScopeType {
-		case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
-			if !actor.HasDept(req.ScopeID) {
-				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该部门预算"})
-				return
-			}
-		case model.BudgetScopeStudio:
-			if !actor.HasStudio(req.ScopeID) {
-				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该工作室预算"})
-				return
-			}
-		case model.BudgetScopeCompany:
-			c.JSON(http.StatusForbidden, gin.H{"error": "只有平台管理员可以设置公司层预算"})
-			return
-		case model.BudgetScopeMember:
-			ok, err := h.svc.MemberInDeptIDs(req.ScopeID, actor.DeptIDs)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			if !ok {
-				c.JSON(http.StatusForbidden, gin.H{"error": "无权设置该成员预算"})
-				return
-			}
-		}
+	if status, message := h.checkBudgetScopeWrite(actor, req.ScopeType, req.ScopeID); status != 0 {
+		c.JSON(status, gin.H{"error": message})
+		return
 	}
 
 	parsePeriod := func(p *periodReq) (*service.MultiPeriodItem, error) {
@@ -739,32 +718,9 @@ func (h *BudgetHandler) BatchSet(c *gin.Context) {
 
 	for _, item := range req.Items {
 		// RBAC 校验
-		if !actor.IsGlobal {
-			switch item.ScopeType {
-			case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
-				if !actor.HasDept(item.ScopeID) {
-					results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": "无权设置该部门预算"})
-					continue
-				}
-			case model.BudgetScopeStudio:
-				if !actor.HasStudio(item.ScopeID) {
-					results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": "无权设置该工作室预算"})
-					continue
-				}
-			case model.BudgetScopeCompany:
-				results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": "只有平台管理员可以设置公司层预算"})
-				continue
-			case model.BudgetScopeMember:
-				ok, err := h.svc.MemberInDeptIDs(item.ScopeID, actor.DeptIDs)
-				if err != nil {
-					results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": err.Error()})
-					continue
-				}
-				if !ok {
-					results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": "无权设置该成员预算"})
-					continue
-				}
-			}
+		if status, message := h.checkBudgetScopeWrite(actor, item.ScopeType, item.ScopeID); status != 0 {
+			results = append(results, gin.H{"scope_type": item.ScopeType, "scope_id": item.ScopeID, "ok": false, "error": message})
+			continue
 		}
 
 		daily := item.DailyAmountUSD

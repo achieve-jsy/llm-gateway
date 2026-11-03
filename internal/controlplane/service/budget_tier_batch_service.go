@@ -808,7 +808,9 @@ func (s *BudgetTierService) canManageBatchAllocation(ctx context.Context, actor 
 	case model.BudgetScopeStudio:
 		return actor.HasStudio(allocation.ScopeID), nil
 	case model.BudgetScopeDeptDaily, model.BudgetScopeDeptService:
-		return len(actor.StudioIDs) > 0 && actor.HasDept(allocation.ScopeID), nil
+		// 与预算池额度写入（handler.checkBudgetScopeWrite）共用同一判定：
+		// 部门预算池由工作室管理员/平台管理员下发，部门管理员只读。
+		return actor.CanManageDeptBudgetPool(allocation.ScopeID), nil
 	case model.BudgetScopeMember:
 		if len(actor.StudioIDs) > 0 || len(actor.DeptIDs) == 0 {
 			return false, nil

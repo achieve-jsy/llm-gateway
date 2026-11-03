@@ -109,3 +109,59 @@ func TestActor_IsManager(t *testing.T) {
 		})
 	}
 }
+
+// 回归：部门预算池额度（dept_daily / dept_service）属于「部门额度」，由上级按
+// 「上级配置下级」原则下发。部门负责人对自己部门的额度只读，扩容须走扩容审批；
+// 修复前该判定等价于 HasDept，部门负责人可自行抬高本部门上限。
+func TestActor_CanManageDeptBudgetPool(t *testing.T) {
+	cases := []struct {
+		name   string
+		actor  rbac.Actor
+		deptID string
+		want   bool
+	}{
+		{
+			name:   "平台管理员始终允许",
+			actor:  rbac.Actor{IsGlobal: true},
+			deptID: "dept-a",
+			want:   true,
+		},
+		{
+			name:   "工作室管理员管辖下属部门时允许",
+			actor:  rbac.Actor{StudioIDs: []string{"studio-a"}, DeptIDs: []string{"dept-a"}},
+			deptID: "dept-a",
+			want:   true,
+		},
+		{
+			name:   "工作室管理员管辖范围外拒绝",
+			actor:  rbac.Actor{StudioIDs: []string{"studio-a"}, DeptIDs: []string{"dept-a"}},
+			deptID: "dept-b",
+			want:   false,
+		},
+		{
+			name:   "部门负责人改本部门额度被拒绝",
+			actor:  rbac.Actor{Roles: []string{"dept_admin"}, DeptIDs: []string{"dept-a"}, DeptAdminIDs: []string{"dept-a"}},
+			deptID: "dept-a",
+			want:   false,
+		},
+		{
+			name:   "部门负责人改其他部门额度被拒绝",
+			actor:  rbac.Actor{Roles: []string{"dept_admin"}, DeptIDs: []string{"dept-a"}},
+			deptID: "dept-b",
+			want:   false,
+		},
+		{
+			name:   "无管理角色拒绝",
+			actor:  rbac.Actor{UserID: "u1"},
+			deptID: "dept-a",
+			want:   false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.actor.CanManageDeptBudgetPool(tc.deptID); got != tc.want {
+				t.Errorf("CanManageDeptBudgetPool(%q) = %v, want %v", tc.deptID, got, tc.want)
+			}
+		})
+	}
+}

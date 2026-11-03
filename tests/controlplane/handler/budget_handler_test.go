@@ -2,6 +2,7 @@ package handler_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +22,8 @@ import (
 
 type myBudgetAllocationRepo struct {
 	allocations map[string]*model.BudgetAllocation
+	// memberInDept 控制 MemberInDeptIDs 的返回值；零值 false 保持既有用例语义不变。
+	memberInDept bool
 }
 
 func (r *myBudgetAllocationRepo) UpsertAllocation(*model.BudgetAllocation) error { return nil }
@@ -37,7 +40,7 @@ func (r *myBudgetAllocationRepo) ListMemberIDsByDeptID(string) ([]string, error)
 	return nil, nil
 }
 func (r *myBudgetAllocationRepo) MemberInDeptIDs(string, []string) (bool, error) {
-	return false, nil
+	return r.memberInDept, nil
 }
 func (r *myBudgetAllocationRepo) ListDeptIDsByStudioID(string) ([]string, error) {
 	return nil, nil
@@ -192,4 +195,97 @@ func findBudgetChainItem(t *testing.T, response map[string]any, scopeType string
 	}
 	t.Fatalf("scope %s not found in budget chain", scopeType)
 	return nil
+}
+
+// newBudgetWriteChecker 构建一个带真实 user_roles 的 rbac.Checker，
+// 用于验证 PUT /api/v1/budgets 的数据范围校验（走 Guard 同款 BuildAndInjectActor 路径）。
+func newBudgetWriteChecker(t *testing.T, seed func(db *gorm.DB)) *rbac.Checker {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&orgmodel.UserRole{}))
+	// 工作室管理员的部门范围由 departments 表展开，与 production Checker 一致。
+	require.NoError(t, db.Exec(`CREATE TABLE departments (id text primary key, dept_id text, studio_id text)`).Error)
+	if seed != nil {
+		seed(db)
+	}
+	return rbac.NewChecker(orgrepo.NewRoleRepo(db), orgrepo.NewUserOrgRepo(db))
+}
+
+// seedUserRole 写入一条 user_roles 记录。
+func seedUserRole(t *testing.T, db *gorm.DB, userID string, role orgmodel.RoleType, scopeType orgmodel.ScopeType, scopeID string) {
+	t.Helper()
+	require.NoError(t, db.Create(&orgmodel.UserRole{
+		UserID: userID, Role: role, ScopeType: scopeType, ScopeID: scopeID, GrantedBy: "test",
+	}).Error)
+}
+
+// putBudget 以指定 user_id 调用 PUT /api/v1/budgets 并返回响应。
+func putBudget(t *testing.T, checker *rbac.Checker, repo *myBudgetAllocationRepo, userID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	h := handler.NewBudgetHandler(service.NewBudgetService(repo, myBudgetAlertRepo{}), checker)
+	router := gin.New()
+	router.PUT("/api/v1/budgets", func(c *gin.Context) {
+		c.Set("user_id", userID)
+		h.Set(c)
+	})
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/budgets", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, req)
+	return recorder
+}
+
+// 回归：部门负责人改本部门预算池额度必须被拒绝。
+// 设计文档《模型等级与预算》规定「部门管理员的部门额度只读」，部门预算池额度由
+// 工作室管理员/平台管理员下发，扩容须走扩容审批。
+// 修复前 handler 只校验 HasDept，dept_admin 可直接 PUT /api/v1/budgets 抬高本部门上限。
+func TestSetBudgetDepartmentPoolRejectsDeptAdmin(t *testing.T) {
+	checker := newBudgetWriteChecker(t, func(db *gorm.DB) {
+		seedUserRole(t, db, "u-dept-admin", orgmodel.RoleDeptAdmin, orgmodel.ScopeDept, "dept-a")
+	})
+
+	for _, scopeType := range []string{model.BudgetScopeDeptDaily, model.BudgetScopeDeptService} {
+		t.Run(scopeType, func(t *testing.T) {
+			repo := &myBudgetAllocationRepo{allocations: map[string]*model.BudgetAllocation{}}
+			body := fmt.Sprintf(
+				`{"scope_type":%q,"scope_id":"dept-a","period_type":"monthly","target_limit_usd":"400.000000","effective_mode":"immediate","reason":"尝试抬高本部门额度"}`,
+				scopeType,
+			)
+			recorder := putBudget(t, checker, repo, "u-dept-admin", body)
+
+			require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+			require.Contains(t, recorder.Body.String(), "扩容申请")
+		})
+	}
+}
+
+// 合法路径：工作室管理员配置下属部门预算池额度（上级配置下级）不得被鉴权拦截。
+func TestSetBudgetDepartmentPoolAllowsStudioAdmin(t *testing.T) {
+	checker := newBudgetWriteChecker(t, func(db *gorm.DB) {
+		seedUserRole(t, db, "u-studio-admin", orgmodel.RoleStudioAdmin, orgmodel.ScopeStudio, "studio-a")
+		require.NoError(t, db.Exec(
+			`INSERT INTO departments (id, dept_id, studio_id) VALUES ('dp-uuid-1', 'dept-a', 'studio-a')`,
+		).Error)
+	})
+
+	repo := &myBudgetAllocationRepo{allocations: map[string]*model.BudgetAllocation{}}
+	body := `{"scope_type":"dept_daily","scope_id":"dept-a","period_type":"monthly","target_limit_usd":"400.000000","effective_mode":"immediate","reason":"工作室下发部门额度","preview_only":true}`
+	recorder := putBudget(t, checker, repo, "u-studio-admin", body)
+
+	require.NotEqual(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+}
+
+// 本次收紧只作用于部门额度本身：部门负责人仍可配置本部门成员的独立额度。
+func TestSetBudgetMemberScopeStillAllowsDeptAdmin(t *testing.T) {
+	checker := newBudgetWriteChecker(t, func(db *gorm.DB) {
+		seedUserRole(t, db, "u-dept-admin", orgmodel.RoleDeptAdmin, orgmodel.ScopeDept, "dept-a")
+	})
+
+	repo := &myBudgetAllocationRepo{allocations: map[string]*model.BudgetAllocation{}, memberInDept: true}
+	body := `{"scope_type":"member","scope_id":"member-a","period_type":"monthly","target_limit_usd":"100.000000","effective_mode":"immediate","reason":"成员独立额度","preview_only":true}`
+	recorder := putBudget(t, checker, repo, "u-dept-admin", body)
+
+	require.NotEqual(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 }

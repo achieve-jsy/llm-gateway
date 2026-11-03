@@ -384,51 +384,6 @@
         </div>
       </div>
 
-      <!-- 通知渠道开关 -->
-      <div v-show="activeTab === 'notification-channels'" class="settings-card">
-        <div class="card-header">
-          <div class="card-title-row">
-            <span class="card-icon">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-            </span>
-            <h3 class="card-title">通知渠道开关</h3>
-          </div>
-          <p class="card-desc">按通知类型精细控制站内信和邮件的发送开关。邮件总开关在「邮件通知」页签配置。</p>
-        </div>
-
-        <div class="card-body">
-          <div v-if="channelRulesLoading" v-loading="true" style="min-height: 120px"></div>
-          <table v-else class="channel-rules-table">
-            <thead>
-              <tr>
-                <th class="channel-rules-th-type">通知类型</th>
-                <th v-for="ch in notificationMetadata.channels" :key="ch.channel" class="channel-rules-th-ch">
-                  {{ ch.label }}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="nt in notificationMetadata.types" :key="nt.type">
-                <td class="channel-rules-td-type">{{ nt.label }}</td>
-                <td v-for="ch in notificationMetadata.channels" :key="ch.channel" class="channel-rules-td-ch">
-                  <el-switch
-                    :model-value="isChannelEnabled(nt.type, ch.channel)"
-                    :disabled="ch.channel === 'email' && !form.email_enabled"
-                    @change="(v: boolean | string | number) => setChannelEnabled(nt.type, ch.channel, !!v)"
-                  />
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-if="!form.email_enabled" class="form-hint" style="margin-top: 8px">邮件总开关未开启，邮件列开关暂不生效。请先到「邮件通知」页签开启。</p>
-          <div style="margin-top: 16px">
-            <el-button type="primary" :loading="savingChannelRules" :disabled="!channelRulesChanged" @click="handleSaveChannelRules">
-              保存渠道设置
-            </el-button>
-          </div>
-        </div>
-      </div>
-
       <!-- 故障默认配置 -->
       <div v-show="activeTab === 'failover'" class="settings-card">
         <div class="card-header">
@@ -657,7 +612,7 @@
       </div>
 
       <!-- 操作栏 -->
-      <div v-if="activeTab !== 'notification-channels'" class="action-bar">
+      <div class="action-bar">
         <div class="action-status">
           <span v-if="formChanged" class="change-indicator">有未保存的更改</span>
           <span v-else-if="settingsStore.loaded" class="saved-indicator">
@@ -680,9 +635,9 @@
 import { reactive, ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
-import { exportSettings, importSettings, getNotificationChannelRules, updateNotificationChannelRules, getNotificationChannelMetadata } from '@/services/control-plane'
+import { exportSettings, importSettings } from '@/services/control-plane'
 import { QUOTA_DEFAULTS } from '@/api/quota'
-import type { SystemSettings, NotificationChannelRule, NotificationChannelMetadata } from '@/types/settings'
+import type { SystemSettings } from '@/types/settings'
 import ImageUpload from '@/components/common/ImageUpload.vue'
 
 const settingsStore = useSettingsStore()
@@ -695,67 +650,6 @@ const importing = ref(false)
 const importInputRef = ref<HTMLInputElement>()
 const activeTab = ref('brand')
 
-// ── 通知渠道开关 ──────────────────────────────────────────────────────────────
-const notificationMetadata = ref<NotificationChannelMetadata>({ types: [], channels: [] })
-
-const channelRules = ref<NotificationChannelRule[]>([])
-const channelRulesInitial = ref<NotificationChannelRule[]>([])
-const channelRulesLoading = ref(false)
-const savingChannelRules = ref(false)
-
-function isChannelEnabled(notifType: string, channel: string): boolean {
-  const r = channelRules.value.find(x => x.notification_type === notifType && x.channel === channel)
-  return r ? r.enabled : true
-}
-
-function setChannelEnabled(notifType: string, channel: string, enabled: boolean) {
-  const r = channelRules.value.find(x => x.notification_type === notifType && x.channel === channel)
-  if (r) {
-    r.enabled = enabled
-  } else {
-    channelRules.value.push({ notification_type: notifType, channel: channel as 'inapp' | 'email', enabled })
-  }
-}
-
-const channelRulesChanged = computed(() => {
-  const cur = JSON.stringify(channelRules.value.slice().sort((a, b) =>
-    (a.notification_type + a.channel).localeCompare(b.notification_type + b.channel)))
-  const init = JSON.stringify(channelRulesInitial.value.slice().sort((a, b) =>
-    (a.notification_type + a.channel).localeCompare(b.notification_type + b.channel)))
-  return cur !== init
-})
-
-async function loadChannelRules() {
-  channelRulesLoading.value = true
-  try {
-    const [rules, meta] = await Promise.all([
-      getNotificationChannelRules(),
-      getNotificationChannelMetadata(),
-    ])
-    channelRules.value = rules
-    channelRulesInitial.value = JSON.parse(JSON.stringify(rules))
-    notificationMetadata.value = meta
-  } catch {
-    ElMessage.error('加载通知渠道设置失败')
-  } finally {
-    channelRulesLoading.value = false
-  }
-}
-
-async function handleSaveChannelRules() {
-  savingChannelRules.value = true
-  try {
-    await updateNotificationChannelRules(channelRules.value)
-    channelRulesInitial.value = JSON.parse(JSON.stringify(channelRules.value))
-    ElMessage.success('通知渠道设置已保存')
-  } catch {
-    ElMessage.error('保存失败，请重试')
-  } finally {
-    savingChannelRules.value = false
-  }
-}
-// ─────────────────────────────────────────────────────────────────────────────
-
 const tabs = [
   { key: 'brand', label: '站点品牌', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>' },
   { key: 'access', label: '接入配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10"/></svg>' },
@@ -763,7 +657,6 @@ const tabs = [
   { key: 'oidc', label: 'OIDC 配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>' },
   { key: 'webhook', label: 'Webhook', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>' },
   { key: 'email', label: '邮件通知', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22 6 12 13 2 6"/></svg>' },
-  { key: 'notification-channels', label: '通知渠道', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="12" y1="2" x2="12" y2="4"/></svg>' },
   { key: 'failover', label: '故障默认配置', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' },
   { key: 'pricing', label: '价格汇率', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>' },
   { key: 'budget', label: '预算拦截', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>' },
@@ -1053,7 +946,6 @@ onMounted(async () => {
     form.sticky_default_ttl_seconds = s.sticky_default_ttl_seconds ?? 300
   }
   captureInitial()
-  await loadChannelRules()
 })
 
 function isValidHttpUrl(url: string): boolean {

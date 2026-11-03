@@ -151,6 +151,14 @@
             <el-icon><Setting /></el-icon>
             <template #title>系统设置</template>
           </el-menu-item>
+          <el-menu-item index="/admin/notification-channels">
+            <el-icon><Message /></el-icon>
+            <template #title>通知渠道</template>
+          </el-menu-item>
+          <el-menu-item index="/admin/notification-history">
+            <el-icon><Clock /></el-icon>
+            <template #title>通知历史</template>
+          </el-menu-item>
           <el-menu-item index="/admin/announcements">
             <el-icon><Bell /></el-icon>
             <template #title>公告管理</template>
@@ -245,7 +253,7 @@ import { onMounted, computed, ref, watch, onUnmounted } from 'vue'
 import { isDark, toggleTheme } from './composables/useTheme'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts, Document, DataBoard, Sunny, Moon, CircleClose } from '@element-plus/icons-vue'
+import { Connection, Operation, Cpu, PriceTag, Refresh, ChatDotRound, User, Key, Monitor, Setting, Fold, Expand, Histogram, Collection, Bell, DataLine, OfficeBuilding, UserFilled, Warning, Close, Menu, Wallet, Lock, TrendCharts, Document, DataBoard, Sunny, Moon, CircleClose, Message, Clock } from '@element-plus/icons-vue'
 import NotificationBell from '@/components/common/NotificationBell.vue'
 import AnnouncementBanner from '@/components/common/AnnouncementBanner.vue'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'

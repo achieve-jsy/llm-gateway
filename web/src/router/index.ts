@@ -179,6 +179,18 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '系统设置', requiresAdmin: true }
   },
   {
+    path: '/admin/notification-channels',
+    name: 'NotificationChannels',
+    component: () => import('@/views/admin/NotificationChannelsPage.vue'),
+    meta: { title: '通知渠道', requiresAdmin: true }
+  },
+  {
+    path: '/admin/notification-history',
+    name: 'NotificationHistory',
+    component: () => import('@/views/admin/NotificationHistoryPage.vue'),
+    meta: { title: '通知历史', requiresAdmin: true }
+  },
+  {
     path: '/admin/announcements',
     name: 'AnnouncementList',
     component: () => import('@/views/admin/AnnouncementListPage.vue'),

@@ -97,19 +97,7 @@ func (f *fakeNotificationWriter) Create(n *model.Notification) error {
 	return nil
 }
 
-// fakeWebhookNotifier 记录所有 SendText 调用。
-type fakeWebhookNotifier struct {
-	sentMessages []string
-	sendErr      error
-}
 
-func (f *fakeWebhookNotifier) SendText(_ context.Context, text string) error {
-	if f.sendErr != nil {
-		return f.sendErr
-	}
-	f.sentMessages = append(f.sentMessages, text)
-	return nil
-}
 
 // newAlertRedis 启动 miniredis 并预设已用量 key。
 func newAlertRedis(t *testing.T, scopeType, scopeID string, usedUSD float64) *redis.Client {
@@ -129,13 +117,11 @@ func newAlertService(
 	alloc *model.BudgetAllocation,
 	alertStore *fakeAlertStore,
 	notifWriter *fakeNotificationWriter,
-	notifier service.WebhookNotifier,
 	rdb *redis.Client,
 ) *service.BudgetAlertService {
 	svc := service.NewBudgetAlertServiceForTest(
 		&fakeAllocReader{alloc: alloc},
 		alertStore,
-		notifier,
 	)
 	svc.SetNotificationRepo(notifWriter)
 	if rdb != nil {
@@ -153,7 +139,7 @@ func newAlertService(
 func TestEvaluateAndAlert_NoBudgetConfig(t *testing.T) {
 	alertStore := newFakeAlertStore()
 	notifWriter := &fakeNotificationWriter{}
-	svc := newAlertService(nil, alertStore, notifWriter, nil, nil)
+	svc := newAlertService(nil, alertStore, notifWriter, nil)
 
 	svc.EvaluateAndAlert(context.Background(), "dept_daily", "dept-001")
 
@@ -166,7 +152,7 @@ func TestEvaluateAndAlert_ZeroAmountBudget(t *testing.T) {
 	alloc := &model.BudgetAllocation{ScopeType: "dept_daily", ScopeID: "dept-001", AmountUSD: 0}
 	alertStore := newFakeAlertStore()
 	notifWriter := &fakeNotificationWriter{}
-	svc := newAlertService(alloc, alertStore, notifWriter, nil, nil)
+	svc := newAlertService(alloc, alertStore, notifWriter, nil)
 
 	svc.EvaluateAndAlert(context.Background(), "dept_daily", "dept-001")
 
@@ -179,7 +165,7 @@ func TestEvaluateAndAlert_BelowThreshold(t *testing.T) {
 	alertStore := newFakeAlertStore()
 	notifWriter := &fakeNotificationWriter{}
 	rdb := newAlertRedis(t, "dept_daily", "dept-001", 790)
-	svc := newAlertService(alloc, alertStore, notifWriter, nil, rdb)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
 
 	svc.EvaluateAndAlert(context.Background(), "dept_daily", "dept-001")
 
@@ -198,9 +184,8 @@ func TestEvaluateAndAlert_Exactly80Percent(t *testing.T) {
 		{UserID: ownerID.String()},
 	}
 	notifWriter := &fakeNotificationWriter{}
-	notifier := &fakeWebhookNotifier{}
 	rdb := newAlertRedis(t, scopeType, scopeID, 800)
-	svc := newAlertService(alloc, alertStore, notifWriter, notifier, rdb)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
 
 	svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
 
@@ -215,10 +200,6 @@ func TestEvaluateAndAlert_Exactly80Percent(t *testing.T) {
 	assert.Equal(t, model.NotificationLevelWarning, n.Level, "80% 告警应为 warning")
 	assert.Equal(t, ownerID, n.UserID, "通知应发给对应负责人")
 	assert.Contains(t, n.Title, "80%")
-
-	// Webhook
-	require.Len(t, notifier.sentMessages, 1)
-	assert.Contains(t, notifier.sentMessages[0], "80%")
 }
 
 // TestEvaluateAndAlert_DeptServiceHasTwoThresholds 验证：dept_service scope
@@ -233,7 +214,7 @@ func TestEvaluateAndAlert_DeptServiceHasTwoThresholds(t *testing.T) {
 	}
 	notifWriter := &fakeNotificationWriter{}
 	rdb := newAlertRedis(t, scopeType, scopeID, 210)
-	svc := newAlertService(alloc, alertStore, notifWriter, nil, rdb)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
 
 	svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
 
@@ -258,7 +239,7 @@ func TestEvaluateAndAlert_DeptServiceOnly80TriggersAt80(t *testing.T) {
 	alertStore := newFakeAlertStore()
 	notifWriter := &fakeNotificationWriter{}
 	rdb := newAlertRedis(t, scopeType, scopeID, 160)
-	svc := newAlertService(alloc, alertStore, notifWriter, nil, rdb)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
 
 	svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
 
@@ -275,7 +256,7 @@ func TestEvaluateTierAlert_UsesTemporaryEffectiveLimitAndTwoThresholds(t *testin
 	target, err := budgetdomain.ParseAmount("200.000000")
 	require.NoError(t, err)
 	alertStore := newFakeAlertStore()
-	svc := newAlertService(alloc, alertStore, &fakeNotificationWriter{}, nil, nil)
+	svc := newAlertService(alloc, alertStore, &fakeNotificationWriter{}, nil)
 	svc.SetBudgetTierRepo(&fakeAlertTierRepo{
 		limits: []model.BudgetTierLimit{{
 			BudgetAllocationID: allocationID, ModelTierID: tierID,
@@ -318,7 +299,7 @@ func TestEvaluateAndAlert_Deduplication(t *testing.T) {
 
 	notifWriter := &fakeNotificationWriter{}
 	rdb := newAlertRedis(t, scopeType, scopeID, 900)
-	svc := newAlertService(alloc, alertStore, notifWriter, nil, rdb)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
 
 	svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
 
@@ -333,16 +314,14 @@ func TestEvaluateAndAlert_AlertRecordCreateFails(t *testing.T) {
 	alertStore := newFakeAlertStore()
 	alertStore.createErr = errors.New("db write failed")
 	notifWriter := &fakeNotificationWriter{}
-	notifier := &fakeWebhookNotifier{}
 	rdb := newAlertRedis(t, scopeType, scopeID, 900)
-	svc := newAlertService(alloc, alertStore, notifWriter, notifier, rdb)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
 
 	assert.NotPanics(t, func() {
 		svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
 	})
 
 	assert.Empty(t, notifWriter.createdNotifications)
-	assert.Empty(t, notifier.sentMessages)
 }
 
 // TestEvaluateAndAlert_WebhookFailureIsNonFatal 验证：Webhook 失败不阻断通知。
@@ -355,15 +334,14 @@ func TestEvaluateAndAlert_WebhookFailureIsNonFatal(t *testing.T) {
 		{UserID: uuid.New().String()},
 	}
 	notifWriter := &fakeNotificationWriter{}
-	notifier := &fakeWebhookNotifier{sendErr: errors.New("webhook timeout")}
 	rdb := newAlertRedis(t, scopeType, scopeID, 900)
-	svc := newAlertService(alloc, alertStore, notifWriter, notifier, rdb)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
 
 	assert.NotPanics(t, func() {
 		svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
 	})
 
-	assert.Len(t, notifWriter.createdNotifications, 1, "Webhook 失败不应阻断通知")
+	assert.Len(t, notifWriter.createdNotifications, 1)
 	assert.Len(t, alertStore.createdRecords, 1)
 }
 
@@ -372,17 +350,13 @@ func TestEvaluateAndAlert_NoNotificationRepo(t *testing.T) {
 	scopeType, scopeID := "dept_daily", "dept-001"
 	alloc := &model.BudgetAllocation{ScopeType: scopeType, ScopeID: scopeID, AmountUSD: 1000}
 	alertStore := newFakeAlertStore()
-	notifier := &fakeWebhookNotifier{}
 	rdb := newAlertRedis(t, scopeType, scopeID, 900)
-
-	svc := service.NewBudgetAlertServiceForTest(&fakeAllocReader{alloc: alloc}, alertStore, notifier)
+	svc := service.NewBudgetAlertServiceForTest(&fakeAllocReader{alloc: alloc}, alertStore)
 	svc.SetRedis(rdb)
 
 	assert.NotPanics(t, func() {
 		svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
 	})
-
-	assert.Len(t, notifier.sentMessages, 1, "无 NotificationRepo 时 Webhook 仍应发送")
 }
 
 // TestEvaluateAndAlert_MemberScopeNotifiesMemberOnly 验证：member scope 只通知成员本人。
@@ -398,7 +372,7 @@ func TestEvaluateAndAlert_MemberScopeNotifiesMemberOnly(t *testing.T) {
 
 	notifWriter := &fakeNotificationWriter{}
 	rdb := newAlertRedis(t, scopeType, scopeID, 85)
-	svc := newAlertService(alloc, alertStore, notifWriter, nil, rdb)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
 
 	svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
 
@@ -420,7 +394,7 @@ func TestEvaluateAndAlert_MemberScopeDoesNotNotifyAdmin(t *testing.T) {
 
 	notifWriter := &fakeNotificationWriter{}
 	rdb := newAlertRedis(t, scopeType, scopeID, 85)
-	svc := newAlertService(alloc, alertStore, notifWriter, nil, rdb)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
 
 	svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
 
@@ -446,7 +420,7 @@ func TestEvaluateAndAlert_MultipleOwners(t *testing.T) {
 
 	notifWriter := &fakeNotificationWriter{}
 	rdb := newAlertRedis(t, scopeType, scopeID, 850)
-	svc := newAlertService(alloc, alertStore, notifWriter, nil, rdb)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
 
 	svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
 
@@ -467,14 +441,13 @@ func TestEvaluateAndAlert_FindOwnersFails(t *testing.T) {
 	alertStore := newFakeAlertStore()
 	alertStore.ownersErr = errors.New("db query failed")
 	notifWriter := &fakeNotificationWriter{}
-	notifier := &fakeWebhookNotifier{}
 	rdb := newAlertRedis(t, scopeType, scopeID, 900)
-	svc := newAlertService(alloc, alertStore, notifWriter, notifier, rdb)
+	svc := newAlertService(alloc, alertStore, notifWriter, rdb)
 
 	assert.NotPanics(t, func() {
 		svc.EvaluateAndAlert(context.Background(), scopeType, scopeID)
 	})
 
-	assert.Empty(t, notifWriter.createdNotifications, "查负责人失败则不写通知")
-	assert.Len(t, notifier.sentMessages, 1, "查负责人失败不阻断 Webhook")
+	assert.Empty(t, notifWriter.createdNotifications, "查负责人失败不应写通知")
+	assert.Len(t, alertStore.createdRecords, 1, "去重记录应正常写入")
 }

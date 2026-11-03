@@ -46,9 +46,16 @@ func (s *NotificationChannelService) IsEnabled(ctx context.Context, notifType, c
 }
 
 // GetMetadata 返回通知类型和渠道的元数据（标签等），用于前端动态渲染表格。
+// 类型列表来自统一注册表（notification_registry.go），渠道为注册表中全部可用渠道。
 func (s *NotificationChannelService) GetMetadata() model.NotificationMetadata {
-	return model.NotificationMetadata{
-		Types:    model.AllNotificationTypeMetas(),
-		Channels: model.AllNotificationChannelMetas(),
+	regs := GetNotificationTypeRegistry()
+	types := make([]model.NotificationTypeMeta, 0, len(regs))
+	for _, t := range regs {
+		types = append(types, model.NotificationTypeMeta{Type: t.Name, Label: t.DisplayName})
 	}
+	channels := make([]model.NotificationChannelMeta, 0, 3)
+	for _, ch := range allRegistryChannels() {
+		channels = append(channels, model.NotificationChannelMeta{Channel: ch, Label: channelDisplayName(ch)})
+	}
+	return model.NotificationMetadata{Types: types, Channels: channels}
 }

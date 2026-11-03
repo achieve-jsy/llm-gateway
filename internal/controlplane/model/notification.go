@@ -35,11 +35,40 @@ type NotificationDelivery struct {
 	DeliveredAt *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+
+	// 冗余的快照字段：让 email/webhook 投递记录可在管理端通知历史页独立展示
+	//（webhook-only 系统级通知在 notifications 表无对应行，无法靠 dedupe_key 关联）。
+	NotificationType string    `gorm:"type:varchar(32);not null;default:''" json:"notification_type"`
+	Title            string    `gorm:"type:varchar(200);not null;default:''" json:"title"`
+	Content          string    `gorm:"type:text;not null;default:''" json:"content"`
+	UserID           uuid.UUID `gorm:"type:uuid" json:"user_id,omitempty"`
 }
 
 func (NotificationDelivery) TableName() string { return "notification_deliveries" }
 
 func (Notification) TableName() string { return "notifications" }
+
+// AdminNotificationRecord 管理端通知历史视图：inapp 站内信 + email/webhook 投递记录的统一行。
+// 由 notifications 与 notification_deliveries 两表 UNION ALL 得出。
+type AdminNotificationRecord struct {
+	Channel          string     `json:"channel"` // inapp | email | webhook
+	ID               string     `json:"id"`
+	UserID           uuid.UUID  `json:"user_id"`
+	UserName         string     `json:"user_name"`
+	UserEmail        string     `json:"user_email"`
+	NotificationType string     `json:"notification_type"`
+	Level            string     `json:"level"` // 仅站内信有；email/webhook 为空
+	Title            string     `json:"title"`
+	Content          string     `json:"content"`
+	IsRead           bool       `json:"is_read"`
+	ReadAt           *time.Time `json:"read_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	// 投递状态（仅 email/webhook）；站内信为空串
+	DeliveryStatus string     `json:"delivery_status"`
+	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
+	LastError      string     `json:"last_error"`
+	Attempts       int        `json:"attempts"`
+}
 
 // 通知类型常量
 const (
@@ -54,6 +83,15 @@ const (
 	NotificationTypeBudgetOwnerAttention = "budget_owner_attention"
 	NotificationTypeKeyActivity          = "key_activity"
 	NotificationTypeKeyRequestApproved   = "key_request_approved"
+	NotificationTypeKeyApprovalPending   = "key_approval_pending"
+	NotificationTypeSystemStartup        = "system_startup"
+
+	NotificationTypeApprovalPoolEmpty            = "approval_pool_empty"
+	NotificationTypeBudgetScheduleApplied        = "budget_schedule_applied"
+	NotificationTypeBudgetScheduleFailed         = "budget_schedule_failed"
+	NotificationTypePlatformRiskCounterIntegrity = "platform_risk_counter_integrity"
+	NotificationTypePlatformRiskPeriodHealth     = "platform_risk_period_health"
+	NotificationTypePlatformRiskRedisHealth      = "platform_risk_redis_health"
 )
 
 // 通知级别常量（与 Announcement.Level 对齐）
@@ -93,29 +131,4 @@ type NotificationChannelMeta struct {
 type NotificationMetadata struct {
 	Types    []NotificationTypeMeta    `json:"types"`
 	Channels []NotificationChannelMeta `json:"channels"`
-}
-
-// AllNotificationTypeMetas 返回所有通知类型及其中文标签
-func AllNotificationTypeMetas() []NotificationTypeMeta {
-	return []NotificationTypeMeta{
-		{Type: NotificationTypeBudgetAlert, Label: "预算告警"},
-		{Type: NotificationTypeExpansionSubmitted, Label: "扩容申请提交"},
-		{Type: NotificationTypeExpansionApproved, Label: "扩容审批通过"},
-		{Type: NotificationTypeExpansionRejected, Label: "扩容审批拒绝"},
-		{Type: NotificationTypeExpansionDecision, Label: "扩容审批决策"},
-		{Type: NotificationTypeExpansionApplyFailed, Label: "扩容执行失败"},
-		{Type: NotificationTypeExpansionExpiring, Label: "临时扩容即将到期"},
-		{Type: NotificationTypeExpansionRestored, Label: "扩容已恢复"},
-		{Type: NotificationTypeBudgetOwnerAttention, Label: "预算负责人提醒"},
-		{Type: NotificationTypeKeyActivity, Label: "密钥活动异常"},
-		{Type: NotificationTypeKeyRequestApproved, Label: "密钥申请审批通过"},
-	}
-}
-
-// AllNotificationChannelMetas 返回所有通知渠道及其中文标签
-func AllNotificationChannelMetas() []NotificationChannelMeta {
-	return []NotificationChannelMeta{
-		{Channel: "inapp", Label: "站内信"},
-		{Channel: "email", Label: "邮件"},
-	}
 }

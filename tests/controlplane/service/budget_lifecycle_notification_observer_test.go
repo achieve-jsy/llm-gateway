@@ -118,6 +118,10 @@ func TestLifecycleObserverNotifiesRequesterAndCurrentOwnerOnce(t *testing.T) {
 	if err := secondInstance.OnOverrideExpired(context.Background(), item); err != nil {
 		t.Fatalf("cross-instance duplicate callback: %v", err)
 	}
+	// 异步契约：回调只入队，需显式排空才投递。
+	if err := observer.RetryPending(context.Background(), 10); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
 	if got := notifier.count(requesterID, model.NotificationTypeExpansionRestored); got != 1 {
 		t.Fatalf("requester notifications = %d, want 1", got)
 	}
@@ -153,6 +157,10 @@ func TestLifecycleObserverNotifiesScheduleAppliedAndFailedOnce(t *testing.T) {
 			t.Fatalf("failed callback: %v", err)
 		}
 	}
+	// 异步契约：回调只入队，需显式排空才投递。
+	if err := observer.RetryPending(context.Background(), 10); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
 	for _, userID := range []uuid.UUID{createdBy, ownerID} {
 		if got := notifier.count(userID, "budget_schedule_applied"); got != 1 {
 			t.Fatalf("applied notifications for %s = %d, want 1", userID, got)
@@ -160,6 +168,32 @@ func TestLifecycleObserverNotifiesScheduleAppliedAndFailedOnce(t *testing.T) {
 		if got := notifier.count(userID, "budget_schedule_failed"); got != 1 {
 			t.Fatalf("failed notifications for %s = %d, want 1", userID, got)
 		}
+	}
+}
+
+func TestLifecycleOutboxDeadlettersAfterMaxAttempts(t *testing.T) {
+	observer, _, notifier, db := newLifecycleObserverFixture(t)
+	userID := uuid.New()
+	row := &model.NotificationOutbox{
+		ID: uuid.New(), DedupeKey: "deadletter", UserID: userID, Type: "budget_schedule_applied",
+		Level: model.NotificationLevelInfo, Title: "x", Content: "x",
+		Status: "failed", Attempts: 99, NextAttempt: time.Now().Add(-time.Minute).UTC(),
+	}
+	if err := db.Create(row).Error; err != nil {
+		t.Fatalf("seed outbox: %v", err)
+	}
+	if err := observer.RetryPending(context.Background(), 10); err != nil {
+		t.Fatalf("retry pending: %v", err)
+	}
+	if got := notifier.count(userID, "budget_schedule_applied"); got != 0 {
+		t.Fatalf("notifications = %d, want 0 (deadlettered, no dispatch)", got)
+	}
+	var persisted model.NotificationOutbox
+	if err := db.First(&persisted, "id = ?", row.ID).Error; err != nil {
+		t.Fatalf("load outbox: %v", err)
+	}
+	if persisted.Status != "deadletter" {
+		t.Fatalf("status = %q, want deadletter", persisted.Status)
 	}
 }
 
@@ -207,7 +241,8 @@ func TestLifecycleOutboxCrashAfterInboxInsertDoesNotDuplicateNotification(t *tes
 		LockedAt: &expired, LeaseOwner: "crashed", LeaseExpiresAt: expired.UnixMicro(),
 	}).Error)
 	observer := service.NewBudgetLifecycleNotificationObserver(
-		db, repository.NewExpansionRepo(db), &lifecycleOwnerStub{}, service.NewDBNotifier(repo),
+		db, repository.NewExpansionRepo(db), &lifecycleOwnerStub{},
+		service.NewUnifiedNotifier(nil, nil, db, repo, nil, nil, nil),
 	)
 	require.NoError(t, observer.RetryPending(context.Background(), 10))
 	var count int64

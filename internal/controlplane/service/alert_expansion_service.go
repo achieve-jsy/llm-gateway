@@ -43,8 +43,6 @@ type BudgetAlertService struct {
 		ListTierLimits(context.Context, uuid.UUID) ([]model.BudgetTierLimit, error)
 		ListActiveOverrides(context.Context, uuid.UUID, time.Time) ([]model.BudgetTemporaryOverride, error)
 	}
-	// webhookNotifier 可选：webhook 发送（nil = 仅站内+邮件）
-	webhookNotifier WebhookNotifier
 }
 
 type notificationWriter interface {
@@ -84,30 +82,18 @@ func (s *BudgetAlertService) SetNotificationRepo(writer notificationWriter) {
 	s.notifier = notificationWriterAdapter{writer: writer}
 }
 
-// SetWebhookNotifier 注入 Webhook 通知器（由调用方按 settings 动态构建）。
-func (s *BudgetAlertService) SetWebhookNotifier(n WebhookNotifier) {
-	s.webhookNotifier = n
-}
-
-// WebhookNotifier 飞书/webhook 通知接口（由 settings_service 实现）。
-type WebhookNotifier interface {
-	SendText(ctx context.Context, text string) error
-}
-
-func NewBudgetAlertService(budgetRepo *repository.BudgetRepo, alertRepo *repository.BudgetAlertRepo, webhookNotifier WebhookNotifier) *BudgetAlertService {
+func NewBudgetAlertService(budgetRepo *repository.BudgetRepo, alertRepo *repository.BudgetAlertRepo) *BudgetAlertService {
 	return &BudgetAlertService{
-		budgetRepo:      budgetRepo,
-		alertRepo:       alertRepo,
-		webhookNotifier: webhookNotifier,
+		budgetRepo: budgetRepo,
+		alertRepo:  alertRepo,
 	}
 }
 
 // NewBudgetAlertServiceForTest 供测试注入自定义 fake 实现，不对外暴露接口类型。
-func NewBudgetAlertServiceForTest(budgetRepo budgetAllocReader, alertRepo alertRecordStore, webhookNotifier WebhookNotifier) *BudgetAlertService {
+func NewBudgetAlertServiceForTest(budgetRepo budgetAllocReader, alertRepo alertRecordStore) *BudgetAlertService {
 	return &BudgetAlertService{
-		budgetRepo:      budgetRepo,
-		alertRepo:       alertRepo,
-		webhookNotifier: webhookNotifier,
+		budgetRepo: budgetRepo,
+		alertRepo:  alertRepo,
 	}
 }
 
@@ -233,18 +219,9 @@ func (s *BudgetAlertService) EvaluateAndAlert(ctx context.Context, scopeType, sc
 			continue
 		}
 
-		msg := fmt.Sprintf("【预算告警】%s(%s) %s用量已达 %d%%（$%.2f / $%.2f），请关注并考虑扩容",
-			scopeType, scopeID, dimensionType, threshold, usedUSD, limitUSD)
-
 		// 通道 1（解耦的 Notifier：站内信 + 邮件 + ...）
 		s.sendNotifications(ctx, scopeType, scopeID, threshold, usedUSD, limitUSD)
 
-		// 通道 2（Webhook 降级：失败不阻断，仅记录）
-		if s.webhookNotifier != nil {
-			if err := s.webhookNotifier.SendText(ctx, msg); err != nil {
-				slog.Warn("budget_alert: webhook notify failed", "error", err)
-			}
-		}
 		slog.Info("budget_alert: sent", "scope_type", scopeType, "scope_id", scopeID,
 			"threshold", threshold, "ratio", ratio)
 	}

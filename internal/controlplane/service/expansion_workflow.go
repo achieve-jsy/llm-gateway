@@ -872,7 +872,7 @@ func (s *ExpansionService) NotifyOwner(
 	}
 	for _, recipient := range recipients {
 		if err := s.notifier.Notify(ctx, &model.Notification{
-			UserID: recipient, Type: "budget_owner_attention", Level: model.NotificationLevelWarning,
+			UserID: recipient, Type: model.NotificationTypeBudgetOwnerAttention, Level: model.NotificationLevelWarning,
 			Title: "预算负责人处理提醒", Content: strings.TrimSpace(input.Message),
 			RefType: "budget_scope", RefID: input.ScopeType + ":" + input.ScopeID,
 		}); err != nil {
@@ -1029,7 +1029,7 @@ func (s *ExpansionService) notifyApprovalPoolEmpty(ctx context.Context, request 
 	}
 	for _, recipient := range recipients {
 		_ = s.notifier.Notify(ctx, &model.Notification{
-			UserID: recipient, Type: "approval_pool_empty", Level: model.NotificationLevelWarning,
+			UserID: recipient, Type: model.NotificationTypeApprovalPoolEmpty, Level: model.NotificationLevelWarning,
 			Title: "扩容审批池为空", Content: "请补充当前作用域的有效负责人。",
 			RefType: "expansion_request", RefID: request.ID.String(),
 		})

@@ -112,6 +112,8 @@ docker ps --format '{{.Names}}\t{{.Status}}' | grep llm
 5. **SSH 并发 255 / 会话卡住**
    - 一条后台 ssh 卡在 `docker compose down --timeout 600` 会占着会话，新连接可能 255。处理：杀掉本地卡住的 ssh 进程释放会话，再新连过去 `docker rm -f` 目标容器；避免用宽泛 `pkill -f "compose.*down"`。
 6. **含空格的 env 不能直接 source**（见 §5），`DATABASE_URL`/`OAUTH_SCOPES` 会被截断。CI 里没这问题（用 `export VAR='...'` 注入）。
+7. **预算能力预检不要硬依赖 jq**
+   - `supports_budget_v2` 读 active gateway `/ready` 的 capabilities。旧脚本 `command -v jq || die`，生产机未装 jq 时会在 pull 镜像后立刻失败（v0.107.2 实测）。应 jq → python3 回退；都没有则按「不支持 v2」走 `force_safe_budget_mode`，不要中断部署。临时救急：`apt-get install -y jq` 后重跑同 tag 的 `deploy-prod`。
 
 ## 8. CI 集成（.gitlab-ci.yml）
 

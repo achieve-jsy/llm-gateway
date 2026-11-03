@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/example/llm-gateway/internal/controlplane/audit"
 	"github.com/example/llm-gateway/internal/controlplane/keyactivity"
@@ -14,7 +13,6 @@ import (
 	"github.com/example/llm-gateway/internal/notification"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -25,30 +23,6 @@ import (
 // 内部实现按已配置通道分发（写站内信 + 发邮件等）。
 type Notifier interface {
 	Notify(ctx context.Context, n *model.Notification) error
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DBNotifier：站内信通道（写 notifications 表）
-// ─────────────────────────────────────────────────────────────────────────────
-
-// DBNotifier 写 notifications 表（站内信）。
-type DBNotifier struct {
-	repo *repository.NotificationRepo
-}
-
-func NewDBNotifier(repo *repository.NotificationRepo) *DBNotifier {
-	return &DBNotifier{repo: repo}
-}
-
-func (w *DBNotifier) Notify(_ context.Context, n *model.Notification) error {
-	if w.repo == nil {
-		return nil
-	}
-	if err := w.repo.Create(n); err != nil {
-		slog.Warn("notifier: db write failed", "user_id", n.UserID, "type", n.Type, "error", err)
-		return err
-	}
-	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,31 +75,17 @@ func (e *EmailNotifier) Notify(ctx context.Context, n *model.Notification) error
 		sender.SetSkipTLSVerify(true)
 	}
 	if n.DedupeKey != "" {
-		delivery := &model.NotificationDelivery{ID: uuid.New(), DedupeKey: n.DedupeKey, Channel: "email", Status: "pending"}
-		if err := e.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "dedupe_key"}, {Name: "channel"}}, DoNothing: true}).Create(delivery).Error; err != nil {
+		shouldSend, persisted, err := acquireDelivery(ctx, e.db, n.DedupeKey, "email", n)
+		if err != nil {
 			return err
 		}
-		var persisted model.NotificationDelivery
-		if err := e.db.WithContext(ctx).Where("dedupe_key = ? AND channel = ?", n.DedupeKey, "email").First(&persisted).Error; err != nil {
-			return err
-		}
-		if persisted.Status == "delivered" {
+		if !shouldSend {
 			return nil
 		}
 		subject := "[LLM Gateway] " + n.Title
 		body := fmt.Sprintf("%s\n\n时间: %s", n.Content, n.CreatedAt.Format("2006-01-02 15:04"))
-		err := sender.SendTextWithSubjectAndDedupeKey(ctx, subject, body, n.DedupeKey)
-		updates := map[string]any{"attempts": gorm.Expr("attempts + 1")}
-		if err != nil {
-			updates["status"], updates["last_error"] = "failed", err.Error()
-		} else {
-			now := time.Now().UTC()
-			updates["status"], updates["last_error"], updates["delivered_at"] = "delivered", "", now
-		}
-		if updateErr := e.db.WithContext(ctx).Model(&persisted).Updates(updates).Error; updateErr != nil {
-			return updateErr
-		}
-		return err
+		sendErr := sender.SendTextWithSubjectAndDedupeKey(ctx, subject, body, n.DedupeKey)
+		return settleDelivery(ctx, e.db, persisted, sendErr)
 	}
 
 	go e.sendAsync(sender, n, recipients)
@@ -207,54 +167,6 @@ func loadSMTPConfig(repo *repository.SettingsRepo) (*smtpConfig, error) {
 		port:       port,
 		skipVerify: strings.EqualFold(skipStr, "true"),
 	}, nil
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MultiNotifier：分发到多个通道
-// ─────────────────────────────────────────────────────────────────────────────
-
-// MultiNotifier 把一条通知分发到多个通道。任一通道失败不阻断其他通道。
-type MultiNotifier struct {
-	n []Notifier
-}
-
-func NewMultiNotifier(nn ...Notifier) *MultiNotifier {
-	return &MultiNotifier{n: nn}
-}
-
-func (m *MultiNotifier) Notify(ctx context.Context, n *model.Notification) error {
-	var firstErr error
-	for _, sub := range m.n {
-		if sub == nil {
-			continue
-		}
-		if err := sub.Notify(ctx, n); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GatedNotifier：按通知类型 × 渠道控制是否放行
-// ─────────────────────────────────────────────────────────────────────────────
-
-// GatedNotifier 在调用内层 Notifier 之前先查 ChannelGate，如未启用则静默跳过。
-type GatedNotifier struct {
-	inner   Notifier
-	channel string
-	gate    ChannelGate
-}
-
-func NewGatedNotifier(inner Notifier, channel string, gate ChannelGate) *GatedNotifier {
-	return &GatedNotifier{inner: inner, channel: channel, gate: gate}
-}
-
-func (g *GatedNotifier) Notify(ctx context.Context, n *model.Notification) error {
-	if g.gate != nil && !g.gate.IsEnabled(ctx, n.Type, g.channel) {
-		return nil
-	}
-	return g.inner.Notify(ctx, n)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

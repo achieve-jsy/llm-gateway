@@ -26,12 +26,18 @@ type BudgetLifecycleNotificationObserver struct {
 
 var _ BudgetLifecycleObserver = (*BudgetLifecycleNotificationObserver)(nil)
 
+// maxOutboxAttempts 单条通知的最大投递尝试次数。达到后标记为 deadletter，
+// 不再重试——飞书 webhook 配置错误等持续失败的行不会无限占用消费队列
+// （每分钟重试 + attempts 无限增长），在弱一致语义下放弃即可。
+const maxOutboxAttempts = 5
+
 func (o *BudgetLifecycleNotificationObserver) RetryPending(ctx context.Context, limit int) error {
 	if o.notifier == nil {
 		return nil
 	}
 	now := time.Now().UTC()
 	var rows []model.NotificationOutbox
+	deadlettered := make(map[uuid.UUID]struct{})
 	err := o.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.NotificationOutbox{}).
 			Where("status = ? AND lease_expires_at > 0 AND lease_expires_at < ?", "processing", now.UnixMicro()).
@@ -44,6 +50,14 @@ func (o *BudgetLifecycleNotificationObserver) RetryPending(ctx context.Context, 
 			return err
 		}
 		for _, row := range rows {
+			if row.Attempts >= maxOutboxAttempts {
+				deadlettered[row.ID] = struct{}{}
+				if err := tx.Model(&model.NotificationOutbox{}).Where("id = ?", row.ID).
+					Updates(map[string]any{"status": "deadletter", "last_error": "max attempts exceeded", "locked_at": nil, "lease_owner": "", "lease_expires_at": 0}).Error; err != nil {
+					return err
+				}
+				continue
+			}
 			if err := tx.Model(&model.NotificationOutbox{}).Where("id = ?", row.ID).
 				Updates(map[string]any{"status": "processing", "attempts": gorm.Expr("attempts + 1"), "locked_at": now, "lease_owner": o.leaseOwner, "lease_expires_at": now.Add(5 * time.Minute).UnixMicro()}).Error; err != nil {
 				return err
@@ -55,6 +69,9 @@ func (o *BudgetLifecycleNotificationObserver) RetryPending(ctx context.Context, 
 		return err
 	}
 	for _, row := range rows {
+		if _, ok := deadlettered[row.ID]; ok {
+			continue
+		}
 		notification := &model.Notification{
 			UserID: row.UserID, Type: row.Type, Level: row.Level, Title: row.Title,
 			Content: row.Content, RefType: row.RefType, RefID: row.RefID,
@@ -103,7 +120,7 @@ func (o *BudgetLifecycleNotificationObserver) OnOverrideExpired(
 	}
 	recipients = append(recipients, owners...)
 	return o.notifyRecipients(ctx, "override-expired:"+item.ID.String(), recipients, &model.Notification{
-		Type: "expansion_restored", Level: model.NotificationLevelInfo,
+		Type: model.NotificationTypeExpansionRestored, Level: model.NotificationLevelInfo,
 		Title: "临时扩容已到期", Content: fmt.Sprintf(
 			"临时额度已于 %s 到期，当前额度恢复为届时生效的长期基础额度。",
 			item.ExpiredAt.Format(time.RFC3339),
@@ -116,14 +133,14 @@ func (o *BudgetLifecycleNotificationObserver) OnScheduleApplied(
 	ctx context.Context,
 	item AppliedBudgetSchedule,
 ) error {
-	return o.notifySchedule(ctx, item.ID, item.BudgetAllocationID, "budget_schedule_applied", "", item.AppliedAt)
+	return o.notifySchedule(ctx, item.ID, item.BudgetAllocationID, model.NotificationTypeBudgetScheduleApplied, "", item.AppliedAt)
 }
 
 func (o *BudgetLifecycleNotificationObserver) OnScheduleFailed(
 	ctx context.Context,
 	item FailedBudgetSchedule,
 ) error {
-	return o.notifySchedule(ctx, item.ID, item.BudgetAllocationID, "budget_schedule_failed", item.FailureReason, item.FailedAt)
+	return o.notifySchedule(ctx, item.ID, item.BudgetAllocationID, model.NotificationTypeBudgetScheduleFailed, item.FailureReason, item.FailedAt)
 }
 
 func (o *BudgetLifecycleNotificationObserver) notifySchedule(
@@ -146,7 +163,7 @@ func (o *BudgetLifecycleNotificationObserver) notifySchedule(
 	title := "预算计划已生效"
 	content := fmt.Sprintf("%s预算计划已于 %s 生效。", schedule.PeriodType, at.Format(time.RFC3339))
 	level := model.NotificationLevelInfo
-	if notificationType == "budget_schedule_failed" {
+	if notificationType == model.NotificationTypeBudgetScheduleFailed {
 		title, level = "预算计划生效失败", model.NotificationLevelCritical
 		content = fmt.Sprintf(
 			"%s预算计划于 %s 生效失败：%s。请进入预算管理重新配置。",
@@ -190,5 +207,7 @@ func (o *BudgetLifecycleNotificationObserver) notifyRecipients(
 			return err
 		}
 	}
-	return o.RetryPending(ctx, len(seen))
+	// 只入队，不在此同步投递。后台 worker（router.go outbox 消费 goroutine）
+	// 周期调用 RetryPending 完成真实分发，避免生命周期 RunOnce 阻塞在飞书 HTTP / SMTP 上。
+	return nil
 }

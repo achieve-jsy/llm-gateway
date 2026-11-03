@@ -325,6 +325,13 @@ func (f *fakeGroupBudgetTierService) GetByID(uint) (*model.Group, error) {
 	return f.group, nil
 }
 
+func (f *fakeGroupBudgetTierService) ListEnabledGroupsWithModels() ([]model.Group, error) {
+	if f.group == nil {
+		return nil, nil
+	}
+	return []model.Group{*f.group}, nil
+}
+
 func TestModelTierHandlerSetGroupBudgetTierReturns200(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tierID := uuid.New()

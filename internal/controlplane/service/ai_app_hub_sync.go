@@ -322,6 +322,46 @@ func normalizeParent(parentID string) string {
 	return parentID
 }
 
+// Authorize 判定 passport 能否触发某个范围的同步。
+//
+// 全量只给管理员；单工作室/单部门额外允许该工作室负责人自己刷新。
+func (s *AIAppHubSyncService) Authorize(ctx context.Context, passport string, scope SyncScope) (bool, error) {
+	if passport == "" {
+		return false, nil
+	}
+	admin, err := s.repo.HasAnyRole(ctx, passport, []string{"admin", "ai_app_admin"})
+	if err != nil {
+		return false, err
+	}
+	if admin {
+		return true, nil
+	}
+	switch scope.Kind {
+	case ScopeStudio:
+		id, err := uuid.Parse(scope.ID)
+		if err != nil {
+			return false, nil
+		}
+		studio, err := s.repo.GetStudioByID(ctx, id)
+		if err != nil {
+			return false, nil
+		}
+		return studio.LeaderPassport != "" && studio.LeaderPassport == passport, nil
+	case ScopeDepartment:
+		department, err := s.repo.GetDepartment(ctx, scope.ID)
+		if err != nil || department.StudioID == nil {
+			return false, nil
+		}
+		studio, err := s.repo.GetStudioByID(ctx, *department.StudioID)
+		if err != nil {
+			return false, nil
+		}
+		return studio.LeaderPassport != "" && studio.LeaderPassport == passport, nil
+	default:
+		return false, nil
+	}
+}
+
 // markStatus 记录最近一次同步结果，管理页据此展示"上次同步时间/结果"。
 func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string) {
 	if s.settings == nil {

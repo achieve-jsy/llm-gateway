@@ -120,3 +120,19 @@ func (r *AIAppHubRepo) SetDepartmentStudio(ctx context.Context, deptID string, s
 		Where("department_id = ?", deptID).
 		Update("studio_id", studioID).Error
 }
+
+// HasAnyRole 查 legacy 的 user_roles 表。该表只在 migrations/043 里创建，
+// 没有纳入 Atlas 迁移，因此这里直接用表名查询，不建 GORM model。
+func (r *AIAppHubRepo) HasAnyRole(ctx context.Context, passport string, roles []string) (bool, error) {
+	if passport == "" || len(roles) == 0 {
+		return false, nil
+	}
+	var count int64
+	err := r.db.WithContext(ctx).Table("user_roles").
+		Where("passport = ? AND role IN ?", passport, roles).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}

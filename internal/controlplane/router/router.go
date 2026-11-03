@@ -2,11 +2,14 @@ package router
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	aiapphub "github.com/example/llm-gateway/internal/aiapphub/ehrclient"
 	authrepo "github.com/example/llm-gateway/internal/auth/repository"
 	"github.com/example/llm-gateway/internal/budgetperiod"
 	"github.com/example/llm-gateway/internal/controlplane/auth"
@@ -507,12 +510,16 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		panic("构造 TraceBodyService 失败: " + tbErr.Error())
 	}
 
+	// AI 应用聚合页的同步触发器（全量 / 单工作室 / 单部门）。
+	hubSyncHandler := handler.NewAIAppHubSyncHandler(newAIAppHubSyncService(db, settingsRepo))
+
 	// 管理接口组（JWT 认证）
 	adminGroup := r.Group("/api/v1")
 	adminGroup.Use(middleware.JWTAuth())
 	adminGroup.Use(middleware.AuditMiddleware(auditSvc, db))
 	{
 		// 渠道定义（Registry）
+		adminGroup.POST("/admin/ai-app-hub/sync", hubSyncHandler.Sync)
 		adminGroup.GET("/provider-definitions", guard(rbac.PermProviderManage), defHandler.ListDefinitions)
 		adminGroup.GET("/provider-definitions/:id", guard(rbac.PermProviderManage), defHandler.GetDefinition)
 
@@ -1153,4 +1160,41 @@ func splitScopes(s string) []string {
 		return nil
 	}
 	return strings.Fields(strings.ReplaceAll(s, ",", " "))
+}
+
+// defaultEHRApiTokenEnv 等三个环境变量决定同步任务能不能跑。
+const (
+	ehrBaseURLDefault = "https://open.example.com"
+	ehrPrefixDefault  = "/open-apis/ehr-apic/open-apis/resource/v1"
+	ehrOrgIDDefault   = "1428195512246472704"
+)
+
+// newAIAppHubSyncService 构造同步服务。EHR_API_TOKEN 缺失时不注册真实客户端，
+// 调用会返回 ErrUpstream，接口上能明确看到"没配 token"，而不是 panic。
+func newAIAppHubSyncService(db *gorm.DB, settingsRepo *repository.SettingsRepo) *service.AIAppHubSyncService {
+	repo := repository.NewAIAppHubRepo(db)
+	token := os.Getenv("EHR_API_TOKEN")
+	if token == "" {
+		return service.NewAIAppHubSyncService(unconfiguredFetcher{}, repo, settingsRepo, service.DefaultSyncRules())
+	}
+	fetcher := aiapphub.New(aiapphub.Config{
+		BaseURL: envOr("EHR_BASE_URL", ehrBaseURLDefault),
+		Prefix:  envOr("EHR_PREFIX", ehrPrefixDefault),
+		Token:   token,
+		OrgID:   envOr("EHR_ORG_ID", ehrOrgIDDefault),
+	})
+	return service.NewAIAppHubSyncService(fetcher, repo, settingsRepo, service.DefaultSyncRules())
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+type unconfiguredFetcher struct{}
+
+func (unconfiguredFetcher) FetchDepartments(context.Context) ([]aiapphub.Department, error) {
+	return nil, fmt.Errorf("%w: EHR_API_TOKEN 未配置", aiapphub.ErrUpstream)
 }

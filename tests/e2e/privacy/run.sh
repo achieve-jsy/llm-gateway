@@ -74,20 +74,10 @@ UPSTREAM_PORT=$UP_PORT UPSTREAM_DUMP_DIR=$WORK/upstream \
   python3 tests/e2e/privacy/upstream.py > "$WORK/upstream.log" 2>&1 &
 echo $! >> "$WORK/pids"
 
-# ── 构建 + control-plane ────────────────────────────────────────────────────
+# ── 构建 ────────────────────────────────────────────────────────────────────
 log "构建二进制"
 go build -o "$WORK/gateway" ./cmd/gateway
 go build -o "$WORK/control-plane" ./cmd/control-plane
-
-log "启动 control-plane"
-APP_ENV=dev CONTROL_PLANE_PORT=$CP_PORT DATABASE_URL="$DB_URL" \
-  REDIS_ADDR="127.0.0.1:$REDIS_PORT" REDIS_PASSWORD='' \
-  "$WORK/control-plane" > "$WORK/cp.log" 2>&1 &
-echo $! >> "$WORK/pids"
-for _ in $(seq 1 40); do
-  [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CP_PORT/api/v1/settings/public")" = 200 ] && break
-  sleep 1
-done
 
 # ── 最小数据集 ──────────────────────────────────────────────────────────────
 log "写入最小数据集"
@@ -107,6 +97,20 @@ insert into group_models (group_id, model_id, model_name, priority, weight)
 values (1, '44444444-4444-4444-4444-444444444444', 'bf-privacy-e2e', 0, 1)
 on conflict do nothing;
 SQL
+
+# control-plane 只在启动时把「可用模型快照」写一次 Redis（router.Setup 里的
+# RefreshAvailableSnapshot），之后要等 provider 变更才会再写。所以必须先灌数据再起 CP：
+# 反过来的话网关拿到的是一份空快照，请求会 404 unknown_model。
+# 之前能过只是因为共用一个长期存活的 Redis，里面残留着上一轮的快照。
+log "启动 control-plane"
+APP_ENV=dev CONTROL_PLANE_PORT=$CP_PORT DATABASE_URL="$DB_URL" \
+  REDIS_ADDR="127.0.0.1:$REDIS_PORT" REDIS_PASSWORD='' \
+  "$WORK/control-plane" > "$WORK/cp.log" 2>&1 &
+echo $! >> "$WORK/pids"
+for _ in $(seq 1 40); do
+  [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CP_PORT/api/v1/settings/public")" = 200 ] && break
+  sleep 1
+done
 
 # ── 网关配置与启动 ──────────────────────────────────────────────────────────
 # 只改 privacy 段：mode / key_path / actions，其余沿用 config/dev.yaml。
@@ -180,6 +184,20 @@ req "$(body "第二次 $SECRET")" > /dev/null
 second=$(cat "$(last_up)" | grep -o '{{[A-Z_]*_[0-9a-z]\{8\}}}' | head -1)
 [ -n "$first" ] && [ "$first" = "$second" ] || fail "占位符不稳定: $first vs $second"
 echo "占位符: $first"
+
+log "用例 2b/5 trace 落库：call_traces 里不能留明文"
+# 时序：TraceCapture 在 handler 之前就抓走了原始字节，trace 又是异步批量落库，
+# 所以要轮询等落库完成；mask 模式的 trace 正文必须与上游一致（占位符，无明文）。
+traced=0
+for _ in $(seq 1 20); do
+  masked=$(psql "$DB_URL" -tAc "select count(*) from call_traces where request_body::text like '%{{%'" 2>/dev/null || echo 0)
+  if [ "${masked:-0}" -ge 1 ]; then traced=1; break; fi
+  sleep 1
+done
+[ "$traced" = 1 ] || fail "call_traces 里没有脱敏后的请求正文"
+plain=$(psql "$DB_URL" -tAc "select count(*) from call_traces where request_body::text like '%glpat-%'" 2>/dev/null || echo 0)
+[ "${plain:-0}" = 0 ] || fail "call_traces 里仍有明文凭证（$plain 条）"
+echo "call_traces: 含占位符 $masked 条，含明文 $plain 条"
 
 log "用例 3/5 流式：占位符被上游切成两半，客户端仍拿到完整原文"
 stream=$(req "$(printf '{"model":"privacy-e2e-group","stream":true,"messages":[{"role":"user","content":"流式 %s 结束"}]}' "$SECRET")" stream)

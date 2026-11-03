@@ -130,78 +130,88 @@
               <div class="form-hint">默认使用 Catalog；手动价格单位为 USD / 1M tokens。</div>
             </el-form-item>
 
+            <template v-if="pricingMode === 'catalog'">
+              <el-form-item label="Catalog 关联">
+                <el-radio-group v-model="catalogBindingMode">
+                  <el-radio-button label="auto">自动匹配</el-radio-button>
+                  <el-radio-button label="manual">手动指定</el-radio-button>
+                </el-radio-group>
+                <div class="form-hint">手动指定会在创建模型时直接写入 catalog_id。</div>
+              </el-form-item>
+
+              <div v-if="catalogBindingMode === 'manual'" class="catalog-map-table">
+                <div class="catalog-row catalog-head">
+                  <span>模型名</span>
+                  <span>Catalog 条目</span>
+                </div>
+                <div v-for="model in parsedModels" :key="model" class="catalog-row">
+                  <span class="mono-text">{{ model }}</span>
+                  <el-select
+                    v-model="catalogBindings[model]"
+                    filterable
+                    remote
+                    clearable
+                    :remote-method="(query: string) => searchCatalogOptions(model, query)"
+                    :loading="catalogLoading[model]"
+                    placeholder="搜索并选择 Catalog"
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="item in catalogOptions[model] || []"
+                      :key="item.id"
+                      :label="catalogOptionLabel(item)"
+                      :value="item.id"
+                    />
+                  </el-select>
+                </div>
+                <div v-if="parsedModels.length === 0" class="pricing-empty">输入模型名后可关联 Catalog</div>
+              </div>
+            </template>
+
+            <el-form-item v-if="pricingMode !== 'catalog'" label="缓存价格">
+              <el-checkbox v-model="showCachePricing">设置缓存读/写价格</el-checkbox>
+              <div class="form-hint">不设置时按现有计费逻辑处理。</div>
+            </el-form-item>
+
             <el-row v-if="pricingMode === 'uniform'" :gutter="16">
-              <el-col :span="6">
+              <el-col :span="12">
                 <el-form-item label="输入价格">
                   <el-input-number v-model="uniformPricing.input" :min="0" :precision="6" :step="0.1" style="width: 100%" />
                 </el-form-item>
               </el-col>
-              <el-col :span="6">
+              <el-col :span="12">
                 <el-form-item label="输出价格">
                   <el-input-number v-model="uniformPricing.output" :min="0" :precision="6" :step="0.1" style="width: 100%" />
                 </el-form-item>
               </el-col>
-              <el-col :span="6">
+              <el-col v-if="showCachePricing" :span="12">
                 <el-form-item label="缓存读价格">
                   <el-input-number v-model="uniformPricing.cacheRead" :min="0" :precision="6" :step="0.1" style="width: 100%" />
                 </el-form-item>
               </el-col>
-              <el-col :span="6">
+              <el-col v-if="showCachePricing" :span="12">
                 <el-form-item label="缓存写价格">
                   <el-input-number v-model="uniformPricing.cacheWrite" :min="0" :precision="6" :step="0.1" style="width: 100%" />
                 </el-form-item>
               </el-col>
             </el-row>
 
-            <div v-else-if="pricingMode === 'per_model'" class="pricing-table">
+            <div v-else-if="pricingMode === 'per_model'" class="pricing-table" :class="{ 'with-cache': showCachePricing }">
               <div class="pricing-row pricing-head">
                 <span>模型名</span>
                 <span>输入价格</span>
                 <span>输出价格</span>
-                <span>缓存读价格</span>
-                <span>缓存写价格</span>
+                <span v-if="showCachePricing">缓存读价格</span>
+                <span v-if="showCachePricing">缓存写价格</span>
               </div>
               <div v-for="model in parsedModels" :key="model" class="pricing-row">
                 <span class="mono-text">{{ model }}</span>
                 <el-input-number v-model="perModelPricing[model].input" :min="0" :precision="6" :step="0.1" />
                 <el-input-number v-model="perModelPricing[model].output" :min="0" :precision="6" :step="0.1" />
-                <el-input-number v-model="perModelPricing[model].cacheRead" :min="0" :precision="6" :step="0.1" />
-                <el-input-number v-model="perModelPricing[model].cacheWrite" :min="0" :precision="6" :step="0.1" />
+                <el-input-number v-if="showCachePricing" v-model="perModelPricing[model].cacheRead" :min="0" :precision="6" :step="0.1" />
+                <el-input-number v-if="showCachePricing" v-model="perModelPricing[model].cacheWrite" :min="0" :precision="6" :step="0.1" />
               </div>
               <div v-if="parsedModels.length === 0" class="pricing-empty">输入模型名后可分别设置价格</div>
-            </div>
-          </el-collapse-item>
-        </el-collapse>
-
-        <el-collapse v-model="catalogPanels" class="advanced-collapse">
-          <el-collapse-item title="Catalog 关联（可选）" name="catalog">
-            <div class="form-hint catalog-hint">可为每个模型手动指定 Catalog 条目；不指定时按模型名和后续自动绑定流程处理。</div>
-            <div class="catalog-map-table">
-              <div class="catalog-row catalog-head">
-                <span>模型名</span>
-                <span>Catalog 条目</span>
-              </div>
-              <div v-for="model in parsedModels" :key="model" class="catalog-row">
-                <span class="mono-text">{{ model }}</span>
-                <el-select
-                  v-model="catalogBindings[model]"
-                  filterable
-                  remote
-                  clearable
-                  :remote-method="(query: string) => searchCatalogOptions(model, query)"
-                  :loading="catalogLoading[model]"
-                  placeholder="搜索并选择 Catalog"
-                  style="width: 100%"
-                >
-                  <el-option
-                    v-for="item in catalogOptions[model] || []"
-                    :key="item.id"
-                    :label="catalogOptionLabel(item)"
-                    :value="item.id"
-                  />
-                </el-select>
-              </div>
-              <div v-if="parsedModels.length === 0" class="pricing-empty">输入模型名后可关联 Catalog</div>
             </div>
           </el-collapse-item>
         </el-collapse>
@@ -215,7 +225,7 @@
                   <div v-if="selectedDef?.base_url" class="form-hint">默认地址：{{ selectedDef.base_url }}</div>
                 </el-form-item>
               </el-col>
-              <el-col :span="12">
+              <el-col v-if="credentialKeys.length > 1" :span="12">
                 <el-form-item label="Key 字段" prop="credential_key">
                   <el-select
                     v-model="formData.credential_key"
@@ -271,42 +281,60 @@
         <div v-if="previewRows.length === 0" class="preview-empty">
           输入 Key 和模型后生成渠道预览
         </div>
-        <el-table v-else :data="previewRows" border max-height="220">
-          <el-table-column label="渠道名称" min-width="190">
-            <template #default="{ row }">
-              <span>{{ row.name }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="Key" min-width="180">
-            <template #default="{ row }">
-              <span class="mono-text">{{ row.credential }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="将创建模型" min-width="280">
-            <template #default="{ row }">
-              <div class="model-tags">
-                <el-tag v-for="model in row.models" :key="model" size="small" effect="plain">{{ model }}</el-tag>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="价格来源" width="140">
-            <template #default>
-              <el-tag size="small" effect="plain">{{ pricingModeLabel }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="Catalog" width="110">
-            <template #default>
-              <el-tag size="small" effect="plain">{{ catalogSummaryLabel }}</el-tag>
-            </template>
-          </el-table-column>
-        </el-table>
+        <template v-else>
+          <div class="preview-summary">
+            <div>
+              <span class="preview-summary-label">渠道</span>
+              <strong>{{ previewRows.length }}</strong>
+            </div>
+            <div>
+              <span class="preview-summary-label">每渠道模型</span>
+              <strong>{{ parsedModels.length }}</strong>
+            </div>
+            <div>
+              <span class="preview-summary-label">模型实例</span>
+              <strong>{{ totalModelCreates }}</strong>
+            </div>
+            <div>
+              <span class="preview-summary-label">价格</span>
+              <strong>{{ pricingModeLabel }}</strong>
+            </div>
+            <div>
+              <span class="preview-summary-label">Catalog</span>
+              <strong>{{ catalogSummaryLabel }}</strong>
+            </div>
+          </div>
+          <el-collapse v-model="previewPanels" class="preview-detail-collapse">
+            <el-collapse-item title="查看明细" name="detail">
+              <el-table :data="previewRows" border max-height="220">
+                <el-table-column label="渠道名称" min-width="190">
+                  <template #default="{ row }">
+                    <span>{{ row.name }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Key" min-width="180">
+                  <template #default="{ row }">
+                    <span class="mono-text">{{ row.credential }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="将创建模型" min-width="280">
+                  <template #default="{ row }">
+                    <div class="model-tags">
+                      <el-tag v-for="model in row.models" :key="model" size="small" effect="plain">{{ model }}</el-tag>
+                    </div>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-collapse-item>
+          </el-collapse>
+        </template>
       </div>
     </div>
 
     <template #footer>
       <el-button @click="emit('close')">取消</el-button>
       <el-button type="primary" :loading="submitting" :disabled="previewRows.length === 0" @click="handleSubmit">
-        创建 {{ previewRows.length }} 个渠道
+        创建 {{ previewRows.length }} 个渠道和 {{ totalModelCreates }} 个模型
       </el-button>
     </template>
   </el-dialog>
@@ -355,8 +383,10 @@ const previewLoading = ref(false)
 const templateProviderId = ref('')
 const advancedPanels = ref<string[]>([])
 const pricingPanels = ref<string[]>([])
-const catalogPanels = ref<string[]>([])
+const previewPanels = ref<string[]>([])
 const pricingMode = ref<PricingMode>('catalog')
+const catalogBindingMode = ref<'auto' | 'manual'>('auto')
+const showCachePricing = ref(false)
 const uniformPricing = ref<PricePair>({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 const perModelPricing = ref<Record<string, PricePair>>({})
 const catalogBindings = ref<Record<string, string>>({})
@@ -409,6 +439,7 @@ const pricingModeLabel = computed(() => {
 })
 
 const catalogSummaryLabel = computed(() => {
+  if (pricingMode.value !== 'catalog' || catalogBindingMode.value !== 'manual') return '自动'
   const bound = parsedModels.value.filter(model => catalogBindings.value[model]).length
   return bound > 0 ? `${bound}/${parsedModels.value.length}` : '自动'
 })
@@ -441,8 +472,10 @@ function resetForm() {
   templateProviderId.value = ''
   advancedPanels.value = []
   pricingPanels.value = []
-  catalogPanels.value = []
+  previewPanels.value = []
   pricingMode.value = 'catalog'
+  catalogBindingMode.value = 'auto'
+  showCachePricing.value = false
   uniformPricing.value = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   perModelPricing.value = {}
   catalogBindings.value = {}
@@ -574,7 +607,9 @@ function buildModelPayload(modelName: string) {
     price_mode: 'catalog',
     weight: 1
   }
-  if (catalogBindings.value[modelName]) payload.catalog_id = catalogBindings.value[modelName]
+  if (pricingMode.value === 'catalog' && catalogBindingMode.value === 'manual' && catalogBindings.value[modelName]) {
+    payload.catalog_id = catalogBindings.value[modelName]
+  }
   if (pricingMode.value === 'uniform') {
     return applyManualPricing(payload, uniformPricing.value)
   }
@@ -612,8 +647,8 @@ function applyManualPricing(payload: QuickOnboardPayload['models'][number], pair
     input_price: pair.input,
     output_price: pair.output,
   }
-  if (pair.cacheRead > 0) priced.cache_read_price = pair.cacheRead
-  if (pair.cacheWrite > 0) priced.cache_write_price = pair.cacheWrite
+  if (showCachePricing.value && pair.cacheRead > 0) priced.cache_read_price = pair.cacheRead
+  if (showCachePricing.value && pair.cacheWrite > 0) priced.cache_write_price = pair.cacheWrite
   return priced
 }
 
@@ -853,9 +888,13 @@ function validatePricing(): boolean {
 
 .pricing-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 130px 130px 130px 130px;
+  grid-template-columns: minmax(0, 1fr) 130px 130px;
   gap: 10px;
   align-items: center;
+}
+
+.pricing-table.with-cache .pricing-row {
+  grid-template-columns: minmax(0, 1fr) 130px 130px 130px 130px;
 }
 
 .pricing-head {
@@ -955,6 +994,44 @@ function validatePricing(): boolean {
   font-size: 13px;
 }
 
+.preview-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px;
+}
+
+.preview-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+  background: var(--el-fill-color-extra-light);
+}
+
+.preview-summary-label {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.preview-detail-collapse {
+  border-top: 1px solid var(--el-border-color-light);
+}
+
+.preview-detail-collapse :deep(.el-collapse-item__header) {
+  height: 38px;
+  padding: 0 14px;
+  border-bottom: 0;
+  color: var(--el-text-color-regular);
+  font-weight: 500;
+}
+
+.preview-detail-collapse :deep(.el-collapse-item__content) {
+  padding-bottom: 0;
+}
+
 .mono-text {
   font-family: monospace;
   color: var(--el-text-color-secondary);
@@ -996,6 +1073,10 @@ function validatePricing(): boolean {
 
   .catalog-row {
     grid-template-columns: 1fr;
+  }
+
+  .preview-summary {
+    grid-template-columns: 1fr 1fr;
   }
 }
 </style>

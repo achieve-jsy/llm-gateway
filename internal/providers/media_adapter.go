@@ -16,9 +16,21 @@ type MediaAdapterParams struct {
 	Name string
 	// BaseURL 是上游 base URL（来自 provider.endpoint）；为空表示用渠道默认地址。
 	BaseURL string
-	// Credentials 是**原始凭证文本**（provider_credentials，通常是一段 JSON）。
+	// Credentials 是**原始凭证文本**（provider_credentials）。
 	// 各渠道自行解析自己的 schema（如 Kling 的 access_key/secret_key），
 	// 网关不解释其内部结构——渠道之间因此互不耦合。
+	//
+	// ⚠️ 形态不一定是 JSON！控制面 internal/controlplane/service/credential.go 的
+	// extractAPIKey 会按 auth_type 决定下发形态：
+	//   - auth_type ∈ {aksk, iam, hmac} → **保留完整 JSON**（如 Kling 的
+	//     access_key/secret_key 双列，因为既无 auth_type 也无 api_key，也走这条）；
+	//   - 否则若含 api_key 字段 → **抽成裸字符串**（单 Key 渠道，如 Vidu）；
+	//   - 两者都不满足 → 原样返回。
+	// 因此**单 Key 渠道的适配器必须同时接受裸字符串与 JSON 两种形态**，否则真机上会
+	// 「凭据解析失败 → 渠道静默从注册表消失 → 全部请求 501」。已由 providers/vidu 验证。
+	//
+	// 反面注意：若在双列凭据（如 Kling）里加上 api_key 字段，它会被抽成裸字符串并
+	// 导致该渠道静默失效——双列渠道的凭据 JSON 里**不要**出现 api_key 键。
 	Credentials string
 	// Models 是该渠道声明的模型名列表（可空，仅用于日志/能力提示）。
 	Models []string

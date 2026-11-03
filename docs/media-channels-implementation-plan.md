@@ -509,6 +509,63 @@ image 组落到 `buildProbeRequest` 的 **default 分支**去发 `POST /v1/chat/
    从未被使用（SA4010），是纯死代码（`models` map 已按 id 索引）。已删除并复验回到精确基线。
    → 教训：**合并后必须重跑 lint 并逐 linter 对拍**，只对拍总数会漏掉「一项降一项升」的情况。
 
+### D3（Vidu 适配器）合并记录 + 一次「验收闸门被既有 flaky 测试污染」的排查（第 11 轮）
+
+**D3 交付**：`feat/media-d3`，基线 `c498dcbe` → 6 个提交，改动严格限定在
+`internal/providers/vidu/{credentials,translate,media_adapter}.go` 与
+`tests/providers/vidu/*_test.go` 共 7 个文件；`MediaProviderType`/`NewMediaAdapter`
+的导出符号与签名保持不变（工厂表未改）。**已快进合并到集成分支**。
+
+lead 复核结论（不照单全收）：
+- 独立跑闸门：`make build`=0、lint **精确基线 125 / staticcheck 9 / ineffassign 12 / gosimple 4**、
+  `providers/vidu` 0 命中、`go.mod`/`vendor` 零改动。
+- 🔴 独立跑 `make test` **首次得到 4 个 FAIL**，与 D3 声称的「50 包 0 FAIL」不符 → 见下节排查。
+  最终 `make test` = **50 包 0 FAIL**（连续 4 次）。
+
+#### 🔴 那次 FAIL 的真相：既有 flaky 测试，与媒体工作无关
+
+第一次 `make test` 失败的是 **`tests/controlplane/keyactivity`** 的 3 个用例
+（`TestScanner_E4_Spike_TriggersAlert` / `TestScanner_E4_Dedup_SameHourTwice` /
+`TestScanner_Comprehensive_E2AndE4BothTrigger`），**D3 根本没有碰过这个包**。
+
+**排查过程与证据**：
+1. `git log main..HEAD -- internal/controlplane/keyactivity/ tests/controlplane/keyactivity/`
+   → **空**：整个媒体分支从未修改该包及其测试 → 失败**可证明与媒体工作无关**。
+2. 单独跑 → 通过；整包跑 3 次 → 通过；全量 `make test` 复跑 4 次 → 全绿（50 包 0 FAIL）。
+3. 失败输出的时间戳是 **16:59:58——整点前 2 秒**；断言为
+   `expected 1 usage_spike alert (100 > threshold 35), got 0` 与
+   `E4 with same hour bucket should deduplicate to 1, got 0`，日志中 alert 去重键形如
+   `dedup=2026-10-16-15`（**日期+小时**）。
+
+**根因**：`internal/controlplane/keyactivity/scanner.go:196` 的
+`nowHour := hourBucketTime(time.Now())` 用**墙钟**截断到小时作为尖峰去重键，
+而测试用 `time.Now()` 造数（如 `cursor = time.Now().Add(-24*time.Hour)`、
+`pastTime := time.Now().Add(-2*time.Hour)`）。两者都依赖「当前墙钟落在小时的哪个位置」，
+因此在**整点边界附近**，测试硬编码的小时桶期望与实际计算出的桶不一致 → 断言失败。
+
+**性质定性（不夸大）**：这是**既有缺陷**（不是本次改动引入），触发概率低但对**验收闸门**
+有实际影响——它会不定期把一次干净的交付判成红的，**且极易被误判为「刚合并的那支队伍搞坏了」**
+（本轮就差点如此）。出现时必须先用上面的 `git log -- <包路径>` 证明相关性，再复跑确认。
+
+**处置**：本轮**不修**。正确修法是给 scanner 注入可控时钟（把 `time.Now()` 换成可注入的
+`now func() time.Time`），这属于 `internal/controlplane/keyactivity` 这个**其它子系统**的
+生产代码改动，超出媒体链路范围；按 D1/文件边界纪律不应顺手动。已在此登记给该模块的负责人。
+**已验证当前闸门为绿**（连续 4 次全量 50 包 0 FAIL）。
+
+#### D3 的一个跨渠道发现（价值超出本任务）
+
+控制面 `internal/controlplane/service/credential.go` 的 `extractAPIKey` 会按 `auth_type`
+决定下发形态：`aksk|iam|hmac` → **保留完整 JSON**；否则若含 `api_key` → **抽成裸字符串**；
+两者都不满足 → 原样返回。因此：
+
+- **单 Key 渠道的适配器必须同时接受「裸字符串」与「JSON」两种形态**，否则真机上会
+  「凭据解析失败 → 渠道静默从注册表消失 → 全部请求 501」。Vidu 已按此实现并有单测。
+- **Kling 不受影响**（lead 已逐行核实，非采信）：其凭据是
+  `{"access_key":...,"secret_key":...}`，**既无 `auth_type` 也无 `api_key`**，走最后一行
+  原样返回。但这也意味着：**若将来有人在 Kling 凭据里加上 `api_key` 字段，它会被抽成裸字符串
+  并导致 Kling 静默失效** —— 已作为接缝契约的注意事项登记（见
+  `internal/providers/media_adapter.go` 的注释）。
+
 ## 3. 批次与依赖图
 
 ```mermaid

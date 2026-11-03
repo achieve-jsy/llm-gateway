@@ -117,6 +117,33 @@ func TestSanitizeResponsesRequest_RemapsTopLevelVerbosity(t *testing.T) {
 	assert.Equal(t, "text", format["type"])
 }
 
+func TestSanitizeResponsesRequest_StripsClaudeThinkingAndMapsEffort(t *testing.T) {
+	req := &core.ResponsesRequest{
+		Model: "gpt-5.5",
+		Input: "hi",
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"thinking": json.RawMessage(`{"type":"enabled","budget_tokens":12000}`),
+		}),
+	}
+	providers.SanitizeResponsesRequest(req)
+	assert.Empty(t, req.ExtraFields.Lookup("thinking"), "thinking must not reach OpenAI/Azure Responses")
+	require.NotNil(t, req.Reasoning)
+	assert.Equal(t, "high", req.Reasoning.Effort)
+
+	// 已有 reasoning.effort 时不覆盖，但仍剥离 thinking
+	req2 := &core.ResponsesRequest{
+		Model:     "gpt-5.5",
+		Input:     "hi",
+		Reasoning: &core.Reasoning{Effort: "low"},
+		ExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
+			"thinking": json.RawMessage(`{"type":"enabled","budget_tokens":12000}`),
+		}),
+	}
+	providers.SanitizeResponsesRequest(req2)
+	assert.Empty(t, req2.ExtraFields.Lookup("thinking"))
+	assert.Equal(t, "low", req2.Reasoning.Effort)
+}
+
 func TestConvertChatRequestToResponses_MapsToolsAndReasoning(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-5.5",

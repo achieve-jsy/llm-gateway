@@ -1,0 +1,10 @@
+# 原本地开发库配置备份（192.0.2.10）
+# 恢复：cp config/dev.yaml.orig-local config/dev.yaml
+
+redis:
+  addr: "192.0.2.10:6379"
+  password: "CHANGE_ME_REDIS_PASSWORD"
+  db: 0
+
+database:
+  url: "host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway sslmode=disable"

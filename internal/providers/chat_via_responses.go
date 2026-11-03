@@ -415,7 +415,7 @@ func truncateUserRaw(raw json.RawMessage) json.RawMessage {
 	return encoded
 }
 
-// SanitizeResponsesRequest 出站防火墙：把误入的 Chat Completions 顶层字段
+// SanitizeResponsesRequest 出站防火墙：把误入的 Chat Completions / Claude 顶层字段
 // 收敛为 Responses 合法形态（对齐 LiteLLM + OpenAI Responses 文档）。
 // 直连 /responses 与 Chat→Responses 桥接都会走这里。
 func SanitizeResponsesRequest(req *core.ResponsesRequest) {
@@ -424,11 +424,104 @@ func SanitizeResponsesRequest(req *core.ResponsesRequest) {
 	}
 	// Chat Completions 的 stream_options.include_usage 对 Responses 非法。
 	req.StreamOptions = nil
+	// Claude / CC Switch 注入的 thinking → reasoning（或丢弃），避免 Unknown parameter: 'thinking'
+	applyThinkingToReasoning(req)
 	applyResponsesOptionalExtras(req.ExtraFields, req)
+}
+
+// applyThinkingToReasoning 处理 Anthropic/Claude Code/CC Switch 注入的顶层 thinking。
+// OpenAI/Azure Responses 只认 reasoning；thinking 必须剥离，否则上游 400。
+func applyThinkingToReasoning(req *core.ResponsesRequest) {
+	if req == nil {
+		return
+	}
+	raw := req.ExtraFields.Lookup("thinking")
+	if len(raw) == 0 || string(raw) == "null" {
+		return
+	}
+
+	// 已有 reasoning.effort 时只剥 thinking，不覆盖客户端明确指定的推理强度。
+	if req.Reasoning != nil && strings.TrimSpace(req.Reasoning.Effort) != "" {
+		return
+	}
+
+	effort := mapThinkingPayloadToEffort(raw)
+	if effort == "" {
+		return
+	}
+	if req.Reasoning == nil {
+		req.Reasoning = &core.Reasoning{Effort: effort}
+		return
+	}
+	req.Reasoning.Effort = effort
+}
+
+// mapThinkingPayloadToEffort 将 Claude thinking 载荷粗映射为 OpenAI reasoning.effort。
+// 支持：
+//   - {"type":"enabled","budget_tokens":N}
+//   - {"type":"adaptive"} / {"type":"disabled"}
+//   - 字符串 "low"|"medium"|"high" 等
+func mapThinkingPayloadToEffort(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			return ""
+		}
+		s = strings.ToLower(strings.TrimSpace(s))
+		switch s {
+		case "none", "minimal", "low", "medium", "high", "xhigh":
+			return s
+		default:
+			return ""
+		}
+	}
+
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) != nil {
+		return ""
+	}
+	if t, _ := obj["type"].(string); strings.EqualFold(t, "disabled") {
+		return "none"
+	}
+	if t, _ := obj["type"].(string); strings.EqualFold(t, "adaptive") {
+		return "medium"
+	}
+	if effort, _ := obj["effort"].(string); strings.TrimSpace(effort) != "" {
+		return strings.ToLower(strings.TrimSpace(effort))
+	}
+
+	budget := 0
+	switch v := obj["budget_tokens"].(type) {
+	case float64:
+		budget = int(v)
+	case int:
+		budget = v
+	case json.Number:
+		n, _ := v.Int64()
+		budget = int(n)
+	}
+	switch {
+	case budget <= 0:
+		if t, _ := obj["type"].(string); strings.EqualFold(t, "enabled") {
+			return "medium"
+		}
+		return ""
+	case budget < 1024:
+		return "low"
+	case budget < 8192:
+		return "medium"
+	default:
+		return "high"
+	}
 }
 
 // applyResponsesOptionalExtras 将 ExtraFields 收敛为 Responses 白名单字段，
 // 并完成 verbosity / response_format → text.* 的 LiteLLM/OpenAI 映射。
+// thinking / reasoning_effort 等 Chat/Claude-only 字段不在白名单，出站会被丢弃。
 func applyResponsesOptionalExtras(src core.UnknownJSONFields, respReq *core.ResponsesRequest) {
 	if respReq == nil {
 		return

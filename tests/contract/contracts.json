@@ -792,112 +792,181 @@
     }
   },
   "media_channels": {
-    "status": "骨架（A10 占位）：路由、字段清单、状态词表已按设计文档 §2.1/§3.3/§6.3 落定；示例与逐项错误码细节由 E 队补齐",
+    "status": "已与实现对齐（Batch 3 · E4 收口）：路由、响应字段、状态词表、错误码逐条能在代码里找到对应实现，证据以 file:line 标注。新增/修改本段前必须先核对 evidence；**代码里没有的 code / 字段一律不许写进来**（写了但代码不返回，是最坏的一种文档）。",
     "design_doc": "docs/media-channels-integration-design.md",
     "public_doc": "docs/media-api.md",
     "base_prefix": "/v1",
     "auth": "Bearer <api key>（沿用 /v1 鉴权链；任务查询与产物额外做归属校验）",
     "routes": {
       "POST /images/generations": {
-        "handler": "internal/gateway/handler/image_handler.go（B 队实现，A7 接缝已就位）",
+        "handler": "internal/gateway/handler/image_handler.go（ImageHandler.HandleImageGeneration）",
+        "handler_evidence": "internal/gateway/server/routes_media.go:156 注册；实现 internal/gateway/handler/image_handler.go:209",
         "upstream": "OpenAI Images /v1/images/generations（gpt-image）",
         "success_status": 200,
         "request_content_type": "application/json",
         "response_content_type": "application/json",
-        "response_note": "必须原样回写上游响应字节（b64 可达数十 MB），禁止重新序列化",
+        "response_note": "原样回写上游响应字节（b64 可达数十 MB），禁止重新序列化：image_handler.go:669-691",
         "request_fields": [
           "model", "prompt", "n", "size", "quality", "background",
           "moderation", "output_format", "output_compression", "user"
-        ]
+        ],
+        "request_fields_evidence": "internal/core/image.go:62-77 ImageGenerationRequest"
       },
       "POST /images/edits": {
-        "handler": "internal/gateway/handler/image_handler.go（B 队实现，A7 接缝已就位）",
+        "handler": "internal/gateway/handler/image_handler.go（ImageHandler.HandleImageEdit）",
+        "handler_evidence": "internal/gateway/server/routes_media.go:157 注册；实现 internal/gateway/handler/image_handler.go:260",
         "upstream": "OpenAI Images /v1/images/edits（gpt-image）",
         "success_status": 200,
         "request_content_type": "multipart/form-data",
         "response_content_type": "application/json",
         "multipart_fields": {
-          "image": "可重复字段（image[]），至少 1 个；顺序语义化（首尾帧），网关重建 multipart 时必须保序并保留真实 filename",
-          "mask": "可选；缺省文件名 mask.png"
+          "image": "可重复字段（image / image[]），至少 1 个；顺序语义化（首尾帧），网关重建 multipart 时必须保序并保留真实 filename：image_handler.go:446-462",
+          "mask": "可选；缺省文件名 mask.png（internal/core/image.go:37）"
         },
         "request_fields": [
           "model", "prompt", "n", "size", "quality", "background", "moderation",
           "output_format", "output_compression", "input_fidelity", "response_format", "user"
         ],
-        "multipart_only_fields": ["image[]", "mask"]
+        "multipart_only_fields": ["image[]", "mask"],
+        "request_fields_evidence": "internal/core/image.go:84-104 ImageEditRequest",
+        "limits": "单文件 part 32MB / 整请求 128MB / 单文本字段 1MB / 上游超时 120s（image_handler.go:54-77）；超限 400 invalid_request_error"
       },
       "POST /videos": {
-        "handler": "internal/gateway/handler/media_task_handler.go（C 队实现，A7 接缝已就位）",
+        "handler": "internal/gateway/handler/media_task_handler.go（MediaTaskHandler.Create）",
+        "handler_evidence": "internal/gateway/server/routes_media.go:216 注册；实现 internal/gateway/handler/media_task_handler.go:293",
         "success_status": 200,
+        "success_status_note": "创建成功与幂等命中都是 200（media_task_handler.go:437/481/484/504/507）；幂等命中不重复打上游、不重复计费",
         "request_content_type": "application/json",
         "request_fields": [
           "model", "prompt", "image", "duration", "resolution", "mode", "action", "aspect_ratio"
         ],
+        "request_fields_extra": {
+          "size": "可选；用于推导 aspect_ratio，并原样回填到响应的 size（media_task_handler.go:1523 mediaSubmitParams、:1197 mediaResponseSize）",
+          "kind": "可选；缺省 video，显式 image 用于异步图像渠道（media_task_handler.go:1695 mediaTaskKind）",
+          "client_request_id": "可选；Idempotency-Key 头的 body 兜底（media_task_handler.go Create 幂等键解析）"
+        },
+        "image_field_note": "image / images 可单值可数组，元素可为 URL 字符串或 {url:...}；张数决定 action（0→text_to_video、1→image_to_video、2→first_tail_to_video、>2→reference_to_video），保序不去重（media_task_handler.go:1710 mediaTaskAction）",
+        "validation": "body 上限 64KB、必须为 JSON 对象；缺 model / 缺 prompt 且缺图 / action 与图片数矛盾 → 400 invalid_request_error（media_task_handler.go:306-322、:1488-1497）",
         "optional_headers": ["Idempotency-Key"],
-        "flow": "鉴权 → 组调度（组名→上游模型+渠道类型）→ PrepareAuthorizedGates（预算+请求配额+模型配额）→ 适配器 Submit → 同步写控制面 /internal/v1/media-tasks（写失败必须 5xx，禁止 fire-and-forget）"
+        "flow": "鉴权 → 组调度（组名→上游模型+渠道类型）→ PrepareAuthorizedGates（预算+请求配额+模型配额）→ 402 media_pricing_missing → 适配器 Submit（WithNoRetry，至多一次）→ 同步写控制面 /internal/v1/video/tasks（写失败必须 502，禁止 fire-and-forget）",
+        "response": "OpenAI video 对象，字段见 video_response_fields"
       },
       "GET /videos/{task_id}": {
-        "handler": "internal/gateway/handler/media_task_handler.go（C 队实现，A7 接缝已就位）",
+        "handler": "internal/gateway/handler/media_task_handler.go（MediaTaskHandler.Retrieve）",
+        "handler_evidence": "internal/gateway/server/routes_media.go:217 注册；实现 internal/gateway/handler/media_task_handler.go:584",
         "success_status": 200,
         "flow": "本地任务查询 → 归属校验 → 终态缓存直返 → 未终态则 adapter.Query(vendor_task_id) → 状态归一 → CAS 只前进 → completed 时记账一次",
-        "ownership_rule": "task_id 必须属于调用方 API Key/用户；跨 Key 读取一律返回 404（不是 403，避免任务探测）"
+        "ownership_rule": "task_id 必须属于调用方 API Key/用户；任务不存在与不属于调用方都返回 **404 not_found_error**（不是 403，避免任务探测）：media_task_handler.go:959-976",
+        "error_statuses": "404 not_found_error / 501 not_implemented（渠道未接线）/ 502 upstream_error（上游查询或 CAS 写入失败）/ 503 service_unavailable（store 未接线）"
       },
       "GET /videos/{task_id}/content": {
-        "handler": "internal/gateway/handler/media_task_handler.go（C 队实现）",
+        "handler": "internal/gateway/handler/media_task_handler.go（MediaTaskHandler.Content）",
+        "handler_evidence": "internal/gateway/server/routes_media.go:218 注册；实现 internal/gateway/handler/media_task_handler.go:727",
         "success_status": 302,
-        "note": "Phase 1-4 直跳上游产物 URL（credentialless）；Phase 5 改为网关代理"
+        "note": "Phase 1-4 直跳上游产物 URL（credentialless，Cache-Control: no-store，只放行 http/https）；Phase 5 改为网关代理",
+        "error_statuses": "404 not_found_error（任务未完成或无可下载产物）/ 502 upstream_error（产物地址非法）/ 503 service_unavailable（store 未接线）：media_task_handler.go:729-754"
+      }
+    },
+    "video_object": {
+      "shape_source": "New API dto/openai_video.go（照 OpenAI video 对象实现）。依据：D1 决策选型理由即「对齐 OpenAI 生态，客户端 SDK 可直接用」；响应结构见 internal/gateway/handler/media_task_handler.go:225",
+      "object_value": "video",
+      "progress_type": "integer 0-100（**不是字符串**）；恒出现（OpenAI 结构体里没有 omitempty，SDK 按必填字段读）",
+      "progress_normalization": "存储层 media_tasks.progress 是 varchar，可能是百分比数字也可能是阶段名：① 能解析成数字（允许尾随 % / 前后空白 / 小数）→ clamp 到 0-100，小数向下取整；② 阶段名 → 显式映射表（queued/submitted/created/pending/not_start/waiting=0、queueing=10、in_progress/processing/running/started/generating=50、completed/succeed/succeeded/success/finished/done=100、failed/failure/error/expired/cancelled/canceled/rejected=0）；③ 空值或认不出的词 → 0（明确的下界，绝不填 100，也不外推）；④ 归一后状态为 completed → 强制 100（避免出现 status=completed + progress=0 的自相矛盾）",
+      "progress_normalization_evidence": "internal/gateway/handler/media_task_handler.go:1088 mediaProgressValue、:90 mediaProgressStageValues",
+      "progress_monotonicity": "**不保证**单调不减：存储层只保留最后一次上报值；若同一渠道先报百分比、后又只报阶段名，对外可能回退。现有渠道口径稳定（Vidu 报百分比、Kling 报阶段名），未观察到该情形",
+      "optional_fields": {
+        "completed_at": "int64 Unix 秒；取自 media_tasks.finished_at（控制面**首次**进入终态时写入：internal/controlplane/repository/video_task_repo.go:629-630）；非终态省略",
+        "seconds": "十进制字符串（如 \"8\"）；优先上游实际用量（usage.vendor.duration / output_seconds 等），退化请求参数 duration；取不到省略——**不编造**（media_task_handler.go:1137 mediaResponseSeconds）",
+        "size": "形如 1280x720；只认请求参数里**字面**给出的 WxH（size 优先，其次 resolution）。**不做** \"720p\" → \"1280x720\" 的推导：短边 720 对应的另一边取决于宽高比、渠道与 mode 的输出档位，推导错比不填更糟（media_task_handler.go:1197 mediaResponseSize）"
+      },
+      "intentionally_absent": {
+        "task_id": "OpenAI 侧是待废弃的旧 id 别名；本网关对外 id 只有一个（id）",
+        "remixed_from_video_id": "本网关无 remix 能力",
+        "metadata": "当前无需要下发的自定义元数据",
+        "expires_at": "未实现；产物签名链接的过期时间只在 artifacts[].expires_at 里，且上游常不给"
       }
     },
     "video_response_fields": [
-      "id", "object", "status", "model", "created_at", "progress", "error", "artifacts"
+      "id", "object", "status", "model", "created_at", "completed_at", "progress", "seconds", "size", "error", "artifacts"
     ],
+    "video_response_field_types": {
+      "id": "string（网关生成，前缀 task_）",
+      "object": "string，恒为 video",
+      "status": "string，见 status_enum",
+      "model": "string，**模型组名**（不是上游模型 id）",
+      "created_at": "int64 Unix 秒",
+      "completed_at": "int64 Unix 秒（omitempty）",
+      "progress": "int 0-100（恒出现）",
+      "seconds": "string（omitempty）",
+      "size": "string（omitempty）",
+      "error": "object {message, code}（omitempty）；仅 status=failed 且已知原因时出现，code 目前恒为 upstream_error",
+      "artifacts": "array（omitempty）——**本网关扩展字段**（OpenAI video 对象没有它）：免重定向的直连产物地址；标准取产物方式仍是 GET /v1/videos/{task_id}/content"
+    },
+    "artifacts_item_fields": ["kind", "url", "mime_type", "expires_at"],
+    "artifacts_evidence": "internal/core/media_task.go:138-147 MediaArtifact；由 media_task_handler.go:1038 buildResponse 从 response_body 读取",
     "video_object_value": "video",
     "status_enum": ["queued", "in_progress", "completed", "failed"],
     "status_semantics": {
       "vocabulary": "对外统一 OpenAI 词表；上游词表（Kling submitted/processing/succeed/failed、Vidu created/queueing/processing/success/failed）由适配器归一",
       "ordering": "只允许前进：queued → in_progress → completed|failed，由 CAS 保证，终态不可回退",
-      "expired": "控制面超时 sweeper 的存储层状态 expired 对外必须归一为 failed（不记账），FailReason 说明超时",
+      "stored_status_mapping": "存储层词表 → 对外词表：queued/submitted/created/pending/not_start/waiting → queued；in_progress/processing/running/queueing/started/generating → in_progress；completed/succeed/succeeded/success/finished/done → completed；failed/failure/error/expired/cancelled/canceled/rejected → failed；认不出的存储值当非终态（继续轮询）。证据：internal/gateway/handler/media_task_handler.go:1004 mapStoredStatus",
+      "expired": "控制面超时 sweeper（控制面 cron，非拉取式端点）写入的存储层状态 expired 对外必须归一为 failed（不记账），error.message 说明超时",
       "unknown_upstream_status": "上游未知状态词属于协议失败（适配器返回 error），既不得当 completed 也不得无限轮询",
       "business_failure_vs_transport_error": "上游业务失败 → 用 status=failed + error 表达（不是 HTTP 5xx、不重试）；传输或协议失败 → 适配器返回 error，由 handler 映射为 5xx/重试并计入 poll_failures"
     },
     "error_codes": {
-      "400": ["invalid_request_error（不支持的参数，如 generations 的 response_format/style/seed，需给出替代建议）", "validation_error（渠道参数前置校验失败）"],
-      "402": ["media_pricing_missing（MEDIA_REQUIRE_PRICING=true 且该模型无媒体价）"],
+      "400": ["invalid_request_error（参数缺失/矛盾/请求体非法；图像链路还用于不支持的参数，如 generations 的 response_format/style/seed 与 edits 的 style/seed，并给出替代建议）"],
+      "402": ["media_pricing_missing（准入计价开关打开且该模型无媒体价）", "budget_exceeded / tier_budget_exceeded（平台预算闸门，沿用既有 402 语义）"],
       "403": ["direct_model_not_allowed（图像/视频链路只接受模型组名，直连模型 ID 被拒）"],
-      "404": ["not_found_error（任务不存在，或不属于当前 Key/用户）"],
-      "501": ["not_implemented（provider 未实现可选媒体能力，见 core.ErrMediaNotSupported）"],
-      "502": ["upstream_error（上游不可达/响应非法）"],
-      "503": ["media_pricing_unavailable / billing_fact_store_backpressure"]
+      "404": ["not_found_error（任务不存在，或有意地不属于当前 Key/用户）", "group_not_found（模型组不存在；沿用平台统一错误体）"],
+      "429": ["quota_exceeded 系列（请求/模型层配额闸门，沿用平台既有语义）"],
+      "501": ["not_implemented（provider 未实现可选媒体能力，见 core.ErrMediaNotSupported；Kling/Vidu 适配器未接通时也走这里）"],
+      "502": ["upstream_error（上游不可达/响应非法/任务状态写入失败）"],
+      "503": ["service_unavailable（任务持久化未接线）", "billing_fact_store_backpressure（计费事实存储背压，BillingFactGuard 拦在 POST /v1/images/*、/v1/videos 之前：internal/gateway/server/router.go:276、:420-448）", "model_unavailable（模型组暂时无可用模型）"],
+      "not_implemented_note": "`media_pricing_unavailable` 与 `validation_error` 在**媒体链路（/v1/images/*、/v1/videos）没有任何代码路径**，不得写入对外契约：媒体准入闸门只有 402 media_pricing_missing。核验：`grep -rn media_pricing_unavailable --include=*.go internal/ cmd/ tests/` 只命中 media_pricing_gate.go 的一句注释；`validation_error` 只出现在控制面管理面 /api/v1/* 的既有 handler（另一套对外面）与 bedrock 上游错误透传中。",
+      "upstream_4xx_passthrough": "图像链路会把上游 4xx **原样透传**（状态码 + 上游错误体的 code），因此 400/401/403/404 的 code 可能来自上游而非网关自造：internal/gateway/handler/image_handler.go:729-737"
     },
     "id_contract": {
-      "public_task_id": "网关生成并由控制面持久化（media_tasks.task_id），对外只暴露它",
+      "public_task_id": "网关生成并由控制面持久化（media_tasks.task_id），对外只暴露它：media_task_handler.go generateMediaTaskID（前缀 task_ + 128 位随机）",
       "vendor_task_id": "上游任务 id，存 media_tasks.vendor_task_id，禁止直接返回给客户端",
-      "adapter_contract": "core.MediaTaskProvider.Submit 返回上游 id；Query 的入参是上游 id"
+      "adapter_contract": "core.MediaTaskProvider.Submit 返回上游 id；Query 的入参是上游 id（internal/core/media_task.go）"
     },
     "internal_api": {
       "auth": "InternalAuth（X-Internal-Token）",
+      "base_path": "/internal/v1",
+      "path_decision": "决策 D5：**沿用既有 `/internal/v1/video/tasks*` 路径不变，只扩 payload**，不新建 `/internal/v1/media-tasks`。理由：control-plane 与 gateway 是两个进程、可能分批部署，改路径会引入滚动窗口不兼容；路径名与数据库表名（media_tasks）解耦。证据：internal/controlplane/router/router.go:901-909（注释 + 注册）、internal/gateway/infra/video_task_client.go:202（客户端常量 videoTaskInternalPath）",
       "routes": {
-        "POST /internal/v1/media-tasks": "创建（同步返回错误，网关必须感知失败）",
-        "GET /internal/v1/media-tasks/{id}": "查询（含归属字段）",
-        "PATCH /internal/v1/media-tasks/{id}": "CAS 更新状态/进度/用量",
-        "GET /internal/v1/media-tasks?sweep=1": "sweeper 拉取超时非终态任务"
+        "POST /internal/v1/video/tasks": "创建；返回 201 新建 / 200 幂等命中（(api_key_id, idempotency_key) 已存在）。router.go:903",
+        "PATCH /internal/v1/video/tasks/{id}": "CAS 更新状态/进度/用量/成本/产物；expected_status 非空时仅当当前状态相等才更新。router.go:904",
+        "PATCH /internal/v1/video/tasks/{id}/status": "仅更新状态（兼容旧调用方）。router.go:905",
+        "GET /internal/v1/video/tasks/{id}": "按 task_id 读单条全量（含归属字段、finished_at、usage、cost_micro_usd）。router.go:908",
+        "GET /internal/v1/video/tasks/{id}/provider-type": "取 provider_type / model / provider_name（旧调用方）。router.go:909"
       },
+      "sweeper": "超时清扫是**控制面 cron**（决策 D6）：internal/controlplane/service/media_task_sweeper.go + config media_task.sweep_interval_seconds / sweep_batch；**不存在** `GET /internal/v1/video/tasks?sweep=1` 这类拉取式端点，网关侧也不做后台扫描（media_task_handler.go timedOut 只做请求内前台判定）",
+      "expired_normalization": "内部读端点已把 expired 归一为 failed 再返回（internal/controlplane/handler/video_task_handler.go internalTaskView + model.CallerMediaTaskStatus），网关侧的 mapStoredStatus 再做一次防御性归一",
       "gateway_no_db": "gateway 禁止直连数据库，任务读写一律走上述内部 API（防护栏 A1）"
     },
     "billing": {
       "mode": "事后记账（无预扣则无退款）",
-      "when": "仅在终态完成时记账一次；failed/expired 不记账",
+      "when": "仅在终态完成时记账一次；failed/expired 不记账；重复查询与并发查询的败者都不记账（CAS 命中才算本次推进）",
       "image": "优先 image token（usage.output_tokens 等）；退化 len(data) × per_image",
-      "video": "优先上游实际用量（Kling final_unit_deduction）；退化 duration × resolution 档位单价（Vidu）"
+      "video": "优先上游实际用量（Kling final_unit_deduction）；退化 duration × resolution 档位单价（Vidu）",
+      "no_price_no_cost": "价表查不到时不写 cost/billed_at，并明确 usage_missing（绝不静默记 0 元）：media_task_handler.go buildCompletionUpdate",
+      "price_fields_exposed": "对外响应**不含**任何单价/成本字段（video_response_field_types 即全集）；成本只落在媒体任务表与 call_logs（管理面 /api/v1/usage* 读取）"
     },
     "unsupported_params": {
       "generations": ["response_format（改用 output_format）", "style（仅 dall-e-3）", "seed"],
-      "behavior": "返回 400 而不是静默丢弃"
+      "edits": ["style（仅 dall-e-3）", "seed"],
+      "edits_note": "edits **支持** response_format（与 generations 不同）",
+      "behavior": "返回 400 invalid_request_error 并给出替代建议，而不是静默丢弃（image_handler.go:589-628、:644-660）"
+    },
+    "channel_adapters": {
+      "status": "Kling / Vidu 适配器（internal/providers/kling/media_adapter.go、internal/providers/vidu/media_adapter.go）当前仍是「未实现」接缝：构造器返回 core.ErrMediaNotSupported，因此这两个渠道的请求会得到 501 not_implemented（这是刻意的，避免用占位凭据打真实上游产生费用）；gpt-image 图像链路已接通。",
+      "param_matrix": "渠道级参数矩阵（duration/resolution/mode 合法组合）在适配器内 fail-closed 校验；网关侧维护的字段白名单只有 mediaSubmitParams 的 7 个冻结键（media_task_handler.go:1523），不额外维护渠道白名单。"
     },
     "tbd": [
-      "媒体单价的对外展示字段名（A1/E3 定稿后回填）",
-      "video create 的完整参数白名单与各渠道约束（D3 前置校验矩阵）",
-      "artifacts 字段在响应中的精确形状（E4 与 C5 对齐后回填示例）"
+      "渠道参数矩阵的逐项取值（duration/resolution/mode × 渠道）随适配器上线补录；该矩阵在适配器内实现，不在本段冻结。",
+      "Phase 5 产物代理（当前为 302 直跳上游）落地后，GET /v1/videos/{task_id}/content 的响应语义需从 302 改为字节流并回填本节。"
     ]
   }
 }

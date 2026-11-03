@@ -1,0 +1,323 @@
+# 三渠道接入实施方案（agent teams 执行版）
+
+> 配套设计文档：[media-channels-integration-design.md](media-channels-integration-design.md)（架构、上游契约、数据模型、计费口径）
+> 姊妹调研（**已存在，必须先读**）：[video-integration-comparison.md](video-integration-comparison.md)——本网关 vs LiteLLM vs New API 的视频专项对比，§5 演进建议（P0 风控/P1 计费/P2 架构）、§6 已实施记录
+> 参考实现：New API `7de10f2c`（机制对照见 §7）
+> 本方案定位：**可直接派发给 agent teams 执行的任务级计划**，含文件归属、验收标准、批次依赖、防护栏合规。
+
+---
+
+## 0. 开工前必须确认的事项
+
+| # | 事项 | 为什么必须确认 | 建议 |
+|---|---|---|---|
+| **C-1** | ~~防护栏 A3 需要修订~~ → **已核对，降级** | 复核 `core/types.go:255-261` 发现 `ModelPricing` **已内建**非 token 单位族：`PerImage`、`InputPerImage`、`PerSecondInput`、`PerSecondOutput`、`PerRequest`、`PerPage`、`PerCharacterInput`。即 A3「统一 USD per 1M tokens」在实现上本就只约束 token 类字段，**不存在与视频计费的铁律冲突** | 仅在 `docs/guardrails.md` A3 补一句澄清（有既有字段族，媒体计价复用），不再新增 A4 条款 |
+| **C-2a** | D1 对外协议 | 已确认：**新增 OpenAI 形状 `/v1/videos` 并存**，Seedance 旧端点保留 | 已定 |
+| **C-2b** | ~~D2 任务表~~ → **已定：方案 D（扩列 + 改名为 `media_tasks`）** | 你已拍板。理由见 §1.1：`video_tasks` 已带归属列/scoped 查询族/三套统计，且**改名只需改 1 行 `TableName()`**（Go 里 `"video_tasks"` 仅出现 1 次、零裸 SQL） | C 队按 D 施工：delta 列 + **手写** `ALTER TABLE … RENAME`（禁止走 diff，见 C1） |
+| **C-3** | **工作区隔离方式** | 当前工作区有 **300 个 dirty 文件**（WIP 分支 `fix/budget-next-period-409`），含**他人未提交的迁移 WIP**（`atlas-migrations/*.down.sql`、`*.up.sql`，**时间戳乱序**，见 §0.1） | Batch 0 第一件事：`git worktree add` 独立工作区 + `feat/media-channels` 分支（见 T0）；**绝对不要在当前脏工作区直接开发，也不要 stash 他人的改动** |
+| **C-4** | ~~基线选哪个~~ → **已定：基于 `origin/main`** | 核实结果**推翻了原判断**：`git rev-list --left-right --count origin/main...origin/test` = `311 0`，且 `git merge-base --is-ancestor origin/test origin/main` 成立 → **main 完全包含 test（领先 311 提交），是仓库最新分支**。你选择从 main 开工作分支是最优解，**不存在任何合并债** | `git worktree add` 基于 `origin/main` 开 `feat/media-channels`（见 T0）。注意：main 上**没有** `call_type.go`、`call_logs.call_type`、`video_tasks` 的新列，这些都要在本分支新增 |
+
+### 0.1 基线与并发工作流现状（逐条核实，2026-10-16）
+
+| 事实 | 证据 | 影响 |
+|---|---|---|
+| **`origin/main` 是最新分支：完全包含 `origin/test`** | `git rev-list --left-right --count origin/main...origin/test` → `311 0`；`git merge-base --is-ancestor origin/test origin/main` → 成立 | 基线取 main 最优，**无合并债**（原判断"test 领先 HEAD 142"只是局部，真实关系是 main ⊇ test ⊃ … ⊃ HEAD） |
+| main 上媒体能力**确认全缺** | `git grep -l` on `origin/main`：`/v1/images` 0 处、`/v1/videos` 0 处、`media_tasks` 0 处、`call_type` 0 处；`PerImage`/`PerSecondOutput`/`PerRequest` 在 `internal/gateway/`、`internal/controlplane/pricing/` **零消费**；`catalog_parser.go` 只解析 `output_cost_per_token` | 缺口结论与设计文档一致；**A1/A5/B 队的任务前提成立** |
+| main **已有** Seedance 视频路由 | `origin/main:internal/gateway/server/router.go:371-372` | 新 `/v1/videos` 与之并存（D1 已确认） |
+| `internal/gateway/observability/call_type.go` **未被版本控制**（`??`），main/test 都没有 | `git status --short`；`git grep` on `origin/main` | ⚠️ **A4 必须新增**（不能假设存在）。本地脏工作区里有一份**已验证**的实现（见姊妹文档 §6），可移植但需先落地到版本控制 |
+| `call_logs.call_type` 迁移只在本地 HEAD | `atlas-migrations/20261014063200_add_call_logs_call_type.sql`（main 无） | 若需要该列，须在本分支新增迁移 |
+| `video_handler.go` 等 4 个文件有**已验证但未提交**的改动 | 姊妹文档 §6 记录了端到端验证（真 PG/Redis + stub 上游，2026-10-14） | **完整、可交付**的工作；基于 main 开发时它不会出现，需决定是否移植 |
+| `atlas-migrations/` 有**他人未提交**的 `*.up.sql`/`*.down.sql`（`20260824*`、`20260902*`，**早于已提交版本**） | `git status --short atlas-migrations/`；`atlas migrate validate` **通过**（退出码 0，但 validate 不校验与已应用版本的线性关系） | ⚠️ 版本乱序风险真实存在；**新 worktree 基于 main 天然规避**（这些文件不会被带过去） |
+| 本机 `atlas` 可用 | `/Users/jsy/.local/bin/atlas` | 各队可直接跑 `validate`/`hash` |
+| **`go build ./...` 在 main 上就是红的（既有破损，非本方案引入）** | `test/bedrock_model_id_check.go:98:23: undefined: bedrock.NewListFoundationModelsPaginator`；该目录是根目录 `test/`（非 `tests/`）的临时调试代码，由提交 `241896ac revert: remove non-release changes from main` 遗留 | ✅ **验收关口改为 `make build`**（团队与 CI 的真实关口：CI 只 `go build ./cmd/gateway ./cmd/control-plane`）。**任何队都不要用 `go build ./...` 作为闸门**，也不要顺手改 `test/`（超出本方案范围） |
+| **`make test` 在 main 上也是红的（既有破损，非本方案引入）** | `tests/controlplane/handler` **整包编译失败**：`model_tier_handler_test.go:336,369: *fakeGroupBudgetTierService does not implement handler.GroupBudgetTierServiceInterface (missing method ListEnabledGroupsWithModels)`。接口侧在 `internal/controlplane/handler/model_tier_handler.go:33-40` 已为只读端点 `model-tier-hierarchy` 增加该方法，但测试 fake 未同步 → 该包编译失败。**已在干净的 `media-a1` 工作区（零改动）复现，证明与安全清理无关** | ✅ **已修**：分支 `fix/baseline-tests-build`（基于 `origin/main`）给 fake 补齐 `ListEnabledGroupsWithModels()`（3 行，测试侧，`nil, nil` 足够——用它的两个用例只测 `SetBudgetTier*`）。不修则**所有批次的 `make test` 闸门形同虚设** |
+| ⚠️ 门禁口径（合并基线修复前） | 上述两项都是 **`origin/main` 既有破损** | 合并 `fix/baseline-tests-build` 之前，各队的单测验收请**按包**跑自己相关的包（如 `go test ./tests/gateway/observability/ -count=1`），**不要**以整仓 `go test ./tests/...` 的红色结论判断自己的改动；合并之后整仓闸门才有效 |
+| **⚠️ 安全问题（既有）→ 已开独立修复分支 `fix/remove-leaked-debug-creds`** | 初查仅 `test/bedrock_model_id_check.go`，**全仓扫描后范围扩大**：生产库口令在 `config/prod.yaml:13`、`config/dev.yaml:14`、`.env`、`.env.example`、`.opencode/skills/*`、`.cursor/skills/*`、集成测试注释里共 **8 个文件**；Redis 口令 6 处；`JWT_SECRET` 与固定 `ENCRYPTION_KEY` 另在 skill 文档中。`.env` **被 `.gitignore` 声明忽略却仍被追踪**（历史遗留）。口令自 **2026-05-22** 起入仓，**48 个提交**含该口令、42 个含该密钥 | ✅ **已修复 HEAD**（5 个提交：删除调试文件、config 清空改环境变量注入、`.env` 取消追踪、skill 文档改 `${PROD_*}` 引用、集成测试去掉口令兜底），复扫零残留，`go build ./...` 因此恢复绿。🔴 **仍需人工完成**：① **轮换生产库口令**（已验证有效，必须换）；② 确认生产是否曾用该固定 `ENCRYPTION_KEY`（生产走 CI 变量 `PROD_ENCRYPTION_KEY`，`config/*.yaml` 均无该键，**推断未受影响**）；③ **历史清理**（48 个提交）需评估 `git filter-repo`/BFG，属改写共享历史，**另行决策** |
+| **CI 用 `-mod=vendor`** | `.gitlab-ci.yml:99,196,479` 均为 `go build -mod=vendor`；仓库有 `vendor/` 目录 | **尽量不要引入新依赖**；若必须引入，需 `go mod vendor` 并提交 `vendor/` 变更 |
+| 基线已验证绿 | 本 worktree 上 `make build` 退出码 0；`go build ./cmd/... ./internal/...` 退出码 0 | 可放心作为所有验收的对照基线 |
+| **生产库已只读核实（192.0.2.10:5433/llm_gateway_prod，PG 18.4）** | `video_tasks` **112 行**（2026-07-10 → 2026-10-15，仍在写入）、`video_task_events` 327 行；**无任何视图/物化视图**引用 `video_tasks`；仅 1 个外键 `fk_video_task_events_task`（`ON DELETE CASCADE`）；生产迁移 **58 条，最高版本 `20261012122318` = `origin/main` 最新版本**；生产**没有** `media_tasks`/图像相关表，`call_logs` **没有** `call_type` 列 | ✅ **决策 D 的改名迁移安全性已验证**：① 无仓库外**数据库内**消费方（无视图依赖）；② 外键随 `ALTER TABLE ... RENAME` 自动跟随，安全；③ 存量 112 行必须保留 → 只能 `RENAME`，绝不能建新表+搬数据；④ 新迁移时间戳晚于生产最高版本，排序正确；⑤ 本地 WIP 迁移（含 `call_type`）均**未**上生产 |
+| **本机没有 Docker** | `docker info` 失败；`atlas.hcl` 的 `dev` 为 `docker://postgres/16/dev` | ⚠️ **`make atlas-diff` / `atlas migrate diff` 不可用** → 迁移一律**手写 SQL** + `atlas migrate hash --dir "file://atlas-migrations"`（skill 允许手写，但**必须**重算校验和）。写 SQL 时逐列对齐 GORM tag，否则 Atlas 与 DB 漂移 |
+| 已提交迁移的最新版本号 | `atlas-migrations/20261012122318_create_feedback_attachments_table.sql` | 本方案新增迁移必须**晚于**该时间戳；已分配：A1 = `20261016100000_add_model_catalog_media_prices.sql`、C1 = rename 迁移（C 队另定）、A5 = `model_type` CHECK 扩展 |
+
+> **顺带纠错**：**主工作区/旧分支**上的 `AGENTS.md` 与 `docs/guardrails.md` 迁移指引已过期（仍写 `migrations/NNN_*.sql`）；但**你已经决定基于 `origin/main`，而 main 上的 `AGENTS.md` 已更新为 Atlas 指引**（"`atlas-migrations/` 唯一迁移源，时间戳命名；legacy `migrations/` 已冻结"），故**本方案无需附带这个 docs PR**。注意：权威源是 Atlas：`atlas.hcl` + `atlas-migrations/atlas.sum` + Makefile 的 `atlas-diff/apply/status` + CI 执行 `atlas migrate apply --dir "file://atlas-migrations" --baseline "$ATLAS_BASELINE"`（`.gitlab-ci.yml:286-287`）。`migrations/` 已停更（最后 7-22，atlas-migrations 最新 10-14）。本方案一律走 Atlas。
+
+---
+
+## 1. 团队编制
+
+五支队伍，按「**不共享文件**」原则切分；同一批次内并行，跨批次串行。
+
+| 队 | 名称 | 职责 | 拥有文件（独占） | 依赖 |
+|---|---|---|---|---|
+| **A** | 基座与接缝 | 计价兜底、埋点归类、`model_type` 扩展、出站重试策略、**并行接缝**（路由/接口/registry 骨架） | `observability/cost.go`、`observability/call_type.go`、`middleware/usage_collector.go`、`pricing/resolver.go`、`provider_snapshot_service.go`、`llmclient/client.go`、`server/routes_media.go`(新)、`core/image.go`(新)、`core/media_task.go`(新)、`media_registry.go`(新) | 无 |
+| **B** | 图像同步链路 | gpt-image 生成/编辑、multipart、大响应、图像计价 | `providers/openai/*`、`gateway/handler/image_handler.go`(新) | A |
+| **C** | 任务平台 | 任务表（**§1.1 待定**：A 扩 `video_tasks` / D 扩列+改名 / B 新建）、内部 API、状态机 CAS、归属校验、幂等、超时 sweeper、`/v1/videos` 路由 | `controlplane/model/media_task.go`(新)、`controlplane/{repository,service,handler}/media_task*`(新)、`gateway/infra/media_task_client.go`(新)、`gateway/handler/media_task_handler.go`(新)、`media_registry.go` 实现、`cmd/gateway/main.go` 接线 | A |
+| **D** | 渠道适配器 | Vidu、Kling、参数前置校验、用量抽取、渠道种子 | `providers/vidu/*`(新)、`providers/kling/*`(新)、`controlplane/handler/{test,model_check}_handler.go` 分支 | C |
+| **E** | 治理与收口 | 看板/告警/探活、前端、对外文档、契约测试 | `web/src/views/admin/*`、`docs/media-api.md`(新)、`tests/contract/contracts.json`、`controlplane/handler/*` 探活 | B、C、D |
+
+### 0.2 权威漂移检查（本轮新建立的手段，2026-10-16）
+
+**背景更正**：此前记录「本机无 Docker」**有误**。实际 `/opt/homebrew/bin/{docker,colima}` 与 `~/.colima` 均在，只是 colima 未启动；本轮 `colima start` 成功（Docker 28.4.0）。`docker://postgres/16` 首次拉取因 registry 认证 EOF 失败，**重试即成功**（瞬时故障）。
+
+**方法（零污染仓库）**：`atlas migrate diff` 会把新迁移**写进迁移目录**，直接跑 `make atlas-diff` 会污染 `atlas-migrations/`。故：把 `atlas-migrations/` 复制到 `/tmp/atlas-drift`，用 `--dir "file:///tmp/atlas-drift"` + `--to "file://<atlas-loader 输出>"` + `--dev-url "postgres://jsy@127.0.0.1:5432/atlas_dev?sslmode=disable&search_path=public"`（**本机 Homebrew Postgres 18 建独立库 `atlas_dev`**，比 colima 里的容器更可靠——容器方式报 `querying system variables: EOF`）。期望 schema 与 CI 同源，均来自 `tools/atlas-loader`。
+
+**结论（权威）**：
+
+| 项 | 结果 |
+|---|---|
+| 基线漂移语句数（`origin/main`+基线修复） | **72 条 / 58 张表** |
+| 集成后漂移语句数（Batch 0 全部并入） | **72 条 / 58 张表** |
+| `comm -13` 逐条 diff（集成有而基线无） | **空** → **我们的工作引入零漂移** ✅ |
+| `model_catalog` 漂移 | **0 处提及** → **A1 的 12 个媒体价列与 GORM 声明完全一致** ✅（比 `atlas migrate validate` 强得多的证据，后者只校验校验和） |
+
+**⚠️ 由此暴露的既有仓库健康问题（非本方案引入）**：`atlas-migrations/` 与 GORM 期望 schema 已**大幅脱节**——72 条漂移里包括 `CREATE TABLE channel_monitors/channel_monitor_*/model_status_logs`（GORM 有、迁移里没有）、`api_keys/models/users/model_groups` 缺 `quota_rpm`/`quota_max_concurrency` 列、以及大量 `bigserial→bigint`、`DROP NOT NULL/DEFAULT`、索引重建。后果：
+
+1. **`make atlas-diff` 在本仓库不可用**——任何一次运行都会产出含**破坏性 `DROP CONSTRAINT`/`DROP INDEX`** 的 72 条语句。**🔴 C1 绝对不要执行 `make atlas-diff` 并提交其结果**（这比原警告更严重：不只是把 RENAME 理解成 DROP+CREATE，而是会连带删掉 50+ 个既有约束/索引）。C1 只能手写 rename 迁移。
+2. **闸门口径升级**：`atlas migrate validate` 是**弱**闸门（只校验 `atlas.sum` 完整性）；真正的强闸门是 **「漂移增量 = 0」**——即用上述方法对拍基线与集成，`comm -13` 必须为空。后续每批按此验收。
+3. **C1 相关区域的既有漂移（应顺手修掉，都属于它要动的表）**：① 外键名 `fk_video_task_events_task` → Atlas 期望 **`fk_video_tasks_events`**；② `video_task_events.id` 迁移里是 **`serial`(int4)**，GORM 声明是 `uint`(**int8**) → Atlas 要求 `ALTER COLUMN id TYPE bigint`。**根因澄清**：`model_groups` 的 `DROP CONSTRAINT chk_model_groups_model_type` 是**既有**漂移（该约束在 `20260710180000` 就存在，A5 只是重建了它），并非 A5 引入——但它说明**任何 CHECK 约束只要 GORM model 不声明，就会被 Atlas 视为多余并建议删除**（GORM 可用 `gorm:"check:..."` tag 声明）。
+4. 本地 `atlas_dev` 库保留备用（后续批次继续用它做漂移对拍）。
+
+---
+
+### 1.1 待讨论的决策：`video_tasks` 还是 `media_tasks`
+
+你要求「针对 `video_tasks` 讨论一下」。补全核实后，**原推荐（新建 `media_tasks`）的证据基础不足**——它低估了 `video_tasks` 的下游投入。以下是完整事实。
+
+#### 现状：`video_tasks` 比"一张表"重得多
+
+| 维度 | 事实 | 证据（`origin/main`） |
+|---|---|---|
+| 列 | `task_id`(PK)、`api_key_id`、`api_key_name`、`api_key_type`、`user_id`、`user_name`、`model`、`provider_name`、`provider_type`、`status`、`created_at`、`updated_at` + `video_url`、`request_body`、`response_body`、`error_message` | `atlas-migrations/20260710150000_*.sql`、`20260710160000_*.sql` |
+| **归属列已有** | `api_key_id`/`user_id` 都在 → `GetTask` 越权读是**代码缺陷**，不是 schema 缺失 | 同上 |
+| **CAS 可行** | 有 `status` + `updated_at`，`UPDATE … WHERE task_id=? AND status=?` 即可，**无需改表** | 表结构 |
+| **权限模型已有** | `ListScoped`/`GetByIDScoped`/`GetByIDAndUserID`/`StatsScoped`/`StatsTrendScoped`/`StatsDistributionScoped` + `VideoTaskScope`/`applyScope` | `video_task_repo.go:70,107,122,257,284,288,328,332,350,354` |
+| **统计骨架已有** | `Stats`/`StatsTrend`/`StatsDistribution` | `video_task_repo.go:284,328,350` |
+| 消费点 | 后端 **12** 文件；前端 **11** 文件（`VideoTaskTable`/`VideoKpiCards`/`VideoTrendChart`/`VideoDistributionCharts`/`VideoTaskDetail`/`UsageRecordTable` + `api/videoTasks.ts`/`api/ops.ts` + 2 spec） | `git grep -l VideoTask origin/main` |
+| **改名成本极低** | Go 代码里 `"video_tasks"` 只出现 **1 次**：`model/video_task.go:30` 的 `TableName()`；**无裸 SQL**（无 `Table()/Raw()/Exec()` 引用表名）；前端只走 API（仅 2 处注释提及表名） | `git grep -n '"video_tasks"' origin/main` |
+
+#### 接入三渠道所缺的列（delta）
+
+`kind`(image|video)、`action`（**Kling 必需**：其查询 URL 含 `text2video`/`image2video` 段）、`vendor_task_id`（对外 id 与上游 id 分离——抄 New API 的 `PrivateData.UpstreamTaskID`）、`progress`、`usage`/`cost_micro_usd`/`billed_at`（视频计费现为 0）、`started_at`/`finished_at`、`poll_failures`（服务端推进用）、`idempotency_key`、`private_data`、`dept_id`/`studio_id`。
+
+#### 四个选项
+
+| 选项 | 做法 | 工程量 | 看板/前端 | 长期 |
+|---|---|---|---|---|
+| **A 扩列** | 只加 delta 列，`kind` 区分图像/视频，表名不变 | 最小（1 个迁移） | **零改动**（加 kind 过滤） | 表名 `video_tasks` 却存图像任务，语义错位 |
+| **B 新建 `media_tasks`**（原 D2） | 新表 + repo/service/内部 API | 大 | **必须做 union 合并层**：KPI/趋势/分布拆两段，11 个前端文件受影响 | 语义干净，但永久双表 |
+| **C 折中** | 新表承载新渠道 + 新接口兼容读旧表 | 中 | 仍需合并层 | 永久双表 |
+| **D 扩列 + 改名** | 同 A 的列，并把表改名 `media_tasks`（改 `TableName()` 一行 + 1 个 rename 迁移） | ≈A + 一次 rename | **一次改完，之后单表、无 union** | **单表、名字正确** |
+
+#### 修正后的推荐：**D**（次选 A）
+
+理由：`"video_tasks"` 在 Go 代码里只由 `TableName()` 一处决定，**改名不会波及那 25+ 个消费点**（它们都经 GORM 模型访问）。所以 D 的额外成本几乎只是一条 rename 迁移，却换来「单表 + 语义正确 + 看板无需 union」。
+
+**D 的实施要点（防数据丢失）**：Atlas 的 `migrate diff` 会把「旧表消失 + 新表出现」理解为 **DROP + CREATE** → 必须**手写** `ALTER TABLE "video_tasks" RENAME TO "media_tasks";`（`video_task_events` 同理）作为版本化迁移，然后按 skill 强制 `atlas migrate hash` + `atlas migrate validate`（skill 允许手写 DDL，但必须重算校验和）。rename 之后未来的 diff 自然干净。
+
+#### 已拍板（2026-10-16）
+
+1. **选 D**：扩列 + 改名为 `media_tasks`（表名一次改对，避免永久双表与看板 union）。
+2. **不移植**本地脏工作区的视频日志实现：A4 在 main 基线上**从零实现** `call_type` 归一化。
+3. 待确认（不阻塞 A 队）：是否存在**仓库外**直接查 `video_tasks` 的消费方（Grafana/BI/运维 SQL）；若有，rename 需通知或加兼容视图。
+
+---
+
+## 2. 任务分解
+
+估时单位：人日（一个 agent 会话 ≈ 一个 team 的并行单元）。
+
+### Batch 0 — Team A（基座与接缝，共 11 项，9–11 人日）
+
+| ID | 任务 | 主要改动 | 验收 / 测试 | 估时 |
+|---|---|---|---|---|
+| **T0** | 工作区隔离（**已执行**） | `git worktree add .worktrees/media-channels -b feat/media-channels origin/main`；确认 `make build` + `go build ./cmd/... ./internal/...` 干净（**已核实绿**），作为后续所有验收的对照基线 | 新工作区 `git status` 无无关改动；`make build` 通过 | 0.5 |
+| **A1** | 计价链路打通（**`core` 字段已有；但 `model_catalog` 需补列 + 迁移**） | ✅ 二次核实：`core/types.go:248-261` **已存在** `PerImage`/`InputPerImage`/`PerSecondInput`/`PerSecondOutput`/`PerRequest` 等字段，但在 `internal/gateway/` 与 `internal/controlplane/pricing/` 中**零消费**。**但 `model_catalog.go:33-39` 只有 4 个 token 价 + 阶梯价，没有任何媒体价列**（`origin/main` 与主工作区一致，属既有缺口）→ 所以 A1 **必须新增列并手写迁移**；`ModelPricing` 侧只做打通、不新增字段。要做的是：① `catalog_parser.go:104-118` 目前只解析 token 类价（`output_cost_per_token`），需补 `output_cost_per_image`/`output_cost_per_video_per_second` 等 → 结构化列；② `provider_snapshot_service.go:112-155` 透传；③ `pricing/resolver.go` 返回媒体价；④ `observability/cost.go:101-102` 与 `collector.go` 增 per-image/per-second/per-request 分支（消除 `InputPerMtok != nil` 把媒体请求误判为 token 计价的缺陷） | 表格驱动单测：token / per_image / input_per_image / per_second / per_request 五种口径；断言「字段存在但无价 → missing=true」 | 1.5 |
+| **A2** | 无价拒绝与 `usage_missing` | 准入层开关 `MEDIA_REQUIRE_PRICING`（默认 true）：命中无价 → `402/503` + 计数；关闭时放行但 `usage_missing=true` + 强告警 | 单测：默认拒绝、开关关闭放行且埋点标记、`usage_collector.go:86` 的 `EstCostUSD>0` 门槛不再被绕过 | 1.5 |
+| **A3** ✅**已交付**（由 A1 的 `4fb6decd` 完成） | 防护栏 A3 措辞澄清（**已降级，不再新增条款**） | `docs/guardrails.md:27-29`：补一句「token 类价格用 per-1M-tokens；媒体类复用 `ModelPricing` 既有的 per-image/per-second/per-request 字段族」，避免后来者以为必须把所有价折成 token 价 | 文档评审通过；与 A1 的口径一致 | 0.25 |
+| **A4** | 埋点归类（**从零实现**） | 前提：`internal/gateway/observability/call_type.go` 在 `origin/main` **不存在**，且已决策**不移植**本地脏工作区的实现 → 从零实现（可参考姊妹文档 §6 的取值约定，但不要依赖脏工作区文件）。然后增 `image.generations`/`image.edits`/`video.submit`/`video.get`/`video.content` 常量 + `deriveExactCallType` 分支；`router.go:420-430` 的 `isBillableRequest` 覆盖新路径 | 单测：各路径/方法归一正确；`maxCallTypeLen=64` 不越界 | 1 |
+| **A4-补充** | **词表统一为 `model_info`**（决策） | A4 交付时按方案原文实现为 `model.info`；但**先落地的那份已验证实现**（姊妹文档 §6「视频日志补全」的 `internal/gateway/observability/call_type.go`）用的是 `model_info`。经核实 `origin/main` 上**无任何消费方**（`git grep` 为空），且 `web/src` 里**并没有** `model_info` 引用（A4 报告此点有误）→ 为避免日后两套词表，**统一为 `model_info`** | 常量与断言各改一处，`go test ./tests/gateway/observability/` 全绿 | 0.1 |
+| **A5** ✅**已交付** | `model_type` 支持 `image` | 6 处 binding 白名单（`service/model_service.go:117,265,483`、`group_service.go:141,154`、`provider_quick_onboard_service.go:39`）+ `model_groups.model_type` CHECK 的**新迁移**（已提交的 `atlas-migrations/20260710180000_*.sql:15` **不可改** → 按 D1 铁律新增迁移） | 迁移可 apply；建 `model_type=image` 的模型成功；非法值仍被拒 | 1 |
+| **A6** | 出站重试策略 | `llmclient` 增加 per-call「禁止重试」选项（提交类请求必须无重试）；对 POST 媒体路径禁用 429/5xx 重试 | 单测：注入 502/429 时 `media` 提交只发一次；chat 路径行为不变（回归） | 1.5 |
+| **A7** | 接缝：路由 | 新增 `server/routes_media.go`（两个空注册函数 + `MediaDeps`）+ `router.go` 调用点 | `make build`；空实现下现有测试全绿 | 0.5 |
+| **A8** | 接缝：接口 | 新增 `core/image.go`（`ImageProvider`/请求响应类型）、`core/media_task.go`（`MediaTaskProvider`/`MediaStatus`/`MediaArtifact`；业务失败返回状态、传输失败返回 error 的契约注释） | 类型定义编译通过；契约注释明确 | 1 |
+| **A9** | 接缝：registry | 新增 `media_registry.go`（`map[providerType]` + `Swap`/`Get` + `sync.RWMutex`）骨架 | 单测：并发 Swap/Get 无竞态（`-race`） | 0.5 |
+| **A10** | 契约与文档骨架 | `tests/contract/contracts.json` 占位、`docs/media-api.md` 骨架 | 文件存在、格式合法 | 0.5 |
+| **A11** | **`call_logs.call_type` 落库（A4 的尾巴，A4 本次明确不做 DB 变更）** | ① 迁移 `atlas-migrations/20261016120000_add_call_logs_call_type.sql`（`call_type varchar(64)`，**手写 + `atlas migrate hash`**；⚠️ 时间戳已从 `100500` 后移到 **`120000`**，必须晚于 `20261016110000`（A1 第二个迁移），否则会插在序列中间造成 out-of-order）；② 在 `observability/collector.go` 调 **`observability.DeriveCallType(ctx.Request.Method, ctx.Request.URL.Path)`**（注意是**导出名**，方案原文的 `deriveCallType` 已改为导出以适配 Q3 的外部测试包）落库；③ 历史行回填（端点优先、`model` 后缀兜底、**不覆盖已有值**、chat 行不动） | 迁移 validate 通过；回填 SQL 有幂等性证明；collector 单测断言落库值 | 1 |
+| **A12** | **catalog `mode` → `model_type` 归一（A5 发现的高风险缺口）** | `model_service.go:457 CreateModelFromCatalog` 把 catalog 的 `cat.Mode`（LiteLLM `mode`，取值含 `image_generation`/`image_edit`/`completion`/`responses`/`audio_*`）**原样**写入 `models.model_type`，而 `models` 表**没有** CHECK（已核实）→ Catalog 接入的图像模型类型是 `image_generation` 而非 `image`。后果链：`ModelGroupSelector.vue:198` → `listAllModels({model_type})` → `model_repo.go:66` **精确等值**匹配 → 组类型为 `image` 时**筛不出**这些模型；而 `group_service.go:470 assertSameModelType` 只比成员之间、不比对 `group.ModelType` → **不报错、静默不可用** | 新增归一映射（`image_generation`/`image_edit` → `image`；`video_generation` → `video`；`completion`/`responses` → `chat`；`audio_*` 由负责人定：保留或显式拒绝），并补单测断言「catalog 来源的模型其 `model_type` 必落在合法枚举内」 | 0.5 |
+
+### Batch 1 — Team B（图像同步链路，6 项，6–8 人日）
+
+| ID | 任务 | 主要改动 | 验收 / 测试 | 估时 |
+|---|---|---|---|---|
+| **B1** | OpenAI 图像适配器 | `providers/openai/` 实现 `core.ImageProvider`（generations/edits）。暴露差异必须处理：匿名内嵌 `CompatibleProvider` 者自动获得；命名字段者显式委派 3 行；**无 `CompatibleProvider` 者返回 501** | 单测：三类 provider 各断言「实现/委派/501」 | 2 |
+| **B2** | `/v1/images/generations` | `image_handler.go`：**组名→上游模型改写**（复用 `groupDispatch`）、参数白名单校验、**响应原样回写**（禁止重新序列化，b64 可达数十 MB） | 单测：组名改写正确、直连模型 ID 被拒（403）、响应字节级一致 | 1.5 |
+| **B3** | `/v1/images/edits` | multipart **重建**（`image[]` 重复字段、`mask`、保持真实 filename）、改写 model 字段、boundary 变化 | 单测：解析→重建→再解析往返一致；model 已改写；多图顺序保持 | 2 |
+| **B4** | 请求体与日志策略 | 遵守 S3：`call_traces` 512KB 截断、multipart 不落正文、base64 不入日志；DEBUG 正文日志对 multipart 跳过 | 单测：大 body 被截断、multipart 不破坏、无 b64 泄漏 | 1 |
+| **B5** | 错误语义 | 不支持的参数（generations 的 `response_format`/`style`）→ 400 并给出替代建议（`output_format`）；上游错误映射；401 语义 | 单测：参数矩阵（支持/不支持）逐项断言 | 1 |
+| **B7** | **提交类请求不得走 handler 层 group failover（A6 发现，与 C5 共用同一改动）** | `internal/gateway/handler/chat.go:190-245`（非流式）与 `:307-345`（流式）的 failover 循环（`shouldTriggerFailover` 在 `:395`）会在 429/5xx/网络错误时把**同一请求体**重发给组内另一个成员 → 对提交类请求等于**换一个上游再建一次任务并重复计费**，与 in-client 重试同类风险。llmclient 的 `WithNoRetry`/`NoRetry` **不覆盖**这一层 | 提交路径在 failover 决策前判 `llmclient.IsNoRetry(ctx)`（failover 轮次的 `roundCtx` 由 `baseCtx` 派生、标记不丢）→ **提交路径不 failover**；**轮询/查询路径保留** failover + GET 重试。单测：提交路径 429 时组内第二个渠道**零请求**；查询路径仍 failover | 0.5 |
+| **B6** | 图像计价接入 | 优先 image token（`usage.output_tokens` 等），退化 `len(data)` × 单价；与 A1/A2 对接 | 单测：有 usage / 无 usage / 无价拒绝 三态 | 1 |
+
+### Batch 1 — Team C（任务平台，8 项，9–11 人日）
+
+| ID | 任务 | 主要改动 | 验收 / 测试 | 估时 |
+|---|---|---|---|---|
+| **C1** | **扩列 + 改名迁移（决策 D）** | ① `controlplane/model/video_task.go` 增 delta 列：`kind`(image/video)、`action`、`vendor_task_id`、`progress`、`usage`、`cost_micro_usd`、`billed_at`、`started_at`、`finished_at`、`poll_failures`、`idempotency_key`、`private_data`、`dept_id`、`studio_id`；② **手写** rename 迁移与 `TableName()` 改动（`video_tasks`→`media_tasks`、`video_task_events`→`media_task_events`）；③ 按 skill 强制 `atlas migrate hash` + `validate`；④ 核对 `tools/atlas-loader/main.go` 的注册 | ⚠️ **rename 禁止走 `atlas migrate diff`**（会被理解为 DROP+CREATE，丢数据）；`atlas migrate validate` 通过；`make build` 通过；存量行仍可读、看板不回归 | 2 |
+| **C1-补充** | **⚠️ rename 会留下 21 个「仍叫 video_*」的具名对象（已核实），必须一并处理，否则后续 `atlas migrate diff` 会报漂移** | `ALTER TABLE … RENAME` **不会**重命名索引/约束（Postgres 行为）。生产库实测现存具名对象：二级索引 6 个（`idx_video_tasks_api_key`/`_model`/`_status`/`_ts`、`idx_video_task_events_task_id`/`_created_at`）、主键 2 个（`video_tasks_pkey`、`video_task_events_pkey`）、外键 1 个（`fk_video_task_events_task`）、**Atlas 自动生成的 NOT NULL 约束 12 个**（`video_tasks_{api_key_id,created_at,model,provider_name,provider_type,status,task_id,updated_at}_not_null` + `video_task_events_{created_at,event_type,id,task_id}_not_null`）。而 Atlas 的期望 schema 由 `tools/atlas-loader`（GORM 声明）生成 → 名字不一致就会产生「建新名+删旧名」的churn | 二选一：**①（推荐，零漂移）**只做 2 条 `RENAME TABLE`，GORM 侧**只改 `TableName()`**、`index:` tag 与命名**一律保持 `video_*` 不动** → 与 DB 完全一致，代价是名字遗留；**②（干净但工作量大）**在迁移里显式 `ALTER INDEX … RENAME TO` / `ALTER TABLE … RENAME CONSTRAINT`（含 12 个 not-null 约束与 2 个主键、1 个外键），**同时**改 GORM 的 `index:` tag。无论选哪个，**验收时必须核对 `cd tools/atlas-loader && go run main.go` 的输出与迁移后 schema 逐名一致**（本机无 Docker，无法跑 `atlas migrate diff`，所以这个对照是唯一的漂移证据）。⚠️ **2026-10-16 父 agent 修正：上面「选项① = 零漂移」说过头了。** 用 `tools/atlas-loader` 实测后发现两件事：① **外键名今天就已经不一致**——loader 期望 `fk_video_tasks_events`，而迁移创建、生产库实际是 `fk_video_task_events_task`（`atlas-migrations/20260710160000_add_video_tasks_detail_fields.sql:16`）→ **main 上已存在该漂移**（也意味着「Atlas 是否按名比对 FK」需要实证，不能假设）；② **主键**在 loader 输出里是内联 `PRIMARY KEY ("task_id")`、**没有显式名**，而 Postgres 侧名为 `video_tasks_pkey`，`RENAME` 后 Postgres 会**保留旧名** → 是否漂移同样未知。因此**正确做法不是推断**：C1 改完 GORM model 后**先跑 `cd tools/atlas-loader && go run main.go` 拿到期望名字（尤其 FK 与索引）**，再据此写迁移把这些具名对象显式改成期望名。**另外更正一条更早的误判**：本机其实**装了 Docker 与 colima**（`/opt/homebrew/bin/{docker,colima}`、存在 `~/.colima`），此前「无 Docker」的结论有误；只是 **colima 未启动**（`colima status` → not running）。若允许 `colima start`，则应直接用 `atlas migrate diff --env local` 拿**权威结论**，彻底摆脱推断 | 0.5 |
+| **C2** | repository + service | CAS 更新（仅状态前进）、超时扫描、按归属查询、事件时间线（复用既有 `*Scoped` 查询族） | 单测：CAS 冲突丢弃、终态不可回退、超时置 `expired` | 2 |
+| **C3** | 内部 API + 网关 client | `/internal/v1/media-tasks`（**必须 `InternalAuth`**，S1）+ create/get/patch/sweep；网关侧 client **同步创建**（禁止 fire-and-forget，写失败返 5xx） | 单测：内部 API 鉴权拒绝；client 写失败时 handler 返 5xx | 2 |
+| **C4** | registry 接线与热更新 | 填充 `media_registry.go`；按 snapshot 重建整张 map；复用 `config:change` 热更新链路 | 单测：热更新后 `Get` 返回新适配器；旧请求不中断 | 1 |
+| **C5** | `/v1/videos` 三件套 | `media_task_handler.go`：create（组调度→准入→提交→落库）、retrieve（归属校验→终态缓存→查上游→CAS→记账）、content（302 直跳） | 单测：三端点 happy path；状态映射 OpenAI 词表 | 2 |
+| **C6** | 归属校验 + 幂等 | 跨 Key 读他人任务 → **404**（姊妹文档 §5 P0#1 建议用 404 而非 403，避免任务探测）；`Idempotency-Key` 唯一索引，命中直接返回既有任务且不打上游 | 单测：IDOR 回归（**含现有 video 路径的反面案例**）、幂等不重复计费 | 1.5 |
+| **C7** | 状态机 + sweeper | 配置化 `MEDIA_TASK_TIMEOUT_MINUTES`（默认 30）、`MEDIA_POLL_MAX_FAILURES`（默认 20）；失败分类（not_found/auth/transient/unrecognized）决定重试或放弃 | 单测：状态序列 `queued→in_progress→completed`、失败分类矩阵、超时 | 1.5 |
+| **C8** | 终态记账挂钩 | 终态成功时写用量+成本（一次），失败/超时不记账；调 A1 计价能力 | 单测：成功记账一次、重复 retrieve 不重复记账、失败不记账 | 1.5 |
+
+### Batch 2 — Team D（渠道适配器，6 项，7–9 人日）
+
+| ID | 任务 | 主要改动 | 验收 / 测试 | 估时 |
+|---|---|---|---|---|
+| **D1** | Vidu 适配器 | `providers/vidu/`：`Authorization: Token`、`/ent/v2/{text2video,img2video,start-end2video,reference2video}`、查询 `/ent/v2/tasks/{id}/creations`、状态归一（`created`/`queueing`/`processing`/`success`/`failed`）、产物 `creations[0].url`、失败 `err_code` | httptest mock：提交/查询/终态全路径；状态枚举全值穷举 | 2 |
+| **D2** | Kling 适配器 | `providers/kling/signer.go`（**HS256 JWT**：`iss`=accessKey、`exp`=now+1800、`nbf`=now-5、密钥=secretKey、header `Authorization: Bearer`）+ text2video/image2video + 查询；**状态枚举以上游 `submitted/processing/succeed/failed` 为准**（勿照抄插件反向渲染表） | 单测：签名向量（对照插件规格）；mock 全路径 | 2.5 |
+| **D3** | 参数前置校验 | Kling：`mode∈{std,pro}`、`kling-v2-master` 拒 std、`duration` 字符串 1–3600、`model_name`/`model` 同值、`cfg_scale`；Vidu：`images` 数量→action、`vidu2.0` 无图报错、各模型 duration 区间、resolution 组合约束（vidu2.0 时长 8 仅 720p） | 表格驱动：每条约束一个用例，断言 400 + 明确文案 | 1.5 |
+| **D4** | 用量抽取与单价 | Kling 终态取 **`final_unit_deduction`**（估算仅准入）；Vidu 用 `duration × resolution`（**上游不回 credits**）；配置走 A1 已打通的 `PerSecondOutput`/`PerRequest` | 单测：Kling 实际用量优先、Vidu 分档计价；无价走 A2 拒绝 | 1.5 |
+| **D5** | 渠道种子 + 硬编码补分支 | `provider_definitions` 种子迁移（kling/vidu，含 `credential_schema`/`default_models`/`vendor_options`）；补 `handler/test_handler.go:206-208`、`handler/model_check_handler.go:165-180` 的 switch | 迁移后前端渠道类型可选；探活分支可达 | 1.5 |
+| **D6** | 凭证安全 | Kling AK/SK 走 D3 铁律（`providers.encrypted_credentials`，AES-256-GCM）；`credential_schema` 校验必填与格式 | 单测：凭证不落明文日志；缺字段报错 | 1 |
+
+### Batch 3 — Team E（治理与收口，5 项，5–7 人日）
+
+| ID | 任务 | 主要改动 | 验收 / 测试 | 估时 |
+|---|---|---|---|---|
+| **E1** | 看板与告警 | 任务状态分布/成功率/P50-P99 时长/成本；`usage_missing` 与「无价拒绝」计数告警；**因采用 D 方案（单表），看板无需 union**，只需加 `kind` 维度过滤 | 页面数据与库一致；告警可触发 | 2 |
+| **E2** | 探活（不真出图/出视频） | 沿用 `test_handler.go` 的 connectivity+auth only 范式 | 探活不产生上游费用（抓请求断言） | 1 |
+| **E2-补充** | **image 组必须跳过组级 chat 探针（否则看板必然误报失败）** | A5 打开 `model_type=image` 后**新暴露**的路径：`group_check_service.go:106,135-139` 的 `isVideoGroupModelType` 只跳过 video 组，image 组会落到 `buildProbeRequest:270 default` 发 `/v1/chat/completions` 探针 → 对图像模型组**必然失败**，健康看板全红。补丁（A5 已给出）：谓词改为 `case "video","video_generation","image","image_generation": return true`，并去掉 `:111` skipMsg 里 "video group" 的硬编码 | 单测：image 组不产生 chat 探针请求（抓请求断言）；看板不再出现 image 组的探针失败 | 0.3 |
+| **E3** | 前端 | 渠道与模型配置页复用 `VideoSupported*`；新增媒体单价的展示与编辑（复用既有 `PerSecond*`/`PerImage`/`PerRequest`） | 前端校验与后端 binding 一致；`npx vite build` 通过 | 1.5 |
+| **E4** | 对外文档与契约 | `docs/media-api.md`（模型组、错误码、示例）。⚠️ 注意：`docs/seedance-api.md` 虽然被 `AGENTS.md` 引用，但**在 `origin/main` 上并不存在**（主工作区里是未跟踪文件）→ **不要**把对齐目标指向它，改为对齐 `docs/` 既有对外文档的写法（如 `docs/configuration.md` 的结构）+ `docs/README.md` 索引 + `tests/contract/contracts.json` 补齐 | 文档可照着调通；contracts 与实现一致 | 1 |
+| **E5** | 合并闸门 | `make build`、`make test`、`go test ./tests/... -tags=integration`、`make lint`、`make swagger`、`atlas migrate validate` 全绿；按 Q3 确认无 `internal/**/*_test.go` | 全部命令输出留证 | 0.5 |
+
+**合计：35–45 人日**（A1/A3 按修正后估算下调约 1 人日；采用 D 方案后 C 队与 E 队较原 B 方案省，但已计入 rename 的迁移与回归成本）。
+
+---
+
+### Batch 0 交付记录（随进度更新）
+
+| 任务 | 状态 | 提交 / 证据 |
+|---|---|---|
+| **A4** 埋点归类 | ✅ 已交付（待合并 + 词表微调） | 分支 `feat/media-a4`，提交 `8ccdaa16 feat(observability): 新增 call_type 端点归一化`。4 文件：`internal/gateway/observability/call_type.go`(新,172 行)、`internal/gateway/server/router.go`(+7/-1，仅 `isBillableRequest`)、`tests/gateway/observability/call_type_test.go`(新,321 行,57 子用例)、`tests/gateway/server/billable_request_test.go`(新,185 行)。验收：`make build` 退出码 0；`go test ./tests/gateway/... -count=1` **15 个包全 ok**；`-mod=vendor` 构建亦通过；无新依赖；未动 `atlas-migrations/`、`internal/core/video/*`、`test/`。已确认其 gofmt 未污染 main 原本的 import 脏状态 |
+| **基线修复**（不在原任务清单，属前置） | ✅ 已交付 | 分支 `fix/baseline-tests-build`，提交 `089d0374`。`tests/controlplane/handler/model_tier_handler_test.go` 补齐 fake 缺失的接口方法（3 行）。验证：`make test` 退出码 0、**44 个包全 ok、0 FAIL**。修复前该包在 `origin/main` 上整包编译失败，使所有批次的整仓测试闸门失效 |
+| **A1** 计价链路 | ✅ 已交付（已合并） | 分支 `feat/media-channels` 上 5 个提交：`3d3b8eb8`(5 列) → `b7341045`(+7 列) → `5938f860`(按 mode 分派解析/快照/价表) → `07c533e4`(`EstimateMediaCost`+采集器媒体分支) → `4fb6decd`(A3 口径澄清)。**共 +12 个 `numeric(18,8) NULL` 媒体价列**；`mode` 为权威判别（`image_generation`/`image_edit`→图像、`video_generation`→视频、mode 为空回退 `model_type`）；NULL=无价以区别 token 价的 0 占位。额外审计出两处会**静默丢字段**的覆盖层合并（`modeldata/merge.go`、`providers/registry_pricing_merge.go`）并补齐。验收：`make build` 0、`make test` 47 包 ok、`atlas migrate validate` 0 且 hash 幂等、GORM↔SQL 对拍 26→38 列 ADDED 12/REMOVED 0。**覆盖度实测**（本地 2725 条目录）：媒体 mode 共 253 条，206 条至少有一条参与计价的价，**12 条完全无价**（计费时必然 `usage_missing`，不静默记 0 元）。⚠️ 如实披露的缺口：`cost_per_second`/`input/output_cost_per_video_token` 本地种子里 0 条（**未证实**，仅防御性解析）；`output_cost_per_character` 故意不解析；`price_mode=manual` 的媒体模型仍无价（设计 §7.2 未落地）；per-pixel/per-video-token/per-character 只解析入库、**不参与计价**（B6 若要必须自扩桶）；媒体用量**未落 `call_logs`**（C8 对账需另加列）；快照透传无 Redis 自动化覆盖 |
+| **A5** `model_type=image` | ✅ 已交付（待合并） | 分支 `feat/media-a5`：`14b66fdf`(迁移) → `4504f5c7`(Go+测试) → `52b200c8`(合入基线修复)。6 处 binding 白名单统一为 `chat image embedding embedding_vl rerank rerank_vl video`；迁移 `20261016101000_add_model_type_image.sql` 用 `DROP CONSTRAINT IF EXISTS`+`ADD CONSTRAINT` 重建 `chk_model_groups_model_type`（**只多 `image`**，无删改）；已核实 `models.model_type` **确实没有** CHECK（atlas 迁移与 legacy `migrations/` 全目录皆无）→ 只处理 `model_groups` 正确。验收：`make build` 0、`go test ./tests/controlplane/...` 全绿、`atlas migrate hash`/`validate` 均 0、`-mod=vendor` 通过、无新依赖、`atlas.sum` 未手改。**98 个子用例**，含一条**防漂移测试**（扫描 `atlas-migrations/*.sql` 取最后一个 `chk_model_groups_model_type` 定义，断言其 CHECK 集合 == 白名单契约集合，把「迁移与 binding 一致」固化为回归） |
+| **A7–A10** 接缝 | ✅ 已交付（待合并） | 分支 `feat/media-seams`：`1a68c5b6`(core 可选接口) → `ca64bfc6`(适配器注册表) → `8bb423ec`(网关路由接缝) → `3c7c78c1`(契约与文档骨架) → `959cb9fd`(合入基线修复)。11 文件 **+1641 行**：`internal/core/image.go`(159)、`internal/core/media_task.go`(202，含 `MediaKind`/`MediaStatus`/`MediaAction`/`MediaArtifact`)、`internal/providers/media_registry.go`(137，`Swap` 整表原子替换)、`internal/gateway/server/routes_media.go`(158，`MediaDeps`/`newMediaDeps`/两个注册函数)、`docs/media-api.md`(199)、`tests/contract/contracts.json`(+109) + 3 个测试文件（含 `media_registry_test.go` 391 行）。**父 agent 独立复验**：`make build` 退出码 0、`make test` 退出码 0、**45 个包全 ok**（比基线多 `tests/core`）。✅ 安全性核查：两个 `registerMedia*Routes` 是**空壳 TODO（不引用任何尚不存在的 handler）**，`newMediaDeps` 是**纯结构体构造、无副作用** → 不会造成启动 panic；两者挂在既有 `v1` 组上（含 Auth/配额/埋点中间件链） |
+| **A6** 出站不重试 | ✅ 已交付（已合并） | 分支 `feat/media-a6`：`c76ee3ac` + 基线合并。新增 `internal/llmclient/retry_policy.go`(61) 与 `client.go`(+20/-2)：`WithNoRetry(ctx)`（调用级、随 provider 透传）与 `Request.NoRetry`（请求级）两个等价入口（OR 语义），读用导出的 `IsNoRetry(ctx)`，落到 `DoRaw`/`DoPassthrough` 的 `maxAttempts`；**不传选项 = 逐字节不变**。测试 455 行，证据为「429/502/503/504 下 **1 次 vs 默认 4 次**」，真实 provider 栈同样 4→1；并做了**变异校验**（把 `retryDisabled` 改成 `return false` → 12 个子用例全 FAIL），证明测试非空跑。附三个既有事实：`DoPassthrough` 对非幂等 POST 本来就不重放（`client.go:516-529`）；**client 超时本就终止**（`client.go:391`）；熔断只会更少发不会重发 |
+| **Batch 0 闸门（集成后全量复验）** | ✅ **通过** | 集成分支 `feat/media-channels` 合并 基线修复 + 接缝(A7–A10) + A4 + A5 + A6 + A1 后实测：`make build` **0**；`atlas migrate validate` **0**；`go vet ./cmd/... ./internal/...` **0**；`make test` **0、47 个包全 ok、0 FAIL**。相对 `origin/main`：**23 提交 / 45 文件 / +4577 −42**。合并冲突仅 `atlas.sum` 一处，用 `atlas migrate hash` 重算解决（未手改）。**另加两项此前从未做过的强验证（本轮 Docker/本地 PG 可用后补做）**：⑥ **全量 apply 到全新库成功**——`atlas migrate apply --dir file://atlas-migrations --url <本机临时库 atlas_fresh>`（**不带 `--baseline`**，即 59 条迁移全部正序执行）：退出码 **0**、**59 migrations / 303 sql statements / 1.82s**；随后实测 A1 的 **12 个媒体价列全部存在且为 `numeric(18,8)`**、A5 的 `chk_model_groups_model_type` 取值**恰好是 `chat,image,embedding,embedding_vl,rerank,rerank_vl,video` 七值**。⑦ **漂移增量 = 0**（见 §0.2）：基线 72 条 = 集成 72 条，逐条 diff 为空。**顺带在新库上确认了既有漂移为真**（非仅生产库现象）：`fk_video_task_events_task` 与 `video_task_events.id` 为 **`integer`(int4)**（迁移写的是 `serial`，GORM 声明 `uint`→int8），二者都落在 C1 要动的表上 |
+| **lint 闸门（可用口径与陷阱，必读）** | ⚠️ 已定义 | ① **`make lint`（全仓）在本仓库不可用**：根目录 `test/bedrock_model_id_check.go` 是 main 上遗留的死代码，`golangci-lint run ./...` 直接 typecheck 硬失败（`undefined: bedrock.NewListFoundationModelsPaginator`）——**安全分支删除该文件后**又会被 `tests/controlplane/handler` 的既有编译失败挡住（基线修复解决）。② **可用口径**：`golangci-lint run ./cmd/... ./internal/... ./tests/...`（已装 v1.64.8 于 `~/.local/bin`）；CI **没有** golangci-lint 步骤（`.gitlab-ci.yml` 零命中），故这是本地闸门。③ **陷阱**：默认 `max-issues-per-linter: 50`，`unused` 与 `errcheck` 两边都恰好 50 条被**截断** → **禁止按文件计数比对**；只能按**未被截断的 linter** 对拍。④ 基线（`origin/main`+基线修复）为 **125 条**既有告警；**Batch 0 新增恰好 1 条**（`tests/llmclient/retry_policy_test.go` SA1012 传 nil Context），已用「类型化 nil 变量」修掉（commit `70db33e5`），未牺牲 nil 安全断言。⑤ 后续各批**验收标准 = 零新增告警**（按 staticcheck/ineffassign/gosimple 对拍），不要求清理既有 125 条 |
+| ⚠️ **移交后续的两项** | 待办 | ① `docs/README.md` 索引与 `AGENTS.md` 目录**未登记**新增的 `docs/media-api.md`（仓库约定「新增文档须登记」）→ 归 **E4**；② 本机**未安装 golangci-lint**，`make lint` 无法运行 → 归 **E5** 关口（接缝队已对变更包 `go vet` 通过） |
+
+---
+
+## 3. 批次与依赖图
+
+```mermaid
+flowchart LR
+  T0[T0 工作区隔离<br/>基于 origin/main] --> A[A 队: 基座与接缝<br/>A1-A10]
+  A --> B[B 队: 图像同步<br/>B1-B6]
+  A --> C[C 队: 任务平台<br/>C1-C8]
+  C --> D[D 队: 渠道适配器<br/>D1-D6]
+  B --> E[E 队: 治理与收口<br/>E1-E5]
+  C --> E
+  D --> E
+```
+
+| 批次 | 队伍 | 并行度 | 闸门（通过才进下一批） |
+|---|---|---|---|
+| **Batch 0** | A | 串行前置 | `make build` + A 队单测全绿 + `atlas migrate validate` |
+| **Batch 1** | **B ∥ C** | 2 队并行（文件不重叠） | 图像可出图且计费；`/v1/videos` 对 mock 上游闭环 |
+| **Batch 2** | D | 1 队（依赖 C 的平台） | 两家渠道对 mock 上游闭环；参数校验用例全绿 |
+| **Batch 3** | E | 1 队（依赖全部） | 合并闸门 E5 全绿 |
+
+**口径提醒**：采用决策 D 后**不再有双表问题**（`video_tasks` 直接改名为 `media_tasks`），看板与既有 25+ 消费点无需 union——这是 D 相对原方案的核心收益。
+
+---
+
+## 4. 防护栏合规检查表
+
+| 条款 | 本方案如何满足 | 状态 |
+|---|---|---|
+| A1 gateway 不直连 DB | 任务读写全部走 `/internal/v1/media-tasks`（C3） | ✅ |
+| A2 组能力取交集 | **已存在**：`aggregateVideoCaps`（`model_info_service.go:233-252`）对 resolutions/aspect_ratios/actions 取交集；新增能力维度（如 `kind`、`mode`）**必须同步加入交集逻辑** | ✅ 需扩展 |
+| A3 价格单位 | **经复核无冲突**：`ModelPricing` 已内建 per-image/per-second/per-request 字段族，A3 在实现上只约束 token 类字段 | ✅ 仅补澄清（A3 任务） |
+| D1 迁移只增不改 | `model_groups.model_type` CHECK 用**新迁移**扩展；改名走**新增** rename 迁移 | ✅ |
+| D2 Expand-Contract | `video_tasks`→`media_tasks` 用 `ALTER TABLE … RENAME`（保数据），而非建新表+搬数据 | ✅ |
+| D3 敏感数据加密 | Kling AK/SK 存 `providers.encrypted_credentials`（AES-256-GCM），D6 负责验证 | ✅ |
+| Q1 编译通过 | 每批次闸门 **`make build`**（= 团队与 CI 的真实关口；CI 只构建 `./cmd/gateway ./cmd/control-plane`） | ✅ |
+| Q2 不抑制类型错误 | 评审项，`error` 必须显式处理 | ✅ |
+| Q3 测试物理分离 | 全部测试在 `tests/` 镜像 `internal/`；**禁止** `internal/**/*_test.go` | ✅ |
+| P1 Conventional Commits | 每任务一次提交，如 `feat(gateway): 新增 /v1/videos 任务创建` | ✅ |
+| P2/P3 分支策略 | `feat/media-channels`（T0，基于 `origin/main`），不直推 main | ✅ |
+| S1 内部 API 鉴权 | `/internal/v1/media-tasks` 走 `InternalAuth`（C3） | ✅ |
+| S2 `__system_` Key 过滤 | 探活使用系统 Key，自动跳过埋点（E2） | ✅ |
+| S3 请求体截断 | 512KB 截断 + multipart/base64 特殊处理（B4） | ✅ |
+
+---
+
+## 5. 每队的完成定义（DoD）与派发模板
+
+**通用 DoD**：① 代码 + 测试同一提交；② `make build` 通过（**不要用 `go build ./...`**，见下）；③ 新增测试全绿且**先用测试复现问题再修**（TDD）；④ 不改已提交迁移；⑤ 不新增 `internal/**/*_test.go`；⑥ 无明文凭证；⑦ 提交信息符合 Conventional Commits；⑧ 输出「改了哪些文件 + 验收命令及真实输出」。
+
+**派发模板（每个 team 一条）**：
+
+```
+角色：你是 llm-gateway「<队名>」实现者。
+上下文（必读）：docs/media-channels-integration-design.md、docs/media-channels-implementation-plan.md、docs/guardrails.md、AGENTS.md。
+工作区：<worktree 绝对路径>（不要在主工作区改动）
+你的任务（只做这些，不要越界改他人文件）：<任务 ID + 每个任务的表格行原文>
+文件归属（独占）：<列出允许改的文件>
+参考实现（只读，禁止修改）：/private/tmp/newapi-research/new-api 的 <对应文件>
+验收：<该批次的命令与断言>
+输出：① 变更文件清单 ② 每个验收命令的真实输出 ③ 未完成/存疑项
+```
+
+> 派发原则（来自 dispatching-parallel-agents）：**同一批次的队伍之间不共享文件、不相互等待**；Batch 1 的 B 与 C 通过 Batch 0 建立的接缝隔离；任何队伍发现自己需要改他人独占文件时，**停下来报告**而不是自行扩权。
+
+---
+
+## 6. 风险与回滚
+
+| 风险 | 触发信号 | 回滚/缓解 |
+|---|---|---|
+| 计价改动影响现有 chat 计费 | chat 单测红或线上账目变化 | A1/A2 全部走新增分支 + 开关默认保守；计价提交独立可回滚 |
+| **rename 迁移丢数据** | 迁移里出现 `DROP TABLE`/`CREATE TABLE` | **禁止用 `atlas migrate diff` 生成 rename**，手写 `ALTER TABLE … RENAME`；上线前在带数据的库上演练 |
+| CAS 写错导致任务卡死 | 任务长期停留在 `in_progress` | 超时 sweeper 兜底；CAS 只前进不倒退 |
+| 上游参数校验过严拒绝合法请求 | 400 率异常 | D3 校验项全部来自上游契约（设计 §3），并保留「透传未知字段」的开关 |
+| Kling JWT 规格与官方不一致 | 全线 401 | D2 开工前用真实凭证做一次连通性验证（设计 R10） |
+| 迁移动到并发 WIP | `atlas.sum` 冲突或版本乱序 | 新 worktree 基于 `origin/main` 天然规避脏工作区的乱序文件；仍严格按 skill：rebase → 重生成 → hash → validate，**不手改 `atlas.sum`** |
+
+---
+
+## 7. New API → 本方案的任务对照
+
+| New API 机制（证据） | 本方案任务 |
+|---|---|
+| 路由协议表 `pkg/jsplugin/routing.go:93-96` | C5 |
+| 渠道→适配器映射 `relay/relay_adaptor.go:141-155` | C4 |
+| 任务表 `model/task.go:50-72`（含 `PrivateData`） | C1 |
+| 对外 id 与上游 id 分离（`PrivateData.UpstreamTaskID`） | C1 的 `vendor_task_id` 列 |
+| CAS 推进 `service/task_polling.go:69,101` | C2、C7 |
+| 轮询失败分类 `:292-330` | C7 |
+| 超时/失败上限 `common/init.go:209,211` | C7 |
+| 用量表达式（credit/units）`kling/plugin.js:19-27` | D4、A1 |
+| 归一状态词表 `kling/plugin.js:465` | C5、A8 |
+| 产物直跳 `credentialless` `kling/plugin.js:324-326` | C5（content 302） |
+| **不抄**：JS 引擎 `moejs v0.1.0-alpha.6` | —（用 Go 适配器：D1/D2） |
+
+---
+
+## 8. 立即可以开工的部分
+
+**Batch 0 无任何阻塞**：C-1 经复核已降级（无需改铁律）、C-2a/C-2b 已拍板、C-4 已定为基于 `origin/main` 的 worktree（T0 已执行）。
+
+派发顺序建议：
+
+1. **A 队第一批（计价与埋点）**：`A1`（打通既有媒体价字段 + 单测）与 `A4`（`call_type` 从零实现 + `isBillableRequest`）。
+2. **A 队第二批（接缝与类型）**：`A5`（`model_type=image`）+ `A7`/`A8`/`A9`/`A10`（并行接缝）。
+3. **A 队第三批（策略与文案）**：`A2`（无价拒绝）、`A3`（文档澄清）、`A6`（提交不重试）。
+
+每个 agent 开工前先确认：新 worktree 里 `make build` 干净，作为所有后续验收的对照基线。⚠️ 整仓 `go test ./tests/...` 在 `origin/main` 上因 `tests/controlplane/handler` 既有破损而为红（见 §0.1），合并 `fix/baseline-tests-build` 后才可用作整仓闸门；在那之前按包验证自己相关的包。

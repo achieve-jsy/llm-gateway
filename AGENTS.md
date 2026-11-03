@@ -132,6 +132,8 @@ cd tools/opencode-models-discovery && bun run build:bundle && bunx tsc --noEmit 
 | `docs/guardrails.md` | 项目防护栏铁律 |
 | `docs/frontend-design-guidelines.md` | 前端 UI/UX 设计规范（Vue3 + Element Plus） |
 | `docs/opencode-models-discovery.md` | OpenCode 模型发现插件架构 |
+| `docs/media-api.md` | 媒体能力（图像/视频）对外协议与错误码 |
+| `docs/media-channels-integration-design.md` | 三渠道媒体链路接入设计（架构/契约/数据模型/计费） |
 
 ### 其他
 

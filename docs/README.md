@@ -15,6 +15,11 @@
 | [guardrails.md](guardrails.md) | 项目防护栏铁律（架构/数据库/配置/质量/流程） | 否 |
 | [frontend-design-guidelines.md](frontend-design-guidelines.md) | 前端 UI/UX 设计规范（Vue3 + Element Plus），含设计 token、三态、危险操作确认、动作密度等 | 否 |
 | [opencode-models-discovery.md](opencode-models-discovery.md) | OpenCode 模型发现插件架构 | 是 |
+| [media-api.md](media-api.md) | **媒体能力对外协议**：`/v1/images/generations`、`/v1/images/edits`、`/v1/videos` 三件套的请求/响应契约、错误码与异步任务语义（对接方入口） | 是 |
+| [media-channels-integration-design.md](media-channels-integration-design.md) | 三渠道（gpt-image / Kling / Vidu）媒体链路接入设计：总体架构、上游契约、数据模型、计费口径 | 是 |
+| [media-channels-implementation-plan.md](media-channels-implementation-plan.md) | 媒体链路分批实施计划、批次闸门与交付记录 | 是 |
+| [image-generation-relay-analysis.md](image-generation-relay-analysis.md) | LiteLLM / New API 图像转发实现对比分析（接入选型依据） | 否 |
+| [video-integration-comparison.md](video-integration-comparison.md) | 视频链路对比（Seedance 现状 / New API / LiteLLM）与演进建议 | 是 |
 
 ## 约定
 

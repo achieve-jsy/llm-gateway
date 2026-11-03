@@ -341,6 +341,12 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 		performanceHandler := handler.NewPerformanceHandler(performanceSvc)
 		adminGroup.GET("/health/performance", performanceHandler.GetPerformance)
 
+		// 运维总览（聚合状态，用于 OpsDashboardPage）
+		opsSvc := service.NewOpsService(db, healthCheckRepo)
+		opsSvc.SetHealthCheckService(healthCheckSvc)
+		opsHandler := handler.NewOpsHandler(opsSvc)
+		adminGroup.GET("/ops/status", opsHandler.GetStatus)
+
 		// 模型状态变更日志
 		adminGroup.GET("/model-status-logs", modelStatusLogHandler.ListModelStatusLogs)
 

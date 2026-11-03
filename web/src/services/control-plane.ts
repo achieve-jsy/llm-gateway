@@ -837,6 +837,49 @@ export async function getPerformance(
   return response.data.data
 }
 
+// ===================== 运维总览 =====================
+
+export interface OpsStatusCounts {
+  total: number
+  enabled: number
+  disabled: number
+}
+
+export interface OpsGroupCounts {
+  total: number
+  public: number
+  controlled: number
+}
+
+export interface OpsRecentCheck {
+  target_name: string
+  target_type: string
+  success: boolean
+  response_time_ms: number
+  error?: string
+  checked_at: string
+}
+
+export interface OpsHealthCheckStatus {
+  enabled: boolean
+  running: boolean
+  recent: OpsRecentCheck[]
+}
+
+export interface OpsStatusResponse {
+  providers: OpsStatusCounts
+  models: OpsStatusCounts
+  keys: OpsStatusCounts
+  groups: OpsGroupCounts
+  health_check: OpsHealthCheckStatus
+  generated_at: string
+}
+
+export async function getOpsStatus(): Promise<OpsStatusResponse> {
+  const response = await http.get<ApiResponse<OpsStatusResponse>>('/api/v1/ops/status')
+  return response.data.data
+}
+
 // ===================== v0.7 预算管理 =====================
 
 import type { BudgetItem, BudgetScopeType, BudgetSetPayload, BudgetChainItem, BudgetContextItem } from '@/types/budget'

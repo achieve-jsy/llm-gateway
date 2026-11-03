@@ -161,6 +161,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '模型状态变更日志' }
   },
   {
+    path: '/admin/ops',
+    name: 'OpsDashboard',
+    component: () => import('@/views/admin/ops/OpsDashboardPage.vue'),
+    meta: { title: '运维总览', requiresAdmin: true }
+  },
+  {
     path: '/announcements',
     name: 'AnnouncementFeed',
     component: () => import('@/views/AnnouncementFeedPage.vue'),

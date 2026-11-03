@@ -362,8 +362,8 @@ func Setup(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	}()
 
 	// 用户侧公开路由（无需认证）
-	r.GET("/api/v1/channel-monitors", channelMonitorUserHandler.ListPublic)
-	r.GET("/api/v1/channel-monitors/:id/status", channelMonitorUserHandler.GetStatus)
+	r.GET("/api/v1/public/channel-monitors", channelMonitorUserHandler.ListPublic)
+	r.GET("/api/v1/public/channel-monitors/:id/status", channelMonitorUserHandler.GetStatus)
 
 	// 管理接口组（JWT 认证）
 	adminGroup := r.Group("/api/v1")

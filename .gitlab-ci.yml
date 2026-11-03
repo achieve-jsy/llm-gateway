@@ -140,14 +140,13 @@ deploy-test:
         docker pull ${REGISTRY}/${GATEWAY_IMAGE}:${IMAGE_TAG}
         docker pull ${REGISTRY}/${CONTROL_PLANE_IMAGE}:${IMAGE_TAG}
 
-        # 确保 .env 中数据库和 Redis 指向测试实例
-        sed -i 's/dbname=llm_gateway /dbname=llm_gateway_test /' .env 2>/dev/null || true
-        sed -i 's/^REDIS_DB=.*/REDIS_DB=1/' .env 2>/dev/null || true
-        sed -i 's/^DB_NAME=.*/DB_NAME=llm_gateway_test/' .env 2>/dev/null || true
-
         export IMAGE_TAG="${IMAGE_TAG}"
         export REGISTRY="${REGISTRY}"
         export APP_ENV="staging"
+        export DATABASE_URL="host=192.0.2.10 port=5432 user=llm_gateway password=CHANGE_ME_PASSWORD dbname=llm_gateway_test sslmode=disable"
+        export REDIS_ADDR="192.0.2.10:6379"
+        export REDIS_PASSWORD="CHANGE_ME_REDIS_PASSWORD"
+        export REDIS_DB="1"
         export GATEWAY_PORT="${GATEWAY_PORT}"
         export CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT}"
         export GATEWAY_HOST="0.0.0.0"

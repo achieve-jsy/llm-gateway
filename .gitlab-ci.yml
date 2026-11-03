@@ -372,6 +372,8 @@ deploy-app-test:
         export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
         export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
+        # EHR 接口中心（AI 应用聚合页同步）：三个都注入才启动每日 03:00 同步，否则接口 502、调度不启动。
+        export EHR_BASE_URL='${TEST_EHR_BASE_URL:-}' EHR_API_TOKEN='${TEST_EHR_API_TOKEN:-}' EHR_ORG_ID='${TEST_EHR_ORG_ID:-}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
         # 非密钥 canonical 开关：测试环境默认进入安全影子记账，不启用任何阻断。
@@ -423,6 +425,8 @@ rollback-test:
         export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
         export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
+        # EHR 接口中心（AI 应用聚合页同步）：三个都注入才启动每日 03:00 同步，否则接口 502、调度不启动。
+        export EHR_BASE_URL='${TEST_EHR_BASE_URL:-}' EHR_API_TOKEN='${TEST_EHR_API_TOKEN:-}' EHR_ORG_ID='${TEST_EHR_ORG_ID:-}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
         export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
@@ -530,6 +534,8 @@ deploy-app-test-fast:
         export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
         export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
+        # EHR 接口中心（AI 应用聚合页同步）：三个都注入才启动每日 03:00 同步，否则接口 502、调度不启动。
+        export EHR_BASE_URL='${TEST_EHR_BASE_URL:-}' EHR_API_TOKEN='${TEST_EHR_API_TOKEN:-}' EHR_ORG_ID='${TEST_EHR_ORG_ID:-}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
         export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true
@@ -578,6 +584,8 @@ deploy-app-test-fast:
         export INTERNAL_AUTH_TOKEN='${TEST_INTERNAL_TOKEN}'
         export ENCRYPTION_KEY='${TEST_ENCRYPTION_KEY}'
         export OAUTH_CLIENT_ID='${TEST_OAUTH_CLIENT_ID}' OAUTH_CLIENT_SECRET='${TEST_OAUTH_CLIENT_SECRET}'
+        # EHR 接口中心（AI 应用聚合页同步）：三个都注入才启动每日 03:00 同步，否则接口 502、调度不启动。
+        export EHR_BASE_URL='${TEST_EHR_BASE_URL:-}' EHR_API_TOKEN='${TEST_EHR_API_TOKEN:-}' EHR_ORG_ID='${TEST_EHR_ORG_ID:-}'
         export OAUTH_REDIRECT_URI='http://192.0.2.10:9080/auth/callback'
         export FRONTEND_URL='http://192.0.2.10:9080'
         export BUDGET_TIER_MASTER_ENABLED=true BUDGET_TIER_ACCOUNTING_ENABLED=true

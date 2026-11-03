@@ -80,6 +80,14 @@ services:
       OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-http://192.0.2.10:9080/auth/callback}
       OAUTH_SCOPES: ${OAUTH_SCOPES:-openid profile email}
       FRONTEND_URL: ${FRONTEND_URL:-http://192.0.2.10:9080}
+      # EHR 接口中心（AI 应用聚合页同步）。空值 = 未配置：同步接口返回 502、定时任务不启动（安全默认）。
+      # 密钥走 GitLab TEST_EHR_API_TOKEN，仓库里不留明文。
+      EHR_BASE_URL: ${EHR_BASE_URL:-}
+      EHR_API_TOKEN: ${EHR_API_TOKEN:-}
+      EHR_ORG_ID: ${EHR_ORG_ID:-}
+      EHR_PREFIX: ${EHR_PREFIX:-/open-apis/ehr-apic/open-apis/resource/v1}
+      AI_APP_HUB_SYNC_CRON: ${AI_APP_HUB_SYNC_CRON:-0 3 * * *}
+      AI_APP_HUB_SYNC_TZ: ${AI_APP_HUB_SYNC_TZ:-Asia/Shanghai}
     volumes:
       # 控制面只点读（冻结包 reader 全程不写文件）⇒ 只读挂载即可。
       - type: bind

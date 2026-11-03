@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/example/llm-gateway/internal/aiapphub/ehrclient"
@@ -15,6 +16,12 @@ import (
 
 // ErrScopeNotFound 指定的部门/工作室不在本次拉取结果里（或指向手工维护的工作室）。
 var ErrScopeNotFound = errors.New("sync scope not found")
+
+// ErrSyncInProgress 已有一次同步在执行；同一时刻只允许一个，避免两个请求交错写库。
+var ErrSyncInProgress = errors.New("sync in progress")
+
+// syncTimeout 单次同步上限。全量 99 条实测 1-3 秒，30 秒足够兜住网络抖动。
+const syncTimeout = 30 * time.Second
 
 // ScopeKind 同步范围。三种范围都只拉一次 EHR 全量（EHR 没有单节点接口），
 // 差别只在写库范围。
@@ -80,6 +87,7 @@ const (
 )
 
 type AIAppHubSyncService struct {
+	mu       sync.Mutex
 	fetcher  DepartmentFetcher
 	repo     *repository.AIAppHubRepo
 	settings *repository.SettingsRepo
@@ -94,9 +102,19 @@ func NewAIAppHubSyncService(f DepartmentFetcher, repo *repository.AIAppHubRepo, 
 //
 // 失败时业务表一行都不写（本地保持上一次成功的数据），只把失败写进状态键。
 func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyncResult, error) {
+	if !s.mu.TryLock() {
+		return HubSyncResult{}, ErrSyncInProgress
+	}
+	defer s.mu.Unlock()
+
+	// 状态写入不受本次同步超时影响：超时恰恰是最需要记下 failed 的场景。
+	ctx, cancel := context.WithTimeout(ctx, syncTimeout)
+	defer cancel()
+
 	start := time.Now()
 	items, err := s.fetcher.FetchDepartments(ctx)
 	if err != nil {
+		s.markStatus(scope, "failed", err.Error())
 		return HubSyncResult{}, err
 	}
 
@@ -107,6 +125,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyn
 
 	targets, err := s.resolveTargets(ctx, scope, byID)
 	if err != nil {
+		s.markStatus(scope, "failed", err.Error())
 		return HubSyncResult{}, err
 	}
 
@@ -145,7 +164,7 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyn
 		}
 	}
 
-	s.markStatus(ctx, scope, "success", "")
+	s.markStatus(scope, "success", "")
 	return HubSyncResult{
 		Scope:       string(scope.Kind),
 		Departments: len(targets),
@@ -304,7 +323,7 @@ func normalizeParent(parentID string) string {
 }
 
 // markStatus 记录最近一次同步结果，管理页据此展示"上次同步时间/结果"。
-func (s *AIAppHubSyncService) markStatus(ctx context.Context, scope SyncScope, status, errMsg string) {
+func (s *AIAppHubSyncService) markStatus(scope SyncScope, status, errMsg string) {
 	if s.settings == nil {
 		return
 	}

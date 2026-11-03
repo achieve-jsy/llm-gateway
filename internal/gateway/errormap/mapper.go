@@ -60,6 +60,9 @@ func MapProviderError(err error) *model.UnifiedError {
 		// 映射仍用重建 body（含网关分类后的 error.type），避免 openai 401 等被原始 type 误判为 bad_request。
 		if len(gwErr.Body) > 0 {
 			upstream.Body = parseErrorBody(gwErr.Body)
+			// Keep an independent copy: the provider client owns the original
+			// byte slice and may reuse its response buffer after returning.
+			upstream.RawBody = append([]byte(nil), gwErr.Body...)
 		}
 		if gatewayerrors.Has(code) {
 			ec := gatewayerrors.Lookup(code)
@@ -75,6 +78,18 @@ func MapProviderError(err error) *model.UnifiedError {
 				HTTPStatus: ec.HTTPStatus,
 				Upstream:   &upstream,
 			}
+		}
+
+		// Keep the upstream payload even when a provider returns a status/body
+		// combination that is not yet registered in the mapping table. This is
+		// essential for explicit passthrough mode: losing the GatewayError here
+		// would make the handler manufacture a generic 502 response.
+		return &model.UnifiedError{
+			Type:       model.ErrorTypeTempFailure,
+			Code:       "provider_error",
+			Message:    gwErr.Message,
+			HTTPStatus: http.StatusBadGateway,
+			Upstream:   &upstream,
 		}
 	}
 

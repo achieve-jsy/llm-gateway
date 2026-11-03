@@ -22,11 +22,13 @@ import (
 )
 
 const (
-	// defaultNonStreamTimeout 非流式请求每轮上游超时（含 failover 每轮），对齐 LiteLLM 默认值。
-	// 推理类模型（DeepSeek R1、o1 等）单次响应可能超过 30s，保守值过小会导致误 failover。
-	defaultNonStreamTimeout = 600 * time.Second
+	// defaultNonStreamTimeout 非流式请求每轮上游超时（含 failover 每轮）。
+	// 推理类模型（DeepSeek R1、o1 等）单次响应可能超过 30s，保守值过小会导致误 failover；
+	// 但过大会让并发槽位被慢/挂起请求长期占用（详见 concurrency 泄漏修复），故收敛到 300s。
+	defaultNonStreamTimeout = 300 * time.Second
 	// defaultStreamTimeout 流式请求总超时，需与 Nginx proxy_read_timeout 保持一致。
-	defaultStreamTimeout = 600 * time.Second
+	// 同样收敛到 300s，避免长流占住并发槽位达 10 分钟。
+	defaultStreamTimeout = 300 * time.Second
 	// defaultCooldownDuration 429 限流后默认冷却时长（无 Retry-After 时使用）。
 	defaultCooldownDuration = 60 * time.Second
 )
@@ -459,7 +461,7 @@ func respondGroupError(c *gin.Context, err error) {
 // 当 X-Error-Format: passthrough 请求头存在时，直接透传上游错误，不做归一化。
 func respondError(c *gin.Context, ue *model.UnifiedError) {
 	if IsPassthroughMode(c) {
-		writePassthroughError(c, ue.HTTPStatus, string(ue.Type), ue.Code, ue.Message)
+		writePassthroughError(c, ue)
 		return
 	}
 	errObj := gin.H{

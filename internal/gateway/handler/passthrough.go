@@ -2,7 +2,9 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
+	"github.com/example/llm-gateway/internal/gateway/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -13,9 +15,15 @@ func IsPassthroughMode(c *gin.Context) bool {
 	return c.GetHeader("X-Error-Format") == "passthrough"
 }
 
-// writePassthroughError writes an upstream error response as-is from GatewayError fields,
-// bypassing the gateway's canonical error normalization.
-func writePassthroughError(c *gin.Context, status int, errType string, code string, message string) {
+// writePassthroughError writes the upstream status and exact response body when
+// the provider response was retained. If the error was generated locally (for
+// example, a timeout or an empty model group), it falls back to the gateway
+// error envelope because there is no upstream response to copy.
+func writePassthroughError(c *gin.Context, ue *model.UnifiedError) {
+	if ue == nil {
+		return
+	}
+
 	// Check for stashed upstream headers from proxy handling.
 	if h, ok := c.Get("passthrough_headers"); ok {
 		if headers, ok := h.(map[string]string); ok {
@@ -24,11 +32,34 @@ func writePassthroughError(c *gin.Context, status int, errType string, code stri
 			}
 		}
 	}
+
+	status := ue.HTTPStatus
+	contentType := strings.TrimSpace(c.GetHeader("Content-Type"))
+	if ue.Upstream != nil {
+		// The normalized mapper deliberately uses 502/503 for gateway policy.
+		// Passthrough mode must instead expose the status returned by the provider.
+		if ue.Upstream.Status >= 100 && ue.Upstream.Status <= 599 {
+			status = ue.Upstream.Status
+		}
+		if headers, ok := c.Get("passthrough_headers"); ok {
+			if values, ok := headers.(map[string]string); ok && contentType == "" {
+				contentType = values["Content-Type"]
+			}
+		}
+		if len(ue.Upstream.RawBody) > 0 {
+			if contentType == "" {
+				contentType = "application/json"
+			}
+			c.Data(status, contentType, ue.Upstream.RawBody)
+			return
+		}
+	}
+
 	c.JSON(status, gin.H{
 		"error": gin.H{
-			"type":    errType,
-			"code":    code,
-			"message": message,
+			"type":    string(ue.Type),
+			"code":    ue.Code,
+			"message": ue.Message,
 		},
 	})
 }

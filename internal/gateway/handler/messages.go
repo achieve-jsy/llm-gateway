@@ -428,7 +428,13 @@ func (h *MessagesHandler) HandleCountTokens(c *gin.Context) {
 // respondAnthropicError sends an error in Anthropic format.
 func (h *MessagesHandler) respondAnthropicError(c *gin.Context, httpStatus int, errType string, code string, message string, upstream *gatewayerrors.UpstreamInfo) {
 	if IsPassthroughMode(c) {
-		writePassthroughError(c, httpStatus, errType, code, message)
+		writePassthroughError(c, &model.UnifiedError{
+			Type:       model.ErrorType(errType),
+			Code:       code,
+			Message:    message,
+			HTTPStatus: httpStatus,
+			Upstream:   upstream,
+		})
 		return
 	}
 	body := gin.H{

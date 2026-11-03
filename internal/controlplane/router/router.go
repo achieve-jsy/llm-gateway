@@ -471,6 +471,12 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 	videoTaskSvc := service.NewVideoTaskService(videoTaskRepo)
 	videoTaskHandler := handler.NewVideoTaskHandler(videoTaskSvc)
 
+	// 媒体任务维度运维看板（E 队 Batch 3 · E1 任务 4）：只读聚合，独立于上面的 CRUD 服务，
+	// 走 handler → service → repository 三层（SQL 只在 repository.MediaTaskStatsRepo）。
+	mediaTaskDashboardHandler := handler.NewMediaTaskDashboardHandler(
+		service.NewMediaTaskDashboardService(repository.NewMediaTaskStatsRepo(db)),
+	)
+
 	// C7：超时任务清扫（控制面有 DB、网关没有）。把超过 MEDIA_TASK_TIMEOUT_MINUTES
 	// （默认 30，viper 读取、环境变量优先）仍未进入终态的媒体任务置为 expired
 	// （视同 failed、不记账）。legacy Seedance 行不在扫描范围，零回归。
@@ -708,6 +714,9 @@ func Setup(lifecycleCtx context.Context, db *gorm.DB, rdb *redis.Client) *gin.En
 		adminGroup.GET("/ops/video-tasks/stats", guard(rbac.PermUsageViewScoped), videoTaskHandler.Stats)
 		adminGroup.GET("/ops/video-tasks", guard(rbac.PermUsageViewScoped), videoTaskHandler.List)
 		adminGroup.GET("/ops/video-tasks/:id", guard(rbac.PermUsageViewScoped), videoTaskHandler.Get)
+
+		// 媒体任务维度运维看板（image+video 单表承载；鉴权与上面的媒体任务统计一致）
+		adminGroup.GET("/ops/media-tasks/dashboard", guard(rbac.PermUsageViewScoped), mediaTaskDashboardHandler.GetDashboard)
 
 		// 视频任务管理
 		adminGroup.GET("/video/tasks/stats/trend", guard(rbac.PermUsageViewScoped), videoTaskHandler.StatsTrend)

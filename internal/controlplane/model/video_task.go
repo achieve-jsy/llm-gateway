@@ -38,6 +38,17 @@ const (
 	MediaTaskKindVideo = "video"
 )
 
+// legacy Seedance 词表（存量行与旧链路仍在写；看板必须**同时**归组两套词表）。
+//
+// 只读侧常量：新增这些常量不改变任何写入路径，仅用于消除看板统计里的魔法字符串。
+// 与上面媒体词表的对应关系：submitted↔queued、running↔in_progress、succeeded↔completed；
+// `failed` 两套词表同形。⚠️ 看板不得把 expired 折算成 failed。
+const (
+	MediaTaskLegacyStatusSubmitted = "submitted"
+	MediaTaskLegacyStatusRunning   = "running"
+	MediaTaskLegacyStatusSucceeded = "succeeded"
+)
+
 // IsMediaTaskStatus 报告状态是否属于媒体词表（含存储层专有的 expired）。
 func IsMediaTaskStatus(status string) bool {
 	switch status {

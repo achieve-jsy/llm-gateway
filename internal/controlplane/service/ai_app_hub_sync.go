@@ -13,6 +13,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// ErrScopeNotFound 指定的部门/工作室不在本次拉取结果里（或指向手工维护的工作室）。
+var ErrScopeNotFound = errors.New("sync scope not found")
+
 // ScopeKind 同步范围。三种范围都只拉一次 EHR 全量（EHR 没有单节点接口），
 // 差别只在写库范围。
 type ScopeKind string
@@ -97,14 +100,20 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyn
 		return HubSyncResult{}, err
 	}
 
-	names := make(map[string]string, len(items))
 	byID := make(map[string]ehrclient.Department, len(items))
 	for _, it := range items {
-		names[it.ID] = it.Name
 		byID[it.ID] = it
 	}
 
+	targets, err := s.resolveTargets(ctx, scope, byID)
+	if err != nil {
+		return HubSyncResult{}, err
+	}
+
 	for _, it := range items {
+		if !targets[it.ID] {
+			continue
+		}
 		d := &model.AIAppDepartment{
 			DepartmentID:   it.ID,
 			Name:           it.Name,
@@ -120,14 +129,18 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyn
 		}
 	}
 
-	studioIDs, studios, hidden, err := s.syncStudios(ctx, items)
+	studioIDs, studios, hidden, err := s.syncStudios(ctx, items, targets)
 	if err != nil {
 		return HubSyncResult{}, err
 	}
 
-	for _, it := range items {
+	for id := range targets {
+		it, ok := byID[id]
+		if !ok {
+			continue
+		}
 		studioID := nearestStudioID(it, byID, studioIDs)
-		if err := s.repo.SetDepartmentStudio(ctx, it.ID, studioID); err != nil {
+		if err := s.repo.SetDepartmentStudio(ctx, id, studioID); err != nil {
 			return HubSyncResult{}, err
 		}
 	}
@@ -135,19 +148,82 @@ func (s *AIAppHubSyncService) Sync(ctx context.Context, scope SyncScope) (HubSyn
 	s.markStatus(ctx, scope, "success", "")
 	return HubSyncResult{
 		Scope:       string(scope.Kind),
-		Departments: len(items),
+		Departments: len(targets),
 		Studios:     studios,
 		Hidden:      hidden,
 		DurationMs:  time.Since(start).Milliseconds(),
 	}, nil
 }
 
-// syncStudios 为 type=2 的节点建/更新工作室行，返回 departmentID -> studioID 映射。
-func (s *AIAppHubSyncService) syncStudios(ctx context.Context, items []ehrclient.Department) (map[string]uuid.UUID, int, int, error) {
+// resolveTargets 计算本次要写哪些部门节点。
+//
+// all 写全部；department 只写那一个节点；studio 写工作室节点加它整棵子树。
+func (s *AIAppHubSyncService) resolveTargets(ctx context.Context, scope SyncScope, nodes map[string]ehrclient.Department) (map[string]bool, error) {
+	switch scope.Kind {
+	case ScopeAll, "":
+		targets := make(map[string]bool, len(nodes))
+		for id := range nodes {
+			targets[id] = true
+		}
+		return targets, nil
+
+	case ScopeDepartment:
+		if _, ok := nodes[scope.ID]; !ok {
+			return nil, ErrScopeNotFound
+		}
+		return map[string]bool{scope.ID: true}, nil
+
+	case ScopeStudio:
+		studioID, err := uuid.Parse(scope.ID)
+		if err != nil {
+			return nil, ErrScopeNotFound
+		}
+		studio, err := s.repo.GetStudioByID(ctx, studioID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrScopeNotFound
+			}
+			return nil, err
+		}
+		// 手工维护的工作室没有 EHR 部门 ID，无从拉取子树。
+		if studio.DepartmentID == nil || *studio.DepartmentID == "" {
+			return nil, ErrScopeNotFound
+		}
+		root := *studio.DepartmentID
+		if _, ok := nodes[root]; !ok {
+			return nil, ErrScopeNotFound
+		}
+		return subtreeOf(root, nodes), nil
+
+	default:
+		return nil, ErrScopeNotFound
+	}
+}
+
+// subtreeOf 返回 root 及其全部后代的 ID 集合。
+func subtreeOf(root string, nodes map[string]ehrclient.Department) map[string]bool {
+	targets := map[string]bool{root: true}
+	queue := []string{root}
+	for len(queue) > 0 {
+		parent := queue[0]
+		queue = queue[1:]
+		for id, node := range nodes {
+			if normalizeParent(node.ParentID) != parent || targets[id] {
+				continue
+			}
+			targets[id] = true
+			queue = append(queue, id)
+		}
+	}
+	return targets
+}
+
+// syncStudios 为 targets 内的 type=2 节点建/更新工作室行，返回 departmentID -> studioID 映射。
+func (s *AIAppHubSyncService) syncStudios(ctx context.Context, items []ehrclient.Department, targets map[string]bool) (map[string]uuid.UUID, int, int, error) {
 	ids := make(map[string]uuid.UUID)
 	studios, hidden := 0, 0
 	for _, it := range items {
-		if it.Type != 2 {
+		if it.Type != 2 || !targets[it.ID] {
 			continue
 		}
 		studios++

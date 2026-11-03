@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	obsmodel "github.com/example/llm-gateway/internal/observability/model"
 	"github.com/example/llm-gateway/internal/orgservice/rbac"
@@ -21,9 +22,13 @@ import (
 // 逻辑对齐 web/prototype/model-analytics.js 的 renderInsight；MVP 用确定性规则
 // 引擎（不接真 LLM），保证数字与页面真实计算一致、不幻觉。
 
-// BUDGET_PER_DAY 每日预算 mock 常量，对齐原型 BUDGET_PER_DAY=1400。
-// 区间预算 = BUDGET_PER_DAY × 区间天数；真实预算接入后替换为按域预算查询。
-const BUDGET_PER_DAY = 1400.0
+// budgetAllocationRow 预算分配表(budget_allocations)查询行。
+// 限额字段 -1 表示不限；区间预算按 日→月→周 优先折算。
+type budgetAllocationRow struct {
+	AmountUSD       float64
+	WeeklyAmountUSD float64
+	DailyAmountUSD  float64
+}
 
 // highTierName 高阶模型等级标识，对齐原型 HIGH_TIERS={'L3-Premium'}。
 const highTierName = "L3-Premium"
@@ -74,12 +79,14 @@ type InsightScopeInfo struct {
 
 // InsightMetrics 指标锚点，与文本内数字保持一致。
 type InsightMetrics struct {
-	Cost        float64 `json:"cost"`
-	PrevCost    float64 `json:"prev_cost"`
-	DeltaPct    float64 `json:"delta_pct"`
-	BudgetPct   float64 `json:"budget_pct"`
-	HighTierPct float64 `json:"high_tier_pct"`
-	CacheRate   float64 `json:"cache_rate"`
+	Cost             float64 `json:"cost"`
+	PrevCost         float64 `json:"prev_cost"`
+	DeltaPct         float64 `json:"delta_pct"`
+	BudgetPct        float64 `json:"budget_pct"`
+	Budget           float64 `json:"budget"`
+	BudgetConfigured bool    `json:"budget_configured"`
+	HighTierPct      float64 `json:"high_tier_pct"`
+	CacheRate        float64 `json:"cache_rate"`
 }
 
 // InsightSegments 三段式输出。
@@ -150,6 +157,7 @@ type insightMetrics struct {
 	RangeLabel   string
 	Days         int
 	Budget       float64
+	BudgetConfigured bool
 	Cost         float64
 	PrevCost     float64
 	HighCost     float64
@@ -286,7 +294,7 @@ func buildInsight(m insightMetrics) InsightResponse {
 	}
 	absD := math.Abs(delta)
 	budPct := 0.0
-	if cost > 0 {
+	if cost > 0 && m.BudgetConfigured && m.Budget > 0 {
 		budPct = cost / m.Budget * 100
 	}
 	hp := 0.0
@@ -300,7 +308,8 @@ func buildInsight(m insightMetrics) InsightResponse {
 
 	resp.Metrics = InsightMetrics{
 		Cost: cost, PrevCost: pCost, DeltaPct: delta,
-		BudgetPct: budPct, HighTierPct: hp, CacheRate: cacheRate,
+		BudgetPct: budPct, Budget: m.Budget, BudgetConfigured: m.BudgetConfigured,
+		HighTierPct: hp, CacheRate: cacheRate,
 	}
 
 	var topM *insightModel
@@ -385,8 +394,12 @@ func buildInsight(m insightMetrics) InsightResponse {
 	} else {
 		switch m.ScopeKind {
 		case "company":
+			budgetTxt := "未配置"
+			if m.BudgetConfigured {
+				budgetTxt = fmtPct0(budPct)
+			}
 			facts = append(facts, Segment{Text: fmt.Sprintf("区间费用 %s / 预算 %s / 环比 %s，高阶模型（L3）占 %s。",
-				fmtCost(cost), fmtPct0(budPct), fmtDeltaPct(delta), fmtPct0(hp))})
+				fmtCost(cost), budgetTxt, fmtDeltaPct(delta), fmtPct0(hp))})
 			if topM != nil && cost > 0 {
 				facts = append(facts, Segment{
 					Text:  fmt.Sprintf("费用大头在 %s（%s，%s，占 %s）。", topM.Model, tierDisplay(topM.Tier), fmtCost(topM.Cost), fmtPct0(topM.Cost/cost*100)),
@@ -557,7 +570,7 @@ func (h *UsageHandler) AnalyticsInsight(c *gin.Context) {
 	usagePol := policy.UsagePolicy{}
 
 	days := int(to.Sub(from).Hours()/24) + 1
-	budget := BUDGET_PER_DAY * float64(days)
+	budget, budgetConfigured := resolveBudget(db, scope.Kind, scope.Key, from, days)
 
 	modelFilter, tierFilter, deptFilter := "", "", ""
 	switch scope.Kind {
@@ -800,6 +813,7 @@ func (h *UsageHandler) AnalyticsInsight(c *gin.Context) {
 		RangeLabel:   from.Format("01-02") + "~" + to.Format("01-02"),
 		Days:         days,
 		Budget:       budget,
+		BudgetConfigured: budgetConfigured,
 		Cost:         tot.Cost,
 		PrevCost:     prevTot.Cost,
 		HighCost:     tot.HighCost,
@@ -819,6 +833,45 @@ func (h *UsageHandler) AnalyticsInsight(c *gin.Context) {
 	metrics.TopUserModels = topUserModels
 
 	c.JSON(http.StatusOK, buildInsight(metrics))
+}
+
+// resolveBudget 按分析范围解析区间预算（USD）。
+// company → budget_allocations scope_type='company' scope_id='GLOBAL'；
+// dept   → scope_type='dept_daily' scope_id=<dept_id>；
+// model/tier 无预算分配 → (0, false)。
+// 折算优先级：日限额 > 0 → 日×天数；否则月限额 → 月×天数/当月天数；否则周限额 → 周×天数/7。
+func resolveBudget(db *gorm.DB, scopeKind, scopeKey string, from time.Time, days int) (budget float64, configured bool) {
+	scopeType, scopeID := "", ""
+	switch scopeKind {
+	case "company":
+		scopeType, scopeID = "company", "GLOBAL"
+	case "dept":
+		scopeType, scopeID = "dept_daily", scopeKey
+	default:
+		return 0, false
+	}
+	var row budgetAllocationRow
+	if err := db.Table("budget_allocations").
+		Select("amount_usd, weekly_amount_usd, daily_amount_usd").
+		Where("scope_type = ? AND scope_id = ? AND enabled", scopeType, scopeID).
+		Take(&row).Error; err != nil {
+		return 0, false
+	}
+	switch {
+	case row.DailyAmountUSD > 0:
+		return row.DailyAmountUSD * float64(days), true
+	case row.AmountUSD > 0:
+		return row.AmountUSD * float64(days) / float64(daysInMonth(from)), true
+	case row.WeeklyAmountUSD > 0:
+		return row.WeeklyAmountUSD * float64(days) / 7, true
+	default:
+		return 0, false
+	}
+}
+
+// daysInMonth 返回 t 所在月的天数。
+func daysInMonth(t time.Time) int {
+	return time.Date(t.Year(), t.Month()+1, 0, 0, 0, 0, 0, t.Location()).Day()
 }
 
 // parseInsightDates 解析 start/end：优先 JSON body，缺省回退 query 参数。

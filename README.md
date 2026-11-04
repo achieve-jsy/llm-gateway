@@ -188,4 +188,4 @@ docker compose --profile observability up -d   # Jaeger + OTel Collector
 
 ## 说明
 
-私有项目，仅供内部使用。仓库不含任何生产凭证，部署时请通过环境变量注入密钥。
+本项目以现状开源，仅作学习与参考。仓库内不含任何真实凭证，部署时请通过环境变量注入密钥；生产使用前请自行审计配置与安全策略。
